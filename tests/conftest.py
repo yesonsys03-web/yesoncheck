@@ -86,3 +86,27 @@ def write_test_video(path, frames=24, size=(320, 240)):
         writer.write(np.full((size[1], size[0], 3), (i * 10) % 255, np.uint8))
     writer.release()
     return path
+
+
+import subprocess
+
+
+@pytest.fixture
+def make_video():
+    """ffmpeg로 시험 영상(영상+소리, H.264) 생성. 한글 경로 가능."""
+    from yesoncheck import external_tools
+
+    ffmpeg = external_tools.ffmpeg_path()
+
+    def make(path, seconds=2):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        subprocess.run(
+            [ffmpeg, "-y", "-v", "error",
+             "-f", "lavfi", "-i", f"testsrc=duration={seconds}:size=320x240:rate=24",
+             "-f", "lavfi", "-i", f"sine=duration={seconds}",
+             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", path],
+            check=True, **external_tools.subprocess_kwargs(),
+        )
+        return path
+
+    return make

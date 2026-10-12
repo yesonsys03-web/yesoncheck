@@ -1,10 +1,8 @@
 """Playback and transport controls for VideoPlayer."""
 
 import os
-import shutil
 import subprocess
 import sys
-import tempfile
 import time
 
 import cv2
@@ -27,7 +25,7 @@ from PyQt5.QtWidgets import (
 
 from yesoncheck.frame_utils import FrameCalculator
 from yesoncheck.workers import FFmpegWorker
-from yesoncheck import paths
+from yesoncheck import external_tools, file_names, paths
 
 class PlayerPlaybackMixin:
 
@@ -36,28 +34,23 @@ class PlayerPlaybackMixin:
         ffprobe를 사용하여 비디오 코덱 정보를 추출합니다.
         """
         try:
-            if hasattr(sys, '_MEIPASS'):
-                # 빌드된 앱의 경우 번들 리소스 경로에서 ffprobe 찾기
-                ffprobe_path = os.path.join(sys._MEIPASS, 'ffprobe')
-            else:
-                # 개발 환경에서는 시스템 PATH의 ffprobe 사용
-                ffprobe_path = "ffprobe"
-
             result = subprocess.run(
-                [ffprobe_path, '-v', 'error', '-select_streams', 'v:0',
-                '-show_entries', 'stream=codec_name', '-of',
-                'default=noprint_wrappers=1:nokey=1', file_path],
+                [external_tools.ffprobe_path(), '-v', 'error', '-select_streams', 'v:0',
+                 '-show_entries', 'stream=codec_name', '-of',
+                 'default=noprint_wrappers=1:nokey=1', file_path],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
-                check=True
+                check=True,
+                **external_tools.subprocess_kwargs(),
             )
-            codec_name = result.stdout.strip()
+            codec_name = external_tools.decode_output(result.stdout).strip()
             if not codec_name:
                 return "코덱 정보를 찾을 수 없습니다."
             return codec_name
+        except external_tools.ToolNotFoundError as e:
+            return f"오류: {e}"
         except subprocess.CalledProcessError as e:
-            print(f"ffprobe 실행 중 오류 발생:\n{e.stderr}")
+            print(f"ffprobe 실행 중 오류 발생:\n{external_tools.decode_output(e.stderr)}")
             return f"ffprobe 실행 오류: {e.returncode}"
         except Exception as e:
             print(f"예상치 못한 오류 발생:\n{e}")
@@ -76,8 +69,10 @@ class PlayerPlaybackMixin:
         if not output_file_path:
             return
 
-        if not output_file_path.endswith('.mov'):
-            output_file_path += '.mov'
+        output_file_path = paths.normalize_native(file_names.with_extension(output_file_path, '.mov'))
+        ffmpeg = self.require_ffmpeg()
+        if ffmpeg is None:
+            return
 
         self.progress_dialog = QProgressDialog("비디오 병합 중...", "취소", 0, 100, self)
         self.progress_dialog.setWindowModality(Qt.WindowModal)
@@ -85,71 +80,13 @@ class PlayerPlaybackMixin:
         self.progress_dialog.setAutoClose(False)
         self.progress_dialog.show()
 
-        self.worker = FFmpegWorker(lambda: self._merge_videos_process(file_paths, output_file_path))
+        self.worker = FFmpegWorker(
+            lambda: external_tools.merge_videos_ffmpeg(ffmpeg, file_paths, output_file_path, self.worker.progress.emit)
+        )
         self.worker.progress.connect(self.update_progress)
         self.worker.finished.connect(self.on_merge_finished)
         self.worker.error.connect(self.on_merge_error)
         self.worker.start()
-
-    def _merge_videos_process(self, file_paths, output_file_path):
-        temp_dir = tempfile.mkdtemp()
-        temp_files = []
-
-        try:
-            total_steps = 2  # 비디오 변환 및 최종 병합의 두 단계
-            current_step = 0
-
-            # 1. 비디오 목록 파일 작성
-            video_list_path = os.path.join(temp_dir, "video_list.txt")
-            with open(video_list_path, "w") as f:
-                for file_path in file_paths:
-                    f.write(f"file '{file_path}'\n")
-            temp_files.append(video_list_path)
-
-            current_step += 1
-            self.worker.progress.emit(int(current_step / total_steps * 100))
-
-            # 2. 비디오 병합과 동시에 블랙 프레임 제거
-            cmd = [
-                self.ffmpeg_path,
-                '-f', 'concat',
-                '-safe', '0',
-                '-i', video_list_path,
-                '-vf', "blackdetect=d=0.1:pix_th=0.1,blackframe=0:32",
-                '-c:v', 'libx264',
-                '-preset', 'medium',
-                '-crf', '23',
-                '-c:a', 'aac',
-                '-b:a', '192k',
-                '-pix_fmt', 'yuv420p',
-                '-movflags', 'faststart',
-                '-f', 'mov',
-                output_file_path
-            ]
-            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-
-            while True:
-                output = process.stderr.readline()
-                if output == '' and process.poll() is not None:
-                    break
-                if output:
-                    progress = int((current_step + 0.5) / total_steps * 100)
-                    self.worker.progress.emit(progress)
-
-            self.worker.progress.emit(100)  # 완료
-
-        except subprocess.CalledProcessError as e:
-            error_msg = f"FFmpeg 처리 중 오류 발생:\nCommand: {e.cmd}\nReturn code: {e.returncode}\nOutput: {e.stdout}\nError: {e.stderr}"
-            raise Exception(error_msg)
-        except Exception as e:
-            print(f"예상치 못한 오류 발생: {str(e)}")
-            raise
-        finally:
-            for temp_file in temp_files:
-                if os.path.exists(temp_file):
-                    os.remove(temp_file)
-            if os.path.exists(temp_dir):
-                shutil.rmtree(temp_dir)
 
     def update_progress(self, value):
         self.progress_dialog.setValue(value)

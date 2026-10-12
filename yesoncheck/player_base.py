@@ -65,7 +65,7 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck.video_widget import CustomVideoWidget
-from yesoncheck import paths, shared_config
+from yesoncheck import external_tools, paths, shared_config
 # 무거운 모듈들은 lazy import로 변경 (실제 사용 시점에만 로드)
 # from yesoncheck.workers import OCRWorker, OCRExportWorker, SceneDetectWorker
 # from yesoncheck.player_timeline import CollapsibleBox
@@ -287,11 +287,6 @@ QMessageBox {
         self.jobComboBox.currentIndexChanged.connect(self.update_playlist)
 
         self.installEventFilter(self)
-        
-        if hasattr(sys, '_MEIPASS'):
-            self.ffmpeg_path = os.path.join(sys._MEIPASS, 'ffmpeg')
-        else:
-            self.ffmpeg_path = "ffmpeg"
 
         self.show_overlay = False
         self.isFullScreen = False
@@ -3342,13 +3337,17 @@ QMessageBox {
             QMessageBox.information(self, "내보내기 진행 중", "이미 OCR 구간 내보내기가 실행 중입니다.")
             return
 
+        ffmpeg = self.require_ffmpeg()
+        if ffmpeg is None:
+            return
+
         # OCRExportWorker lazy import
         from .workers import OCRExportWorker
         self.ocr_export_worker = OCRExportWorker(
             self.filename_a,
             segments,
             output_dir,
-            self.ffmpeg_path,
+            ffmpeg,
             include_audio=include_audio,
             export_mode=export_mode,
             bitrate=bitrate,
@@ -3798,6 +3797,14 @@ QMessageBox {
         msg_box.setStyleSheet("QLabel{min-width: 700px; min-height: 500px;}")
         
         msg_box.exec_()
+
+    def require_ffmpeg(self):
+        """ffmpeg 경로. 찾지 못하면 오류 창을 띄우고 None."""
+        try:
+            return external_tools.ffmpeg_path()
+        except external_tools.ToolNotFoundError as exc:
+            QMessageBox.critical(self, "ffmpeg 없음", str(exc))
+            return None
 
     def show_run_and_build_dialog(self):
         """실행 및 빌드를 원클릭 버튼으로 제공하는 다이얼로그."""

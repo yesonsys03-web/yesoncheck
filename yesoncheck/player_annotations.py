@@ -889,12 +889,16 @@ class PlayerAnnotationsMixin:
     def _start_annotation_export(
         self, output_path, export_mode="balanced", include_audio=True, total_frames=None
     ):
+        ffmpeg = self.require_ffmpeg()
+        if ffmpeg is None:
+            return
+
         frame_dict = self.annotation_store.as_frame_dict(total_frames=total_frames)
         self.annotation_export_worker = AnnotationExportWorker(
             self.filename_a,
             frame_dict,
             output_path,
-            self.ffmpeg_path,
+            ffmpeg,
             include_audio=include_audio,
             export_mode=export_mode,
         )
