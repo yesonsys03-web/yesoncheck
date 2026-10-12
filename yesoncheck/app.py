@@ -52,6 +52,8 @@ def launch(argv=None):
     # 메인 윈도우 표시 후 스플래시 닫기
     player.show()
     splash.finish(player)
+    # 공유 설정 문제(설정 폴더·작품 경로·변환표)는 스플래시가 닫힌 뒤에 알림 (스플래시가 대화상자를 가리지 않게)
+    QTimer.singleShot(0, player.resolve_shared_config_problem)
 
     if owns_app:
         return app.exec_()

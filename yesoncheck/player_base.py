@@ -65,6 +65,7 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck.video_widget import CustomVideoWidget
+from yesoncheck import paths, shared_config
 # 무거운 모듈들은 lazy import로 변경 (실제 사용 시점에만 로드)
 # from yesoncheck.workers import OCRWorker, OCRExportWorker, SceneDetectWorker
 # from yesoncheck.player_timeline import CollapsibleBox
@@ -84,13 +85,8 @@ class VideoPlayerBase(QMainWindow):
         self.bookmarks_file = os.path.join(os.path.expanduser("~"), ".yeson_bookmarks.json")
         self.load_bookmarks()
         
-        # 작품 경로 관련 초기화
-        self.work_paths = {}
-        # 시스템 전역 경로 설정
-        self.work_paths_config_dir = "/USA_DB/test_jn/.yesoncheck"
-        self.work_paths_file = os.path.join(self.work_paths_config_dir, "work_paths.json")
-        self.work_paths_password_file = os.path.join(self.work_paths_config_dir, "work_paths_password.json")
-        self.load_work_paths()
+        # 작품 경로: 공유 설정 폴더의 work_paths.json (문제는 창 표시 후 resolve_shared_config_problem이 알림)
+        self.setup_shared_config()
         
         # 4K 성능 최적화를 위한 캐싱 시스템 추가
         self.frame_cache = {}
@@ -382,6 +378,7 @@ QMessageBox {
         # JSON에서 작품 목록 로드
         for work_name in sorted(self.work_paths.keys()):
             self.workComboBox.addItem(work_name)
+        self._update_shared_config_title()
         self.seasonComboBox = QComboBox()
         self.seasonComboBox.addItem("시즌선택")
         self.jobComboBox = QComboBox()
@@ -3589,6 +3586,11 @@ QMessageBox {
             opencl_action.triggered.connect(lambda: self.set_gpu_mode(2))
             self.gpu_action_group.append(opencl_action)
         
+        # 공유 설정 폴더 변경 (Windows: PC마다 고름)
+        if paths.IS_WINDOWS:
+            shared_config_action = settings_menu.addAction('공유 설정 폴더 변경...')
+            shared_config_action.triggered.connect(lambda: self.choose_shared_config_dir())
+
         # 4K 성능 모드 서브메뉴
         performance_menu = settings_menu.addMenu('4K 성능 모드')
         self.performance_action_group = []

@@ -30,6 +30,9 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck.workers import ThumbnailLoaderWorker, ThumbnailWorker
+import traceback
+
+from yesoncheck import paths, shared_config
 
 class PlayerSidebarMixin:
 
@@ -330,6 +333,7 @@ class PlayerSidebarMixin:
 
     def update_season_list(self):
         selected_work = self.workComboBox.currentText()
+        self._work_path_problems_shown = set()
         self.seasonComboBox.clear()
         self.seasonComboBox.addItem("시즌선택")
 
@@ -813,62 +817,122 @@ class PlayerSidebarMixin:
         else:
             QMessageBox.warning(self, "선택 필요", "삭제할 북마크를 선택해주세요.")
 
-    def load_work_paths(self):
-        """작품 경로를 JSON 파일에서 로드합니다."""
-        try:
-            if os.path.exists(self.work_paths_file):
-                with open(self.work_paths_file, 'r', encoding='utf-8') as f:
-                    self.work_paths = json.load(f)
-            else:
-                # 기본 경로 설정
-                self.init_default_work_paths()
-                self.save_work_paths()
-        except Exception as e:
-            print(f"작품 경로 로드 오류: {e}")
-            self.init_default_work_paths()
-            self.save_work_paths()
+    def setup_shared_config(self):
+        """공유 설정 폴더를 정하고 작품 경로(Windows는 변환표도)를 읽습니다.
 
-    def save_work_paths(self):
-        """작품 경로를 JSON 파일에 저장합니다."""
+        창은 띄우지 않고 문제를 self.shared_config_problem에 남깁니다 (창 표시 후 resolve_shared_config_problem이 알림).
+        읽기에 실패해도 공유 파일을 기본값으로 덮어쓰지 않습니다.
+        """
+        self.work_paths = {}
+        self.shared_config_problem = None
+        self.work_paths_config_dir = None
+        self.work_paths_file = None
+        self.work_paths_password_file = None
         try:
-            # 디렉토리가 없으면 생성
-            config_dir = os.path.dirname(self.work_paths_file)
-            if config_dir and not os.path.exists(config_dir):
-                os.makedirs(config_dir, exist_ok=True)
-            
-            with open(self.work_paths_file, 'w', encoding='utf-8') as f:
-                json.dump(self.work_paths, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"작품 경로 저장 오류: {e}")
+            config_dir = shared_config.configured_config_dir()
+        except shared_config.SharedConfigError as exc:
+            self.shared_config_problem = str(exc)
+            return
+        if config_dir is None:
+            self.shared_config_problem = "공유 설정 폴더가 아직 정해지지 않았습니다."
+            return
+        self.work_paths_config_dir = config_dir
+        self.work_paths_file = os.path.join(config_dir, shared_config.WORK_PATHS_FILENAME)
+        self.work_paths_password_file = os.path.join(config_dir, shared_config.PASSWORD_FILENAME)
+        problems = []
+        try:
+            self.work_paths = shared_config.read_work_paths(self.work_paths_file)
+        except shared_config.SharedConfigError as exc:
+            problems.append(str(exc))
+        if paths.IS_WINDOWS:
+            try:
+                paths.activate(paths.PathMap.load(config_dir))
+            except paths.PathMapError as exc:
+                paths.activate(None)
+                problems.append(str(exc))
+        if problems:
+            self.shared_config_problem = "\n\n".join(problems)
+
+    def _update_shared_config_title(self):
+        title = "Yeson Checker"
+        if self.shared_config_problem:
+            title += " — 공유 설정 오류 (작품 목록 없음)"
+        self.setWindowTitle(title)
+
+    def resolve_shared_config_problem(self):
+        """창 표시 후 공유 설정 문제를 알립니다. Windows에서 설정 폴더를 못 찾으면 고르게 합니다."""
+        if not self.shared_config_problem:
+            return
+        if paths.IS_WINDOWS and not shared_config.is_valid_config_dir(self.work_paths_config_dir):
+            if self.choose_shared_config_dir(self.shared_config_problem):
+                return
+        QMessageBox.critical(
+            self,
+            "공유 설정 오류",
+            f"{self.shared_config_problem}\n\n작품 목록 없이 계속합니다. 파일 직접 열기와 드래그는 쓸 수 있습니다.",
+        )
+
+    def choose_shared_config_dir(self, reason=None):
+        """(Windows) 공유 설정 폴더를 고르게 하고 PC별 설정에 저장합니다. 골랐으면 True."""
+        if reason:
+            QMessageBox.information(
+                self,
+                "공유 설정 폴더 선택",
+                f"{reason}\n\n작품 경로 설정(work_paths.json)이 들어 있는 공유 설정 폴더(.yesoncheck)를 골라 주세요.",
+            )
+        while True:
+            folder = QFileDialog.getExistingDirectory(self, "공유 설정 폴더(.yesoncheck) 선택")
+            if not folder:
+                return False
+            try:
+                config_dir = paths.drive_to_unc(folder)
+                shared_config.validate_config_dir(config_dir)
+            except (paths.PathMapError, shared_config.SharedConfigError) as exc:
+                QMessageBox.warning(self, "다른 폴더를 고르세요", str(exc))
+                continue
+            shared_config.save_local_settings({"config_dir": config_dir})
+            self.setup_shared_config()
+            self.reload_work_combo()
+            if self.shared_config_problem:
+                QMessageBox.critical(self, "공유 설정 오류", self.shared_config_problem)
+            return True
+
+    def reload_work_combo(self):
+        """작품 콤보박스를 self.work_paths로 다시 채웁니다."""
+        self.workComboBox.blockSignals(True)
+        self.workComboBox.clear()
+        self.workComboBox.addItem("작품선택")
+        for work_name in sorted(self.work_paths.keys()):
+            self.workComboBox.addItem(work_name)
+        self.workComboBox.blockSignals(False)
+        self._update_shared_config_title()
+        self.update_season_list()
+
+    def save_work_paths(self, parent=None):
+        """작품 경로를 공유 파일에 저장합니다. 실패하면 오류 창을 띄우고 False."""
+        try:
+            shared_config.write_work_paths(self.work_paths_file, self.work_paths)
+            return True
+        except OSError:
+            QMessageBox.critical(parent or self, "작품 경로 저장 실패", f"{self.work_paths_file}\n\n{traceback.format_exc()}")
+            return False
 
     def hash_password(self, password):
         """비밀번호를 해시화합니다."""
         return hashlib.sha256(password.encode('utf-8')).hexdigest()
 
     def load_password_hash(self):
-        """저장된 비밀번호 해시를 로드합니다."""
-        try:
-            if os.path.exists(self.work_paths_password_file):
-                with open(self.work_paths_password_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    return data.get('password_hash', None)
+        """저장된 비밀번호 해시. 파일이 없으면 None(최초 설정). 읽기 실패는 예외로 올립니다."""
+        if not os.path.exists(self.work_paths_password_file):
             return None
-        except Exception as e:
-            print(f"비밀번호 해시 로드 오류: {e}")
-            return None
+        with open(self.work_paths_password_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data.get('password_hash', None)
 
     def save_password_hash(self, password_hash):
-        """비밀번호 해시를 저장합니다."""
-        try:
-            # 디렉토리가 없으면 생성
-            config_dir = os.path.dirname(self.work_paths_password_file)
-            if config_dir and not os.path.exists(config_dir):
-                os.makedirs(config_dir, exist_ok=True)
-            
-            with open(self.work_paths_password_file, 'w', encoding='utf-8') as f:
-                json.dump({'password_hash': password_hash}, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"비밀번호 해시 저장 오류: {e}")
+        """비밀번호 해시를 저장합니다 (공유 설정 폴더는 이미 있어야 함). 실패는 예외로 올립니다."""
+        with open(self.work_paths_password_file, 'w', encoding='utf-8') as f:
+            json.dump({'password_hash': password_hash}, f, ensure_ascii=False, indent=2)
 
     def verify_password(self, password):
         """비밀번호를 확인합니다."""
@@ -883,50 +947,72 @@ class PlayerSidebarMixin:
         password_hash = self.hash_password(password)
         self.save_password_hash(password_hash)
 
-    def init_default_work_paths(self):
-        """기본 작품 경로를 설정합니다."""
-        self.work_paths = {
-            "BB": "/usadata3/Bento_Project",
-            "KOTH": "/usadata2/Disney/KOTH",
-            "Big_Mouth": "/usadata2/Titmouse/Big_Mouth",
-            "TGN": "/usadata3/Bento_Project2/Great_North",
-            "MatingSeason": "/usadata2/Titmouse/MatingSeason",
-            "The_Johnsons": "/usadata2/Titmouse/The_Johnsons",
-            "BB_Animatic": "/Users/studio01/Desktop/usadata4/BentoBox_Data/BentoBox_data/BB_New/",
-            "KOTH_Animatic": "/Volumes/bgfinal/colordata/KOTH",
-            "BM_Animatic": "/Volumes/bgfinal/colordata/BIG_MOUTH",
-            "TGN_Animatic": "/Users/studio01/Desktop/usadata4/BentoBox_Data/BentoBox_data/",
-            "MS_Animatic": "/Volumes/bgfinal/colordata/MatingSeason",
-            "TJS_Animatic": "/Volumes/bgfinal/colordata/The_Johnsons"
-        }
-
     def get_work_path(self, work_name):
-        """작품 이름에 해당하는 경로를 반환합니다."""
-        return self.work_paths.get(work_name, "")
+        """작품 경로를 이 PC에서 여는 경로로 돌려줍니다 (Windows: 변환표로 UNC 변환).
 
-    def normalize_path(self, path):
-        """경로를 짧은 형식으로 변환합니다.
-        
-        /System/Volumes/Data/usadata -> /usadata
-        /System/Volumes/Data/Volumes -> /Volumes
-        /System/Volumes/Data/Users -> /Users
+        변환하지 못하거나 (Windows에서) 폴더가 없으면 오류 창을 한 번 띄우고 ""를 돌려줍니다.
         """
-        if not path:
-            return path
-        
-        # /System/Volumes/Data로 시작하는 경우 변환
-        if path.startswith("/System/Volumes/Data/"):
-            normalized = path.replace("/System/Volumes/Data", "", 1)
-            return normalized
-        
-        # 이미 짧은 형식인 경우 그대로 반환
-        return path
+        stored = self.work_paths.get(work_name, "")
+        if not stored:
+            return ""
+        try:
+            native = paths.to_native(stored)
+        except paths.PathMapError as exc:
+            self._report_work_path_problem(f"작품 '{work_name}'의 경로를 이 PC 경로로 바꿀 수 없습니다.\n\n{exc}")
+            return ""
+        if paths.IS_WINDOWS and not os.path.isdir(native):
+            self._report_work_path_problem(
+                f"작품 '{work_name}' 폴더를 열 수 없습니다.\n\n이 PC 경로: {native}\n공유 설정 경로: {stored}\n\n"
+                "NAS 연결과 path_map.json을 확인하세요."
+            )
+            return ""
+        return native
+
+    def _report_work_path_problem(self, message):
+        """작품 하나를 고를 때 시즌·job·목록이 각각 같은 경로를 물으므로 같은 오류는 한 번만 보여 줍니다."""
+        shown = self.__dict__.setdefault("_work_path_problems_shown", set())
+        if message in shown:
+            return
+        shown.add(message)
+        QMessageBox.critical(self, "작품 경로 오류", message)
+
+    def _stored_work_path_or_warn(self, folder_path, parent):
+        """고른 폴더를 공유 설정에 저장할 Mac 경로로 바꿉니다. 못 바꾸면 오류 창을 띄우고 None."""
+        try:
+            return paths.to_canonical(folder_path)
+        except paths.PathMapError as exc:
+            QMessageBox.critical(parent, "경로를 저장할 수 없음", f"고른 폴더를 공유 설정에 저장할 경로로 바꾸지 못했습니다.\n\n{exc}")
+            return None
+
+    def _refresh_work_path_table(self, table):
+        table.clear()
+        for work_name, path in sorted(self.work_paths.items()):
+            text = f"{work_name}: {path}"
+            if paths.IS_WINDOWS:
+                try:
+                    text += f"\n    → {paths.to_native(path)}"
+                except paths.PathMapError:
+                    text += "\n    → 변환표에 없음 (path_map.json 확인)"
+            item = QListWidgetItem(text)
+            item.setData(Qt.UserRole, work_name)
+            table.addItem(item)
 
     def manage_work_paths(self):
         """작품 경로 관리 다이얼로그를 표시합니다."""
+        # 공유 설정에 문제가 있으면 관리 금지 (깨진 파일을 빈 목록으로 덮어쓰거나 새 비밀번호를 받지 않도록)
+        if self.shared_config_problem or self.work_paths_config_dir is None:
+            QMessageBox.warning(
+                self, "작품 경로 관리",
+                f"공유 설정에 문제가 있어 작품 경로를 관리할 수 없습니다.\n\n{self.shared_config_problem or '공유 설정 폴더 없음'}",
+            )
+            return
         # 비밀번호 확인
-        password_hash = self.load_password_hash()
-        
+        try:
+            password_hash = self.load_password_hash()
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, "비밀번호 파일 오류", f"비밀번호 파일을 읽지 못했습니다:\n{self.work_paths_password_file}\n\n{exc}")
+            return
+
         if password_hash is None:
             # 비밀번호가 설정되지 않은 경우, 초기 비밀번호 설정
             password, ok = QInputDialog.getText(
@@ -951,7 +1037,11 @@ class PlayerSidebarMixin:
                 QMessageBox.warning(self, "오류", "비밀번호가 일치하지 않습니다.")
                 return
             
-            self.set_password(password)
+            try:
+                self.set_password(password)
+            except OSError as exc:
+                QMessageBox.critical(self, "비밀번호 저장 실패", f"{self.work_paths_password_file}\n\n{exc}")
+                return
             QMessageBox.information(self, "설정 완료", "비밀번호가 설정되었습니다.")
         else:
             # 비밀번호 입력 요청
@@ -1046,12 +1136,8 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         table = QListWidget()
         table.setAlternatingRowColors(True)
         
-        # 현재 작품 경로를 리스트에 표시
-        for work_name, path in sorted(self.work_paths.items()):
-            item = QListWidgetItem(f"{work_name}: {path}")
-            item.setData(Qt.UserRole, work_name)  # 작품 이름을 저장
-            table.addItem(item)
-        
+        self._refresh_work_path_table(table)
+
         layout.addWidget(table)
         
         # 버튼 레이아웃
@@ -1107,24 +1193,21 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             return
         
         folder_path = QFileDialog.getExistingDirectory(dialog, f"{work_name} 작품 경로 선택")
-        if folder_path:
-            # 경로를 짧은 형식으로 변환
-            normalized_path = self.normalize_path(folder_path)
-            self.work_paths[work_name] = normalized_path
-            self.save_work_paths()
-            
-            # 콤보박스에도 추가
-            if work_name not in [self.workComboBox.itemText(i) for i in range(self.workComboBox.count())]:
-                self.workComboBox.addItem(work_name)
-            
-            # 리스트 업데이트
-            table.clear()
-            for work_name, path in sorted(self.work_paths.items()):
-                item = QListWidgetItem(f"{work_name}: {path}")
-                item.setData(Qt.UserRole, work_name)
-                table.addItem(item)
-            
-            QMessageBox.information(dialog, "추가 완료", f"'{work_name}' 작품이 추가되었습니다.")
+        if not folder_path:
+            return
+        stored_path = self._stored_work_path_or_warn(folder_path, dialog)
+        if stored_path is None:
+            return
+        self.work_paths[work_name] = stored_path
+        if not self.save_work_paths(dialog):
+            del self.work_paths[work_name]
+            return
+
+        # 콤보박스에도 추가
+        if work_name not in [self.workComboBox.itemText(i) for i in range(self.workComboBox.count())]:
+            self.workComboBox.addItem(work_name)
+        self._refresh_work_path_table(table)
+        QMessageBox.information(dialog, "추가 완료", f"'{work_name}' 작품이 추가되었습니다.")
 
     def edit_work_path(self, table, dialog):
         """선택된 작품의 경로를 수정합니다."""
@@ -1137,25 +1220,23 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         if not work_name:
             return
         
-        folder_path = QFileDialog.getExistingDirectory(
-            dialog, 
-            f"{work_name} 작품 경로 선택",
-            self.work_paths.get(work_name, "")
-        )
-        if folder_path:
-            # 경로를 짧은 형식으로 변환
-            normalized_path = self.normalize_path(folder_path)
-            self.work_paths[work_name] = normalized_path
-            self.save_work_paths()
-            
-            # 리스트 업데이트
-            table.clear()
-            for work_name, path in sorted(self.work_paths.items()):
-                item = QListWidgetItem(f"{work_name}: {path}")
-                item.setData(Qt.UserRole, work_name)
-                table.addItem(item)
-            
-            QMessageBox.information(dialog, "수정 완료", f"'{work_name}' 작품의 경로가 수정되었습니다.")
+        try:
+            start_dir = paths.to_native(self.work_paths.get(work_name, ""))
+        except paths.PathMapError:
+            start_dir = ""  # 선택 창의 시작 위치만 정하는 값 (고른 경로는 저장 전에 다시 검사함)
+        folder_path = QFileDialog.getExistingDirectory(dialog, f"{work_name} 작품 경로 선택", start_dir)
+        if not folder_path:
+            return
+        stored_path = self._stored_work_path_or_warn(folder_path, dialog)
+        if stored_path is None:
+            return
+        previous = self.work_paths.get(work_name)
+        self.work_paths[work_name] = stored_path
+        if not self.save_work_paths(dialog):
+            self.work_paths[work_name] = previous
+            return
+        self._refresh_work_path_table(table)
+        QMessageBox.information(dialog, "수정 완료", f"'{work_name}' 작품의 경로가 수정되었습니다.")
 
     def delete_work_path(self, table, dialog):
         """선택된 작품을 삭제합니다."""
@@ -1177,23 +1258,15 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         )
         
         if reply == QMessageBox.Yes:
-            # 작품 경로에서 제거
-            if work_name in self.work_paths:
-                del self.work_paths[work_name]
-                self.save_work_paths()
-            
-            # 콤보박스에서도 제거
+            previous = self.work_paths.pop(work_name, None)
+            if not self.save_work_paths(dialog):
+                if previous is not None:
+                    self.work_paths[work_name] = previous
+                return
             index = self.workComboBox.findText(work_name)
             if index >= 0:
                 self.workComboBox.removeItem(index)
-            
-            # 리스트 업데이트
-            table.clear()
-            for work_name, path in sorted(self.work_paths.items()):
-                item = QListWidgetItem(f"{work_name}: {path}")
-                item.setData(Qt.UserRole, work_name)
-                table.addItem(item)
-            
+            self._refresh_work_path_table(table)
             QMessageBox.information(dialog, "삭제 완료", f"'{work_name}' 작품이 삭제되었습니다.")
 
     def change_password(self, dialog):
@@ -1237,7 +1310,11 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             return
         
         # 비밀번호 변경
-        self.set_password(new_password)
+        try:
+            self.set_password(new_password)
+        except OSError as exc:
+            QMessageBox.critical(dialog, "비밀번호 저장 실패", f"{self.work_paths_password_file}\n\n{exc}")
+            return
         QMessageBox.information(dialog, "변경 완료", "비밀번호가 변경되었습니다.")
 
     def switch_to_list_mode(self):
