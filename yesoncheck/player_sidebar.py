@@ -831,7 +831,7 @@ class PlayerSidebarMixin:
         try:
             config_dir = shared_config.configured_config_dir()
         except shared_config.SharedConfigError as exc:
-            self.shared_config_problem = str(exc)
+            self.shared_config_problem = f"{exc}\n\n{traceback.format_exc()}"
             return
         if config_dir is None:
             self.shared_config_problem = "공유 설정 폴더가 아직 정해지지 않았습니다."
@@ -843,13 +843,13 @@ class PlayerSidebarMixin:
         try:
             self.work_paths = shared_config.read_work_paths(self.work_paths_file)
         except shared_config.SharedConfigError as exc:
-            problems.append(str(exc))
+            problems.append(f"{exc}\n\n{traceback.format_exc()}")
         if paths.IS_WINDOWS:
             try:
                 paths.activate(paths.PathMap.load(config_dir))
             except paths.PathMapError as exc:
                 paths.activate(None)
-                problems.append(str(exc))
+                problems.append(f"{exc}\n\n{traceback.format_exc()}")
         if problems:
             self.shared_config_problem = "\n\n".join(problems)
 
@@ -890,7 +890,11 @@ class PlayerSidebarMixin:
             except (paths.PathMapError, shared_config.SharedConfigError) as exc:
                 QMessageBox.warning(self, "다른 폴더를 고르세요", str(exc))
                 continue
-            shared_config.save_local_settings({"config_dir": config_dir})
+            try:
+                shared_config.save_local_settings({"config_dir": config_dir})
+            except (shared_config.SharedConfigError, OSError) as exc:
+                QMessageBox.critical(self, "PC별 설정 저장 실패", f"{exc}\n\n{traceback.format_exc()}")
+                return False
             self.setup_shared_config()
             self.reload_work_combo()
             if self.shared_config_problem:

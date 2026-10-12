@@ -63,6 +63,7 @@ def test_corrupt_work_paths_not_overwritten(new_player, dialogs, tmp_path):
     config = make_config(str(tmp_path), None, raw="{broken")
     player = new_player(config)
     assert "읽지 못했습니다" in player.shared_config_problem
+    assert "Traceback" in player.shared_config_problem
     assert combo_items(player.workComboBox) == ["작품선택"]
     with open(os.path.join(config, "work_paths.json"), encoding="utf-8") as fh:
         assert fh.read() == "{broken"
@@ -113,3 +114,27 @@ def test_save_converts_drive_path(new_player, dialogs, tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "_remote_name_of_drive", lambda drive: {"Z:": "\\\\nas\\colordata"}.get(drive))
     paths.activate(PathMap.from_dict({"version": 1, "shares": [{"mac": "/Volumes/colordata", "windows": ["\\\\nas\\colordata"]}]}, "map"))
     assert player._stored_work_path_or_warn("Z:/FLORIDA/시즌", None) == "/Volumes/colordata/FLORIDA/시즌"
+
+
+def test_choose_shared_config_dir_handles_save_failure(new_player, dialogs, tmp_path, monkeypatch):
+    config = make_config(str(tmp_path), {})
+    player = new_player(config)
+    monkeypatch.setattr(paths, "IS_WINDOWS", True)
+    monkeypatch.setattr(paths, "drive_to_unc", lambda p, resolver=None: p)
+
+    # APPDATA\YesonCheck\settings.json이 깨져 있음 (시작할 때 이 흐름으로 들어오게 되는 바로 그 상황)
+    appdata = tmp_path / "appdata"
+    (appdata / "YesonCheck").mkdir(parents=True)
+    (appdata / "YesonCheck" / "settings.json").write_text("{broken", encoding="utf-8")
+    monkeypatch.setenv("APPDATA", str(appdata))
+
+    # 고를 폴더는 공유 설정 폴더로서는 유효함 (work_paths.json 존재)
+    valid_config = tmp_path / "valid_config"
+    valid_config.mkdir()
+    (valid_config / "work_paths.json").write_text("{}", encoding="utf-8")
+    dialogs.folders.append(str(valid_config))
+
+    result = player.choose_shared_config_dir()
+
+    assert result is False
+    assert any(kind == "critical" and "PC별 설정" in text for kind, _t, text in dialogs.messages)
