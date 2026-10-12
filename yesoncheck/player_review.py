@@ -3,8 +3,9 @@
 import copy
 import os
 import re
+import sys
 import cv2
-from yesoncheck import web_info
+from yesoncheck import external_tools, web_info
 from PyQt5.QtCore import (
     QEvent,
     QObject,
@@ -980,13 +981,14 @@ class OCRReviewDialog(QDialog):
         
         self.exportModeComboBox = QComboBox()
         self.exportModeComboBox.addItem("균형 (빠르고 정확)", "balanced")  # 기본값
-        self.exportModeComboBox.addItem("고속 (VideoToolbox)", "fast")
+        self.exportModeComboBox.addItem(external_tools.fast_mode_label(), "fast")
         self.exportModeComboBox.addItem("고품질 (최고 화질)", "quality")
         self.exportModeComboBox.setCurrentIndex(0)  # 균형 모드가 기본값
         self.exportModeComboBox.setToolTip(
             "균형: libx264 faster (속도와 품질의 균형, 추천)\n"
-            "고속: VideoToolbox 하드웨어 가속 (5-10배 빠름)\n"
-            "고품질: libx264 slower (느리지만 최고 화질)"
+            + ("고속: VideoToolbox 하드웨어 가속 (5-10배 빠름)\n" if sys.platform == "darwin"
+               else "고속: libx264 veryfast + 선택한 비트레이트 (CPU)\n")
+            + "고품질: libx264 slower (느리지만 최고 화질)"
         )
         export_controls_layout.addWidget(self.exportModeComboBox)
         
@@ -1005,7 +1007,7 @@ class OCRReviewDialog(QDialog):
         self.bitrateComboBox.setVisible(False)
         self.bitrateComboBox.setToolTip(
             "비트레이트가 낮을수록 파일 크기는 작아지지만 품질이 낮아집니다.\n"
-            "VideoToolbox 모드에서만 사용됩니다."
+            "고속 모드에서만 사용됩니다."
         )
         export_controls_layout.addWidget(self.bitrateComboBox)
         

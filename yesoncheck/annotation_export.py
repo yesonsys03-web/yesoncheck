@@ -2,11 +2,12 @@
 
 import os
 import subprocess
-import sys
+import threading
 
 import cv2
 from PyQt5.QtCore import QThread, pyqtSignal
 
+from yesoncheck import external_tools
 from yesoncheck.annotation_burn import burn_annotations_on_frame
 
 
@@ -65,21 +66,7 @@ class AnnotationExportWorker(QThread):
         else:
             cmd.append("-an")
 
-        if self.export_mode == "fast" and sys.platform == "darwin":
-            cmd.extend(
-                [
-                    "-c:v",
-                    "h264_videotoolbox",
-                    "-b:v",
-                    self.bitrate,
-                    "-allow_sw",
-                    "1",
-                ]
-            )
-        elif self.export_mode == "quality":
-            cmd.extend(["-c:v", "libx264", "-preset", "slower", "-crf", "18"])
-        else:
-            cmd.extend(["-c:v", "libx264", "-preset", "faster", "-crf", "20"])
+        cmd.extend(external_tools.video_encoder_args(self.export_mode, self.bitrate))
 
         if self.include_audio:
             cmd.extend(["-c:a", "aac", "-b:a", "192k"])
@@ -111,9 +98,15 @@ class AnnotationExportWorker(QThread):
             proc = subprocess.Popen(
                 cmd,
                 stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
+                **external_tools.subprocess_kwargs(),
             )
+            # ffmpeg 진행 출력을 계속 읽어 둠: 안 읽으면 파이프(Windows 약 4KB)가 차서 ffmpeg가 멈추고
+            # 프레임을 쓰는 이쪽도 같이 멈춤
+            stderr_chunks = []
+            stderr_reader = threading.Thread(target=lambda: stderr_chunks.append(proc.stderr.read()), daemon=True)
+            stderr_reader.start()
 
             frame_idx = 0
             annotated_frames = 0
@@ -136,13 +129,16 @@ class AnnotationExportWorker(QThread):
 
             if not self._is_running:
                 proc.stdin.close()
-                proc.terminate()
+                proc.kill()
+                proc.wait()
+                stderr_reader.join()
                 self.error.emit("보내기가 취소되었습니다.")
                 return
 
             proc.stdin.close()
-            stderr = proc.stderr.read().decode("utf-8", errors="ignore")
             return_code = proc.wait()
+            stderr_reader.join()
+            stderr = external_tools.decode_output(b"".join(stderr_chunks))
             if return_code != 0:
                 self.error.emit(f"FFmpeg 오류:\n{stderr[-4000:]}")
                 return

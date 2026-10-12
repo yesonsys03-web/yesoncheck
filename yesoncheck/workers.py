@@ -4,6 +4,7 @@ import copy
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
@@ -13,7 +14,7 @@ import numpy as np
 from PyQt5.QtCore import QThread, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap
 
-from yesoncheck import paths
+from yesoncheck import external_tools, file_names, paths
 
 # Auto trim module import
 try:
@@ -3133,6 +3134,8 @@ class OCRExportWorker(QThread):
         self._progress_lock = Lock()  # 스레드 안전한 진행률 업데이트
         self._completed_count = 0
         self._executor = None  # ThreadPoolExecutor 참조 저장
+        self._procs = set()  # 실행 중인 ffmpeg (취소 시 끝냄)
+        self._procs_lock = Lock()
 
     def stop(self):
         self._is_running = False
@@ -3145,6 +3148,11 @@ class OCRExportWorker(QThread):
                     self._executor.shutdown(wait=False, cancel_futures=True)
             except Exception:
                 pass  # 이미 종료되었거나 오류 발생 시 무시
+        # 실행 중인 ffmpeg를 끝냄 (Windows에서는 남은 ffmpeg가 출력 파일을 잠금)
+        with self._procs_lock:
+            running = list(self._procs)
+        for proc in running:
+            proc.kill()
 
     def _export_single_segment(self, idx, segment, total_segments):
         """Export a single segment to video file. Returns (success, segment_with_path, error_msg)."""
@@ -3167,6 +3175,7 @@ class OCRExportWorker(QThread):
         # edited_text가 있으면 우선 사용, 없으면 text(원본 OCR 결과) 사용
         safe_name = segment.get("edited_text") or segment.get("text") or "blank"
         safe_name = re.sub(r"[^0-9A-Za-z_-]+", "_", safe_name)[:80] or "segment"
+        safe_name = file_names.avoid_reserved_name(safe_name)
 
         # 중복 파일명 처리: 같은 이름이 있으면 _1, _2, _3... 추가
         base_filename = f"{safe_name}.mp4"
@@ -3219,43 +3228,16 @@ class OCRExportWorker(QThread):
             f"{precise_end_time:.6f}",
         ]
 
-        # 내보내기 모드에 따라 인코딩 설정
-        if self.export_mode == 'fast':
-            # 고속 모드: VideoToolbox 하드웨어 가속 (5-10배 빠름, 프레임 단위 정확)
-            ffmpeg_cmd.extend([
-                "-c:v", "h264_videotoolbox",
-                "-b:v", self.bitrate,  # 동적 비트레이트 (사용자 선택값)
-                "-allow_sw", "1",     # 하드웨어 실패 시 소프트웨어 폴백
-            ])
-            if self.include_audio:
-                ffmpeg_cmd.extend(["-c:a", "aac", "-b:a", "192k"])
-            else:
-                ffmpeg_cmd.append("-an")
-            log_msg = f"[구간 {idx}/{total_segments}] 인코딩 모드: 고속 (VideoToolbox, 비트레이트: {self.bitrate}, 오디오: {'포함' if self.include_audio else '제외'})"
-        elif self.export_mode == 'quality':
-            # 고품질 모드: libx264 slower (느리지만 최고 품질)
-            ffmpeg_cmd.extend([
-                "-c:v", "libx264",
-                "-preset", "slower",
-                "-crf", "18",
-            ])
-            if self.include_audio:
-                ffmpeg_cmd.extend(["-c:a", "aac", "-b:a", "192k"])
-            else:
-                ffmpeg_cmd.append("-an")
-            log_msg = f"[구간 {idx}/{total_segments}] 인코딩 모드: 고품질 (libx264 slower, CRF 18, 오디오: {'포함' if self.include_audio else '제외'})"
-        else:  # 'balanced' (기본값)
-            # 균형 모드: libx264 faster (속도와 품질의 균형)
-            ffmpeg_cmd.extend([
-                "-c:v", "libx264",
-                "-preset", "faster",
-                "-crf", "20",  # 18보다 약간 낮은 품질이지만 더 빠름
-            ])
-            if self.include_audio:
-                ffmpeg_cmd.extend(["-c:a", "aac", "-b:a", "192k"])
-            else:
-                ffmpeg_cmd.append("-an")
-            log_msg = f"[구간 {idx}/{total_segments}] 인코딩 모드: 균형 (libx264 faster, CRF 20, 오디오: {'포함' if self.include_audio else '제외'})"
+        # 내보내기 모드에 따라 인코딩 설정 (고속: Mac VideoToolbox, Windows libx264 veryfast + 비트레이트)
+        ffmpeg_cmd.extend(external_tools.video_encoder_args(self.export_mode, self.bitrate))
+        if self.include_audio:
+            ffmpeg_cmd.extend(["-c:a", "aac", "-b:a", "192k"])
+        else:
+            ffmpeg_cmd.append("-an")
+        mode_name = {"fast": external_tools.fast_mode_label(), "quality": "고품질 (libx264 slower, CRF 18)"}.get(
+            self.export_mode, "균형 (libx264 faster, CRF 20)")
+        bitrate_note = f", 비트레이트: {self.bitrate}" if self.export_mode == "fast" else ""
+        log_msg = f"[구간 {idx}/{total_segments}] 인코딩 모드: {mode_name}{bitrate_note} (오디오: {'포함' if self.include_audio else '제외'})"
 
         self.status.emit(log_msg)
         # print(f"[OCRExportWorker] {log_msg}")
@@ -3272,19 +3254,30 @@ class OCRExportWorker(QThread):
             self.status.emit(log_msg)
             # print(f"[OCRExportWorker] {log_msg}")
 
-            subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            proc = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                    **external_tools.subprocess_kwargs())
+        except OSError as exc:
+            return (False, None, f"FFmpeg 실행 실패 ({filename}): {exc}")
+        with self._procs_lock:
+            self._procs.add(proc)
+        if not self._is_running:  # stop()이 Popen과 등록 사이에 불린 경우
+            proc.kill()
+        try:
+            _, stderr = proc.communicate()
+        finally:
+            with self._procs_lock:
+                self._procs.discard(proc)
+        if not self._is_running:
+            output_path.unlink(missing_ok=True)  # 취소로 끊긴 미완성 파일
+            return (False, None, "취소됨")
+        if proc.returncode != 0:
+            return (False, None, f"FFmpeg 오류 ({filename}): {external_tools.decode_output(stderr)}")
 
-            log_msg = f"[구간 {idx}/{total_segments}] '{filename}' 내보내기 완료 → {output_path}"
-            self.status.emit(log_msg)
-            # print(f"[OCRExportWorker] {log_msg}")
-
-            segment_with_path = dict(segment)
-            segment_with_path["output_path"] = str(output_path)
-            return (True, segment_with_path, None)
-
-        except subprocess.CalledProcessError as exc:
-            error_msg = f"FFmpeg 오류 ({filename}): {exc.stderr.decode('utf-8', errors='ignore')}"
-            return (False, None, error_msg)
+        log_msg = f"[구간 {idx}/{total_segments}] '{filename}' 내보내기 완료 → {output_path}"
+        self.status.emit(log_msg)
+        segment_with_path = dict(segment)
+        segment_with_path["output_path"] = str(output_path)
+        return (True, segment_with_path, None)
 
     def run(self):
         if not self.segments:

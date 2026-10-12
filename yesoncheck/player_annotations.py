@@ -29,6 +29,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from yesoncheck import external_tools
 from yesoncheck.annotation_export import AnnotationExportWorker
 from yesoncheck.annotation_burn import burn_annotations_on_frame
 from yesoncheck.frame_annotations import (
@@ -860,7 +861,7 @@ class PlayerAnnotationsMixin:
         mode_row.addWidget(QLabel("품질:"))
         mode_combo = QComboBox()
         mode_combo.addItem("균형 (권장)", "balanced")
-        mode_combo.addItem("고속 (macOS VideoToolbox)", "fast")
+        mode_combo.addItem(external_tools.fast_mode_label(), "fast")
         mode_combo.addItem("고품질", "quality")
         mode_row.addWidget(mode_combo)
         layout.addLayout(mode_row)
