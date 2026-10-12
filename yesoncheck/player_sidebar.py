@@ -57,7 +57,7 @@ class PlayerSidebarMixin:
             
             # URL들을 파일/폴더로 분류
             for url in urls:
-                local_path = url.toLocalFile()
+                local_path = paths.normalize_native(url.toLocalFile())
                 if os.path.isfile(local_path):
                     # 파일인 경우
                     if parent.is_video_file(local_path):
@@ -73,7 +73,7 @@ class PlayerSidebarMixin:
             # 폴더가 포함된 경우 북마크에 자동 추가
             if folder_paths:
                 for folder_path in folder_paths:
-                    if folder_path not in parent.bookmarks:
+                    if not paths.contains_path(parent.bookmarks, folder_path):
                         parent.bookmarks.append(folder_path)
                         print(f"폴더가 북마크에 자동 추가됨: {folder_path}")
                 
@@ -222,6 +222,7 @@ class PlayerSidebarMixin:
 
         file_paths = [item.toolTip() for item in selected_items]
         target_path = QFileDialog.getExistingDirectory(self, "Select Folder to Copy")
+        target_path = paths.normalize_native(target_path)
         if target_path:
             self.copy_files_to_target(file_paths, target_path)
 
@@ -310,18 +311,17 @@ class PlayerSidebarMixin:
             if not self.current_thumbnail_folder:
                 return
 
-            import hashlib
-            file_hash = hashlib.md5(file_path.encode("utf-8")).hexdigest()
+            file_hash = paths.thumbnail_key(file_path)
             thumbnail_path = os.path.join(self.current_thumbnail_folder, f"{file_hash}.jpg")
-            
+
             if os.path.exists(thumbnail_path):
                 os.remove(thumbnail_path)
                 print(f"썸네일 파일 삭제: {thumbnail_path}")
-            
+
             # UI에서도 썸네일 제거
             for i in range(self.sidebar.count()):
                 item = self.sidebar.item(i)
-                if item and item.data(Qt.UserRole) == file_path:
+                if item and paths.same_path(item.data(Qt.UserRole), file_path):
                     item.setIcon(QIcon())
                     # 파일명만 표시
                     filename = os.path.basename(file_path)
@@ -534,6 +534,7 @@ class PlayerSidebarMixin:
 
     def select_folder(self):
         folder_path = QFileDialog.getExistingDirectory(self, "Select Folder")
+        folder_path = paths.normalize_native(folder_path)
         if folder_path:
             self.load_videos_from_folder(folder_path)
 
@@ -601,7 +602,7 @@ class PlayerSidebarMixin:
             # 사이드바에서 현재 파일 강조
             for i in range(self.sidebar.count()):
                 item = self.sidebar.item(i)
-                is_current = item.toolTip() == current_file
+                is_current = paths.same_path(item.toolTip(), current_file)
                 font = item.font()
                 font.setBold(is_current)
                 item.setFont(font)
@@ -696,8 +697,9 @@ class PlayerSidebarMixin:
     def add_bookmark(self):
         # 현재 폴더를 북마크에 추가
         folder_path = QFileDialog.getExistingDirectory(self, "북마크할 폴더 선택")
+        folder_path = paths.normalize_native(folder_path)
         if folder_path:
-            if folder_path not in self.bookmarks:
+            if not paths.contains_path(self.bookmarks, folder_path):
                 self.bookmarks.append(folder_path)
                 self.save_bookmarks()
                 QMessageBox.information(self, "북마크 추가", f"{folder_path}\n폴더가 북마크에 추가되었습니다.")
@@ -1376,8 +1378,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             if file_path and os.path.isfile(file_path):
                 if self._has_disk_thumbnail(file_path):
                     print(f"캐시된 썸네일 즉시 적용: {file_path}")
-                    import hashlib
-                    file_hash = hashlib.md5(file_path.encode("utf-8")).hexdigest()
+                    file_hash = paths.thumbnail_key(file_path)
                     thumbnail_path = os.path.join(self.current_thumbnail_folder, f"{file_hash}.jpg")
                     pixmap = QPixmap(thumbnail_path)
                     if not pixmap.isNull():
@@ -1434,8 +1435,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             if file_path and os.path.isfile(file_path):
                 if self._has_disk_thumbnail(file_path):
                     print(f"캐시된 썸네일 즉시 적용: {file_path}")
-                    import hashlib
-                    file_hash = hashlib.md5(file_path.encode("utf-8")).hexdigest()
+                    file_hash = paths.thumbnail_key(file_path)
                     thumbnail_path = os.path.join(self.current_thumbnail_folder, f"{file_hash}.jpg")
                     pixmap = QPixmap(thumbnail_path)
                     if not pixmap.isNull():
@@ -1568,8 +1568,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         """디스크에 썸네일이 있는지 확인합니다."""
         if not self.current_thumbnail_folder:
             return False
-        import hashlib
-        file_hash = hashlib.md5(file_path.encode("utf-8")).hexdigest()
+        file_hash = paths.thumbnail_key(file_path)
         thumbnail_path = os.path.join(self.current_thumbnail_folder, f"{file_hash}.jpg")
         return os.path.exists(thumbnail_path)
 
@@ -1604,8 +1603,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         # 동시 실행 제한 (1개로 더 줄임)
         # 디스크에 저장된 썸네일 확인
         if self.current_thumbnail_folder:
-            import hashlib
-            file_hash = hashlib.md5(file_path.encode("utf-8")).hexdigest()
+            file_hash = paths.thumbnail_key(file_path)
             thumbnail_path = os.path.join(self.current_thumbnail_folder, f"{file_hash}.jpg")
             
             if os.path.exists(thumbnail_path):
@@ -1687,7 +1685,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             # 사이드바에서 해당 파일을 찾아 썸네일 설정
             for i in range(self.sidebar.count()):
                 item = self.sidebar.item(i)
-                if item and item.data(Qt.UserRole) == file_path:
+                if item and paths.same_path(item.data(Qt.UserRole), file_path):
                     # 아이콘 설정
                     item.setIcon(QIcon(pixmap))
                     print(f"썸네일 아이템 업데이트 완료: {file_path}")

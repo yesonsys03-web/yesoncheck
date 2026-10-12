@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import (
 
 from yesoncheck.frame_utils import FrameCalculator
 from yesoncheck.workers import FFmpegWorker
+from yesoncheck import paths
 
 class PlayerPlaybackMixin:
 
@@ -404,6 +405,7 @@ class PlayerPlaybackMixin:
             file_path, _ = QFileDialog.getOpenFileName(self, f"Open Video {video_type}")
 
         if file_path:
+            file_path = paths.normalize_native(file_path)
             # 플레이리스트 재생 중이 아닐 때만 stop_video 호출
             if not self.is_playlist_playing:
                 self.stop_video()

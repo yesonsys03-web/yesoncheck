@@ -13,6 +13,8 @@ import numpy as np
 from PyQt5.QtCore import QThread, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap
 
+from yesoncheck import paths
+
 # Auto trim module import
 try:
     from .auto_trim import detect_scene_cuts, detect_scene_cuts_with_opencv, SCENEDETECT_AVAILABLE
@@ -86,9 +88,7 @@ class ThumbnailWorker(QThread):
 
             # 썸네일 파일 경로 생성
             if self.thumbnail_folder:
-                import hashlib
-
-                file_hash = hashlib.md5(self.file_path.encode("utf-8")).hexdigest()
+                file_hash = paths.thumbnail_key(self.file_path)
                 thumbnail_path = os.path.join(self.thumbnail_folder, f"{file_hash}.jpg")
 
                 # 이미 썸네일이 존재하는지 확인
@@ -255,9 +255,7 @@ class ThumbnailLoaderWorker(QThread):
 
                 try:
                     # 파일 해시로 썸네일 경로 생성
-                    import hashlib
-
-                    file_hash = hashlib.md5(file_path.encode("utf-8")).hexdigest()
+                    file_hash = paths.thumbnail_key(file_path)
                     thumbnail_path = os.path.join(self.thumbnail_folder, f"{file_hash}.jpg")
 
                     if os.path.exists(thumbnail_path):

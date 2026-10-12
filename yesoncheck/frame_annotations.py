@@ -6,6 +6,8 @@ import os
 import uuid
 from typing import Any, Dict, List, Optional
 
+from yesoncheck import paths
+
 
 ANNOTATION_TYPES = ("text", "rect", "ellipse", "line", "arrow")
 DEFAULT_COLOR = "#ff3333"
@@ -388,7 +390,7 @@ class FrameAnnotationStore:
             str(frame_idx): items for frame_idx, items in self.annotations.items()
         }
         return {
-            "video_path": self.video_path,
+            "video_path": paths.to_storage(self.video_path),
             "fps": self.fps,
             "annotations": serialized,
         }
@@ -424,7 +426,10 @@ class FrameAnnotationStore:
             return False
         with open(target, "r", encoding="utf-8") as handle:
             data = json.load(handle)
+        opened_video_path = self.video_path
         self.from_dict(data)
+        # 파일에 적힌 경로(다른 PC·OS에서 저장했을 수 있음)로 바꾸지 않고 지금 연 영상 경로를 유지
+        self.video_path = opened_video_path
         return True
 
 

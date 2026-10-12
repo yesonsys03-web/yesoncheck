@@ -1278,7 +1278,7 @@ QSlider::add-page:horizontal {
                 folder_paths = []  # 폴더 경로들을 저장할 리스트
                 
                 for url in urls:
-                    file_path = url.toLocalFile()
+                    file_path = paths.normalize_native(url.toLocalFile())
                     if os.path.isfile(file_path):
                         if self.is_video_file(file_path):
                             video_files.append(file_path)
@@ -1292,7 +1292,7 @@ QSlider::add-page:horizontal {
                 # 폴더가 포함된 경우 북마크에 자동 추가
                 if folder_paths:
                     for folder_path in folder_paths:
-                        if folder_path not in self.bookmarks:
+                        if not paths.contains_path(self.bookmarks, folder_path):
                             self.bookmarks.append(folder_path)
                             print(f"폴더가 북마크에 자동 추가됨: {folder_path}")
                     
@@ -3007,7 +3007,7 @@ QMessageBox {
             if ocr_mode is None:
                 ocr_mode = getattr(self, '_last_ocr_mode', 'titmouse')
             save_data = {
-                "video_path": current_video_path,
+                "video_path": paths.to_storage(current_video_path),
                 "roi": self.ocr_roi if hasattr(self, 'ocr_roi') and self.ocr_roi else None,
                 "fps": self.fps if hasattr(self, 'fps') and self.fps else 24.0,
                 "total_frames": self.total_frames_a if hasattr(self, 'total_frames_a') and self.total_frames_a else 1,
@@ -3147,8 +3147,18 @@ QMessageBox {
             images_dir = os.path.join(json_dir, f"{json_basename}_images")
             
             # 동영상 경로 확인 및 자동 로드
-            saved_video_path = load_data.get("video_path")
-            
+            stored_video_path = load_data.get("video_path")
+            try:
+                saved_video_path = paths.from_storage(stored_video_path)
+            except paths.PathMapError as exc:
+                QMessageBox.warning(
+                    self, "동영상 경로 변환 실패",
+                    f"저장된 동영상 경로를 이 PC 경로로 바꾸지 못했습니다:\n{stored_video_path}\n\n{exc}",
+                )
+                if not self.filename_a:
+                    return
+                saved_video_path = None  # 이미 연 영상으로 계속
+
             # 방법 2: 동영상이 로드되지 않았거나 경로가 다르면 자동으로 로드
             if saved_video_path:
                 # 동영상이 로드되지 않은 경우
@@ -3171,7 +3181,7 @@ QMessageBox {
                         )
                         return
                 # 동영상 경로가 다른 경우
-                elif saved_video_path != self.filename_a:
+                elif not paths.same_path(saved_video_path, self.filename_a):
                     reply = QMessageBox.question(
                         self,
                         "동영상 경로 불일치",

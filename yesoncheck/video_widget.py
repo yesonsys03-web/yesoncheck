@@ -18,6 +18,7 @@ from PyQt5.QtGui import (
     QTransform,
     QWheelEvent,
 )
+
 from PyQt5.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsLineItem,
@@ -29,6 +30,8 @@ from PyQt5.QtWidgets import (
     QLabel,
     QMessageBox,
 )
+
+from yesoncheck import paths
 
 class CustomVideoWidget(QGraphicsView):
     wipePositionChanged = pyqtSignal()
@@ -300,7 +303,7 @@ class CustomVideoWidget(QGraphicsView):
             
             # URL들을 파일/폴더로 분류
             for url in urls:
-                local_path = url.toLocalFile()
+                local_path = paths.normalize_native(url.toLocalFile())
                 if os.path.isfile(local_path):
                     # 파일인 경우
                     if parent.is_video_file(local_path):
@@ -316,7 +319,7 @@ class CustomVideoWidget(QGraphicsView):
             # 폴더가 포함된 경우 북마크에 자동 추가
             if folder_paths:
                 for folder_path in folder_paths:
-                    if folder_path not in parent.bookmarks:
+                    if not paths.contains_path(parent.bookmarks, folder_path):
                         parent.bookmarks.append(folder_path)
                         print(f"폴더가 북마크에 자동 추가됨: {folder_path}")
                 
