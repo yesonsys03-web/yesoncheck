@@ -1,0 +1,52 @@
+# PyInstaller
+.pyinstaller/
+build/
+dist/
+*.spec.bak
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Project specific
+.yesoncheck_thumb/
+*.log
+*.db
+*.sqlite
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Thumbnails
+.yesoncheck_thumb/
+
+
+# 정적 ffmpeg 바이너리 (크기 때문에 제외, ./fetch_ffmpeg.sh로 받음)
+vendor/ffmpeg/x86_64/
+vendor/ffmpeg/arm64/
+
+# 백업·에이전트 상태
+*.bak
+.omc/

@@ -1,0 +1,31 @@
+# YesonCheck 빌드 환경 (Python 3.10, Intel/Apple Silicon 공통) — 직접 고정하는 목록
+# 실제 설치는 하위 의존성까지 고정한 아키텍처별 lock 파일로 함 (setup_build_env.sh).
+# 이 파일을 고친 뒤에는 lock을 다시 만드세요:
+#   MACOSX_DEPLOYMENT_TARGET=12.0 uv pip compile requirements-build.txt --python-version 3.10 \
+#     --python-platform x86_64-apple-darwin --no-header -o requirements-build-x86_64.lock
+#   (arm64는 --python-platform aarch64-apple-darwin, -o requirements-build-arm64.lock)
+PyQt5==5.15.11
+numpy==1.26.4
+# paddleocr 2.7.3이 opencv <=4.6.0.66을 요구하고, pdf2docx가 headless 판을 끌어오므로 셋 다 같은 버전으로 고정
+opencv-python==4.6.0.66
+opencv-contrib-python==4.6.0.66
+opencv-python-headless==4.6.0.66
+# paddle은 아키텍처마다 몬터레이에서 도는 버전이 다름 (휠 안 라이브러리의 최소 macOS 기준)
+#   x86_64: 2.6.2는 macOS 13.0 필요 → 3.0.0(12.3)   arm64: 3.0.0은 libblas가 14.0 필요 → 2.6.2(11.4)
+#   paddleocr 2.7.3 OCR 결과는 두 버전에서 동일함을 확인
+paddlepaddle==3.0.0; platform_machine == "x86_64"
+paddlepaddle==2.6.2; platform_machine == "arm64"
+paddleocr==2.7.3
+scikit-image==0.24.0
+# 0.7부터 VideoManager가 없어져 auto_trim.py(Animatic 모드)가 꺼짐 → 0.6.x 고정
+scenedetect==0.6.7.1
+setuptools==75.8.0
+# setuptools 75가 내부에 포함(vendored)한 패키지 중 PyInstaller 6.14.1이 앱에 넣지 못하는 것들.
+# paddle이 import 시 setuptools를 불러오므로 빠지면 앱 시작/OCR이 실패함 → 같은 버전을 일반 패키지로 설치
+#   backports.tarfile: 앱 시작 시 "No module named 'backports'"
+#   jaraco.collections: OCR 시작 시 "No module named 'jaraco.collections'" (PyInstaller의 vendored 목록에 없음)
+backports.tarfile==1.2.0
+jaraco.collections==5.1.0
+# jaraco.collections가 요구함. 4.x는 typer·rich까지 끌어오므로 setuptools 내장판과 같은 3.12.1로 고정
+jaraco.text==3.12.1
+pyinstaller==6.14.1

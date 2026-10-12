@@ -1,0 +1,246 @@
+"""빌드된 앱에 실행 중 필요한 파이썬 모듈이 모두 들어 있는지 검사합니다.
+
+빌드 환경(소스)에서 앱이 쓰는 경로를 실제로 실행해 불러온 모듈을 모은 뒤,
+빌드된 앱 안에 같은 모듈이 있는지 대조합니다. PyInstaller가 정적 분석으로 놓친 모듈
+(예: setuptools 내부의 jaraco.collections)이 있으면 앱이 실행 중에 "No module named ..."로
+실패하므로 빌드 단계에서 잡습니다.
+
+실행하는 경로:
+- yesoncheck 소스에 있는 모든 import (함수 안의 지연 import 포함)
+- PaddleOCR 생성 + 인식 (앱의 King 모드 설정, 모델이 없으면 ~/.paddleocr에 내려받음)
+- paddle 3.0 입력 크기 변화 버그 회피(yesoncheck.workers.guard_paddle_buffer_growth)가 통하는지
+- PySceneDetect 씬 감지 (임시 합성 영상)
+
+사용법: python check_frozen_imports.py <앱 번들>
+누락이 하나라도 있으면 목록을 출력하고 종료 코드 1로 끝납니다.
+"""
+
+import ast
+import glob
+import importlib
+import os
+import plistlib
+import sys
+import sysconfig
+import tempfile
+import zipfile
+
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+SITE_DIRS = {os.path.realpath(sysconfig.get_paths()[k]) for k in ("purelib", "platlib")}
+STDLIB_DIR = os.path.realpath(sysconfig.get_paths()["stdlib"])
+
+# 앱에 없어도 되는 모듈: 불러오는 쪽이 ImportError를 처리함 (이유를 반드시 적을 것)
+OPTIONAL_MODULES = {
+    "Cython._shared": "setuptools/command/build_ext.py가 Cython을 try/except로 시도, 없으면 distutils판 사용",
+    "_shared": "Cython._shared와 같은 파일 (위와 동일)",
+}
+
+
+def spec_excludes():
+    """YesonCheck_Autocut.spec의 Analysis(excludes=[...]) 목록을 읽습니다."""
+    with open(os.path.join(PROJECT_ROOT, "YesonCheck_Autocut.spec"), encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "Analysis":
+            for kw in node.keywords:
+                if kw.arg == "excludes":
+                    return set(ast.literal_eval(kw.value))
+    raise SystemExit("spec에서 Analysis(excludes=...)를 찾지 못했습니다")
+
+
+class BlockExcluded:
+    """spec에서 제외한 모듈은 빌드된 앱처럼 소스 실행에서도 import 실패로 만듭니다."""
+
+    def __init__(self, names):
+        self.names = names
+
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split(".")[0] in self.names:
+            raise ModuleNotFoundError(f"No module named '{fullname}' (spec excludes)", name=fullname)
+        return None
+
+
+def source_imports():
+    """yesoncheck 패키지 소스의 모든 절대 import 모듈 이름을 모읍니다."""
+    names = set()
+    for path in glob.glob(os.path.join(PROJECT_ROOT, "yesoncheck", "*.py")):
+        with open(path, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read(), path)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                names.add(node.module)
+    return sorted(names)
+
+
+def exercise_app():
+    """앱이 실행 중에 거치는 경로를 소스 환경에서 실행합니다."""
+    sys.path.insert(0, PROJECT_ROOT)
+    sys.meta_path.insert(0, BlockExcluded(spec_excludes()))
+    skipped = []
+    for name in source_imports():
+        try:
+            importlib.import_module(name)
+        except ImportError as exc:
+            # 선택 의존성(transnetv2 등)은 앱도 없는 상태로 동작하므로 건너뜀
+            skipped.append(f"{name} ({exc})")
+
+    import cv2
+    import numpy as np
+    from paddleocr import PaddleOCR
+
+    image = np.full((120, 700, 3), 255, np.uint8)
+    cv2.putText(image, "Seq 02A_S09 - Panel 6", (15, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.6, (0, 0, 0), 3)
+    engine = PaddleOCR(
+        use_angle_cls=True, lang="en", show_log=False, use_gpu=False, use_mp=True, total_process_num=2,
+        det_db_thresh=0.3, det_db_box_thresh=0.5, rec_batch_num=16, use_space_char=True,
+    )
+    result = engine.ocr(image, cls=True)
+    texts = [line[1][0] for line in (result[0] or [])]
+    if not texts:
+        raise SystemExit("OCR 실행 결과가 비어 있습니다 (빌드 환경의 PaddleOCR 확인 필요)")
+
+    # 앱의 paddle 3.0 버그 회피(guard_paddle_buffer_growth)가 이 Mac의 paddle에서 통하는지 확인:
+    # 새 엔진에 입력 크기(배치·폭)가 여러 번 커지는 순서를 넣음 (회피가 없으면 paddle 3.0.0은 4번째에서 실패)
+    from yesoncheck.workers import guard_paddle_buffer_growth
+
+    fresh = PaddleOCR(use_angle_cls=False, lang="en", show_log=False, use_gpu=False, rec_batch_num=16, use_space_char=True)
+    guard_paddle_buffer_growth(fresh)
+    rec = fresh.text_recognizer
+    for batch, width in [(1, 320), (2, 320), (1, 320), (3, 320), (1, 640), (1, 320), (1, 960), (4, 960), (2, 1280)]:
+        rec.input_tensor.copy_from_cpu(np.random.rand(batch, 3, 48, width).astype("float32"))
+        try:
+            rec.predictor.run()
+        except RuntimeError as exc:
+            raise SystemExit(f"paddle 입력 크기 변화 회피 실패 (배치 {batch}, 폭 {width}): {exc}") from exc
+        for output in rec.output_tensors:  # 앱(paddleocr)처럼 실행 후 출력을 읽음
+            output.copy_to_cpu()
+
+    from yesoncheck.auto_trim import detect_scene_cuts
+
+    with tempfile.TemporaryDirectory() as tmp:
+        video = os.path.join(tmp, "cuts.mp4")
+        writer = cv2.VideoWriter(video, cv2.VideoWriter_fourcc(*"mp4v"), 24, (320, 180))
+        for i in range(72):
+            writer.write(np.full((180, 320, 3), 0 if i < 36 else 255, np.uint8))
+        writer.release()
+        detect_scene_cuts(video, min_scene_len=5)
+    return texts, skipped
+
+
+def frozen_contents(bundle):
+    """빌드된 앱의 PYZ·base_library.zip 모듈 이름과 Frameworks 파일 경로를 모읍니다."""
+    from PyInstaller.archive.readers import CArchiveReader
+
+    with open(os.path.join(bundle, "Contents", "Info.plist"), "rb") as fh:
+        exe_name = plistlib.load(fh)["CFBundleExecutable"]
+    exe = os.path.join(bundle, "Contents", "MacOS", exe_name)
+    pkg = CArchiveReader(exe)
+    pyz_name = next(n for n in pkg.toc if n.endswith(".pyz"))
+    modules = set(pkg.open_embedded_archive(pyz_name).toc)
+
+    frameworks = os.path.join(bundle, "Contents", "Frameworks")
+    with zipfile.ZipFile(os.path.join(frameworks, "base_library.zip")) as zf:
+        for entry in zf.namelist():
+            if entry.endswith(".pyc"):
+                name = entry[:-4].replace("/", ".")
+                modules.add(name[: -len(".__init__")] if name.endswith(".__init__") else name)
+
+    files = set()
+    # 데이터 폴더는 Contents/Resources에 있고 Frameworks에서 심볼릭 링크로 연결됨 → 링크를 따라감
+    for root, _dirs, names in os.walk(frameworks, followlinks=True):
+        for name in names:
+            files.add(os.path.relpath(os.path.join(root, name), frameworks))
+    return modules, files
+
+
+def frozen_location(name, path, is_package_dir=False):
+    """소스 환경의 모듈 위치를 빌드된 앱 Contents/Frameworks 기준 상대 경로로 바꿉니다.
+
+    경로는 모듈 이름에서 계산합니다 (ppocr.utils.network → <루트>/ppocr/utils/network.py).
+    루트가 site-packages 아래면 앱에서도 같은 상대 위치(paddleocr 등)에 있어야 합니다.
+    계산할 수 없으면 None.
+    """
+    path = os.path.realpath(path)
+    parts = name.split(".")
+    base = os.path.basename(path)
+    if is_package_dir:
+        rel = os.path.join(*parts)
+    elif base.startswith("__init__."):
+        rel = os.path.join(*parts, base)
+    else:
+        rel = os.path.join(*parts[:-1], base)
+    if not path.endswith(os.sep + rel):
+        return None
+    root = path[: -len(os.sep + rel)]
+    for site in SITE_DIRS:
+        if root == site or root.startswith(site + os.sep):
+            return os.path.normpath(os.path.join(os.path.relpath(root, site), rel))
+    if root == os.path.join(STDLIB_DIR, "lib-dynload"):
+        return os.path.join("lib-dynload", rel)
+    if root in (STDLIB_DIR, PROJECT_ROOT):
+        return rel
+    return None
+
+
+def main():
+    if len(sys.argv) != 2:
+        print(__doc__)
+        return 2
+    bundle = sys.argv[1]
+
+    baseline = set(sys.modules)  # 인터프리터 시작 시 모듈(.pth 포함)은 앱과 무관
+    texts, skipped = exercise_app()
+    used = {name: mod for name, mod in sys.modules.items() if name not in baseline and mod is not None}
+
+    modules, files = frozen_contents(bundle)
+    missing = []
+    for name, mod in sorted(used.items()):
+        # 별칭 등록(requests.packages.urllib3 → urllib3 등)은 같은 객체가 실제 이름으로 검사되므로 건너뜀
+        # (paddle._C_ops처럼 __name__만 바뀐 실제 모듈은 객체가 달라 계속 검사됨)
+        real_name = getattr(mod, "__name__", name)
+        if real_name != name and used.get(real_name) is mod:
+            continue
+        if name in sys.builtin_module_names or name in modules or name in OPTIONAL_MODULES or name == "__mp_main__":
+            continue
+        # distutils는 앱에서 setuptools의 내장판(setuptools._distutils)으로 연결됨
+        if name.split(".")[0] == "distutils" and "setuptools._distutils" + name[len("distutils"):] in modules:
+            continue
+        file_attr = getattr(mod, "__file__", None)
+        if file_attr is None:
+            pkg_paths = list(getattr(mod, "__path__", None) or [])
+            if not pkg_paths:
+                # 파일 없이 실행 중 만들어지는 모듈(cv2.aruco, _cython_3_x, six.moves 등) → 부모가 제공
+                continue
+            # 네임스페이스 패키지: 하위 모듈이 PYZ에 있거나 같은 폴더가 앱에 있으면 충분
+            if any(m.startswith(name + ".") for m in modules):
+                continue
+            rel_dirs = [frozen_location(name, p, is_package_dir=True) for p in pkg_paths]
+            if any(r and any(f.startswith(r + os.sep) for f in files) for r in rel_dirs):
+                continue
+            missing.append(f"{name} (네임스페이스 패키지 {pkg_paths})")
+            continue
+        rel = frozen_location(name, file_attr)
+        if rel is None:
+            missing.append(f"{name} (앱 안 위치를 계산할 수 없음: {file_attr})")
+        elif rel not in files:
+            missing.append(f"{name} (앱에 {rel} 없음)")
+
+    print(f"앱 경로 실행: OCR 결과 {texts}, 사용 모듈 {len(used)}개")
+    if skipped:
+        print(f"소스 환경에도 없어 건너뛴 선택 모듈 {len(skipped)}개:")
+        for line in skipped:
+            print(f"  {line}")
+    if missing:
+        print(f"빌드된 앱에 없는 모듈 {len(missing)}개 (실행 중 'No module named' 오류 가능):")
+        for line in missing:
+            print(f"  {line}")
+        return 1
+    print("통과: 실행에 쓰인 모듈이 모두 앱에 들어 있습니다.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

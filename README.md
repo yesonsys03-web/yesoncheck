@@ -1,0 +1,138 @@
+# YesonCheck 리팩터링 가이드
+
+## 소개
+YesonCheck는 PyQt5 기반의 영상 비교/검토 툴입니다. 이번 리팩터링으로 코드가 패키지 구조(`yesoncheck/`)로 재정비되어 유지보수가 쉬워졌으며, 기능과 UI는 기존 버전과 동일하게 동작합니다.
+
+## 준비 사항
+- Python 3.10 (권장: `/Users/studio01/coding/p310` 가상환경)
+- 시스템에 설치된 FFmpeg 6.x 이상 (`ffmpeg`, `ffprobe` 명령어가 PATH에서 동작해야 함)
+- pip 최신 버전: `python -m pip install --upgrade pip`
+
+### 필수 파이썬 패키지
+`./setup_build_env.sh`가 아래 패키지를 `requirements-build.txt`의 고정 버전으로 설치합니다 ([BUILD.md](BUILD.md)).
+(paddleocr 2.7.3 때문에 opencv는 4.6.0.66. paddlepaddle은 몬터레이 지원을 위해 Intel 3.0.0, Apple Silicon 2.6.2를 씁니다.)
+- `PyQt5` : 데스크톱 UI 프레임워크
+- `opencv-python` : 프레임 단위 이미지/영상 처리
+- `numpy` : 배열 연산 및 영상 버퍼 처리
+- `pyinstaller` : macOS 앱 번들 패키징 시 사용 (개발 모드 실행만 필요하다면 생략 가능)
+- `paddlepaddle`, `paddleocr` : ROI 영역 글자 인식을 위한 PaddleOCR 엔진 (macOS의 경우 [Paddle 공식 안내](https://www.paddlepaddle.org.cn/install/quick)와 같이 OS별 설치 옵션을 참고하세요.)
+
+## 실행 방법
+
+### 원클릭 실행 (권장)
+명령어 복사 없이 한 번에 실행·빌드할 수 있습니다.
+
+| 동작 | 방법 |
+|------|------|
+| **앱 실행** | 터미널에서 `./run_app.sh` 실행 (또는 앱 메뉴 **Help → 실행 및 빌드** → **▶ 앱 실행**) |
+| **macOS 앱 빌드** | 터미널에서 `./build_app.sh` 실행 (또는 **Help → 실행 및 빌드** → **📦 macOS 앱 빌드**) |
+
+- `run_app.sh`, `build_app.sh`는 프로젝트 루트에 있으며, p310 가상환경(`~/coding/p310`)을 사용합니다.
+- 앱이 떠 있는 상태에서는 **Help → 실행 및 빌드**에서 위 버튼을 누르면 새 터미널에서 실행/빌드됩니다.
+
+### 수동 실행 (가상환경·명령어 직접 사용 시)
+1. 가상환경 생성·의존성 설치 (최초 한 번)  
+   ```bash
+   ./setup_build_env.sh
+   ```
+2. 가상환경 활성화  
+   ```bash
+   source ~/coding/p310/bin/activate
+   ```
+3. 애플리케이션 실행  
+   ```bash
+   python -m yesoncheck.app
+   ```
+   첫 실행 시 폰트/스타일 경고가 출력될 수 있으나 기능에는 영향이 없습니다.
+
+## OCR 기반 구간 추출
+1. Video A를 로드하여 프레임이 표시된 상태로 둡니다.
+2. 사이드 컨트롤의 `OCR ROI 지정` 버튼을 눌러 비디오 위에서 분석할 영역을 드래그합니다.
+3. ROI가 지정되면 `OCR 구간 추출` 버튼이 활성화됩니다. 클릭하면 전체 프레임을 분석한 뒤 결과 검토 다이얼로그가 열립니다.
+4. 다이얼로그에서 X-Sheet 형태의 표와 타임라인을 통해 구간을 확인·수정한 뒤 `내보내기`를 누르면 저장 폴더를 선택하고 FFmpeg로 개별 클립이 `libx264`로 인코딩됩니다.
+5. 진행 상황과 메시지는 컨트롤 패널 하단의 상태 라벨로 확인할 수 있으며, 취소 버튼을 누르면 분석 또는 내보내기를 즉시 중단할 수 있습니다.
+
+## 웹UI 실시간 동기화
+1. OCR 분석 결과 검토 다이얼로그에서 `웹분석` 버튼을 클릭하면 HTML 파일이 생성됩니다.
+2. 생성된 HTML 파일을 웹 브라우저에서 열면 웹UI가 표시됩니다.
+3. 웹UI와 데스크탑 애플리케이션이 WebSocket을 통해 실시간으로 동기화됩니다:
+   - 데스크탑에서 편집(텍스트, 프레임, 병합, 삭제, 씬 분할)하면 웹UI에 자동 반영
+   - 웹UI에서 편집(스마트 병합, undo/redo)하면 데스크탑에 자동 반영
+4. 웹UI에서 편집한 내용을 JSON으로 내보낸 후, 데스크탑의 `웹에서 가져오기` 버튼으로 불러올 수 있습니다.
+
+## 수정 사항 주석 (영상에 메모 남기기)
+영상의 특정 장면에 “여기 고쳐주세요” 같은 내용을 **그림·글자**로 남기는 기능입니다. 메모는 영상 위에 직접 표시됩니다.
+
+### 1. 준비
+1. **Open Video A**로 동영상을 엽니다.
+2. 사이드 컨트롤에서 **▶ 수정 사항 주석** 칸을 펼칩니다.
+3. **주석 모드** 버튼을 켭니다.
+
+### 2. 주석 그리기
+- **도구**: 텍스트, 사각형, 타원, 선, 화살표 중 선택
+- **색상**: 빨강·노랑 등 원하는 색 선택
+- **도형**: 영상 위에서 마우스로 드래그
+- **텍스트**: 클릭한 뒤 나오는 창에 글 입력
+- **표시 프레임 (시작~끝)**: 주석이 보일 프레임 범위 (시작=끝이면 한 프레임만)
+- **텍스트 크기** / **선 굵기**: 숫자로 조절
+
+### 3. 수정·삭제
+- 그린 주석을 **클릭**하면 노란 점이 나옵니다. 드래그해서 **이동**·**크기 조절**이 가능합니다.
+- **선택 주석 삭제**: 목록에서 고른 주석 하나만 삭제
+- **현재 프레임에 보이는 주석 전체 삭제**: 지금 화면에 보이는 주석을 한 번에 삭제
+- 목록에서 주석을 고르면 **표시 프레임** 숫자로 구간 수정 가능
+
+### 4. 저장·보내기
+- 주석은 **자동 저장**됩니다. 동영상 파일 옆 `.yesoncheck` 폴더에 JSON으로 저장됩니다.
+- 같은 영상을 다시 열면 이전 주석이 **자동으로 불러와집니다**.
+- **보내기 저장 폴더 선택** 후 **주석 포함 영상보내기**를 누르면, 주석이 영상에 박힌 새 파일이 만들어집니다.
+
+### 팁
+- 주석은 **프레임 구간**으로 표시됩니다 (예: 시작 10, 끝 50 → 10~50번 프레임에서 계속 보임).
+- **OCR ROI 지정**과 **주석 모드**는 동시에 켤 수 없습니다.
+
+## PyInstaller 번들 생성
+- Intel / Apple Silicon 빌드, 몬터레이(macOS 12.3) 지원 조건은 [BUILD.md](BUILD.md)를 참고하세요.
+- **원클릭**: 터미널에서 `./build_app.sh` 실행 또는 앱 메뉴 **Help → 실행 및 빌드** → **📦 macOS 앱 빌드**.
+- 생성된 앱은 `dist/YesonCheck_Autocut_Intel.app` 또는 `dist/YesonCheck_Autocut_AppleSilicon.app`(빌드한 Mac 기준)에 위치합니다.
+- 앱에는 `vendor/ffmpeg/<아키텍처>/`의 정적 ffmpeg·ffprobe가 들어갑니다 (Homebrew ffmpeg는 사용하지 않음).
+- 수동 빌드 시: `source ~/coding/p310/bin/activate` 후 `python -m PyInstaller --clean -y YesonCheck_Autocut.spec`, 이어서 `python check_min_macos.py dist/YesonCheck_Autocut.app $(uname -m)`로 번들을 검사하세요.
+
+## 주요 기능
+- **OCR 분석**: PaddleOCR을 사용한 텍스트 인식 및 구간 추출
+- **애니매틱 모드**: PySceneDetect를 사용한 자동 씬 컷 감지
+- **웹UI 실시간 동기화**: WebSocket을 통한 데스크탑-웹 양방향 동기화
+- **씬 편집**: 병합, 삭제, 씬 분할, 스마트 병합, undo/redo
+- **우클릭 컨텍스트 메뉴**: 타임라인 및 테이블에서 우클릭으로 모든 편집 기능 접근 (데스크탑 및 웹UI)
+- **내보내기**: 전체 내보내기, 선택한 항목만 내보내기, 사운드 포함 옵션
+- **썸네일 최적화**: 프리로드 및 저장된 썸네일 재사용으로 빠른 로딩
+- **프리뷰 재생**: 종료 프레임까지 정확한 재생 보장
+- **수정 사항 주석**: 프레임별 텍스트·도형 주석, 자동 저장, 주석 포함 영상보내기
+
+## 프로젝트 구조 요약
+```
+yesoncheck/
+├─ app.py            # QApplication 부트스트랩 및 CLI 진입점
+├─ main_window.py    # VideoPlayer 조립(믹스인 집합)
+├─ player_base.py    # 메인 윈도우 공통 UI/오버레이 로직
+├─ player_playback.py # 재생·탐색·FFmpeg 제어 믹스인
+├─ player_sidebar.py  # 사이드바·썸네일·북마크 믹스인
+├─ player_timeline.py # OCR 타임라인 위젯 및 CollapsibleBox
+├─ player_annotations.py # 수정 사항 주석 UI 및 재생 연동
+├─ frame_annotations.py  # 주석 데이터 저장/로드
+├─ annotation_burn.py    # 프레임에 주석 렌더링
+├─ annotation_export.py  # 주석 포함 영상보내기
+├─ player_review.py   # OCR 결과 검토 및 편집 다이얼로그 (WebSocket 서버 포함)
+├─ web_info.py        # 웹UI HTML 생성 및 WebSocket 통신
+├─ video_widget.py   # 맞춤형 영상 뷰어 및 인터랙션
+├─ workers.py        # FFmpeg/썸네일 백그라운드 워커
+├─ frame_utils.py    # 프레임/피트 계산 유틸리티
+└─ styles.py         # 스크롤바 등 커스텀 스타일
+```
+문서화 및 운영 가이드는 `AGENTS.md`에서 확인할 수 있습니다.
+
+## 트러블슈팅
+- **`ModuleNotFoundError: No module named 'cv2'`**  
+  가상환경이 올바르게 활성화되었는지 확인하세요. 환경이 깨졌다면 `~/coding/p310`을 지우고 `./setup_build_env.sh`로 다시 만드세요.
+- **FFmpeg 관련 오류**  
+  개발 모드(`run_app.sh`)는 PATH의 `ffmpeg`·`ffprobe`를 씁니다(`brew install ffmpeg`). 빌드된 앱은 번들 안의 정적 ffmpeg를 씁니다.
