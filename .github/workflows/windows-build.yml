@@ -1,0 +1,31 @@
+name: windows-build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10
+
+      - name: 시험 환경 (Python 3.10)
+        run: |
+          uv venv .venv --python 3.10 --managed-python
+          uv pip install --python .venv\Scripts\python.exe -r requirements-test.txt
+
+      - name: 시험용 SMB 공유
+        run: ./ci/setup_test_share.ps1
+
+      - name: 경로 시험
+        run: .venv\Scripts\python.exe -m pytest tests/test_paths.py tests/test_shared_config.py tests/test_paths_windows.py -v -rs
