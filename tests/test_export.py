@@ -2,6 +2,8 @@ import os
 import threading
 import time
 
+import pytest
+
 from yesoncheck import external_tools
 from yesoncheck.annotation_export import AnnotationExportWorker
 from yesoncheck.workers import OCRExportWorker
@@ -34,9 +36,13 @@ def test_export_modes_and_reserved_name(qapp, tmp_path, make_video):
 
 
 def test_cancel_kills_ffmpeg_and_removes_partial(qapp, tmp_path, make_video):
-    video = make_video(str(tmp_path / "긴영상.mov"), seconds=60)
+    # quality 모드로 자연 완료하면 이 길이의 영상은 (측정상) 약 26초가 걸린다 — 아래 10초
+    # join 예산보다 훨씬 길어서, stop()이 실제로 ffmpeg를 끝내지 않으면 반드시 타임아웃으로
+    # 드러난다 (returncode가 자연 종료인 0으로 남는 것도 함께 확인한다).
+    seconds = 600
+    video = make_video(str(tmp_path / "긴영상.mov"), seconds=seconds)
     out_dir = tmp_path / "out"
-    worker = OCRExportWorker(video, [segment("LONG", 0, 60 * 24 - 1)], str(out_dir), external_tools.ffmpeg_path(),
+    worker = OCRExportWorker(video, [segment("LONG", 0, seconds * 24 - 1)], str(out_dir), external_tools.ffmpeg_path(),
                              export_mode="quality", max_workers=1)
     thread = threading.Thread(target=worker.run)
     thread.start()
@@ -44,9 +50,13 @@ def test_cancel_kills_ffmpeg_and_removes_partial(qapp, tmp_path, make_video):
     while not worker._procs and time.time() < deadline:
         time.sleep(0.05)
     assert worker._procs, "ffmpeg가 시작되지 않았습니다"
+    proc = next(iter(worker._procs))  # stop() 전에 잡아 둬야 종료 코드로 '실제로 죽었는지' 확인 가능
     worker.stop()
-    thread.join(timeout=30)
+    thread.join(timeout=10)
     assert not thread.is_alive(), "취소 후에도 내보내기가 끝나지 않았습니다"
+    assert proc.returncode not in (None, 0), (
+        f"ffmpeg가 종료되지 않고 자연 완료된 것으로 보입니다 (returncode={proc.returncode})"
+    )
     assert not (out_dir / "LONG.mp4").exists()
 
 
@@ -70,3 +80,33 @@ def test_annotation_export_long_video_does_not_hang(qapp, tmp_path, make_video):
     assert not thread.is_alive(), "주석 내보내기가 멈췄습니다 (stderr 파이프)"
     assert result.get("done") == out, result.get("error")
     assert os.path.getsize(out) > 0
+
+
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root는 디렉토리 쓰기 권한을 무시합니다")
+def test_annotation_export_reports_ffmpeg_stderr_on_failure(qapp, tmp_path, make_video):
+    """ffmpeg가 출력 파일을 열지 못해 죽으면(stdin BrokenPipeError), 사용자는 ffmpeg의
+    실제 이유("Permission denied" 등)를 봐야 한다 — "[Errno 32] Broken pipe"만 보면 안 된다."""
+    video = make_video(str(tmp_path / "주석 실패 원본.mov"), seconds=3)
+    readonly_dir = tmp_path / "읽기전용"
+    readonly_dir.mkdir()
+    out = str(readonly_dir / "out.mp4")
+    os.chmod(readonly_dir, 0o555)  # 쓰기 권한 제거 → ffmpeg가 출력을 열지 못하고 바로 종료
+    try:
+        worker = AnnotationExportWorker(video, {}, out, external_tools.ffmpeg_path(),
+                                        include_audio=True, export_mode="balanced")
+        result = {}
+        worker.completed.connect(lambda p: result.update(done=p))
+        worker.error.connect(lambda m: result.update(error=m))
+        thread = threading.Thread(target=worker.run)
+        thread.start()
+        deadline = time.time() + 30
+        while thread.is_alive() and time.time() < deadline:
+            qapp.processEvents()
+            thread.join(timeout=0.05)
+        qapp.processEvents()
+        assert not thread.is_alive(), "ffmpeg 실패 후에도 내보내기가 멈췄습니다"
+        assert "done" not in result, result
+        error = result.get("error", "")
+        assert "Permission denied" in error or "Error opening output" in error, error
+    finally:
+        os.chmod(readonly_dir, 0o755)

@@ -76,6 +76,8 @@ class AnnotationExportWorker(QThread):
     def run(self):
         cap = None
         proc = None
+        stderr_chunks = []
+        stderr_reader = None
         try:
             cap = cv2.VideoCapture(self.video_path)
             if not cap.isOpened():
@@ -104,7 +106,6 @@ class AnnotationExportWorker(QThread):
             )
             # ffmpeg 진행 출력을 계속 읽어 둠: 안 읽으면 파이프(Windows 약 4KB)가 차서 ffmpeg가 멈추고
             # 프레임을 쓰는 이쪽도 같이 멈춤
-            stderr_chunks = []
             stderr_reader = threading.Thread(target=lambda: stderr_chunks.append(proc.stderr.read()), daemon=True)
             stderr_reader.start()
 
@@ -149,9 +150,21 @@ class AnnotationExportWorker(QThread):
             )
             self.completed.emit(self.output_path)
         except Exception as exc:
-            self.error.emit(str(exc))
+            ffmpeg_stderr = ""
+            if proc is not None:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait()
+                if stderr_reader is not None:
+                    stderr_reader.join()
+                ffmpeg_stderr = external_tools.decode_output(b"".join(stderr_chunks))[-4000:]
+            if ffmpeg_stderr.strip():
+                self.error.emit(f"{exc}\nFFmpeg 오류:\n{ffmpeg_stderr}")
+            else:
+                self.error.emit(str(exc))
         finally:
             if cap is not None:
                 cap.release()
             if proc is not None and proc.poll() is None:
-                proc.terminate()
+                proc.kill()
+                proc.wait()
