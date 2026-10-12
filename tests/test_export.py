@@ -2,8 +2,6 @@ import os
 import threading
 import time
 
-import pytest
-
 from yesoncheck import external_tools
 from yesoncheck.annotation_export import AnnotationExportWorker
 from yesoncheck.workers import OCRExportWorker
@@ -82,31 +80,31 @@ def test_annotation_export_long_video_does_not_hang(qapp, tmp_path, make_video):
     assert os.path.getsize(out) > 0
 
 
-@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root는 디렉토리 쓰기 권한을 무시합니다")
 def test_annotation_export_reports_ffmpeg_stderr_on_failure(qapp, tmp_path, make_video):
     """ffmpeg가 출력 파일을 열지 못해 죽으면(stdin BrokenPipeError), 사용자는 ffmpeg의
-    실제 이유("Permission denied" 등)를 봐야 한다 — "[Errno 32] Broken pipe"만 보면 안 된다."""
+    실제 이유를 봐야 한다 — "[Errno 32] Broken pipe"만 보면 안 된다.
+
+    출력 경로를 이미 존재하는 폴더로 만들어서 ffmpeg가 그 경로를 출력 파일로 열지 못하게
+    한다 (Mac: "Is a directory", Windows: "Permission denied" — 둘 다 플랫폼에 의존하지
+    않는 chmod 권한 트릭 없이, Mac/Windows 모두에서 똑같이 실패를 일으킨다).
+    """
     video = make_video(str(tmp_path / "주석 실패 원본.mov"), seconds=3)
-    readonly_dir = tmp_path / "읽기전용"
-    readonly_dir.mkdir()
-    out = str(readonly_dir / "out.mp4")
-    os.chmod(readonly_dir, 0o555)  # 쓰기 권한 제거 → ffmpeg가 출력을 열지 못하고 바로 종료
-    try:
-        worker = AnnotationExportWorker(video, {}, out, external_tools.ffmpeg_path(),
-                                        include_audio=True, export_mode="balanced")
-        result = {}
-        worker.completed.connect(lambda p: result.update(done=p))
-        worker.error.connect(lambda m: result.update(error=m))
-        thread = threading.Thread(target=worker.run)
-        thread.start()
-        deadline = time.time() + 30
-        while thread.is_alive() and time.time() < deadline:
-            qapp.processEvents()
-            thread.join(timeout=0.05)
+    out = str(tmp_path / "out.mp4")
+    os.mkdir(out)  # 출력 경로가 폴더 → ffmpeg가 출력 파일을 열지 못하고 바로 종료
+
+    worker = AnnotationExportWorker(video, {}, out, external_tools.ffmpeg_path(),
+                                    include_audio=True, export_mode="balanced")
+    result = {}
+    worker.completed.connect(lambda p: result.update(done=p))
+    worker.error.connect(lambda m: result.update(error=m))
+    thread = threading.Thread(target=worker.run)
+    thread.start()
+    deadline = time.time() + 30
+    while thread.is_alive() and time.time() < deadline:
         qapp.processEvents()
-        assert not thread.is_alive(), "ffmpeg 실패 후에도 내보내기가 멈췄습니다"
-        assert "done" not in result, result
-        error = result.get("error", "")
-        assert "Permission denied" in error or "Error opening output" in error, error
-    finally:
-        os.chmod(readonly_dir, 0o755)
+        thread.join(timeout=0.05)
+    qapp.processEvents()
+    assert not thread.is_alive(), "ffmpeg 실패 후에도 내보내기가 멈췄습니다"
+    assert "done" not in result, result
+    error = result.get("error", "")
+    assert "Error opening output" in error, error
