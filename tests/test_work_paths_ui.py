@@ -1,8 +1,10 @@
 import json
 import os
+import time
 
 import pytest
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QThread, Qt
+from PyQt5.QtWidgets import QApplication
 
 from yesoncheck import paths
 from yesoncheck.paths import PathMap
@@ -40,6 +42,20 @@ def new_player(qapp, monkeypatch):
 
 def combo_items(combo):
     return [combo.itemText(i) for i in range(combo.count())]
+
+
+def test_player_leaves_no_background_thread(new_player, dialogs, tmp_path):
+    """창을 만든 뒤 이벤트를 처리해도 창에 딸린 QThread가 남지 않아야 함.
+
+    (예전 _load_heavy_modules_in_background가 100ms 뒤 창을 부모로 둔 스레드를 띄우고 기다리지 않아, 닫힌 창이
+    GC로 지워질 때 실행 중인 QThread가 파괴돼 Windows 시험 프로세스가 0xC0000409로 중단됐음)
+    """
+    player = new_player(make_config(str(tmp_path), {}))
+    deadline = time.monotonic() + 0.3  # 100ms 타이머가 확실히 지나도록
+    while time.monotonic() < deadline:
+        QApplication.processEvents()
+        time.sleep(0.01)
+    assert player.findChildren(QThread) == []
 
 
 def test_work_list_and_playlist(new_player, dialogs, work_area):

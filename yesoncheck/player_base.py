@@ -25,7 +25,6 @@ from PyQt5.QtCore import (
     QUrl,
     pyqtSlot,
     QItemSelectionModel,
-    QThread,
 )
 from PyQt5.QtGui import QFont
 from PyQt5.QtMultimedia import QMediaPlayer
@@ -247,12 +246,6 @@ QMessageBox {
 """)
         
         self.controls_visible = True  # initUI() 호출 전에 먼저 정의
-        
-        # 무거운 모듈 로딩 플래그
-        self._heavy_modules_loaded = False
-        
-        # 백그라운드에서 무거운 모듈 초기화 (cv2 등)
-        QTimer.singleShot(100, self._load_heavy_modules_in_background)
         
         self.initUI()
 
@@ -4902,29 +4895,5 @@ QMessageBox {
         
         if not video_rect.contains(cursor_pos):
             self.hide_overlay_controls()
-    
-    def _load_heavy_modules_in_background(self):
-        """백그라운드에서 무거운 모듈들을 로드합니다."""
-        if self._heavy_modules_loaded:
-            return
-        
-        # 백그라운드 스레드에서 실행
-        class ModuleLoaderThread(QThread):
-            def __init__(self, parent):
-                super().__init__(parent)
-                self.parent_obj = parent
-            
-            def run(self):
-                """실제 모듈 로딩 작업 (백그라운드 스레드에서 실행)"""
-                try:
-                    # cv2 로드 (가장 무거운 모듈)
-                    import cv2
-                    self.parent_obj._heavy_modules_loaded = True
-                    print("[백그라운드 초기화] 무거운 모듈 로딩 완료")
-                except Exception as e:
-                    print(f"[백그라운드 초기화] 모듈 로딩 오류: {e}")
-        
-        loader_thread = ModuleLoaderThread(self)
-        loader_thread.start()
 
 
