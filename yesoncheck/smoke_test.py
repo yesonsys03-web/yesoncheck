@@ -8,8 +8,28 @@
 
 import json
 import os
+import re
 import sys
 import traceback
+
+# exe manifest의 <longPathAware ...>true</longPathAware> (이름공간 접두사 허용, 값은 true여야 함)
+_LONG_PATH_AWARE = re.compile(rb"<(?:[\w.-]+:)?longPathAware\b[^>]*>\s*true\s*</(?:[\w.-]+:)?longPathAware\s*>")
+
+
+def manifest_long_path_aware(data):
+    """exe 바이트(안의 manifest)에 longPathAware가 true로 켜져 있는지."""
+    return _LONG_PATH_AWARE.search(data) is not None
+
+
+def ocr_model_files(base_dir):
+    """OCR 모델이 base_dir의 whl 폴더 아래로 내려받아졌는지 확인하고 파일 목록(base_dir 기준)을 돌려줌."""
+    whl = os.path.join(base_dir, "whl")
+    assert os.path.isdir(whl), f"OCR 모델 폴더가 없습니다: {whl}"
+    files = sorted(
+        os.path.relpath(os.path.join(root, name), base_dir) for root, _dirs, names in os.walk(whl) for name in names
+    )
+    assert files, f"OCR 모델 폴더가 비어 있습니다: {whl}"
+    return files
 
 
 def run(workdir):
@@ -140,8 +160,16 @@ def run(workdir):
         if not (sys.platform == "win32" and getattr(sys, "frozen", False)):
             return "Windows 빌드 앱에서만 확인"
         with open(sys.executable, "rb") as fh:
-            assert b"longPathAware" in fh.read(), "exe manifest에 longPathAware가 없습니다"
-        return "있음"
+            assert manifest_long_path_aware(fh.read()), "exe manifest에 longPathAware(true)가 없습니다"
+        return "true"
+
+    def ocr_model_dir():
+        """OCR 모델이 ASCII 폴더(%ProgramData%\\YesonCheck\\paddleocr)로 내려받아졌는지 (OCR 실행 뒤)."""
+        if not (sys.platform == "win32" and getattr(sys, "frozen", False)):
+            return "Windows 빌드 앱에서만 확인"
+        from yesoncheck.workers import paddleocr_base_dir
+
+        return ocr_model_files(paddleocr_base_dir())
 
     if video:
         check("ffprobe", probe)
@@ -151,6 +179,7 @@ def run(workdir):
         check("병합", merge)
         check("주석 내보내기", annotation_export)
     check("OCR", ocr)
+    check("OCR 모델 폴더", ocr_model_dir)
     check("긴 경로 허용", long_path_aware)
 
     player.close()
