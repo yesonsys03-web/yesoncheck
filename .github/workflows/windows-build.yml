@@ -49,6 +49,15 @@ jobs:
       - name: 모듈 검사
         run: .venv\Scripts\python.exe check_frozen_imports.py dist\YesonCheck_Autocut
 
+      - name: 실행 시험 데이터 — 자동 연결 (PC별 설정·변환표 없이)
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $env:PATH = "$PWD\vendor\ffmpeg\windows;$env:PATH"
+          .venv\Scripts\python.exe ci\make_test_data.py --auto-connect --share-root $env:YC_TEST_SHARE_ROOT --mac-root /Volumes/yc_test --workdir C:\yc_smoke_auto --settings "$env:APPDATA\YesonCheck\settings.json"
+
+      - name: 실행 시험 — 자동 연결 (빌드된 exe)
+        run: ./ci/run_smoke_test.ps1 -Workdir C:\yc_smoke_auto
+
       - name: 실행 시험 데이터 (시험 공유에 한글 작품 폴더·공유 설정·PC별 설정)
         run: |
           $PSNativeCommandUseErrorActionPreference = $true

@@ -44,20 +44,31 @@ def main():
     parser.add_argument("--unc", help="같은 폴더의 UNC (Windows만, 변환표에 씀)")
     parser.add_argument("--workdir", required=True, help="실행 시험 작업 폴더")
     parser.add_argument("--settings", help="PC별 설정 파일 경로 (Windows만)")
+    parser.add_argument("--auto-connect", action="store_true",
+                        help="자동 연결 시험: 공유 설정을 <share-root>\\test_jn\\.yesoncheck에 두고 변환표·PC별 설정 없이")
     args = parser.parse_args()
 
     ffmpeg = external_tools.ffmpeg_path()
-    config_dir = os.path.join(args.share_root, ".yesoncheck")
+    if args.auto_connect:
+        # Mac 공유 설정 경로 /USA_DB/test_jn/.yesoncheck의 뒷부분과 같은 모양 → 앱이 연결된 드라이브에서 찾아야 함
+        config_dir = os.path.join(args.share_root, "test_jn", ".yesoncheck")
+    else:
+        config_dir = os.path.join(args.share_root, ".yesoncheck")
     write_json(os.path.join(config_dir, "work_paths.json"), {WORK: f"{args.mac_root}/{WORK_FOLDER}"})
-    if args.unc:
+    if args.unc and not args.auto_connect:
         write_json(os.path.join(config_dir, "path_map.json"),
                    {"version": 1, "shares": [{"mac": args.mac_root, "windows": [args.unc]}]})
     frames = os.path.join(args.share_root, WORK_FOLDER, SEASON, JOB, "scene-001", "frames")
     for name in VIDEO_NAMES:
         make_video(ffmpeg, os.path.join(frames, name))
-    write_json(os.path.join(args.workdir, "smoke_config.json"),
-               {"work": WORK, "season": SEASON, "job": JOB, "expected_files": len(VIDEO_NAMES)})
-    if args.settings:
+    smoke_config = {"work": WORK, "season": SEASON, "job": JOB, "expected_files": len(VIDEO_NAMES)}
+    if args.auto_connect:
+        smoke_config.update({"scenario": "auto_connect", "mac_prefix": args.mac_root})
+    write_json(os.path.join(args.workdir, "smoke_config.json"), smoke_config)
+    if args.settings and args.auto_connect:
+        if os.path.exists(args.settings):
+            os.remove(args.settings)  # PC별 설정이 없어야 앱이 공유 설정 폴더를 스스로 찾음
+    elif args.settings:
         write_json(args.settings, {"config_dir": args.unc + "\\.yesoncheck"})
     print("시험 데이터 완료:", config_dir)
 

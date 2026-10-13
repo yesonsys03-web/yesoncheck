@@ -36,7 +36,7 @@ def run(workdir):
     import cv2
     import numpy as np
     from PyQt5.QtCore import Qt
-    from PyQt5.QtWidgets import QApplication, QMessageBox
+    from PyQt5.QtWidgets import QApplication, QDialog, QInputDialog, QMessageBox
 
     from yesoncheck import external_tools
 
@@ -57,6 +57,12 @@ def run(workdir):
     QMessageBox.information = staticmethod(lambda *a, **k: QMessageBox.Ok)
     QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.No)
 
+    # 화면이 없으므로 변환표 자동 설정 확인 창은 기본 선택 그대로 승인, 비밀번호 입력에는 시험용 비밀번호
+    from yesoncheck.path_map_setup_dialog import PathMapSetupDialog
+
+    PathMapSetupDialog.exec_ = lambda self: QDialog.Accepted
+    QInputDialog.getText = staticmethod(lambda *a, **k: ("smoke-password", True))
+
     def check(name, func):
         try:
             detail = func()
@@ -73,6 +79,7 @@ def run(workdir):
 
     def shared_config_ok():
         assert player.shared_config_problem is None, player.shared_config_problem
+        assert player.path_map_problem is None, player.path_map_problem
         return player.work_paths_config_dir
 
     def work_listing():
@@ -82,6 +89,40 @@ def run(workdir):
         files = [player.sidebar.item(i).data(Qt.UserRole) for i in range(player.sidebar.count())]
         assert len(files) == config["expected_files"], files
         return files
+
+    def finish(passed):
+        player.close()
+        app.processEvents()
+        bad_dialogs = [d for d in report["dialogs"] if d["kind"] in ("critical", "warning")]
+        ok = all(c["ok"] for c in report["checks"]) and not bad_dialogs and passed
+        report["ok"] = ok
+        with open(os.path.join(workdir, "smoke_result.json"), "w", encoding="utf-8") as fh:
+            json.dump(report, fh, ensure_ascii=False, indent=2)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0 if ok else 1
+
+    if config.get("scenario") == "auto_connect":
+        from yesoncheck import shared_config
+
+        def auto_config_dir():
+            found = player.work_paths_config_dir or ""
+            assert found.replace("/", "\\").lower().endswith("\\test_jn\\.yesoncheck"), found
+            assert shared_config.load_local_settings().get("config_dir") == found
+            return found
+
+        def auto_path_map():
+            assert player.path_map_problem, "변환표가 없는데 문제로 잡히지 않았습니다"
+            player.resolve_shared_config_problem()
+            assert player.path_map_problem is None, player.path_map_problem
+            with open(os.path.join(player.work_paths_config_dir, "path_map.json"), encoding="utf-8") as fh:
+                data = json.load(fh)
+            assert [entry["mac"] for entry in data["shares"]] == [config["mac_prefix"]], data
+            return data
+
+        listed = (check("공유 설정 자동 찾기", auto_config_dir)
+                  and check("변환표 자동 설정", auto_path_map)
+                  and check("작품 목록", work_listing))
+        return finish(bool(listed))
 
     files = check("공유 설정", shared_config_ok) and check("작품 목록", work_listing)
     video = files[0] if files else None
@@ -182,12 +223,4 @@ def run(workdir):
     check("OCR 모델 폴더", ocr_model_dir)
     check("긴 경로 허용", long_path_aware)
 
-    player.close()
-    app.processEvents()
-    bad_dialogs = [d for d in report["dialogs"] if d["kind"] in ("critical", "warning")]
-    ok = all(c["ok"] for c in report["checks"]) and not bad_dialogs and video is not None
-    report["ok"] = ok
-    with open(os.path.join(workdir, "smoke_result.json"), "w", encoding="utf-8") as fh:
-        json.dump(report, fh, ensure_ascii=False, indent=2)
-    print(json.dumps(report, ensure_ascii=False, indent=2))
-    return 0 if ok else 1
+    return finish(video is not None)

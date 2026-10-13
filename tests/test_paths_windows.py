@@ -54,3 +54,29 @@ def test_path_key_same_for_drive_and_unc(share, monkeypatch):
     monkeypatch.setattr(paths, "IS_WINDOWS", True)
     assert paths.path_key(f"{drive}/작품_왕복/A.mov") == paths.path_key(f"{unc}\\작품_왕복\\a.MOV")
     assert paths.thumbnail_key(f"{drive}\\x.mov") == paths.thumbnail_key(f"{unc}\\X.mov")
+
+
+def test_auto_connect_on_real_share(share):
+    """실제로 연결된 시험 드라이브로 공유 찾기·설정 폴더 찾기·변환표 짝 찾기."""
+    import uuid
+
+    from yesoncheck import path_map_setup
+
+    drive, unc, root = share
+    shares, problems = path_map_setup.connected_shares()
+    mine = [s for s in shares if paths.unc_key(s.unc) == paths.unc_key(unc)]
+    assert mine and drive.upper() in mine[0].drives, (shares, problems)
+
+    sub = "자동연결_" + uuid.uuid4().hex[:6]
+    os.makedirs(os.path.join(root, sub, ".yesoncheck"))
+    with open(os.path.join(root, sub, ".yesoncheck", "work_paths.json"), "w", encoding="utf-8") as fh:
+        fh.write("{}")
+    os.makedirs(os.path.join(root, sub, "작품"))
+
+    found = path_map_setup.find_config_dirs(mine, mac_config_dir=f"/USA_DB/{sub}/.yesoncheck")
+    assert [paths.unc_key(f) for f in found] == [paths.unc_key(f"{unc}\\{sub}\\.yesoncheck")]
+
+    proposal = path_map_setup.propose_mapping({"W": f"/Volumes/yc_test/{sub}/작품"}, mine)
+    assert [(p.mac_prefix, paths.unc_key(p.candidates[0].unc)) for p in proposal.pairs] == [
+        ("/Volumes/yc_test", paths.unc_key(unc))
+    ]
