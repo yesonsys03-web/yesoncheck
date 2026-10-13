@@ -23,12 +23,18 @@ WORK = {"W": "/Volumes/yc/작품"}
 
 @pytest.fixture
 def win(qapp, dialogs, monkeypatch, tmp_path):
-    """Windows 동작 + 가짜 네트워크 드라이브 Y: = NAS (공유 루트와 그 아래 '작품' 폴더만 열림)."""
+    """Windows 동작 + 가짜 네트워크 드라이브 Y: = NAS (공유 루트와 그 아래 '작품' 폴더만 열림).
+
+    시스템 드라이브 바로 아래의 UNC 링크(C:\\USA_DB 같은)는 state.links (기본 없음). %SystemDrive%는 tmp 아래의
+    없는 폴더 → Harmony식 설정 폴더(C:\\USA_DB\\test_jn\\.yesoncheck)도 이 PC의 실제 C:를 보지 않음.
+    """
     monkeypatch.setattr(paths, "IS_WINDOWS", True)
     monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("SystemDrive", str(tmp_path / "sysdrive"))
     state = SimpleNamespace(shares=[Share(NAS, ["Y:"])], folders={NAS.casefold(), f"{NAS}\\작품".casefold()},
-                            answers=[], accept=True, shown=[], players=[])
+                            answers=[], accept=True, shown=[], players=[], links=[])
     monkeypatch.setattr(path_map_setup, "connected_shares", lambda remote_of_drive=None: (state.shares, []))
+    monkeypatch.setattr(path_map_setup, "local_link_shares", lambda *a, **k: (state.links, []))
     monkeypatch.setattr(path_map_setup, "_default_is_dir", lambda p: p.casefold() in state.folders)
     monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: state.answers.pop(0))
 
@@ -387,3 +393,104 @@ def test_progress_dialog_is_deleted(win, dialogs, tmp_path):
         player.auto_setup_path_map(ask_password=False)
     QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
     assert player.findChildren(QProgressDialog) == []
+
+
+# --- Harmony용 링크만 있는 PC: C:\USA_DB → \\서버\USA_DB (네트워크 드라이브에는 USA_DB 공유가 없음) ---
+
+def harmony_mirror(tmp_path):
+    """win의 %SystemDrive% 아래 Mac 공유 설정 경로 모양 (C:\\USA_DB\\test_jn\\.yesoncheck)."""
+    return str(tmp_path / "sysdrive") + "\\USA_DB\\test_jn\\.yesoncheck"
+
+
+def settings_of(tmp_path):
+    with open(os.path.join(str(tmp_path / "appdata"), "YesonCheck", "settings.json"), encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def test_config_dir_found_through_harmony_link(win, dialogs, tmp_path, monkeypatch):
+    mirror = harmony_mirror(tmp_path)
+    real = "\\\\localhost\\yc_fake_usadb\\test_jn\\.yesoncheck"
+    monkeypatch.setattr(path_map_setup, "_default_is_file", lambda p: p.casefold() == f"{mirror}\\work_paths.json".casefold())
+    monkeypatch.setattr(path_map_setup, "_default_realpath", lambda p: {mirror: real}[p])
+    player = win.player()
+    assert settings_of(tmp_path) == {"config_dir": real}  # 링크의 실제 UNC를 저장 (다른 PC와 같은 주소)
+    assert player.work_paths_config_dir == real
+    assert player.config_dir_candidates == []
+
+
+def test_harmony_link_and_drive_to_same_config_count_once(win, dialogs, tmp_path, monkeypatch):
+    share = "\\\\localhost\\yc_fake_usadb"
+    win.shares = [Share(share, ["U:"])]
+    mirror = harmony_mirror(tmp_path)
+    real = f"{share}\\test_jn\\.yesoncheck"
+    files = {f"{mirror}\\work_paths.json".casefold(), f"{real}\\work_paths.json".casefold()}
+    monkeypatch.setattr(path_map_setup, "_default_is_file", lambda p: p.casefold() in files)
+    monkeypatch.setattr(path_map_setup, "_default_realpath", lambda p: {mirror: real.upper()}[p])
+    player = win.player()
+    assert player.config_dir_candidates == []  # 같은 폴더 → 후보 하나 → 바로 씀
+    assert paths.unc_key(settings_of(tmp_path)["config_dir"]) == paths.unc_key(real)
+
+
+def test_local_harmony_folder_and_drive_config_are_both_offered(win, dialogs, tmp_path, monkeypatch):
+    b = "\\\\localhost\\yc_fake_b"
+    win.shares = [Share(b, ["B:"])]
+    mirror = harmony_mirror(tmp_path)
+    other = f"{b}\\test_jn\\.yesoncheck"
+    files = {f"{mirror}\\work_paths.json".casefold(), f"{other}\\work_paths.json".casefold()}
+    monkeypatch.setattr(path_map_setup, "_default_is_file", lambda p: p.casefold() in files)
+    monkeypatch.setattr(path_map_setup, "_default_realpath", lambda p: p)  # 링크가 아닌 진짜 로컬 폴더
+    player = win.player()
+    assert player.config_dir_candidates == [mirror, other]  # 여럿 → 창 표시 후 목록에서 고름
+
+
+def test_choose_config_dir_on_link_uses_real_unc(win, dialogs, tmp_path, monkeypatch):
+    """C:\\USA_DB 아래를 고르면 drive_to_unc는 실패(로컬 드라이브) → 링크의 실제 UNC로 확인·저장."""
+    player = win.player(make_config(str(tmp_path), WORK, {"version": 1, "shares": [{"mac": "/Volumes/yc", "windows": [NAS]}]}))
+    monkeypatch.delenv("YESONCHECK_CONFIG_DIR")  # 이제부터는 PC별 설정(고른 폴더)을 씀
+    folder = "C:/USA_DB/test_jn/.yesoncheck"
+    real = "\\\\localhost\\yc_fake_usadb\\test_jn\\.yesoncheck"
+    monkeypatch.setattr(paths, "_remote_name_of_drive", lambda drive: None)  # C:는 네트워크 드라이브가 아님
+    monkeypatch.setattr(path_map_setup, "_default_realpath", lambda p: {folder: real}[p])
+    validated = []
+    monkeypatch.setattr(shared_config, "validate_config_dir", validated.append)
+    dialogs.folders.append(folder)
+    assert player.choose_shared_config_dir() is True
+    assert validated[0] == real
+    assert settings_of(tmp_path) == {"config_dir": real}
+    assert not any(title == "다른 폴더를 고르세요" for _kind, title, _text in dialogs.messages)
+
+
+def test_choose_plain_local_folder_still_warns(win, dialogs, tmp_path, monkeypatch):
+    player = win.player(make_config(str(tmp_path), WORK, {"version": 1, "shares": [{"mac": "/Volumes/yc", "windows": [NAS]}]}))
+    monkeypatch.setattr(paths, "_remote_name_of_drive", lambda drive: None)
+    monkeypatch.setattr(path_map_setup, "_default_realpath", lambda p: p.replace("/", "\\"))  # 링크 아님 → 로컬 그대로
+    dialogs.folders.append("C:/work")
+    assert player.choose_shared_config_dir() is False
+    warnings = [text for kind, title, text in dialogs.messages if kind == "warning" and title == "다른 폴더를 고르세요"]
+    assert len(warnings) == 1 and "네트워크 드라이브가 아닙니다" in warnings[0]
+
+
+def test_link_share_is_preferred_alias(win, dialogs, tmp_path):
+    """USA_DB에 드라이브 문자 없이 링크로만 연결된 PC → 변환표에서 그 링크의 UNC를 먼저 씀 (작품이 열림)."""
+    link, other = "\\\\localhost\\yc_fake_link", "\\\\localhost\\yc_fake_ip"
+    win.shares = []
+    win.links = [Share(link, ["C:\\yc"])]
+    win.folders |= {link.casefold(), f"{link}\\작품".casefold()}
+    config = make_config(str(tmp_path), WORK, {"version": 1, "shares": [{"mac": "/Volumes/yc", "windows": [other, link]}]})
+    player = win.player(config)
+    assert paths.to_native("/Volumes/yc/작품") == link + "\\작품"
+    player.resolve_shared_config_problem()
+    assert win.shown == [] and dialogs.messages == []
+
+
+def test_auto_setup_finds_pair_through_link_share(win, dialogs, tmp_path):
+    win.shares = []
+    win.links = [Share(NAS, ["C:\\yc"])]
+    config = make_config(str(tmp_path), WORK)
+    win.answers.extend([("pw", True), ("pw", True)])
+    player = win.player(config)
+    player.resolve_shared_config_problem()
+    assert len(win.shown) == 1
+    (_check, combo, _pair), = win.shown[0]._rows
+    assert "C:\\yc" in combo.itemText(0)  # 링크 이름이 드라이브 자리에 보임
+    assert read_map(config)["shares"] == [{"mac": "/Volumes/yc", "windows": [NAS]}]

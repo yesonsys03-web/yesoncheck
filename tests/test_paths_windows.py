@@ -80,3 +80,28 @@ def test_auto_connect_on_real_share(share):
     assert [(p.mac_prefix, paths.unc_key(p.candidates[0].unc)) for p in proposal.pairs] == [
         ("/Volumes/yc_test", paths.unc_key(unc))
     ]
+
+
+def test_local_link_to_share_is_found(share, tmp_path):
+    """시스템 드라이브의 Harmony용 링크(C:\\USA_DB → \\\\서버\\USA_DB)처럼 UNC를 가리키는 디렉터리 링크를 공유로 찾음."""
+    import uuid
+
+    from yesoncheck import path_map_setup
+
+    _drive, unc, root = share
+    sub = "link_target_" + uuid.uuid4().hex[:6]
+    os.makedirs(os.path.join(root, sub))
+    target = f"{unc}\\{sub}"
+    links = tmp_path / "root"
+    links.mkdir()
+    (links / "plain").mkdir()  # 링크가 아닌 폴더는 건너뜀
+    link = links / "USA_DB"
+    try:
+        os.symlink(target, str(link), target_is_directory=True)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:  # ERROR_PRIVILEGE_NOT_HELD (정션은 UNC를 가리킬 수 없어 대신 못 씀)
+            pytest.skip(f"이 러너에서는 심볼릭 링크를 만들 권한이 없습니다: {exc}")
+        raise
+    shares, problems = path_map_setup.local_link_shares(root=str(links))
+    assert problems == []
+    assert [(paths.unc_key(s.unc), s.drives) for s in shares] == [(paths.unc_key(target), [str(link)])]

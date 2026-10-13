@@ -64,7 +64,7 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck.video_widget import CustomVideoWidget
-from yesoncheck import external_tools, image_io, paths, shared_config
+from yesoncheck import external_tools, image_io, paths, shared_config, timing_log
 # 무거운 모듈들은 lazy import로 변경 (실제 사용 시점에만 로드)
 # from yesoncheck.workers import OCRWorker, OCRExportWorker, SceneDetectWorker
 # from yesoncheck.player_timeline import CollapsibleBox
@@ -79,22 +79,42 @@ def stored_and_native_path(stored_path, native_path):
 
 
 class VideoPlayerBase(QMainWindow):
-    def __init__(self, ffmpeg_path=None):
+    # 창을 닫을 때 실행 중인 공유 설정 불러오기를 기다리는 최대 시간 (그 뒤에는 로그만 남기고 닫음)
+    SHARED_CONFIG_CLOSE_WAIT_MS = 5000
+
+    def __init__(self, ffmpeg_path=None, load_shared_config=True):
+        """load_shared_config=False: 공유 설정(NAS)을 읽지 않고 빈 '불러오는 중' 상태로 만듦 — 창을 보인 뒤
+        start_shared_config_load()로 백그라운드에서 읽음 (app.launch). 기본값은 예전처럼 여기서 바로 읽음."""
         super().__init__()
+        # 소리 재생기(QMediaPlayer)는 처음 쓸 때 만듦 (mediaPlayer 속성) — Windows에서 처음 만들 때 8초쯤 걸림
+        self._media_player = None
+        self._media_volume = 100  # 재생기를 만들기 전에 정한 볼륨 (QMediaPlayer 기본값과 같음)
+        self._shared_config_load = None  # 실행 중인 공유 설정 불러오기 (SharedConfigLoad)
+        self._shared_config_closed = False  # 창이 닫힘 → 늦게 온 공유 설정 결과는 버림
         self.setWindowTitle("Yeson Checker")
         self.setGeometry(100, 100, 1080, 720)
-        
-        # 메뉴바 생성
+
+        # 메뉴바 생성 (GPU 확인 포함 — 드라이버에 따라 느릴 수 있음)
+        timing_log.startup("창: 메뉴 만드는 중…")
+        started = time.perf_counter()
         self.create_menu_bar()
-        
+        timing_log.startup(f"창: 메뉴 만듦 ({timing_log.since(started)})")
+
         # 북마크 관련 초기화
         self.bookmarks = []
         self.bookmarks_file = os.path.join(os.path.expanduser("~"), ".yeson_bookmarks.json")
         self.load_bookmarks()
-        
+
         # 작품 경로: 공유 설정 폴더의 work_paths.json (문제는 창 표시 후 resolve_shared_config_problem이 알림)
-        self.setup_shared_config()
-        
+        if load_shared_config:
+            self.shared_config_loading = False
+            timing_log.startup("창: 공유 설정 읽는 중…")
+            started = time.perf_counter()
+            self.setup_shared_config()
+            timing_log.startup(f"창: 공유 설정 읽음 ({timing_log.since(started)})")
+        else:
+            self.set_shared_config_loading_state()
+
         # 4K 성능 최적화를 위한 캐싱 시스템 추가
         self.frame_cache = {}
         self.cache_size = 50  # 캐시 크기 (메모리 사용량 조절)
@@ -246,8 +266,11 @@ QMessageBox {
 """)
         
         self.controls_visible = True  # initUI() 호출 전에 먼저 정의
-        
+
+        timing_log.startup("창: 화면 구성 중…")
+        started = time.perf_counter()
         self.initUI()
+        timing_log.startup(f"창: 화면 구성 끝 ({timing_log.since(started)})")
 
         self.loopEnabled = False
         self.filename_a = ""
@@ -256,10 +279,9 @@ QMessageBox {
         self.cap_b = None
         self.frame_a = None
         self.frame_b = None
-        
+
         self.setFocusPolicy(Qt.StrongFocus)
         self.setAcceptDrops(True)
-        self.mediaPlayer = QMediaPlayer(self)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.next_frame_playback)
         self.videoWidget.fitToWindowChanged.connect(self.on_fit_to_window_changed)
@@ -340,7 +362,39 @@ QMessageBox {
         self.pending_ocr_metadata = None
         self.ocr_export_worker = None
         self.ocr_export_progress_dialog = None
-    
+
+    @property
+    def mediaPlayer(self):
+        """소리 재생기. 처음 쓸 때 만든다 (Windows에서 QMediaPlayer를 처음 만들면 수 초가 걸려 시작할 때는 만들지 않음).
+
+        소리를 실제로 여는 곳(open_file의 setMedia)에서만 쓴다. 정지·위치·상태처럼 이미 있는 재생기만 다루면 되는
+        곳은 _media_player(없으면 None)를 본다 — 소리를 연 적이 없으면 할 일이 없음.
+        """
+        if self._media_player is None:
+            timing_log.log("소리", "재생기 만드는 중…")
+            started = time.perf_counter()
+            player = QMediaPlayer(self)
+            player.setVolume(self._media_volume)
+            self._media_player = player
+            timing_log.log("소리", f"재생기 준비 ({timing_log.since(started)})")
+        return self._media_player
+
+    def media_volume(self):
+        """지금 볼륨: 재생기가 있으면 그 값, 없으면 정해 둔 값 (재생기를 만들지 않음)."""
+        if self._media_player is not None:
+            return self._media_player.volume()
+        return self._media_volume
+
+    def stop_media_player(self):
+        """소리 정지. 재생기를 아직 만들지 않았으면(소리를 연 적이 없음) 할 일이 없음."""
+        if self._media_player is not None:
+            self._media_player.stop()
+
+    def set_media_position(self, position_ms):
+        """소리 위치 맞추기. 재생기가 없으면(소리를 연 적이 없음) 할 일이 없음."""
+        if self._media_player is not None:
+            self._media_player.setPosition(position_ms)
+
     def initUI(self):
         self.current_theme = 'dark'  # 기본 테마
         self.videoWidget = CustomVideoWidget(self)
@@ -3974,6 +4028,10 @@ QMessageBox {
             # 실행 중인 내보내기·병합 중지 (ffmpeg 종료)
             self.stop_running_jobs()
 
+            # 실행 중인 공유 설정 불러오기: 정해진 시간까지만 기다리고, 늦게 오는 결과는 버림
+            self._shared_config_closed = True
+            self.wait_for_shared_config_load(self.SHARED_CONFIG_CLOSE_WAIT_MS)
+
             # 백그라운드 썸네일 로딩 타이머 중지
             if hasattr(self, 'thumbnail_loading_timer'):
                 self.thumbnail_loading_timer.stop()
@@ -4014,9 +4072,9 @@ QMessageBox {
             if hasattr(self, 'cap_b') and self.cap_b:
                 self.cap_b.release()
             
-            # 미디어 플레이어 정리
-            if hasattr(self, 'mediaPlayer'):
-                self.mediaPlayer.stop()
+            # 미디어 플레이어 정리 (만든 적이 없으면 만들지 않음 — mediaPlayer 속성은 처음 쓸 때 만듦)
+            if getattr(self, '_media_player', None) is not None:
+                self._media_player.stop()
             
             # 타이머 정리
             if hasattr(self, 'timer') and self.timer.isActive():
@@ -4873,7 +4931,7 @@ QMessageBox {
                 self.playPauseButton.setText('Play')
                 self.playPauseButton.setStyleSheet("")
         
-        self.overlayVolume.setValue(self.mediaPlayer.volume())
+        self.overlayVolume.setValue(self.media_volume())  # 재생기가 없으면 정해 둔 볼륨 (만들지 않음)
     
     def on_overlay_mouse_enter(self):
         """오버레이 영역에 마우스가 들어올 때 호출됩니다."""

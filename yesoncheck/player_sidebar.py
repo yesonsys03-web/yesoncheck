@@ -1,14 +1,18 @@
 """Media library and sidebar helpers for VideoPlayer."""
 
+import functools
 import hashlib
 import json
 import os
 import shutil
+import sys
 import tempfile
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import cv2
-from PyQt5.QtCore import QDateTime, QDir, Qt, QSize
+from PyQt5.QtCore import QDateTime, QDir, Qt, QSize, QThread, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
@@ -30,8 +34,229 @@ from PyQt5.QtWidgets import (
 from yesoncheck.workers import ThumbnailLoaderWorker, ThumbnailWorker
 import traceback
 
-from yesoncheck import path_map_setup, paths, shared_config
+from yesoncheck import path_map_setup, paths, shared_config, timing_log
 from yesoncheck.path_map_setup_dialog import PathMapSetupDialog
+
+LOADING_TITLE = "Yeson Checker — 공유 설정 불러오는 중…"
+LOADING_NOTICE = "공유 설정을 불러오는 중입니다. 잠시 뒤 다시 시도하세요."
+
+
+@dataclass
+class SharedConfigState:
+    """공유 설정을 읽은 결과 (gather_shared_config가 만들고 창의 _apply_shared_config가 넣음). Qt 객체 없음.
+
+    기본값은 빈 상태 (창을 만들 때 '불러오는 중' 상태, 그리고 setup_shared_config가 읽기 전에 먼저 넣는 상태).
+    """
+
+    config_dir: str = None
+    work_paths: dict = field(default_factory=dict)
+    shared_config_problem: str = None
+    path_map_problem: str = None
+    config_dir_candidates: list = field(default_factory=list)
+    config_dir_search_failed: bool = False
+    activate_path_map: bool = False  # (Windows) 넣을 때 paths.activate(path_map) — 아니면 활성 변환표를 그대로 둠
+    path_map: object = None  # paths.PathMap (이 PC에 연결된 주소를 앞으로 옮김) 또는 None(변환표 해제)
+    works_not_opening: list = None  # (Windows) 시작할 때 미리 계산한 '열리지 않는 작품' — None이면 계산하지 않음
+    elapsed: float = None  # 백그라운드 읽기에 걸린 초
+
+
+def list_works_not_opening(work_paths, to_native):
+    """(Windows) 이 PC에서 열리지 않는 작품 목록 ['작품: 이유']. to_native: 저장된 Mac 경로 → 이 PC 경로.
+
+    작품 경로의 공유 루트(\\\\서버\\공유)를 공유마다 한 번만 열어 보고, 열리지 않으면(서버가 꺼짐 등) 그 공유의
+    작품 폴더는 열어 보지 않습니다 — 작품마다 SMB 시간 초과를 기다리지 않도록.
+    """
+    is_dir = path_map_setup._default_is_dir
+    root_opens = {}  # 접은 (서버, 공유) → 열리는지
+    broken = []
+    timing_log.log("작품 확인", f"작품 {len(work_paths)}개가 이 PC에서 열리는지 확인 중…")
+    started = time.perf_counter()
+    for work_name, stored in sorted(work_paths.items()):
+        try:
+            native = to_native(stored)
+        except paths.PathMapError:
+            broken.append(f"{work_name}: 변환표에 없음 ({stored})")
+            continue
+        root_parts = paths._unc_parts(native)[:2]
+        key = tuple(paths._fold(root_parts))
+        root = "\\\\" + "\\".join(root_parts)
+        if key not in root_opens:
+            timing_log.log("작품 확인", f"{root} 여는 중…")
+            root_started = time.perf_counter()
+            root_opens[key] = is_dir(root)
+            timing_log.log("작품 확인", f"{root} {timing_log.since(root_started)} — "
+                                       f"{'열림' if root_opens[key] else '열리지 않음'}")
+        if not root_opens[key]:
+            broken.append(f"{work_name}: 열 수 없음 ({native}) — 공유 폴더 {root}가 열리지 않음 (서버가 꺼졌거나 연결이 끊김)")
+        elif not is_dir(native):
+            broken.append(f"{work_name}: 열 수 없음 ({native})")
+    timing_log.log("작품 확인", f"확인 끝 ({timing_log.since(started)}): 열리지 않는 작품 {len(broken)}개")
+    return broken
+
+
+def _config_dir_usable(config_dir):
+    """공유 설정 폴더로 쓸 수 있는지 (NAS를 열어 봄 — 서버가 꺼져 있으면 오래 걸릴 수 있어 앞뒤로 기록)."""
+    if config_dir is None:
+        return False
+    timing_log.log("공유 설정", f"설정 폴더 확인 중: {config_dir}")
+    started = time.perf_counter()
+    usable = shared_config.is_valid_config_dir(config_dir)
+    timing_log.log("공유 설정", f"설정 폴더 확인 ({timing_log.since(started)}) — {'쓸 수 있음' if usable else '쓸 수 없음'}")
+    return usable
+
+
+def _auto_find_config_dir(state, shares):
+    """(Windows) 이 PC에서 쓸 수 있는 공유(shares: 연결된 네트워크 드라이브·시스템 드라이브의 UNC 링크)와 Harmony식
+    C:\\USA_DB\\test_jn\\.yesoncheck에서 공유 설정 폴더를 찾습니다 (같은 폴더는 하나로).
+
+    딱 하나면 PC별 설정에 저장하고 그 폴더를 돌려줍니다. 여러 개면 state.config_dir_candidates에 남기고
+    (창 표시 후 고르게 함) None. 하나도 못 찾으면 state.config_dir_search_failed를 True로 남기고 None.
+    PC별 설정 저장 실패는 state.shared_config_problem에 남기고 None.
+    """
+    timing_log.log("공유 설정", "PC별 설정의 공유 설정 폴더가 없거나 열리지 않음 → 이 PC의 공유에서 찾는 중…")
+    started = time.perf_counter()
+    found = []
+    seen = set()
+    local = path_map_setup.find_local_config_dir()
+    for folder in ([local] if local else []) + path_map_setup.find_config_dirs(shares):
+        key = path_map_setup.config_dir_key(folder)
+        if key not in seen:
+            seen.add(key)
+            found.append(folder)
+    timing_log.log("공유 설정", f"찾기 끝 ({timing_log.since(started)}): {', '.join(found) or '못 찾음'}")
+    if len(found) != 1:
+        state.config_dir_candidates = found
+        if not found:
+            state.config_dir_search_failed = True
+        return None
+    try:
+        shared_config.save_local_settings({"config_dir": found[0]})
+    except (shared_config.SharedConfigError, OSError) as exc:
+        state.shared_config_problem = (
+            f"공유 설정 폴더를 찾았지만 PC별 설정에 저장하지 못했습니다: {found[0]}\n{exc}\n\n{traceback.format_exc()}"
+        )
+        return None
+    print(f"[공유 설정] 이 PC의 공유에서 공유 설정 폴더를 찾았습니다: {found[0]}")
+    return found[0]
+
+
+def gather_shared_config(find_works_not_opening=False):
+    """공유 설정 폴더를 정하고 작품 경로(Windows는 변환표도)를 읽습니다 → SharedConfigState.
+
+    파일·NAS 작업만 하고 창·위젯·활성 변환표(paths.activate)는 건드리지 않음 → GUI 밖 스레드에서 실행할 수 있음.
+    (설정 폴더를 자동으로 찾았을 때 PC별 설정(로컬 파일) 저장은 여기서 함.) 예상한 문제는 결과의 *_problem에
+    스택 트레이스째 남기고, 그 밖의 예외는 그대로 올립니다. 공유 파일을 기본값으로 덮어쓰지 않습니다.
+    find_works_not_opening: (Windows) 시작할 때 알릴 '열리지 않는 작품'도 읽은 변환표로 미리 계산.
+    """
+    state = SharedConfigState()
+    shares_once = []  # (Windows) 이 PC의 공유는 한 번만 조사 (링크의 실제 위치 확인은 NAS를 열어 볼 수 있음)
+
+    def available_shares():
+        if not shares_once:
+            shares, _problems = path_map_setup.available_shares()  # 드라이브·링크 문제는 거기서 로그에 남김
+            shares_once.append(shares)
+        return shares_once[0]
+
+    try:
+        config_dir = shared_config.configured_config_dir()
+    except shared_config.SharedConfigError as exc:
+        state.shared_config_problem = f"{exc}\n\n{traceback.format_exc()}"
+        return state
+    if (paths.IS_WINDOWS and not os.environ.get(shared_config.CONFIG_DIR_ENV)
+            and not _config_dir_usable(config_dir)):
+        found = _auto_find_config_dir(state, available_shares())
+        if state.shared_config_problem:
+            return state
+        config_dir = found or config_dir
+    if config_dir is None:
+        state.shared_config_problem = "공유 설정 폴더가 아직 정해지지 않았습니다."
+        return state
+    state.config_dir = config_dir
+    work_paths_file = os.path.join(config_dir, shared_config.WORK_PATHS_FILENAME)
+    problems = []
+    timing_log.log("공유 설정", f"작품 경로 읽는 중: {work_paths_file}")
+    started = time.perf_counter()
+    try:
+        state.work_paths = shared_config.read_work_paths(work_paths_file)
+        timing_log.log("공유 설정", f"작품 경로 읽음 ({timing_log.since(started)}): 작품 {len(state.work_paths)}개")
+    except shared_config.SharedConfigError as exc:
+        problems.append(f"{exc}\n\n{traceback.format_exc()}")
+        timing_log.log("공유 설정", f"작품 경로를 읽지 못함 ({timing_log.since(started)})")
+    if paths.IS_WINDOWS:
+        state.activate_path_map = True
+        timing_log.log("변환표", f"읽는 중: {os.path.join(config_dir, paths.PATH_MAP_FILENAME)}")
+        started = time.perf_counter()
+        try:
+            path_map = paths.PathMap.load(config_dir)
+        except paths.PathMapError as exc:
+            state.path_map_problem = f"{exc}\n\n{traceback.format_exc()}"
+            timing_log.log("변환표", f"읽지 못함 ({timing_log.since(started)})")
+        else:
+            timing_log.log("변환표", f"읽음 ({timing_log.since(started)})")
+            # 같은 공유를 PC마다 다른 주소로 연결했을 수 있음 → 이 PC에 연결된(드라이브·링크) 주소를 먼저 씀 (파일은 그대로)
+            state.path_map = path_map.with_preferred_aliases([share.unc for share in available_shares()])
+    if problems:
+        state.shared_config_problem = "\n\n".join(problems)
+    if find_works_not_opening and state.path_map is not None and not state.shared_config_problem:
+        state.works_not_opening = list_works_not_opening(state.work_paths, state.path_map.mac_to_windows)
+    return state
+
+
+def config_dir_from_chosen_folder(folder):
+    """(Windows) 고른 폴더 → 저장할 공유 설정 폴더 주소.
+
+    네트워크 드라이브·UNC는 drive_to_unc로. 로컬 드라이브의 링크(Harmony용 C:\\USA_DB → \\\\서버\\USA_DB)는
+    실제 위치(realpath)가 UNC면 그 UNC로. 둘 다 아니면 drive_to_unc의 오류(PathMapError)를 그대로 올림.
+    """
+    try:
+        return paths.drive_to_unc(folder)
+    except paths.PathMapError as exc:
+        try:
+            real = path_map_setup._real_unc(path_map_setup._default_realpath(folder))
+        except OSError as real_exc:
+            raise paths.PathMapError(f"{exc}\n실제 위치(링크 대상)도 알 수 없습니다: {real_exc}") from real_exc
+        if real is None:
+            raise exc
+        print(f"[공유 설정] 고른 폴더 {folder}는 링크 → 실제 위치 {real}")
+        return real
+
+
+class SharedConfigLoad(QThread):
+    """gather_shared_config를 GUI 밖에서 실행하는 스레드 (위젯은 건드리지 않음). 결과는 loaded 신호로 GUI 스레드에.
+
+    부모 없이 만들고(창이 지워질 때 함께 파괴되지 않게) 실행 중에는 _running에 붙잡아 둠: 실행 중인 QThread가
+    파괴되면 "QThread: Destroyed while thread is still running"으로 프로세스가 중단됨(7133188 참고).
+    끝나면(finished — GUI 스레드에서 처리) 놓음.
+    """
+
+    loaded = pyqtSignal(object)  # SharedConfigState
+    _running = set()
+
+    def __init__(self, gather=None):
+        super().__init__()
+        self._gather = gather or functools.partial(gather_shared_config, find_works_not_opening=True)
+        self.finished.connect(self._forget)
+
+    def start(self, *args):
+        SharedConfigLoad._running.add(self)
+        super().start(*args)
+
+    def run(self):
+        started = time.perf_counter()
+        try:
+            state = self._gather()
+        except Exception:
+            # 예상 못 한 오류도 삼키지 않음: 로그에 스택 트레이스째 남기고 공유 설정 문제로 알림 (resolve가 창으로)
+            text = traceback.format_exc()
+            print(f"[공유 설정] 불러오다 예상치 못한 오류:\n{text}", file=sys.stderr, flush=True)
+            state = SharedConfigState(shared_config_problem=f"공유 설정을 불러오다 예상치 못한 오류가 났습니다.\n\n{text}")
+        state.elapsed = time.perf_counter() - started
+        self.loaded.emit(state)
+
+    def _forget(self):
+        self.wait()  # finished는 스레드가 끝나기 직전에 옴 → 완전히 끝날 때까지 (곧 끝남)
+        SharedConfigLoad._running.discard(self)
+
 
 class PlayerSidebarMixin:
 
@@ -797,83 +1022,106 @@ class PlayerSidebarMixin:
             QMessageBox.warning(self, "선택 필요", "삭제할 북마크를 선택해주세요.")
 
     def setup_shared_config(self):
-        """공유 설정 폴더를 정하고 작품 경로(Windows는 변환표도)를 읽습니다.
+        """공유 설정 폴더를 정하고 작품 경로(Windows는 변환표도)를 읽어 창에 넣습니다 (동기: 이 스레드에서 바로 읽음).
 
-        창은 띄우지 않고 문제를 self.shared_config_problem에 남깁니다 (창 표시 후 resolve_shared_config_problem이 알림).
-        읽기에 실패해도 공유 파일을 기본값으로 덮어쓰지 않습니다.
+        = gather_shared_config(파일·NAS) + _apply_shared_config(창·활성 변환표). 창은 띄우지 않고 문제를
+        self.shared_config_problem에 남깁니다 (창 표시 후 resolve_shared_config_problem이 알림).
+        읽기에 실패해도 공유 파일을 기본값으로 덮어쓰지 않습니다. 시작할 때는 start_shared_config_load(백그라운드).
         """
-        self.work_paths = {}
-        self.shared_config_problem = None
-        self.path_map_problem = None
-        self.config_dir_candidates = []
-        self.config_dir_search_failed = False
-        self.work_paths_config_dir = None
-        self.work_paths_file = None
-        self.work_paths_password_file = None
-        try:
-            config_dir = shared_config.configured_config_dir()
-        except shared_config.SharedConfigError as exc:
-            self.shared_config_problem = f"{exc}\n\n{traceback.format_exc()}"
-            return
-        if (paths.IS_WINDOWS and not os.environ.get(shared_config.CONFIG_DIR_ENV)
-                and not shared_config.is_valid_config_dir(config_dir)):
-            found = self._auto_find_config_dir()
-            if self.shared_config_problem:
-                return
-            config_dir = found or config_dir
-        if config_dir is None:
-            self.shared_config_problem = "공유 설정 폴더가 아직 정해지지 않았습니다."
-            return
-        self.work_paths_config_dir = config_dir
-        self.work_paths_file = os.path.join(config_dir, shared_config.WORK_PATHS_FILENAME)
-        self.work_paths_password_file = os.path.join(config_dir, shared_config.PASSWORD_FILENAME)
-        problems = []
-        try:
-            self.work_paths = shared_config.read_work_paths(self.work_paths_file)
-        except shared_config.SharedConfigError as exc:
-            problems.append(f"{exc}\n\n{traceback.format_exc()}")
-        if paths.IS_WINDOWS:
-            try:
-                path_map = paths.PathMap.load(config_dir)
-            except paths.PathMapError as exc:
-                paths.activate(None)
-                self.path_map_problem = f"{exc}\n\n{traceback.format_exc()}"
-            else:
-                # 같은 공유를 PC마다 다른 주소로 연결했을 수 있음 → 이 PC 드라이브가 연결된 주소를 먼저 씀 (파일은 그대로)
-                shares, share_problems = path_map_setup.connected_shares()
-                for problem in share_problems:
-                    print(f"[변환표] 드라이브 연결 정보를 읽지 못함: {problem}")
-                paths.activate(path_map.with_preferred_aliases([share.unc for share in shares]))
-        if problems:
-            self.shared_config_problem = "\n\n".join(problems)
+        self._apply_shared_config(SharedConfigState())  # 먼저 빈 상태로 (예상 못 한 예외가 나도 이전 값이 남지 않게)
+        self._apply_shared_config(gather_shared_config())
 
-    def _auto_find_config_dir(self):
-        """(Windows) 연결된 네트워크 드라이브에서 공유 설정 폴더를 찾습니다.
+    def set_shared_config_loading_state(self):
+        """공유 설정을 아직 읽지 않은 빈 '불러오는 중' 상태 (파일·NAS 접근 없음). start_shared_config_load가 채움."""
+        self._apply_shared_config(SharedConfigState())
+        self.shared_config_loading = True
 
-        딱 하나면 PC별 설정에 저장하고 그 폴더를 돌려줍니다. 여러 개면 self.config_dir_candidates에 남기고
-        (창 표시 후 고르게 함) None. 하나도 못 찾으면 self.config_dir_search_failed를 True로 남기고 None.
-        PC별 설정 저장 실패는 self.shared_config_problem에 남기고 None.
+    def _apply_shared_config(self, state):
+        """(GUI 스레드) gather_shared_config 결과를 창에 넣고 (Windows) 이 PC의 변환표를 활성화합니다."""
+        self.work_paths = state.work_paths
+        self.shared_config_problem = state.shared_config_problem
+        self.path_map_problem = state.path_map_problem
+        self.config_dir_candidates = state.config_dir_candidates
+        self.config_dir_search_failed = state.config_dir_search_failed
+        self.work_paths_config_dir = state.config_dir
+        if state.config_dir is None:
+            self.work_paths_file = None
+            self.work_paths_password_file = None
+        else:
+            self.work_paths_file = os.path.join(state.config_dir, shared_config.WORK_PATHS_FILENAME)
+            self.work_paths_password_file = os.path.join(state.config_dir, shared_config.PASSWORD_FILENAME)
+        if state.activate_path_map:
+            paths.activate(state.path_map)
+
+    def start_shared_config_load(self):
+        """(창 표시 후) 공유 설정을 백그라운드 스레드에서 읽고, 끝나면 GUI 스레드에서 넣은 뒤 문제를 알립니다.
+
+        읽는 동안(NAS가 느리거나 서버가 꺼진 드라이브가 있으면 수십 초) 창은 그대로 쓸 수 있고, 작품 경로 관리·
+        공유 설정 폴더 변경은 안내만 합니다.
         """
-        shares, problems = path_map_setup.connected_shares()
-        for problem in problems:
-            print(f"[공유 설정] 드라이브 연결 정보를 읽지 못함: {problem}")
-        found = path_map_setup.find_config_dirs(shares)
-        if len(found) != 1:
-            self.config_dir_candidates = found
-            if not found:
-                self.config_dir_search_failed = True
-            return None
-        try:
-            shared_config.save_local_settings({"config_dir": found[0]})
-        except (shared_config.SharedConfigError, OSError) as exc:
-            self.shared_config_problem = (
-                f"공유 설정 폴더를 찾았지만 PC별 설정에 저장하지 못했습니다: {found[0]}\n{exc}\n\n{traceback.format_exc()}"
-            )
-            return None
-        print(f"[공유 설정] 연결된 드라이브에서 공유 설정 폴더를 찾았습니다: {found[0]}")
-        return found[0]
+        if self._shared_config_closed:
+            timing_log.startup("창이 이미 닫혀 공유 설정을 불러오지 않음")
+            return
+        if self._shared_config_load is not None:
+            raise RuntimeError("공유 설정을 이미 불러오는 중입니다 (start_shared_config_load를 두 번 부름)")
+        self.shared_config_loading = True
+        self.setWindowTitle(LOADING_TITLE)
+        timing_log.startup("공유 설정 불러오기 시작 (백그라운드)")
+        load = SharedConfigLoad()
+        load.loaded.connect(self._on_shared_config_loaded)  # 창은 GUI 스레드 → 대기열을 거쳐 GUI 스레드에서 실행
+        self._shared_config_load = load
+        load.start()
+
+    def _on_shared_config_loaded(self, state):
+        """(GUI 스레드) 백그라운드에서 읽은 공유 설정을 넣고 작품 목록을 채운 뒤 문제를 알립니다.
+
+        창이 닫힌 뒤에 온 결과는 버립니다 (활성 변환표도 바꾸지 않음).
+        """
+        self._shared_config_load = None  # 스레드 객체는 끝날 때까지 SharedConfigLoad._running이 붙잡음
+        if self._shared_config_closed:
+            timing_log.startup(f"공유 설정 불러오기 끝 ({state.elapsed:.2f}초) — 창이 이미 닫혀 결과를 버림")
+            return
+        if QThread.currentThread() is not QApplication.instance().thread():
+            raise RuntimeError("공유 설정 결과를 GUI 스레드가 아닌 곳에서 넣으려 했습니다")
+        self._apply_shared_config(state)
+        self.shared_config_loading = False
+        self.shared_config_load_seconds = state.elapsed
+        self.reload_work_combo()
+        problem = "있음" if (state.shared_config_problem or state.path_map_problem) else "없음"
+        timing_log.startup(
+            f"공유 설정 불러오기 끝 ({state.elapsed:.2f}초): 설정 폴더 {state.config_dir or '없음'}, "
+            f"작품 {len(state.work_paths)}개, 문제 {problem}"
+        )
+        self.resolve_shared_config_problem(works_not_opening=state.works_not_opening)
+
+    def wait_for_shared_config_load(self, timeout_ms):
+        """(창을 닫을 때) 실행 중인 공유 설정 불러오기를 timeout_ms까지만 기다립니다 → 끝났으면 True.
+
+        끝나지 않으면(NAS 응답 대기 등) 로그만 남기고 False — 스레드는 SharedConfigLoad._running이 끝날 때까지
+        붙잡고 있어 파괴되지 않고, 늦게 온 결과는 _on_shared_config_loaded가 버립니다.
+        """
+        load = self._shared_config_load
+        if load is None or not load.isRunning():
+            return True
+        timing_log.log("닫기", "공유 설정 불러오기가 끝나기를 기다리는 중…")
+        if load.wait(timeout_ms):
+            timing_log.log("닫기", "공유 설정 불러오기 끝남")
+            return True
+        timing_log.log("닫기", f"공유 설정 불러오기가 {timeout_ms / 1000:g}초 안에 끝나지 않았습니다 — "
+                             "결과는 버리고 계속 닫습니다 (NAS 응답을 기다리는 중일 수 있음)")
+        return False
+
+    def _shared_config_busy(self):
+        """공유 설정을 불러오는 중이면 안내하고 True (반쯤 읽은 상태로는 아무것도 하지 않음)."""
+        if getattr(self, "shared_config_loading", False):
+            QMessageBox.information(self, "공유 설정", LOADING_NOTICE)
+            return True
+        return False
 
     def _update_shared_config_title(self):
+        if getattr(self, "shared_config_loading", False):
+            self.setWindowTitle(LOADING_TITLE)
+            return
         title = "Yeson Checker"
         if self.shared_config_problem:
             title += " — 공유 설정 오류 (작품 목록 없음)"
@@ -881,11 +1129,12 @@ class PlayerSidebarMixin:
             title += " — 변환표 오류 (작품 경로 관리에서 자동 설정)"
         self.setWindowTitle(title)
 
-    def resolve_shared_config_problem(self):
+    def resolve_shared_config_problem(self, works_not_opening=None):
         """창 표시 후 공유 설정 문제를 알립니다.
 
         Windows: 설정 폴더를 못 찾았으면 고르게 하고(찾은 후보가 여럿이면 그 목록에서), 변환표가 없거나
         열리지 않는 작품이 있으면 연결된 드라이브로 변환표 자동 설정을 제안합니다.
+        works_not_opening: 시작할 때 백그라운드에서 미리 계산한 '열리지 않는 작품' (None이면 여기서 확인).
         """
         if self.shared_config_problem and paths.IS_WINDOWS and not shared_config.is_valid_config_dir(self.work_paths_config_dir):
             if self.config_dir_candidates:
@@ -904,7 +1153,7 @@ class PlayerSidebarMixin:
                 f"{self._shared_config_problem_text()}\n\n작품 목록 없이 계속합니다. 파일 직접 열기와 드래그는 쓸 수 있습니다.",
             )
             return
-        self._offer_path_map_setup()
+        self._offer_path_map_setup(works_not_opening)
 
     def _shared_config_problem_text(self):
         """공유 설정 오류 창에 보일 내용: 공유 설정 문제 + (함께 있으면) 변환표 문제."""
@@ -914,7 +1163,12 @@ class PlayerSidebarMixin:
         return message
 
     def choose_shared_config_dir(self, reason=None):
-        """(Windows) 공유 설정 폴더를 고르게 하고 PC별 설정에 저장합니다. 골랐으면 True."""
+        """(Windows) 공유 설정 폴더를 고르게 하고 PC별 설정에 저장합니다. 골랐으면 True.
+
+        네트워크 드라이브·UNC 폴더, 또는 실제 위치가 UNC인 로컬 링크(Harmony용 C:\\USA_DB 아래)를 고를 수 있음.
+        """
+        if self._shared_config_busy():
+            return False
         if reason:
             QMessageBox.information(
                 self,
@@ -926,7 +1180,7 @@ class PlayerSidebarMixin:
             if not folder:
                 return False
             try:
-                config_dir = paths.drive_to_unc(folder)
+                config_dir = config_dir_from_chosen_folder(folder)
                 shared_config.validate_config_dir(config_dir)
             except (paths.PathMapError, shared_config.SharedConfigError) as exc:
                 QMessageBox.warning(self, "다른 폴더를 고르세요", str(exc))
@@ -966,34 +1220,23 @@ class PlayerSidebarMixin:
         return self._use_config_dir(item)
 
     def _works_not_opening(self):
-        """(Windows) 이 PC에서 열리지 않는 작품 목록 ['작품: 이유'].
+        """(Windows) 이 PC에서 열리지 않는 작품 목록 ['작품: 이유'] (활성 변환표로, 이 스레드에서 바로 확인)."""
+        return list_works_not_opening(self.work_paths, paths.to_native)
 
-        작품 경로의 공유 루트(\\\\서버\\공유)를 공유마다 한 번만 열어 보고, 열리지 않으면(서버가 꺼짐 등) 그 공유의
-        작품 폴더는 열어 보지 않습니다 — 작품마다 SMB 시간 초과를 기다리지 않도록.
+    def _offer_path_map_setup(self, works_not_opening=None):
+        """(Windows) 변환표가 없거나 열리지 않는 작품이 있으면 변환표 자동 설정을 제안합니다.
+
+        works_not_opening: 시작할 때 백그라운드에서 미리 계산한 목록 (None이면 여기서 확인).
         """
-        is_dir = path_map_setup._default_is_dir
-        root_opens = {}  # 접은 (서버, 공유) → 열리는지
-        broken = []
-        for work_name, stored in sorted(self.work_paths.items()):
-            try:
-                native = paths.to_native(stored)
-            except paths.PathMapError:
-                broken.append(f"{work_name}: 변환표에 없음 ({stored})")
-                continue
-            root_parts = paths._unc_parts(native)[:2]
-            key = tuple(paths._fold(root_parts))
-            root = "\\\\" + "\\".join(root_parts)
-            if key not in root_opens:
-                root_opens[key] = is_dir(root)
-            if not root_opens[key]:
-                broken.append(f"{work_name}: 열 수 없음 ({native}) — 공유 폴더 {root}가 열리지 않음 (서버가 꺼졌거나 연결이 끊김)")
-            elif not is_dir(native):
-                broken.append(f"{work_name}: 열 수 없음 ({native})")
-        return broken
-
-    def _offer_path_map_setup(self):
-        """(Windows) 변환표가 없거나 열리지 않는 작품이 있으면 변환표 자동 설정을 제안합니다."""
-        if paths.IS_WINDOWS and (self.path_map_problem or self._works_not_opening()):
+        if not paths.IS_WINDOWS:
+            return
+        if self.path_map_problem:
+            needed = True
+        elif works_not_opening is not None:
+            needed = bool(works_not_opening)
+        else:
+            needed = bool(self._works_not_opening())
+        if needed:
             self.auto_setup_path_map(ask_password=True, startup=True)
 
     def _report_path_map_problem(self, parent, note=None):
@@ -1031,7 +1274,7 @@ class PlayerSidebarMixin:
         if read is None:
             return False
         existing, existing_error = read
-        shares, share_problems = path_map_setup.connected_shares()
+        shares, share_problems = path_map_setup.available_shares()  # 네트워크 드라이브 + 시스템 드라이브의 UNC 링크
         progress = QProgressDialog("연결된 네트워크 드라이브에서 작품 폴더를 찾는 중…", "취소", 0, 100, parent)
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(500)
@@ -1041,9 +1284,13 @@ class PlayerSidebarMixin:
             QApplication.processEvents()
             return not progress.wasCanceled()
 
+        timing_log.log("변환표 자동 설정", f"작품 {len(self.work_paths)}개의 폴더를 공유 {len(shares)}개에서 찾는 중…")
+        started = time.perf_counter()
         try:
             proposal = path_map_setup.propose_mapping(self.work_paths, shares, progress=on_progress)
+            timing_log.log("변환표 자동 설정", f"찾기 끝 ({timing_log.since(started)}): 짝 {len(proposal.pairs)}개")
         except path_map_setup.SetupCancelled:
+            timing_log.log("변환표 자동 설정", f"찾기 취소됨 ({timing_log.since(started)})")
             if startup and self.path_map_problem:
                 self._report_path_map_problem(parent)
             return False
@@ -1262,6 +1509,8 @@ class PlayerSidebarMixin:
 
     def manage_work_paths(self):
         """작품 경로 관리 다이얼로그를 표시합니다."""
+        if self._shared_config_busy():
+            return
         # 공유 설정에 문제가 있으면 관리 금지 (깨진 파일을 빈 목록으로 덮어쓰거나 새 비밀번호를 받지 않도록)
         if self.shared_config_problem or self.work_paths_config_dir is None:
             QMessageBox.warning(

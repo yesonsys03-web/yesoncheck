@@ -8,6 +8,7 @@
 import copy
 import datetime
 import json
+import ntpath
 import os
 import shutil
 import string
@@ -29,6 +30,14 @@ def _default_is_dir(path):
 
 def _default_is_file(path):
     return os.path.isfile(path)
+
+
+def _default_realpath(path):
+    return os.path.realpath(path)
+
+
+def _default_scandir(path):
+    return os.scandir(path)
 
 
 def _join_unc(unc, rest_parts):
@@ -110,6 +119,129 @@ def connected_shares(remote_of_drive=None):
             shares.append(share)
         share.drives.append(drive)
     return shares, problems
+
+
+def merge_shares(shares, more):
+    """두 공유 목록을 UNC별로 합친 새 목록. 같은 공유의 드라이브 문자·링크 이름은 한 Share에 모으고 순서는 유지."""
+    merged = [Share(share.unc, list(share.drives)) for share in shares]
+    by_key = {paths.unc_key(share.unc): share for share in merged}
+    for share in more:
+        key = paths.unc_key(share.unc)
+        found = by_key.get(key)
+        if found is None:
+            found = Share(share.unc, list(share.drives))
+            by_key[key] = found
+            merged.append(found)
+        else:
+            found.drives.extend(drive for drive in share.drives if drive not in found.drives)
+    return merged
+
+
+def system_drive():
+    """%SystemDrive% (보통 'C:')."""
+    return os.environ.get("SystemDrive") or "C:"
+
+
+def _real_unc(real):
+    """realpath 결과가 UNC면 '\\\\서버\\공유\\…' 모양으로 (긴 경로 접두사 \\\\?\\UNC\\ 제거), 아니면 None."""
+    if real.startswith("\\\\?\\UNC\\"):
+        real = "\\\\" + real[len("\\\\?\\UNC\\"):]
+    if real.startswith("\\\\") and not real.startswith("\\\\?\\") and not real.startswith("\\\\.\\"):
+        return real
+    return None
+
+
+# Windows 재분석 태그 (winnt.h; Python stat 모듈은 Windows에서만 정의)
+IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003  # 정션
+IO_REPARSE_TAG_SYMLINK = 0xA000000C
+
+
+def _is_dir_link(entry):
+    """심볼릭 링크 또는 정션인지 (대상은 열지 않음 — Windows는 목록을 읽을 때 받은 재분석 태그를 봄)."""
+    if entry.is_symlink():
+        return True
+    return getattr(entry.stat(follow_symlinks=False), "st_reparse_tag", 0) == IO_REPARSE_TAG_MOUNT_POINT
+
+
+def local_link_shares(root=None, scandir=None, realpath=None):
+    """(Windows) 시스템 드라이브 바로 아래의 디렉터리 링크 중 실제 위치가 UNC인 것 → (shares, problems).
+
+    Toon Boom Harmony용으로 C:\\USA_DB → \\\\서버\\USA_DB 같은 링크를 만들어 둔 PC는 그 공유를 드라이브 문자 없이
+    씀 → 연결된 공유처럼 다룸: Share(unc=<실제 UNC>, drives=["C:\\USA_DB"]). 링크가 아닌 폴더는 실제 위치를 묻지
+    않음. 실제 위치를 알 수 없는 링크(서버가 꺼짐 등)나 목록을 읽지 못한 경우는 problems에 남기고 나머지는 씀.
+    """
+    root = root or system_drive() + "\\"
+    scandir = scandir or _default_scandir
+    realpath = realpath or _default_realpath
+    timing_log.log("링크", f"{root} 아래 디렉터리 링크 확인 중…")
+    started = time.perf_counter()
+    try:
+        with scandir(root) as entries:
+            links = [entry for entry in entries if _is_dir_link(entry)]
+    except OSError as exc:
+        timing_log.log("링크", f"{root} 목록을 읽지 못함 ({timing_log.since(started)}): {exc}")
+        return [], [f"{root} — 목록을 읽지 못함: {exc}"]
+    shares, problems = [], []
+    for entry in links:
+        link_started = time.perf_counter()
+        try:
+            real = realpath(entry.path)
+            unc = _real_unc(real)
+            if unc is not None:
+                paths.unc_key(unc)  # 서버·공유 이름까지 있는 UNC인지 확인 (아니면 PathMapError)
+        except (OSError, paths.PathMapError) as exc:
+            problems.append(f"{entry.path} — 실제 위치를 알 수 없음: {exc}")
+            timing_log.log("링크", f"{entry.path} → 알 수 없음 ({timing_log.since(link_started)}): {exc}")
+            continue
+        timing_log.log("링크", f"{entry.path} → {real} ({timing_log.since(link_started)})"
+                       + ("" if unc else " — 공유가 아님"))
+        if unc is not None:
+            shares = merge_shares(shares, [Share(unc, [entry.path])])
+    timing_log.log("링크", f"{root} 링크 확인 끝 ({timing_log.since(started)}): UNC 링크 {len(shares)}개")
+    return shares, problems
+
+
+def available_shares():
+    """(Windows) 이 PC에서 쓸 수 있는 공유: 연결된 네트워크 드라이브 + 시스템 드라이브의 UNC 링크 → (shares, problems).
+
+    공유 설정 폴더 찾기, 변환표 자동 설정, 변환표 주소 고르기(with_preferred_aliases)에 씀.
+    """
+    timing_log.log("공유", "연결된 네트워크 드라이브 확인 중…")
+    started = time.perf_counter()
+    shares, problems = connected_shares()
+    for problem in problems:
+        timing_log.log("공유", f"드라이브 연결 정보를 읽지 못함: {problem}")
+    links, link_problems = local_link_shares()
+    merged = merge_shares(shares, links)
+    listed = ", ".join(f"{share.unc} ({', '.join(share.drives)})" for share in merged) or "없음"
+    timing_log.log("공유", f"쓸 수 있는 공유 ({timing_log.since(started)}): {listed}")
+    return merged, problems + link_problems
+
+
+def find_local_config_dir(drive=None, mac_config_dir=None, is_file=None, realpath=None):
+    """(Windows) 시스템 드라이브 아래의 Harmony식 공유 설정 폴더(Mac 경로를 그대로 옮긴 C:\\USA_DB\\test_jn\\.yesoncheck)에
+    work_paths.json이 있으면 그 폴더 → 실제 위치가 UNC면 그 UNC, 아니면 로컬 경로 그대로. 없으면 None.
+    """
+    is_file = is_file or _default_is_file
+    realpath = realpath or _default_realpath
+    parts = paths._mac_parts(mac_config_dir or shared_config.MAC_CONFIG_DIR)
+    folder = (drive or system_drive()).rstrip("\\/") + "\\" + "\\".join(parts)
+    timing_log.log("공유 설정", f"{folder} 확인 중…")
+    started = time.perf_counter()
+    if not is_file(folder + "\\" + shared_config.WORK_PATHS_FILENAME):
+        timing_log.log("공유 설정", f"{folder} 확인 {timing_log.since(started)} — 없음")
+        return None
+    real = realpath(folder)
+    found = _real_unc(real) or folder
+    timing_log.log("공유 설정", f"{folder} 확인 {timing_log.since(started)} — 찾음: {found}")
+    return found
+
+
+def config_dir_key(folder):
+    """공유 설정 폴더 후보 비교 키: UNC는 unc_key, 로컬 경로는 대소문자·구분자 무시."""
+    if folder.startswith("\\\\"):
+        return ("unc",) + paths.unc_key(folder)
+    return ("local", ntpath.normpath(folder.replace("/", "\\")).casefold())
 
 
 def find_config_dirs(shares, mac_config_dir=None, is_file=None):

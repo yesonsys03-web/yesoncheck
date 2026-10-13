@@ -1,8 +1,10 @@
+import contextlib
 import json
 import os
 import threading
 import time
 import unicodedata
+from types import SimpleNamespace
 
 import pytest
 
@@ -356,3 +358,82 @@ def test_read_existing_non_utf8_is_backed_up_and_recreated(tmp_path, encoding):
         str(tmp_path), {"version": 1, "shares": [{"mac": "/a", "windows": ["\\\\s\\a"]}]}, backup_existing=True)
     with open(backup, "rb") as fh:
         assert fh.read() == raw
+
+
+# --- 시스템 드라이브의 Harmony용 링크 (C:\USA_DB → \\서버\USA_DB) ---
+
+def fake_entry(name, link=None, root="C:\\"):
+    """os.DirEntry 흉내: link='symlink'·'junction'·None(보통 폴더·파일)."""
+    tag = {"junction": pms.IO_REPARSE_TAG_MOUNT_POINT, "symlink": pms.IO_REPARSE_TAG_SYMLINK}.get(link, 0)
+    return SimpleNamespace(
+        name=name, path=root + name,
+        is_symlink=lambda: link == "symlink",
+        stat=lambda follow_symlinks=True: SimpleNamespace(st_reparse_tag=tag),
+    )
+
+
+def test_local_link_shares_resolves_only_links_to_unc():
+    entries = [
+        fake_entry("USA_DB", "symlink"), fake_entry("Users"), fake_entry("usadata2", "symlink"),
+        fake_entry("Documents and Settings", "junction"), fake_entry("dead", "symlink"), fake_entry("pagefile.sys"),
+    ]
+    targets = {
+        "C:\\USA_DB": "\\\\Mainnas\\USA_DB",
+        "C:\\usadata2": "\\\\?\\UNC\\Mainnas\\usadata2",  # 긴 경로 접두사가 남은 경우
+        "C:\\Documents and Settings": "C:\\Users",  # 정션은 로컬 폴더만 가리킴 → 공유가 아님
+    }
+    resolved = []
+
+    def realpath(path):
+        resolved.append(path)
+        if path == "C:\\dead":
+            raise OSError(53, "네트워크 경로를 찾을 수 없습니다 (가짜 재현)")
+        return targets[path]
+
+    shares, problems = pms.local_link_shares(
+        root="C:\\", scandir=lambda root: contextlib.nullcontext(entries), realpath=realpath,
+    )
+    assert [(s.unc, s.drives) for s in shares] == [
+        ("\\\\Mainnas\\USA_DB", ["C:\\USA_DB"]),
+        ("\\\\Mainnas\\usadata2", ["C:\\usadata2"]),
+    ]
+    assert sorted(resolved) == sorted(["C:\\USA_DB", "C:\\usadata2", "C:\\Documents and Settings", "C:\\dead"])
+    assert len(problems) == 1 and problems[0].startswith("C:\\dead — ") and "가짜 재현" in problems[0]
+
+
+def test_local_link_shares_reports_unreadable_root():
+    def scandir(root):
+        raise PermissionError(13, "접근 거부 (가짜 재현)")
+
+    shares, problems = pms.local_link_shares(root="C:\\", scandir=scandir, realpath=lambda p: pytest.fail(p))
+    assert shares == [] and len(problems) == 1 and "가짜 재현" in problems[0]
+
+
+def test_merge_shares_keeps_letters_and_link_labels_together():
+    connected = [Share("\\\\mainnas\\usa_db", ["U:"]), Share("\\\\nas\\x", ["X:"])]
+    links = [Share("\\\\Mainnas\\USA_DB", ["C:\\USA_DB"]), Share("\\\\Mainnas\\usadata3", ["C:\\usadata3"])]
+    merged = pms.merge_shares(connected, links)
+    assert [(s.unc, s.drives) for s in merged] == [
+        ("\\\\mainnas\\usa_db", ["U:", "C:\\USA_DB"]),
+        ("\\\\nas\\x", ["X:"]),
+        ("\\\\Mainnas\\usadata3", ["C:\\usadata3"]),
+    ]
+    assert connected[0].drives == ["U:"]  # 원본은 그대로
+
+
+def test_find_local_config_dir_uses_harmony_mirror_of_mac_path():
+    checked = []
+    files = {"c:\\usa_db\\test_jn\\.yesoncheck\\work_paths.json"}
+
+    def is_file(path):
+        checked.append(path)
+        return path.casefold() in files
+
+    real = {"C:\\USA_DB\\test_jn\\.yesoncheck": "\\\\Mainnas\\USA_DB\\test_jn\\.yesoncheck"}
+    assert pms.find_local_config_dir("C:", is_file=is_file, realpath=real.__getitem__) == \
+        "\\\\Mainnas\\USA_DB\\test_jn\\.yesoncheck"
+    assert checked == ["C:\\USA_DB\\test_jn\\.yesoncheck\\work_paths.json"]
+    # 링크가 아니라 진짜 로컬 폴더 → 로컬 경로 그대로
+    assert pms.find_local_config_dir("C:", is_file=is_file, realpath=lambda p: p) == "C:\\USA_DB\\test_jn\\.yesoncheck"
+    # 없으면 None (실제 위치는 묻지 않음)
+    assert pms.find_local_config_dir("D:", is_file=is_file, realpath=lambda p: pytest.fail(p)) is None

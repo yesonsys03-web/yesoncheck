@@ -352,7 +352,7 @@ class PlayerPlaybackMixin:
             else:
                 # 플레이리스트 재생 중에는 타이머만 정지
                 self.timer.stop()
-                self.mediaPlayer.stop()
+                self.stop_media_player()
                 
             print(f"Attempting to open video file: {file_path}")
             
@@ -368,6 +368,7 @@ class PlayerPlaybackMixin:
                 if self.cap_a: self.cap_a.release()
                 self.filename_a = file_path
                 self.cap_a = cap
+                # 소리 재생기를 처음 만드는 곳 (mediaPlayer 속성: 처음 쓸 때 만듦)
                 self.mediaPlayer.setMedia(QMediaContent(QUrl.fromLocalFile(file_path)))
                 
                 total_frames = int(self.cap_a.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -1334,7 +1335,7 @@ class PlayerPlaybackMixin:
                 # 오디오 위치 설정 (음수 방지)
                 audio_position = max(0, round(current_frame_idx / original_fps * 1000) - dynamic_offset)
                 # 더 부드러운 동기화 (지연 시간 증가)
-                QTimer.singleShot(5, lambda: self.mediaPlayer.setPosition(audio_position))
+                QTimer.singleShot(5, lambda: self.set_media_position(audio_position))
                 print(f"오디오 동기화: 프레임 {current_frame_idx}, 위치 {audio_position}ms, 오프셋 {dynamic_offset}ms")
 
     def _calculate_audio_offset(self, video_duration, current_frame, fps):
@@ -1363,14 +1364,14 @@ class PlayerPlaybackMixin:
     def _smooth_audio_sync(self, target_position, current_position):
         """점진적으로 오디오 위치를 조정하여 끊김 방지"""
         if abs(target_position - current_position) < 100:  # 차이가 작으면 즉시 조정
-            QTimer.singleShot(1, lambda: self.mediaPlayer.setPosition(target_position))
+            QTimer.singleShot(1, lambda: self.set_media_position(target_position))
         else:
             # 큰 차이는 더 점진적으로 조정
             steps = 5  # 3에서 5로 증가
             step_size = (target_position - current_position) / steps
             for i in range(1, steps + 1):
                 intermediate_pos = current_position + (step_size * i)
-                QTimer.singleShot(i * 3, lambda pos=intermediate_pos: self.mediaPlayer.setPosition(int(pos)))  # 2에서 3으로 증가
+                QTimer.singleShot(i * 3, lambda pos=intermediate_pos: self.set_media_position(int(pos)))  # 2에서 3으로 증가
 
     def update_position_info(self):
         if self.cap_a and self.cap_a.isOpened():
@@ -1476,8 +1477,9 @@ class PlayerPlaybackMixin:
         # 매 180프레임마다 동기화 (훨씬 적게)
         if self._sync_counter >= 180:
             self._sync_counter = 0
-            # 재생 중일 때만 동기화
-            if self.mediaPlayer.state() == QMediaPlayer.PlayingState:
+            # 재생 중일 때만 동기화 (재생기를 만든 적이 없으면 소리도 재생 중이 아님)
+            media_player = self._media_player
+            if media_player is not None and media_player.state() == QMediaPlayer.PlayingState:
                 original_fps = self.cap_a.get(cv2.CAP_PROP_FPS)
                 if original_fps > 0:
                     total_frames = int(self.cap_a.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -1486,7 +1488,7 @@ class PlayerPlaybackMixin:
                     audio_position = max(0, round(current_frame / original_fps * 1000) - dynamic_offset)
                     
                     # 현재 오디오 위치와 차이가 클 때만 동기화 (임계값 더 증가)
-                    current_audio_pos = self.mediaPlayer.position()
+                    current_audio_pos = media_player.position()
                     if abs(audio_position - current_audio_pos) > 400:  # 250ms에서 400ms로 증가
                         # 더 부드러운 동기화를 위해 점진적 조정
                         self._smooth_audio_sync(audio_position, current_audio_pos)
@@ -1908,7 +1910,7 @@ class PlayerPlaybackMixin:
                     if current_frame < 0:
                         current_frame = 0
                     # 오디오를 약간 앞당기기 위해 50ms 오프셋 추가
-                    self.mediaPlayer.setPosition(round(current_frame / original_fps * 1000) - 50)
+                    self.set_media_position(round(current_frame / original_fps * 1000) - 50)
             
             # V 키 모드 진입 시 오버레이 컨트롤러 표시
             if hasattr(self, 'overlayFrame') and not self.controls_visible:
@@ -1951,7 +1953,7 @@ class PlayerPlaybackMixin:
                     if current_frame < 0:
                         current_frame = 0
                     # 오디오를 약간 앞당기기 위해 50ms 오프셋 추가
-                    self.mediaPlayer.setPosition(round(current_frame / original_fps * 1000) - 50)
+                    self.set_media_position(round(current_frame / original_fps * 1000) - 50)
             
             # V 키 모드 해제 시 오버레이 컨트롤러 숨김
             if hasattr(self, 'overlayFrame'):
@@ -2107,11 +2109,12 @@ class PlayerPlaybackMixin:
                 dynamic_offset = self._calculate_audio_offset(video_duration, current_frame, original_fps)
                 audio_position = max(0, round(current_frame / original_fps * 1000) - dynamic_offset)  # 음수 방지
                 # 재생 시작 시 즉시 동기화
-                self.mediaPlayer.setPosition(audio_position)
+                self.set_media_position(audio_position)
                 
                 print(f"재생 시작: 프레임 {current_frame}, 오디오 위치 {audio_position}ms, 오프셋 {dynamic_offset}ms")
                 
-            self.mediaPlayer.play()
+            if self._media_player is not None:  # 영상 A를 열면(setMedia) 만들어져 있음
+                self._media_player.play()
             self.playPauseButton.setText('Pause')
             self.playPauseButton.setStyleSheet("background-color: yellow;")
             
@@ -2127,7 +2130,8 @@ class PlayerPlaybackMixin:
     def pause_video(self):
         if self.timer.isActive():
             self.timer.stop()
-            self.mediaPlayer.pause()
+            if self._media_player is not None:
+                self._media_player.pause()
             self.playPauseButton.setText('Play')
             self.playPauseButton.setStyleSheet("")
             self.labelPlaybackFPS.setText('재생: 일시정지')
@@ -2139,7 +2143,7 @@ class PlayerPlaybackMixin:
             print(f"pause_video called - is_playlist_playing: {self.is_playlist_playing}")
 
     def stop_video(self):
-        self.timer.stop(); self.mediaPlayer.stop()
+        self.timer.stop(); self.stop_media_player()
         if self.cap_a: self.seek_to_frame(1)
         self.playPauseButton.setText('Play'); self.playPauseButton.setStyleSheet("")
         self.labelPlaybackFPS.setText('재생: 정지')
@@ -2191,7 +2195,7 @@ class PlayerPlaybackMixin:
                             dynamic_offset = self._calculate_audio_offset(video_duration, actual_pos, original_fps)
                             audio_position = max(0, round(actual_pos / original_fps * 1000) - dynamic_offset)  # 음수 방지
                             # 프레임 이동 시 부드러운 동기화 (지연 시간 증가)
-                            QTimer.singleShot(3, lambda: self.mediaPlayer.setPosition(audio_position))
+                            QTimer.singleShot(3, lambda: self.set_media_position(audio_position))
                             print(f"프레임 이동: {actual_pos}, 오디오 위치 {audio_position}ms, 오프셋 {dynamic_offset}ms")
                     
                     self.update_frame()
@@ -2210,7 +2214,10 @@ class PlayerPlaybackMixin:
                     break
 
     def setVolume(self, volume):
-        self.mediaPlayer.setVolume(volume)
+        # 재생기를 아직 만들지 않았으면 기억만 해 두고 만들 때 적용 (볼륨 때문에 만들지 않음)
+        self._media_volume = volume
+        if self._media_player is not None:
+            self._media_player.setVolume(volume)
         # 볼륨 퍼센트 레이블 업데이트
         if hasattr(self, 'volumePercentLabel'):
             self.volumePercentLabel.setText(f"{volume}%")

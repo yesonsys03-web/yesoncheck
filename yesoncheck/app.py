@@ -3,6 +3,7 @@
 import datetime
 import os
 import sys
+import time
 import traceback
 
 from PyQt5.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal, pyqtSlot
@@ -13,8 +14,10 @@ if __package__ in (None, ""):
     # Allow running the file directly (python yesoncheck/app.py)
     sys.path.append(os.path.dirname(os.path.dirname(__file__)))
     from yesoncheck.main_window import VideoPlayer  # type: ignore  # pylint: disable=import-error
+    from yesoncheck import timing_log  # type: ignore  # pylint: disable=import-error
 else:
     from .main_window import VideoPlayer
+    from . import timing_log
 
 
 def setup_windows_logging():
@@ -89,13 +92,16 @@ def launch(argv=None):
     """Create and run the QApplication event loop."""
     argv = list(sys.argv if argv is None else argv)
 
+    # 시작 시간 기록: 느릴 수 있는 단계마다 앞뒤로 찍음 → 멈추면 로그의 마지막 줄이 그 단계 (timing_log)
     app = QApplication.instance()
     owns_app = app is None
     if owns_app:
         # 고해상도 디스플레이 지원 (QApplication 생성 전에 설정해야 함)
         QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
         QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+        timing_log.startup("QApplication 만드는 중…")
         app = QApplication(argv)
+    timing_log.startup("QApplication 준비")
 
     # 스플래시 스크린 생성 (즉시 표시)
     pixmap = QPixmap(500, 300)
@@ -107,9 +113,18 @@ def launch(argv=None):
     splash.showMessage("Yeson Checker\n로딩 중...", Qt.AlignCenter | Qt.AlignBottom, Qt.white)
     splash.show()
     app.processEvents()  # 즉시 화면 표시
+    timing_log.startup("스플래시 표시")
     
-    # 메인 윈도우 생성
-    player = VideoPlayer()
+    # 메인 윈도우 생성: 공유 설정(NAS)은 읽지 않고 바로 — 창을 보인 뒤 백그라운드에서 읽음
+    timing_log.startup("창 만드는 중…")
+    started = time.perf_counter()
+    try:
+        player = VideoPlayer(load_shared_config=False)
+    except BaseException:
+        # 오류 창(excepthook)이 스플래시(항상 위)에 가려져 '로딩 중'에서 멈춘 것처럼 보이지 않게 먼저 닫음
+        splash.close()
+        raise
+    timing_log.startup(f"창 만듦 ({timing_log.since(started)})")
     
     if len(argv) > 1:
         file_path = argv[1]
@@ -122,8 +137,10 @@ def launch(argv=None):
     # 메인 윈도우 표시 후 스플래시 닫기
     player.show()
     splash.finish(player)
-    # 공유 설정 문제(설정 폴더·작품 경로·변환표)는 스플래시가 닫힌 뒤에 알림 (스플래시가 대화상자를 가리지 않게)
-    QTimer.singleShot(0, player.resolve_shared_config_problem)
+    timing_log.startup("창 표시")
+    # 공유 설정(설정 폴더·작품 경로·변환표)은 창을 보인 뒤 백그라운드에서 읽고, 끝나면 문제를 알림
+    # (스플래시가 닫힌 뒤라 대화상자가 가려지지 않음)
+    QTimer.singleShot(0, player.start_shared_config_load)
 
     if owns_app:
         return app.exec_()
