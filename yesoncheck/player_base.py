@@ -65,7 +65,7 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck.video_widget import CustomVideoWidget
-from yesoncheck import external_tools, paths, shared_config
+from yesoncheck import external_tools, image_io, paths, shared_config
 # 무거운 모듈들은 lazy import로 변경 (실제 사용 시점에만 로드)
 # from yesoncheck.workers import OCRWorker, OCRExportWorker, SceneDetectWorker
 # from yesoncheck.player_timeline import CollapsibleBox
@@ -3010,6 +3010,7 @@ QMessageBox {
                 "segments": []
             }
             
+            image_failures = []
             for idx, segment in enumerate(segments_to_save):
                 text = segment.get("text", "")
                 edited_text = segment.get("edited_text", "")
@@ -3096,10 +3097,11 @@ QMessageBox {
                                     print(f"[이미지 저장] 세그먼트 {idx}: {w}x{h} → {new_w}x{new_h}로 리사이즈 (OCR 모드: 최대 1920×1080 제한)")
                             
                             # JPEG로 저장 (품질 85% - 파일 크기와 품질의 균형)
-                            cv2.imwrite(image_path, img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                            image_io.imwrite(image_path, img, [cv2.IMWRITE_JPEG_QUALITY, 85])
                             segment_data["roi_image_file"] = image_filename
                     except Exception as e:
                         print(f"이미지 저장 실패 (segment {idx}): {e}")
+                        image_failures.append(f"구간 {idx}: {e}")
                 
                 # Detections 저장 (box 좌표 포함)
                 if detections:
@@ -3110,6 +3112,12 @@ QMessageBox {
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(save_data, f, ensure_ascii=False, indent=2)
             
+            if image_failures:
+                QMessageBox.warning(
+                    self, "일부 이미지 저장 실패",
+                    f"OCR 결과는 저장했지만 구간 이미지 {len(image_failures)}개를 저장하지 못했습니다:\n"
+                    + "\n".join(image_failures[:20]),
+                )
             QMessageBox.information(self, "저장 완료", f"OCR 결과가 저장되었습니다:\n{file_path}")
             self.update_ocr_status_label(f"OCR: 결과 저장됨 ({os.path.basename(file_path)})")
         
@@ -3272,7 +3280,7 @@ QMessageBox {
                     image_path = os.path.join(images_dir, segment_data["roi_image_file"])
                     if os.path.exists(image_path):
                         try:
-                            img = cv2.imread(image_path)
+                            img = image_io.imread(image_path)
                             if img is not None:
                                 # numpy array를 bytes로 변환 (PNG 형식으로 인코딩하여 내부 저장)
                                 # 저장 시 JPEG로 저장했어도, 메모리에서는 PNG로 인코딩하여 일관성 유지

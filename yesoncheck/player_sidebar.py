@@ -3,9 +3,7 @@
 import hashlib
 import json
 import os
-import platform
 import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 
@@ -227,38 +225,16 @@ class PlayerSidebarMixin:
             self.copy_files_to_target(file_paths, target_path)
 
     def copy_files_to_target(self, file_paths, target_path):
-        current_platform = platform.system()
-        if current_platform == 'Darwin':  # macOS
-            self.copy_files_mac(file_paths, target_path)
-        elif current_platform == 'Windows':  # Windows
-            self.copy_files_windows(file_paths, target_path)
-        else:  # Linux
-            self.copy_files_linux(file_paths, target_path)
-
-    def copy_files_mac(self, file_paths, target_path):
+        """선택한 파일을 폴더로 복사합니다 (메타데이터 유지). 실패한 파일은 모아서 보여 줍니다."""
+        failures = []
         for file_path in file_paths:
             try:
-                shutil.copy2(file_path, target_path)  # shutil.copy2는 파일의 메타데이터를 유지합니다.
+                shutil.copy2(file_path, target_path)
                 print(f"File copied to {target_path}")
-            except Exception as e:
-                print(f"Error copying file: {str(e)}")
-
-    def copy_files_windows(self, file_paths, target_path):
-        for file_path in file_paths:
-            cmd = f"robocopy /copyall /e /dcopy:DAT /B /r:3 /w:60 /is /nfl /ndl /np /MT:32 \"{file_path}\" \"{target_path}\""
-            try:
-                subprocess.run(cmd, shell=True, check=True)
-                print(f"File copied to {target_path}")
-            except subprocess.CalledProcessError as e:
-                print(f"Error copying file: {str(e)}")
-
-    def copy_files_linux(self, file_paths, target_path):
-        for file_path in file_paths:
-            try:
-                shutil.copy2(file_path, target_path)  # shutil.copy2는 파일의 메타데이터를 유지합니다.
-                print(f"File copied to {target_path}")
-            except Exception as e:
-                print(f"Error copying file: {str(e)}")
+            except OSError as exc:
+                failures.append(f"{file_path}\n  → {exc}")
+        if failures:
+            QMessageBox.critical(self, "복사 실패", f"{len(failures)}개 파일을 복사하지 못했습니다:\n\n" + "\n".join(failures))
 
     def regenerate_selected_thumbnails(self):
         """선택된 파일들의 썸네일을 재생성합니다."""

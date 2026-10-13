@@ -163,7 +163,7 @@ class PlayerPlaybackMixin:
 
                     # MS_Animatic, TJS_Animatic 전용 처리
                     if selected_work == "MS_Animatic":
-                        mov_files = [f for f in os.listdir(base_path) if f.endswith(('.mov', '.mp4')) and not f.startswith('.')]
+                        mov_files = [f for f in os.listdir(base_path) if file_names.is_listed_video(f)]
                         for mov_file in mov_files:
                             full_path = os.path.join(base_path, mov_file)
                             all_mov_files.append((mov_file, full_path))
@@ -217,7 +217,7 @@ class PlayerPlaybackMixin:
                     # 다른 작품들 처리 (최적화)
                     else:
                         # 먼저 부모 폴더에서 직접 검색 (가장 빠름)
-                        parent_mov_files = [f for f in os.listdir(base_path) if f.endswith(('.mov', '.mp4')) and not f.startswith('.')]
+                        parent_mov_files = [f for f in os.listdir(base_path) if file_names.is_listed_video(f)]
                         for parent_mov_file in parent_mov_files:
                             full_path = os.path.join(base_path, parent_mov_file)
                             all_mov_files.append((parent_mov_file, full_path))
@@ -238,7 +238,7 @@ class PlayerPlaybackMixin:
                                     frames_path = os.path.join(base_path, folder, "frames")
 
                                 if frames_path and os.path.isdir(frames_path):
-                                    mov_files = [f for f in os.listdir(frames_path) if f.endswith(('.mov', '.mp4')) and not f.startswith('.')]
+                                    mov_files = [f for f in os.listdir(frames_path) if file_names.is_listed_video(f)]
                                     for mov_file in mov_files:
                                         full_path = os.path.join(frames_path, mov_file)
                                         all_mov_files.append((mov_file, full_path))
@@ -247,7 +247,7 @@ class PlayerPlaybackMixin:
                         if selected_work == "BM_Animatic":
                             frames_path = os.path.join(base_path, "ANIMATIC")
                             if os.path.isdir(frames_path):
-                                mov_files = [f for f in os.listdir(frames_path) if f.endswith(('.mov', '.mp4')) and not f.startswith('.')]
+                                mov_files = [f for f in os.listdir(frames_path) if file_names.is_listed_video(f)]
                                 for mov_file in mov_files:
                                     full_path = os.path.join(frames_path, mov_file)
                                     all_mov_files.append((mov_file, full_path))
@@ -257,7 +257,7 @@ class PlayerPlaybackMixin:
                             for anim_folder in os.listdir(base_path):
                                 frames_path = os.path.join(base_path, anim_folder)
                                 if 'ANIMATIC' in anim_folder.upper() and os.path.isdir(frames_path):
-                                    mov_files = [f for f in os.listdir(frames_path) if f.endswith(('.mov', '.mp4')) and not f.startswith('.')]
+                                    mov_files = [f for f in os.listdir(frames_path) if file_names.is_listed_video(f)]
                                     for mov_file in mov_files:
                                         full_path = os.path.join(frames_path, mov_file)
                                         all_mov_files.append((mov_file, full_path))

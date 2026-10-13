@@ -6,6 +6,7 @@ import webbrowser
 import sys
 import subprocess
 from datetime import datetime
+from pathlib import Path
 
 
 def generate_web_report(segments, video_path, fps, total_frames, ocr_mode='titmouse'):
@@ -871,7 +872,7 @@ def _generate_html(segments, video_name, fps, total_frames, ocr_mode, video_path
         <div class="preview-section">
             <h2>프리뷰 영상</h2>
             <div class="video-container" id="videoContainer">
-                {'<video id="previewVideo" preload="metadata"><source src="' + video_path + '" type="video/mp4"></video>' if video_path else ''}
+                {'<video id="previewVideo" preload="metadata"><source src="' + Path(video_path).as_uri() + '" type="video/mp4"></video>' if video_path else ''}
                 <div class="video-placeholder" id="videoPlaceholder">썸네일을 클릭하여 세그먼트를 재생하세요</div>
                 <div class="frame-overlay" id="frameOverlay" style="display: none;">Frame: 1</div>
             </div>
@@ -2565,7 +2566,7 @@ def open_web_report(html_path):
             
             # 1. webbrowser 모듈 시도
             # file:// 프로토콜 명시
-            url = f"file://{abs_path}"
+            url = Path(abs_path).as_uri()
             
             try:
                 # new=2: 새 탭에서 열기 시도
