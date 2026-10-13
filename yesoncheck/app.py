@@ -5,7 +5,7 @@ import os
 import sys
 import traceback
 
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal, pyqtSlot
 from PyQt5.QtGui import QFont, QPixmap
 from PyQt5.QtWidgets import QApplication, QLabel, QMessageBox, QSplashScreen
 
@@ -32,14 +32,57 @@ def setup_windows_logging():
     sys.stderr = stream
     print(f"===== YesonCheck 시작 {datetime.datetime.now():%Y-%m-%d %H:%M:%S} =====")
 
+    sys.excepthook = make_excepthook(log_path)
+    return log_path
+
+
+class _ErrorDialog(QObject):
+    """잡히지 않은 예외의 오류 창. GUI 스레드에서만, 한 번에 하나만 띄운다.
+
+    GUI 스레드에서 만들어야 함 (다른 스레드에서 보낸 requested가 GUI 스레드에서 처리되도록).
+    """
+
+    requested = pyqtSignal(str)
+
+    def __init__(self, log_path):
+        super().__init__()
+        self.log_path = log_path
+        self.is_open = False
+        self.requested.connect(self.show_error)
+
+    @pyqtSlot(str)
+    def show_error(self, text):
+        if self.is_open:
+            # 창 안의 이벤트 루프에서 같은 오류가 또 나면(타이머 등) 창이 겹겹이 쌓이다 스택이 넘침 → 로그에만
+            print("(오류 창이 이미 열려 있어 위 예외는 로그에만 남깁니다)", file=sys.stderr)
+            return
+        self.is_open = True
+        try:
+            QMessageBox.critical(None, "YesonCheck 오류", f"{text[-3000:]}\n\n로그: {self.log_path}")
+        finally:
+            self.is_open = False
+
+
+def make_excepthook(log_path):
+    """sys.excepthook: 예외는 항상 스택 트레이스째 로그(stderr)에 남기고, 오류 창은 GUI 스레드에서 하나씩.
+
+    GUI 스레드가 아닌 곳(QThread 등)의 예외는 거기서 창을 만들지 않고(위젯은 GUI 스레드 전용) GUI 스레드로 넘겨 띄운다.
+    """
+    dialog = _ErrorDialog(log_path)
+
     def excepthook(exc_type, exc, tb):
         text = "".join(traceback.format_exception(exc_type, exc, tb))
         print(text, file=sys.stderr)
-        if QApplication.instance() is not None:
-            QMessageBox.critical(None, "YesonCheck 오류", f"{text[-3000:]}\n\n로그: {log_path}")
+        app = QApplication.instance()
+        if app is None:
+            return
+        if QThread.currentThread() is app.thread():
+            dialog.show_error(text)
+        else:
+            dialog.requested.emit(text)  # GUI 스레드의 이벤트 루프에서 show_error 실행
 
-    sys.excepthook = excepthook
-    return log_path
+    excepthook.dialog = dialog  # 시험·GC 방지용 참조
+    return excepthook
 
 
 def launch(argv=None):

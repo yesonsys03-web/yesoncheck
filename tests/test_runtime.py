@@ -41,3 +41,64 @@ def test_windows_logging_only_when_frozen_windows(monkeypatch, tmp_path):
     from yesoncheck import app
     monkeypatch.setattr(app.sys, "platform", "darwin")
     assert app.setup_windows_logging() is None
+
+
+def _raise(message):
+    try:
+        raise RuntimeError(message)
+    except RuntimeError:
+        return sys.exc_info()
+
+
+def test_excepthook_one_dialog_at_a_time(qapp, monkeypatch, capsys):
+    """오류 창이 열려 있는 동안 난 예외(창 안의 이벤트 루프에서 또 던짐)는 창을 겹쳐 띄우지 않고 로그에만."""
+    from PyQt5.QtWidgets import QMessageBox
+
+    from yesoncheck import app
+
+    hook = app.make_excepthook("C:\\logs\\yesoncheck.log")
+    shown = []
+
+    def fake_critical(parent, title, text, *args, **kwargs):
+        shown.append(text)
+        if len(shown) == 1:
+            hook(*_raise("두번째 오류"))  # 창이 떠 있는 동안 같은 스레드에서 또 예외
+        return QMessageBox.Ok
+
+    monkeypatch.setattr(QMessageBox, "critical", fake_critical)
+    hook(*_raise("첫번째 오류"))
+    assert len(shown) == 1
+    assert "첫번째 오류" in shown[0] and "C:\\logs\\yesoncheck.log" in shown[0]
+    logged = capsys.readouterr().err
+    assert "첫번째 오류" in logged and "두번째 오류" in logged and "Traceback" in logged
+    # 창이 닫힌 뒤의 예외는 다시 창으로
+    hook(*_raise("세번째 오류"))
+    assert len(shown) == 2 and "세번째 오류" in shown[1]
+
+
+def test_excepthook_from_other_thread_shows_dialog_on_gui_thread(qapp, monkeypatch, capsys):
+    """GUI 스레드가 아닌 곳의 예외: 그 스레드에서는 창을 만들지 않고, GUI 스레드에서 띄운다."""
+    import threading
+
+    from PyQt5.QtCore import QThread
+    from PyQt5.QtWidgets import QMessageBox
+
+    from yesoncheck import app
+
+    hook = app.make_excepthook("log.txt")
+    shown = []
+
+    def fake_critical(parent, title, text, *args, **kwargs):
+        shown.append((text, QThread.currentThread() is qapp.thread()))
+        return QMessageBox.Ok
+
+    monkeypatch.setattr(QMessageBox, "critical", fake_critical)
+    worker = threading.Thread(target=lambda: hook(*_raise("작업 스레드 오류")))
+    worker.start()
+    worker.join()
+    assert shown == []  # 작업 스레드에서는 창을 띄우지 않음
+    assert "작업 스레드 오류" in capsys.readouterr().err
+    qapp.processEvents()
+    assert len(shown) == 1
+    text, on_gui_thread = shown[0]
+    assert "작업 스레드 오류" in text and on_gui_thread
