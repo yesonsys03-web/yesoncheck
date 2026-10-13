@@ -88,8 +88,12 @@ def launch(argv=None):
 
 
 def main():
-    """CLI entrypoint."""
+    """CLI entrypoint. --smoke-test <작업 폴더>: 실행 시험 (yesoncheck/smoke_test.py)."""
     setup_windows_logging()
+    if len(sys.argv) >= 3 and sys.argv[1] == "--smoke-test":
+        from yesoncheck.smoke_test import run
+
+        return run(sys.argv[2])
     return launch(sys.argv)
 
 
