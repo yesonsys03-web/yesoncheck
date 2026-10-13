@@ -25,6 +25,11 @@ _ERROR_MORE_DATA = 234
 _ERROR_CONNECTION_UNAVAIL = 1201  # 기억된 연결이지만 지금은 끊김 (원격 이름은 돌려줌)
 _ERROR_NOT_CONNECTED = 2250  # 네트워크 드라이브가 아님 (로컬 디스크 등)
 
+# GetDriveTypeW 반환값
+_DRIVE_NO_ROOT_DIR = 1  # 지금 없는 드라이브 문자 (끊긴 기억된 네트워크 연결, 뽑힌 USB 등)
+_DRIVE_FIXED = 3
+_DRIVE_REMOTE = 4
+
 
 class PathMapError(Exception):
     """변환표가 없거나 틀렸거나, 경로를 변환표로 바꿀 수 없을 때."""
@@ -92,6 +97,7 @@ class PathMap:
             fail('"shares" 목록이 비어 있거나 없습니다')
         shares = []
         seen = set()
+        alias_owner = {}  # 접은 UNC 별칭 → 처음 나온 항목 번호 (같은 공유가 두 Mac 경로에 걸리면 Windows → Mac이 모호함)
         for index, entry in enumerate(entries, 1):
             where = f"shares의 {index}번째 항목"
             if not isinstance(entry, dict):
@@ -111,6 +117,14 @@ class PathMap:
             if key in seen:
                 fail(f'{where}: "mac" 값 {mac!r}이(가) 앞 항목과 겹칩니다')
             seen.add(key)
+            for alias, parts in zip(windows, unc_parts):
+                folded = tuple(_fold(parts))
+                owner = alias_owner.setdefault(folded, index)
+                if owner != index:
+                    fail(
+                        f'{where}: "windows" 주소 {alias!r}이(가) {owner}번째 항목에도 있습니다 '
+                        "(대소문자·/·한글 정규화 차이는 같은 주소로 봄). 한 공유 주소는 한 Mac 경로에만 적으세요"
+                    )
             shares.append((mac_parts, unc_parts))
         return cls(shares, source)
 
@@ -124,7 +138,7 @@ class PathMap:
                 "(docs/windows-deploy.md 참고)."
             )
         try:
-            with open(path, encoding="utf-8") as fh:
+            with open(path, encoding="utf-8-sig") as fh:  # 메모장이 붙이는 BOM 허용
                 data = json.load(fh)
         except (OSError, ValueError) as exc:
             raise PathMapError(f"변환표를 읽지 못했습니다: {path}\n{exc}") from exc
@@ -157,8 +171,19 @@ class PathMap:
         return "/" + "/".join(mac_prefix + parts[n:])
 
 
-def _remote_name_of_drive(drive):
-    """WNetGetConnectionW: 'Z:' → '\\\\서버\\공유'. 네트워크 드라이브가 아니면 None (Windows 전용)."""
+def _drive_type(drive):
+    """GetDriveTypeW: 'Z:' → 드라이브 종류(_DRIVE_* 값) (Windows 전용)."""
+    import ctypes
+    from ctypes import wintypes
+
+    func = ctypes.WinDLL("kernel32").GetDriveTypeW
+    func.argtypes = [wintypes.LPCWSTR]
+    func.restype = wintypes.UINT
+    return func(drive + "\\")
+
+
+def _wnet_get_connection(drive):
+    """WNetGetConnectionW: 'Z:' → (반환값, 원격 이름 '\\\\서버\\공유') (Windows 전용)."""
     import ctypes
     from ctypes import wintypes
 
@@ -169,13 +194,31 @@ def _remote_name_of_drive(drive):
     while True:
         buffer = ctypes.create_unicode_buffer(size.value)
         result = func(drive, buffer, ctypes.byref(size))
-        if result == _ERROR_MORE_DATA:
-            continue  # size가 필요한 길이로 바뀌어 있음
-        if result in (_NO_ERROR, _ERROR_CONNECTION_UNAVAIL):
-            return buffer.value or None
-        if result == _ERROR_NOT_CONNECTED:
-            return None
-        raise PathMapError(f"{drive} 드라이브의 연결 정보를 읽지 못했습니다 (WNetGetConnectionW 오류 {result})")
+        if result != _ERROR_MORE_DATA:
+            return result, buffer.value
+        # ERROR_MORE_DATA: size가 필요한 길이로 바뀌어 있음 → 다시
+
+
+def _remote_name_of_drive(drive):
+    """'Z:' → '\\\\서버\\공유'. 네트워크 드라이브가 아니면 None (Windows 전용).
+
+    드라이브 종류를 먼저 보고 로컬 디스크(고정·이동식·CD 등)는 WNetGetConnectionW를 부르지 않는다:
+    네트워크 공급자가 여럿인 PC에서는 로컬 디스크에도 1203(ERROR_NO_NET_OR_BAD_PATH)·1222(ERROR_NO_NETWORK)
+    같은 값을 돌려주는데, path_key는 모든 경로 비교·썸네일 키에 쓰이므로 여기서 오류가 나면 안 된다.
+    """
+    drive_type = _drive_type(drive)
+    if drive_type not in (_DRIVE_REMOTE, _DRIVE_NO_ROOT_DIR):
+        return None
+    result, remote = _wnet_get_connection(drive)
+    if result in (_NO_ERROR, _ERROR_CONNECTION_UNAVAIL):
+        return remote or None
+    if result == _ERROR_NOT_CONNECTED:
+        return None
+    if drive_type == _DRIVE_NO_ROOT_DIR:
+        # 지금 없는 드라이브 문자이고 기억된 네트워크 연결도 아님 → 네트워크 드라이브가 아님
+        print(f"{drive} 드라이브가 없고 기억된 네트워크 연결도 아닙니다 (WNetGetConnectionW {result})")
+        return None
+    raise PathMapError(f"{drive} 드라이브의 연결 정보를 읽지 못했습니다 (WNetGetConnectionW 오류 {result})")
 
 
 @functools.lru_cache(maxsize=32)
@@ -198,7 +241,7 @@ def drive_to_unc(path, resolver=None):
     remote = (resolver or _remote_name_of_drive)(drive.upper())
     if not remote:
         raise PathMapError(
-            f"{drive.upper()}는 네트워크 드라이브가 아닙니다 (로컬 디스크). NAS 공유 폴더를 고르세요: {path}"
+            f"{drive.upper()}는 네트워크 드라이브가 아닙니다 (로컬 디스크이거나 없는 드라이브). NAS 공유 폴더를 고르세요: {path}"
         )
     return remote.rstrip("\\") + rest
 

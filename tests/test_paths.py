@@ -173,3 +173,82 @@ def test_active_map_required(monkeypatch):
     paths.activate(None)
     with pytest.raises(PathMapError, match="로드되지 않았습니다"):
         paths.to_native("/usadata2/x")
+
+
+@pytest.fixture
+def drives(monkeypatch):
+    """GetDriveTypeW·WNetGetConnectionW를 흉내. types: 드라이브 → 종류, wnet: 드라이브 → (반환값, 원격 이름)."""
+    fake = type("FakeDrives", (), {})()
+    fake.types = {}
+    fake.wnet = {}
+    fake.wnet_calls = []
+
+    def wnet(drive):
+        fake.wnet_calls.append(drive)
+        return fake.wnet[drive]
+
+    monkeypatch.setattr(paths, "IS_WINDOWS", True)
+    monkeypatch.setattr(paths, "_drive_type", lambda drive: fake.types[drive])
+    monkeypatch.setattr(paths, "_wnet_get_connection", wnet)
+    paths._cached_remote_name.cache_clear()
+    yield fake
+    paths._cached_remote_name.cache_clear()
+
+
+def test_local_drive_does_not_ask_network(drives):
+    """네트워크 공급자가 여럿인 PC에서는 로컬 디스크에도 WNet이 1203·1222 등을 돌려줌 → 로컬은 아예 묻지 않음."""
+    drives.types["C:"] = paths._DRIVE_FIXED
+    drives.wnet["C:"] = (1222, "")  # ERROR_NO_NETWORK
+    assert paths.path_key("C:\\Clips\\A.mov") == "c:\\clips\\a.mov"
+    assert paths.same_path("c:/clips/a.MOV", "C:\\Clips\\A.mov")
+    with pytest.raises(PathMapError, match="네트워크 드라이브가 아닙니다"):
+        paths.drive_to_unc("C:\\Clips")
+    assert drives.wnet_calls == []
+
+
+def test_network_drive_codes(drives):
+    drives.types["Z:"] = paths._DRIVE_REMOTE
+    drives.wnet["Z:"] = (0, "\\\\nas\\share")
+    assert paths.drive_to_unc("Z:\\a") == "\\\\nas\\share\\a"
+    drives.wnet["Z:"] = (1201, "\\\\nas\\share")  # 기억된 연결, 지금은 끊김
+    assert paths._remote_name_of_drive("Z:") == "\\\\nas\\share"
+    drives.wnet["Z:"] = (2250, "")
+    assert paths._remote_name_of_drive("Z:") is None
+    drives.wnet["Z:"] = (1203, "")  # 네트워크 드라이브인데 연결 정보를 못 읽음 → 오류로 알림
+    with pytest.raises(PathMapError, match="WNetGetConnectionW 오류 1203"):
+        paths._remote_name_of_drive("Z:")
+
+
+def test_absent_drive_letter(drives):
+    """지금 없는 드라이브 문자: 기억된(끊긴) 네트워크 연결이면 원격 이름, 아니면 None (오류 아님)."""
+    drives.types["X:"] = paths._DRIVE_NO_ROOT_DIR
+    drives.wnet["X:"] = (1201, "\\\\nas\\old")
+    assert paths._remote_name_of_drive("X:") == "\\\\nas\\old"
+    drives.wnet["X:"] = (1203, "")
+    assert paths._remote_name_of_drive("X:") is None
+    assert paths.path_key("X:\\A.mov") == "x:\\a.mov"
+
+
+def test_load_accepts_notepad_bom(tmp_path):
+    """메모장이 저장한 UTF-8 BOM 파일도 읽음."""
+    (tmp_path / "path_map.json").write_text(json.dumps(MAP, ensure_ascii=False), encoding="utf-8-sig")
+    assert PathMap.load(str(tmp_path)).mac_to_windows("/usadata2") == "\\\\203.0.113.3\\usadata2"
+
+
+@pytest.mark.parametrize(
+    "alias_a, alias_b",
+    [
+        ("\\\\nas\\공유", "\\\\nas\\공유"),
+        ("\\\\NAS\\Share", "//nas/share"),  # 대소문자·슬래시만 다름
+        ("\\\\nas\\" + unicodedata.normalize("NFC", "공유"), "\\\\nas\\" + unicodedata.normalize("NFD", "공유")),
+    ],
+)
+def test_same_unc_alias_under_two_mac_entries_rejected(alias_a, alias_b):
+    data = {"version": 1, "shares": [{"mac": "/a", "windows": [alias_a]}, {"mac": "/b", "windows": [alias_b]}]}
+    with pytest.raises(PathMapError, match="변환표 형식 오류.*shares의 2번째 항목.*1번째 항목"):
+        PathMap.from_dict(data, "bad-map")
+
+
+def test_same_unc_alias_within_one_entry_allowed():
+    data = {"version": 1, "shares": [{"mac": "/a", "windows": ["\\\\nas\\a", "\\\\NAS\\A"]}]}
+    assert PathMap.from_dict(data, "ok").windows_to_mac("\\\\nas\\a\\x") == "/a/x"
