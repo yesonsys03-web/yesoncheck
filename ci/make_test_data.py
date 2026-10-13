@@ -2,6 +2,7 @@
 
 Windows CI: --share-root C:\\yc_share --unc \\\\localhost\\yc_test --mac-root /Volumes/yc_test --settings %APPDATA%\\YesonCheck\\settings.json
 Mac(로컬 확인): --share-root /tmp/x --mac-root /tmp/x (변환표 없이 Mac 경로 그대로) 후 YESONCHECK_CONFIG_DIR=/tmp/x/.yesoncheck
+자동 연결(--auto-connect): 공유 설정은 <share-root>\\test_jn\\.yesoncheck, 변환표는 '여기에_붙여넣기'가 남은 기본 파일
 """
 
 import argparse
@@ -18,6 +19,7 @@ WORK_FOLDER = "작품_시험"
 SEASON = "시즌1"
 JOB = "job_01"
 VIDEO_NAMES = ["SMOKE_101_컷_001.mov", "SMOKE_101_컷_002.mov"]
+TEMPLATE_PLACEHOLDER = "여기에_붙여넣기"
 
 
 def write_json(path, data):
@@ -45,7 +47,8 @@ def main():
     parser.add_argument("--workdir", required=True, help="실행 시험 작업 폴더")
     parser.add_argument("--settings", help="PC별 설정 파일 경로 (Windows만)")
     parser.add_argument("--auto-connect", action="store_true",
-                        help="자동 연결 시험: 공유 설정을 <share-root>\\test_jn\\.yesoncheck에 두고 변환표·PC별 설정 없이")
+                        help="자동 연결 시험: 공유 설정을 <share-root>\\test_jn\\.yesoncheck에 두고 PC별 설정 없이, "
+                             "변환표는 '여기에_붙여넣기'가 남은 기본 파일로 (앱이 백업 후 새로 만들어야 함)")
     args = parser.parse_args()
 
     ffmpeg = external_tools.ffmpeg_path()
@@ -55,7 +58,11 @@ def main():
     else:
         config_dir = os.path.join(args.share_root, ".yesoncheck")
     write_json(os.path.join(config_dir, "work_paths.json"), {WORK: f"{args.mac_root}/{WORK_FOLDER}"})
-    if args.unc and not args.auto_connect:
+    if args.auto_connect:
+        # 배포 때 놓아 두는 기본 파일 → 앱이 SMB 공유 위의 기존 파일을 백업하고 바꿔치기하는지 시험
+        write_json(os.path.join(config_dir, "path_map.json"),
+                   {"version": 1, "shares": [{"mac": args.mac_root, "windows": [TEMPLATE_PLACEHOLDER]}]})
+    elif args.unc:
         write_json(os.path.join(config_dir, "path_map.json"),
                    {"version": 1, "shares": [{"mac": args.mac_root, "windows": [args.unc]}]})
     frames = os.path.join(args.share_root, WORK_FOLDER, SEASON, JOB, "scene-001", "frames")

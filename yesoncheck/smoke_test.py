@@ -114,10 +114,17 @@ def run(workdir):
             assert player.path_map_problem, "변환표가 없는데 문제로 잡히지 않았습니다"
             player.resolve_shared_config_problem()
             assert player.path_map_problem is None, player.path_map_problem
-            with open(os.path.join(player.work_paths_config_dir, "path_map.json"), encoding="utf-8") as fh:
+            config_dir = player.work_paths_config_dir
+            with open(os.path.join(config_dir, "path_map.json"), encoding="utf-8") as fh:
                 data = json.load(fh)
             assert [entry["mac"] for entry in data["shares"]] == [config["mac_prefix"]], data
-            return data
+            # 시험 데이터의 기본 파일('여기에_붙여넣기')은 SMB 공유 위에서 백업된 뒤 바꿔치기돼야 함
+            backups = sorted(name for name in os.listdir(config_dir) if name.startswith("path_map.json.bak-"))
+            assert len(backups) == 1, backups
+            with open(os.path.join(config_dir, backups[0]), encoding="utf-8") as fh:
+                backup_text = fh.read()
+            assert "여기에_붙여넣기" in backup_text, backup_text
+            return {"path_map": data, "backup": backups[0]}
 
         listed = (check("공유 설정 자동 찾기", auto_config_dir)
                   and check("변환표 자동 설정", auto_path_map)
