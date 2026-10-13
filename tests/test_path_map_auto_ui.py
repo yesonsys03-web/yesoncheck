@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 from PyQt5.QtWidgets import QDialog, QInputDialog
 
-from yesoncheck import path_map_setup, paths
+from yesoncheck import path_map_setup, paths, shared_config
 from yesoncheck.path_map_setup import Share
 from yesoncheck.path_map_setup_dialog import PathMapSetupDialog
 from tests.test_work_paths_ui import make_config
@@ -60,6 +60,10 @@ def read_map(config):
         return json.load(fh)
 
 
+def path_map_criticals(dialogs):
+    return [text for kind, title, text in dialogs.messages if kind == "critical" and "변환표" in title]
+
+
 def test_startup_auto_setup_writes_path_map(win, dialogs, tmp_path):
     config = make_config(str(tmp_path), WORK)
     win.answers.extend([("pw", True), ("pw", True)])  # 최초 비밀번호 설정 + 확인
@@ -78,7 +82,7 @@ def test_cancel_writes_nothing(win, dialogs, tmp_path):
     player = win.player(config)
     player.resolve_shared_config_problem()
     assert not os.path.exists(os.path.join(config, "path_map.json"))
-    assert any(kind == "critical" and "변환표" in title for kind, title, _text in dialogs.messages)
+    assert len(path_map_criticals(dialogs)) == 1
 
 
 def test_wrong_password_writes_nothing(win, dialogs, tmp_path):
@@ -98,7 +102,7 @@ def test_nothing_to_add_shows_no_dialog(win, dialogs, tmp_path):
     player = win.player(config)
     player.resolve_shared_config_problem()
     assert win.shown == []
-    assert any(kind == "critical" and "변환표" in title for kind, title, _text in dialogs.messages)
+    assert len(path_map_criticals(dialogs)) == 1
 
 
 def test_unreadable_template_is_backed_up(win, dialogs, tmp_path):
@@ -170,3 +174,76 @@ def test_no_config_dir_found_opens_folder_picker(win, dialogs, tmp_path, monkeyp
                for kind, _t, text in dialogs.messages)
     assert any(kind == "critical" and title == "공유 설정 오류" for kind, title, _text in dialogs.messages)
     assert not os.path.exists(os.path.join(str(tmp_path / "appdata"), "YesonCheck", "settings.json"))
+
+
+def test_startup_progress_cancel_shows_one_critical(win, dialogs, tmp_path, monkeypatch):
+    """Finding 1 ruling 1c: 진행 창 취소도 (다른 미저장 경로처럼) 변환표 오류를 한 번 알려야 함."""
+    config = make_config(str(tmp_path), WORK)
+
+    def cancelled(*args, **kwargs):
+        raise path_map_setup.SetupCancelled()
+
+    monkeypatch.setattr(path_map_setup, "propose_mapping", cancelled)
+    player = win.player(config)
+    assert player.path_map_problem
+    player.resolve_shared_config_problem()
+    assert not os.path.exists(os.path.join(config, "path_map.json"))
+    assert len(path_map_criticals(dialogs)) == 1
+
+
+def test_startup_password_cancelled_shows_one_critical(win, dialogs, tmp_path):
+    """Finding 1 ruling 1c: 시작할 때 비밀번호를 취소해도 변환표 오류를 한 번 알려야 함."""
+    config = make_config(str(tmp_path), WORK)
+    win.answers.append(("", False))  # 최초 비밀번호 설정 창에서 취소
+    player = win.player(config)
+    assert player.path_map_problem
+    player.resolve_shared_config_problem()
+    assert not os.path.exists(os.path.join(config, "path_map.json"))
+    assert len(path_map_criticals(dialogs)) == 1
+
+
+def test_startup_with_both_problems_reports_both(win, dialogs, tmp_path):
+    """Finding 1 ruling 1a/1b: 공유 설정·변환표 문제가 둘 다 있으면 제목·시작 오류가 둘 다 보여야 함."""
+    config = make_config(str(tmp_path), None, raw="{broken")  # work_paths.json도 깨지고 path_map.json도 없음
+    player = win.player(config)
+    assert player.shared_config_problem and player.path_map_problem
+    assert "공유 설정 오류" in player.windowTitle()
+    assert "변환표 오류" in player.windowTitle()
+    player.resolve_shared_config_problem()
+    criticals = [text for kind, title, text in dialogs.messages if kind == "critical" and title == "공유 설정 오류"]
+    assert len(criticals) == 1
+    assert "읽지 못했습니다" in criticals[0]  # work_paths.json 오류
+    assert "변환표 파일이 없습니다" in criticals[0]  # path_map.json 오류
+
+
+def test_no_additions_and_no_path_map_problem_is_silent(win, dialogs, tmp_path):
+    """Review Focus 5: 변환표는 정상이지만 더할 짝이 없으면(연결된 드라이브 없음) 아무 창도 띄우지 않음."""
+    old = "\\\\localhost\\yc_fake_old"
+    config = make_config(str(tmp_path), WORK, {"version": 1, "shares": [{"mac": "/Volumes/yc", "windows": [old]}]})
+    win.shares = []
+    player = win.player(config)
+    assert player.path_map_problem is None
+    player.resolve_shared_config_problem()
+    assert win.shown == []
+    assert not any(kind in ("critical", "warning") for kind, _title, _text in dialogs.messages)
+
+
+def test_reread_failure_after_save_shows_shared_config_error(win, dialogs, tmp_path, monkeypatch):
+    """Finding 2 ruling 2a: 저장 후 다시 읽기가 실패해도 저장은 된 것 — "변환표 저장됨"이 아니라 공유 설정 오류로 알림."""
+    config = make_config(str(tmp_path), WORK)
+    player = win.player(config)
+    assert player.path_map_problem  # 아직 변환표 없음 → 저장할 것이 있음
+
+    def boom(_path):
+        raise shared_config.SharedConfigError("읽기 실패 (가짜 재현)")
+
+    monkeypatch.setattr(shared_config, "read_work_paths", boom)
+    result = player.auto_setup_path_map(ask_password=False)
+    assert result is True
+    assert read_map(config)["shares"] == [{"mac": "/Volumes/yc", "windows": [NAS]}]
+
+    criticals = [text for kind, title, text in dialogs.messages if kind == "critical" and title == "공유 설정 오류"]
+    assert len(criticals) == 1
+    assert "변환표를 저장했습니다" in criticals[0]
+    assert "읽기 실패 (가짜 재현)" in criticals[0]
+    assert not any(kind == "information" and title == "변환표 저장됨" for kind, title, _text in dialogs.messages)

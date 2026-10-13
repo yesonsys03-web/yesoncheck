@@ -871,7 +871,7 @@ class PlayerSidebarMixin:
         title = "Yeson Checker"
         if self.shared_config_problem:
             title += " — 공유 설정 오류 (작품 목록 없음)"
-        elif getattr(self, "path_map_problem", None):
+        if getattr(self, "path_map_problem", None):
             title += " — 변환표 오류 (작품 경로 관리에서 자동 설정)"
         self.setWindowTitle(title)
 
@@ -892,10 +892,13 @@ class PlayerSidebarMixin:
             if picked:
                 return  # _use_config_dir가 문제 알림·변환표 자동 설정까지 처리함
         if self.shared_config_problem:
+            message = self.shared_config_problem
+            if self.path_map_problem:
+                message += f"\n\n{self.path_map_problem}"
             QMessageBox.critical(
                 self,
                 "공유 설정 오류",
-                f"{self.shared_config_problem}\n\n작품 목록 없이 계속합니다. 파일 직접 열기와 드래그는 쓸 수 있습니다.",
+                f"{message}\n\n작품 목록 없이 계속합니다. 파일 직접 열기와 드래그는 쓸 수 있습니다.",
             )
             return
         self._offer_path_map_setup()
@@ -970,10 +973,18 @@ class PlayerSidebarMixin:
         if paths.IS_WINDOWS and (self.path_map_problem or self._works_not_opening()):
             self.auto_setup_path_map(ask_password=True, startup=True)
 
+    def _report_path_map_problem(self, parent, note=None):
+        """(Windows, startup) 저장 없이 끝날 때 변환표 문제를 한 번만 알립니다 (호출하는 쪽에서 self.path_map_problem을 확인)."""
+        message = self.path_map_problem
+        if note:
+            message = f"{message}\n\n{note}"
+        QMessageBox.critical(parent, "변환표 오류", message)
+
     def auto_setup_path_map(self, ask_password, startup=False, parent=None):
         """(Windows) 연결된 네트워크 드라이브로 변환표 짝을 찾아 확인 창을 띄우고, 승인되면 path_map.json에 합쳐 저장합니다.
 
-        startup이면 기존 변환표에 더할 것이 없을 때 창을 띄우지 않고 변환표 문제만 알립니다. 저장했으면 True.
+        startup이면 기존 변환표에 더할 것이 없을 때 창을 띄우지 않고 변환표 문제만 알립니다(저장 없이 끝나는 모든
+        경로에서 한 번만). 저장했으면 True(다시 읽기에 실패해도 저장은 된 것이므로 True이며, 공유 설정 오류를 따로 알립니다).
         """
         parent = parent or self
         config_dir = self.work_paths_config_dir
@@ -996,6 +1007,8 @@ class PlayerSidebarMixin:
         try:
             proposal = path_map_setup.propose_mapping(self.work_paths, shares, progress=on_progress)
         except path_map_setup.SetupCancelled:
+            if startup and self.path_map_problem:
+                self._report_path_map_problem(parent)
             return False
         finally:
             progress.close()
@@ -1003,17 +1016,18 @@ class PlayerSidebarMixin:
 
         if startup and not path_map_setup.has_additions(existing, proposal):
             if self.path_map_problem:
-                QMessageBox.critical(
-                    parent, "변환표 오류",
-                    f"{self.path_map_problem}\n\n연결된 네트워크 드라이브에서 새로 찾은 짝이 없습니다. NAS 드라이브 연결을 확인하세요.",
+                self._report_path_map_problem(
+                    parent, note="연결된 네트워크 드라이브에서 새로 찾은 짝이 없습니다. NAS 드라이브 연결을 확인하세요.",
                 )
             return False
         dialog = PathMapSetupDialog(proposal, existing_error, parent)
         if dialog.exec_() != QDialog.Accepted:
             if startup and self.path_map_problem:
-                QMessageBox.critical(parent, "변환표 오류", self.path_map_problem)
+                self._report_path_map_problem(parent)
             return False
         if ask_password and not self._confirm_work_paths_password(parent):
+            if startup and self.path_map_problem:
+                self._report_path_map_problem(parent)
             return False
         try:
             data = path_map_setup.merge_path_map(existing, dialog.chosen())
@@ -1027,6 +1041,13 @@ class PlayerSidebarMixin:
         message = f"변환표를 저장했습니다: {map_file}"
         if backup:
             message += f"\n원래 파일은 {backup}으로 보관했습니다."
+        if self.shared_config_problem:
+            # 변환표는 저장됐지만 공유 설정을 다시 읽다가 문제가 생김 (예: NAS 연결 끊김) — 저장은 됐다고 알림
+            QMessageBox.critical(
+                parent, "공유 설정 오류",
+                f"{message}\n\n하지만 공유 설정을 다시 읽지 못했습니다:\n{self.shared_config_problem}",
+            )
+            return True
         broken = self._works_not_opening()
         if broken:
             QMessageBox.warning(parent, "변환표 저장됨 — 열리지 않는 작품", message + "\n\n아직 열리지 않는 작품:\n" + "\n".join(broken))
@@ -1321,7 +1342,11 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
 
             def on_auto_setup():
                 self.auto_setup_path_map(ask_password=False, parent=dialog)
-                self._refresh_work_path_table(table)
+                if self.shared_config_problem:
+                    # 다시 읽기에 실패해 work_paths가 빈 목록일 수 있음 — 관리 창을 닫아 그대로 덮어쓰지 않게 함
+                    dialog.reject()
+                else:
+                    self._refresh_work_path_table(table)
 
             auto_button.clicked.connect(on_auto_setup)
             password_layout.addWidget(auto_button)
