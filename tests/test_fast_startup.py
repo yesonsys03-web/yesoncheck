@@ -369,3 +369,25 @@ def test_launch_closes_splash_when_window_fails(qapp, monkeypatch):
         app_module.launch(["yesoncheck"])
     assert not splashes[0].isVisible()
 
+
+def test_smoke_open_like_launch(qapp, dialogs, work_area, monkeypatch):
+    """실행 시험(자동 연결)이 쓰는 'launch처럼 열기': 창을 보이고 공유 설정을 백그라운드로 불러와 기다림.
+
+    (Windows CI: 실제 시험 공유와 변환표로 — 작품이 열리므로 아무 창도 뜨지 않아야 함)
+    """
+    from yesoncheck.main_window import VideoPlayer
+    from yesoncheck.smoke_test import open_like_launch
+
+    config = make_config(work_area.local, {"SMOKE": work_area.stored}, work_area.path_map)
+    monkeypatch.setenv("YESONCHECK_CONFIG_DIR", config)
+    player, shown_s, load_s = open_like_launch(VideoPlayer, qapp, timeout_s=60)
+    try:
+        assert player.isVisible() and not player.shared_config_loading
+        assert player.work_paths == {"SMOKE": work_area.stored}
+        assert combo_items(player.workComboBox) == ["작품선택", "SMOKE"]
+        assert 0 <= shown_s and 0 <= load_s
+        assert dialogs.errors() == []
+    finally:
+        player.close()
+        paths.activate(None)
+

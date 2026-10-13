@@ -49,11 +49,24 @@ jobs:
       - name: 모듈 검사
         run: .venv\Scripts\python.exe check_frozen_imports.py dist\YesonCheck_Autocut
 
+      - name: '끊긴 기억된 네트워크 드라이브 (W: → 없는 서버 \\192.0.2.1\dead) — 두 실행 시험 모두 이 드라이브가 있는 채로'
+        run: |
+          # 서버가 꺼진 기억된 드라이브: 첫 확인에 20초쯤 걸림 → 창은 바로 보이고 공유 문제로만 알려야 함
+          $key = "HKCU:\Network\W"
+          New-Item -Path $key -Force | Out-Null
+          New-ItemProperty -Path $key -Name RemotePath -PropertyType String -Value "\\192.0.2.1\dead" -Force | Out-Null
+          New-ItemProperty -Path $key -Name UserName -PropertyType String -Value "" -Force | Out-Null
+          New-ItemProperty -Path $key -Name ProviderName -PropertyType String -Value "Microsoft Windows Network" -Force | Out-Null
+          New-ItemProperty -Path $key -Name ProviderType -PropertyType DWord -Value 0x20000 -Force | Out-Null
+          New-ItemProperty -Path $key -Name ConnectionType -PropertyType DWord -Value 1 -Force | Out-Null
+          New-ItemProperty -Path $key -Name DeferFlags -PropertyType DWord -Value 4 -Force | Out-Null
+          Get-ItemProperty -Path $key | Format-List | Out-String | Write-Host
+
       - name: 실행 시험 데이터 — 자동 연결 (PC별 설정·변환표 없이)
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           $env:PATH = "$PWD\vendor\ffmpeg\windows;$env:PATH"
-          .venv\Scripts\python.exe ci\make_test_data.py --auto-connect --share-root $env:YC_TEST_SHARE_ROOT --mac-root /Volumes/yc_test --workdir C:\yc_smoke_auto --settings "$env:APPDATA\YesonCheck\settings.json"
+          .venv\Scripts\python.exe ci\make_test_data.py --auto-connect --share-root $env:YC_TEST_SHARE_ROOT --mac-root /Volumes/yc_test --workdir C:\yc_smoke_auto --settings "$env:APPDATA\YesonCheck\settings.json" --dead-share "\\192.0.2.1\dead"
 
       - name: 실행 시험 — 자동 연결 (빌드된 exe)
         run: ./ci/run_smoke_test.ps1 -Workdir C:\yc_smoke_auto

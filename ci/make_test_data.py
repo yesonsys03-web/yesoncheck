@@ -49,6 +49,9 @@ def main():
     parser.add_argument("--auto-connect", action="store_true",
                         help="자동 연결 시험: 공유 설정을 <share-root>\\test_jn\\.yesoncheck에 두고 PC별 설정 없이, "
                              "변환표는 '여기에_붙여넣기'가 남은 기본 파일로 (앱이 백업 후 새로 만들어야 함)")
+    parser.add_argument("--dead-share",
+                        help="자동 연결 시험: 서버가 없는 기억된 네트워크 드라이브의 UNC (CI가 등록) — 실행 시험이 "
+                             "실패하지 않고 공유 문제로 알렸는지 확인")
     args = parser.parse_args()
 
     ffmpeg = external_tools.ffmpeg_path()
@@ -71,6 +74,8 @@ def main():
     smoke_config = {"work": WORK, "season": SEASON, "job": JOB, "expected_files": len(VIDEO_NAMES)}
     if args.auto_connect:
         smoke_config.update({"scenario": "auto_connect", "mac_prefix": args.mac_root})
+        if args.dead_share:
+            smoke_config["dead_share"] = args.dead_share
     write_json(os.path.join(args.workdir, "smoke_config.json"), smoke_config)
     if args.settings and args.auto_connect:
         if os.path.exists(args.settings):

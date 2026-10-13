@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sys
+import time
 import traceback
 
 # exe manifest의 <longPathAware ...>true</longPathAware> (이름공간 접두사 허용, 값은 true여야 함)
@@ -30,6 +31,34 @@ def ocr_model_files(base_dir):
     )
     assert files, f"OCR 모델 폴더가 비어 있습니다: {whl}"
     return files
+
+
+def show_like_launch(VideoPlayer, app):
+    """app.launch처럼 공유 설정을 읽지 않고 창을 만들어 보임 → (player, 만들어 보이기까지 걸린 초)."""
+    started = time.perf_counter()
+    player = VideoPlayer(load_shared_config=False)
+    player.show()
+    app.processEvents()
+    return player, time.perf_counter() - started
+
+
+def wait_shared_config_load(player, app, timeout_s):
+    """공유 설정을 백그라운드로 불러오고(끝나면 resolve까지 실행됨) 끝날 때까지 이벤트를 처리하며 기다림 → 걸린 초."""
+    started = time.perf_counter()
+    player.start_shared_config_load()
+    while player.shared_config_loading:
+        if time.perf_counter() - started > timeout_s:
+            raise TimeoutError(f"공유 설정 불러오기가 {timeout_s}초 안에 끝나지 않았습니다")
+        app.processEvents()
+        time.sleep(0.01)
+    return time.perf_counter() - started
+
+
+def open_like_launch(VideoPlayer, app, timeout_s=120):
+    """창을 launch처럼 바로 보이고 공유 설정을 백그라운드로 불러와 기다림 → (player, 창 표시 초, 불러오기 초)."""
+    player, shown_s = show_like_launch(VideoPlayer, app)
+    load_s = wait_shared_config_load(player, app, timeout_s)
+    return player, shown_s, load_s
 
 
 def run(workdir):
@@ -75,7 +104,7 @@ def run(workdir):
     app = QApplication.instance() or QApplication([sys.argv[0]])
     from yesoncheck.main_window import VideoPlayer
 
-    player = VideoPlayer()
+    player = None
 
     def shared_config_ok():
         assert player.shared_config_problem is None, player.shared_config_problem
@@ -91,7 +120,8 @@ def run(workdir):
         return files
 
     def finish(passed):
-        player.close()
+        if player is not None:
+            player.close()
         app.processEvents()
         bad_dialogs = [d for d in report["dialogs"] if d["kind"] in ("critical", "warning")]
         ok = all(c["ok"] for c in report["checks"]) and not bad_dialogs and passed
@@ -102,17 +132,47 @@ def run(workdir):
         return 0 if ok else 1
 
     if config.get("scenario") == "auto_connect":
+        # 앱처럼 연다: 창을 먼저 보이고(공유 설정 없이) 공유 설정은 백그라운드에서 — 끝나면 resolve가 자동 설정까지 함
         from yesoncheck import shared_config
 
+        startup = {}  # resolve가 불릴 때(백그라운드 읽기 직후)의 상태
+        share_problems = []  # 변환표 자동 설정 확인 창에 보인 공유 문제
+        original_dialog_init = PathMapSetupDialog.__init__
+
+        def recording_dialog_init(self, proposal, *args, **kwargs):
+            share_problems.extend(proposal.share_problems)
+            original_dialog_init(self, proposal, *args, **kwargs)
+
+        PathMapSetupDialog.__init__ = recording_dialog_init
+
+        def window_shown():
+            nonlocal player
+            player, shown_s = show_like_launch(VideoPlayer, app)
+            original_resolve = player.resolve_shared_config_problem
+
+            def recording_resolve(*args, **kwargs):
+                startup.update(path_map_problem=player.path_map_problem,
+                               shared_config_problem=player.shared_config_problem)
+                return original_resolve(*args, **kwargs)
+
+            player.resolve_shared_config_problem = recording_resolve
+            assert shown_s < 3, f"창을 만들어 보이는 데 {shown_s:.2f}초 걸렸습니다 (3초 미만이어야 함)"
+            return {"construct_show_s": round(shown_s, 3)}
+
+        def shared_config_load():
+            load_s = wait_shared_config_load(player, app, timeout_s=120)
+            assert startup, "공유 설정 불러오기가 끝났는데 resolve_shared_config_problem이 불리지 않았습니다"
+            return {"load_with_resolve_s": round(load_s, 3), "background_gather_s": round(player.shared_config_load_seconds, 3)}
+
         def auto_config_dir():
+            assert startup["shared_config_problem"] is None, startup["shared_config_problem"]
             found = player.work_paths_config_dir or ""
             assert found.replace("/", "\\").lower().endswith("\\test_jn\\.yesoncheck"), found
             assert shared_config.load_local_settings().get("config_dir") == found
             return found
 
         def auto_path_map():
-            assert player.path_map_problem, "변환표가 없는데 문제로 잡히지 않았습니다"
-            player.resolve_shared_config_problem()
+            assert startup["path_map_problem"], "변환표가 없는데 문제로 잡히지 않았습니다"
             assert player.path_map_problem is None, player.path_map_problem
             config_dir = player.work_paths_config_dir
             with open(os.path.join(config_dir, "path_map.json"), encoding="utf-8") as fh:
@@ -126,11 +186,36 @@ def run(workdir):
             assert "여기에_붙여넣기" in backup_text, backup_text
             return {"path_map": data, "backup": backups[0]}
 
-        listed = (check("공유 설정 자동 찾기", auto_config_dir)
+        def dead_share_reported():
+            # 서버가 없는 기억된 드라이브(CI가 등록): 실패가 아니라 확인 창의 공유 문제로만 보여야 함
+            dead = config["dead_share"].lower()
+            reported = [problem for problem in share_problems if dead in problem.lower()]
+            assert reported, f"끊긴 공유 {config['dead_share']}가 공유 문제로 보이지 않았습니다: {share_problems}"
+            return reported
+
+        def media_player():
+            # 소리 재생기는 처음 쓸 때 만듦 (시작할 때 만들지 않음) — 여기서 처음 만들고 걸린 시간을 남김
+            from PyQt5.QtMultimedia import QMediaPlayer
+
+            assert player.findChildren(QMediaPlayer) == [], "소리 재생기가 처음 쓰기 전에 이미 만들어져 있습니다"
+            started = time.perf_counter()
+            media = player.mediaPlayer
+            elapsed = time.perf_counter() - started
+            assert player.findChildren(QMediaPlayer) == [media]
+            return {"media_player_create_s": round(elapsed, 3)}
+
+        listed = (check("창 바로 표시", window_shown)
+                  and check("공유 설정 불러오기 (백그라운드)", shared_config_load)
+                  and check("공유 설정 자동 찾기", auto_config_dir)
                   and check("변환표 자동 설정", auto_path_map)
                   and check("작품 목록", work_listing))
+        if listed and config.get("dead_share"):
+            listed = check("끊긴 공유는 문제로 알림", dead_share_reported)
+        if player is not None:
+            check("소리 재생기 준비 (처음 쓸 때)", media_player)
         return finish(bool(listed))
 
+    player = VideoPlayer()  # 기존 실행 시험: 동기 생성자(공유 설정을 여기서 읽음)
     files = check("공유 설정", shared_config_ok) and check("작품 목록", work_listing)
     video = files[0] if files else None
 
