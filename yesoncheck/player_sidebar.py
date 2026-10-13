@@ -30,7 +30,8 @@ from PyQt5.QtWidgets import (
 from yesoncheck.workers import ThumbnailLoaderWorker, ThumbnailWorker
 import traceback
 
-from yesoncheck import paths, shared_config
+from yesoncheck import path_map_setup, paths, shared_config
+from yesoncheck.path_map_setup_dialog import PathMapSetupDialog
 
 class PlayerSidebarMixin:
 
@@ -803,6 +804,9 @@ class PlayerSidebarMixin:
         """
         self.work_paths = {}
         self.shared_config_problem = None
+        self.path_map_problem = None
+        self.config_dir_candidates = []
+        self.config_dir_search_failed = False
         self.work_paths_config_dir = None
         self.work_paths_file = None
         self.work_paths_password_file = None
@@ -811,6 +815,12 @@ class PlayerSidebarMixin:
         except shared_config.SharedConfigError as exc:
             self.shared_config_problem = f"{exc}\n\n{traceback.format_exc()}"
             return
+        if (paths.IS_WINDOWS and not os.environ.get(shared_config.CONFIG_DIR_ENV)
+                and not shared_config.is_valid_config_dir(config_dir)):
+            found = self._auto_find_config_dir()
+            if self.shared_config_problem:
+                return
+            config_dir = found or config_dir
         if config_dir is None:
             self.shared_config_problem = "공유 설정 폴더가 아직 정해지지 않았습니다."
             return
@@ -827,28 +837,68 @@ class PlayerSidebarMixin:
                 paths.activate(paths.PathMap.load(config_dir))
             except paths.PathMapError as exc:
                 paths.activate(None)
-                problems.append(f"{exc}\n\n{traceback.format_exc()}")
+                self.path_map_problem = f"{exc}\n\n{traceback.format_exc()}"
         if problems:
             self.shared_config_problem = "\n\n".join(problems)
+
+    def _auto_find_config_dir(self):
+        """(Windows) 연결된 네트워크 드라이브에서 공유 설정 폴더를 찾습니다.
+
+        딱 하나면 PC별 설정에 저장하고 그 폴더를 돌려줍니다. 여러 개면 self.config_dir_candidates에 남기고
+        (창 표시 후 고르게 함) None. 하나도 못 찾으면 self.config_dir_search_failed를 True로 남기고 None.
+        PC별 설정 저장 실패는 self.shared_config_problem에 남기고 None.
+        """
+        shares, problems = path_map_setup.connected_shares()
+        for problem in problems:
+            print(f"[공유 설정] 드라이브 연결 정보를 읽지 못함: {problem}")
+        found = path_map_setup.find_config_dirs(shares)
+        if len(found) != 1:
+            self.config_dir_candidates = found
+            if not found:
+                self.config_dir_search_failed = True
+            return None
+        try:
+            shared_config.save_local_settings({"config_dir": found[0]})
+        except (shared_config.SharedConfigError, OSError) as exc:
+            self.shared_config_problem = (
+                f"공유 설정 폴더를 찾았지만 PC별 설정에 저장하지 못했습니다: {found[0]}\n{exc}\n\n{traceback.format_exc()}"
+            )
+            return None
+        print(f"[공유 설정] 연결된 드라이브에서 공유 설정 폴더를 찾았습니다: {found[0]}")
+        return found[0]
 
     def _update_shared_config_title(self):
         title = "Yeson Checker"
         if self.shared_config_problem:
             title += " — 공유 설정 오류 (작품 목록 없음)"
+        elif getattr(self, "path_map_problem", None):
+            title += " — 변환표 오류 (작품 경로 관리에서 자동 설정)"
         self.setWindowTitle(title)
 
     def resolve_shared_config_problem(self):
-        """창 표시 후 공유 설정 문제를 알립니다. Windows에서 설정 폴더를 못 찾으면 고르게 합니다."""
-        if not self.shared_config_problem:
+        """창 표시 후 공유 설정 문제를 알립니다.
+
+        Windows: 설정 폴더를 못 찾았으면 고르게 하고(찾은 후보가 여럿이면 그 목록에서), 변환표가 없거나
+        열리지 않는 작품이 있으면 연결된 드라이브로 변환표 자동 설정을 제안합니다.
+        """
+        if self.shared_config_problem and paths.IS_WINDOWS and not shared_config.is_valid_config_dir(self.work_paths_config_dir):
+            if self.config_dir_candidates:
+                picked = self._pick_config_dir_candidate()
+            else:
+                reason = self.shared_config_problem
+                if self.config_dir_search_failed:
+                    reason = "연결된 네트워크 드라이브에서 공유 설정 폴더를 찾지 못했습니다.\n\n" + reason
+                picked = self.choose_shared_config_dir(reason)
+            if picked:
+                return  # _use_config_dir가 문제 알림·변환표 자동 설정까지 처리함
+        if self.shared_config_problem:
+            QMessageBox.critical(
+                self,
+                "공유 설정 오류",
+                f"{self.shared_config_problem}\n\n작품 목록 없이 계속합니다. 파일 직접 열기와 드래그는 쓸 수 있습니다.",
+            )
             return
-        if paths.IS_WINDOWS and not shared_config.is_valid_config_dir(self.work_paths_config_dir):
-            if self.choose_shared_config_dir(self.shared_config_problem):
-                return
-        QMessageBox.critical(
-            self,
-            "공유 설정 오류",
-            f"{self.shared_config_problem}\n\n작품 목록 없이 계속합니다. 파일 직접 열기와 드래그는 쓸 수 있습니다.",
-        )
+        self._offer_path_map_setup()
 
     def choose_shared_config_dir(self, reason=None):
         """(Windows) 공유 설정 폴더를 고르게 하고 PC별 설정에 저장합니다. 골랐으면 True."""
@@ -868,16 +918,121 @@ class PlayerSidebarMixin:
             except (paths.PathMapError, shared_config.SharedConfigError) as exc:
                 QMessageBox.warning(self, "다른 폴더를 고르세요", str(exc))
                 continue
+            return self._use_config_dir(config_dir)
+
+    def _use_config_dir(self, config_dir):
+        """(Windows) 고른 공유 설정 폴더를 PC별 설정에 저장하고 다시 읽습니다. 저장했으면 True."""
+        try:
+            shared_config.save_local_settings({"config_dir": config_dir})
+        except (shared_config.SharedConfigError, OSError) as exc:
+            QMessageBox.critical(self, "PC별 설정 저장 실패", f"{exc}\n\n{traceback.format_exc()}")
+            return False
+        self.setup_shared_config()
+        self.reload_work_combo()
+        if self.shared_config_problem:
+            QMessageBox.critical(self, "공유 설정 오류", self.shared_config_problem)
+        else:
+            self._offer_path_map_setup()
+        return True
+
+    def _pick_config_dir_candidate(self):
+        """(Windows) 연결된 드라이브에서 찾은 공유 설정 폴더가 여럿일 때 고르게 합니다. 골랐으면 True."""
+        manual = "직접 고르기..."
+        item, ok = QInputDialog.getItem(
+            self,
+            "공유 설정 폴더 선택",
+            "연결된 네트워크 드라이브에서 공유 설정 폴더를 여러 개 찾았습니다. 쓸 폴더를 고르세요:",
+            list(self.config_dir_candidates) + [manual],
+            0,
+            False,
+        )
+        if not ok:
+            return False
+        if item == manual:
+            return self.choose_shared_config_dir()
+        return self._use_config_dir(item)
+
+    def _works_not_opening(self):
+        """(Windows) 이 PC에서 열리지 않는 작품 목록 ['작품: 이유']."""
+        broken = []
+        for work_name, stored in sorted(self.work_paths.items()):
             try:
-                shared_config.save_local_settings({"config_dir": config_dir})
-            except (shared_config.SharedConfigError, OSError) as exc:
-                QMessageBox.critical(self, "PC별 설정 저장 실패", f"{exc}\n\n{traceback.format_exc()}")
-                return False
-            self.setup_shared_config()
-            self.reload_work_combo()
-            if self.shared_config_problem:
-                QMessageBox.critical(self, "공유 설정 오류", self.shared_config_problem)
-            return True
+                native = paths.to_native(stored)
+            except paths.PathMapError:
+                broken.append(f"{work_name}: 변환표에 없음 ({stored})")
+                continue
+            if not os.path.isdir(native):
+                broken.append(f"{work_name}: 열 수 없음 ({native})")
+        return broken
+
+    def _offer_path_map_setup(self):
+        """(Windows) 변환표가 없거나 열리지 않는 작품이 있으면 변환표 자동 설정을 제안합니다."""
+        if paths.IS_WINDOWS and (self.path_map_problem or self._works_not_opening()):
+            self.auto_setup_path_map(ask_password=True, startup=True)
+
+    def auto_setup_path_map(self, ask_password, startup=False, parent=None):
+        """(Windows) 연결된 네트워크 드라이브로 변환표 짝을 찾아 확인 창을 띄우고, 승인되면 path_map.json에 합쳐 저장합니다.
+
+        startup이면 기존 변환표에 더할 것이 없을 때 창을 띄우지 않고 변환표 문제만 알립니다. 저장했으면 True.
+        """
+        parent = parent or self
+        config_dir = self.work_paths_config_dir
+        map_file = os.path.join(config_dir, paths.PATH_MAP_FILENAME)
+        try:
+            existing, existing_error = path_map_setup.read_existing(config_dir)
+        except OSError as exc:
+            QMessageBox.critical(parent, "변환표를 읽지 못함", f"{map_file}\n\n{exc}\n\n{traceback.format_exc()}")
+            return False
+        shares, share_problems = path_map_setup.connected_shares()
+        progress = QProgressDialog("연결된 네트워크 드라이브에서 작품 폴더를 찾는 중…", "취소", 0, 100, parent)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(500)
+
+        def on_progress(done, total):
+            progress.setValue(int(done * 100 / total))
+            QApplication.processEvents()
+            return not progress.wasCanceled()
+
+        try:
+            proposal = path_map_setup.propose_mapping(self.work_paths, shares, progress=on_progress)
+        except path_map_setup.SetupCancelled:
+            return False
+        finally:
+            progress.close()
+        proposal.share_problems = share_problems
+
+        if startup and not path_map_setup.has_additions(existing, proposal):
+            if self.path_map_problem:
+                QMessageBox.critical(
+                    parent, "변환표 오류",
+                    f"{self.path_map_problem}\n\n연결된 네트워크 드라이브에서 새로 찾은 짝이 없습니다. NAS 드라이브 연결을 확인하세요.",
+                )
+            return False
+        dialog = PathMapSetupDialog(proposal, existing_error, parent)
+        if dialog.exec_() != QDialog.Accepted:
+            if startup and self.path_map_problem:
+                QMessageBox.critical(parent, "변환표 오류", self.path_map_problem)
+            return False
+        if ask_password and not self._confirm_work_paths_password(parent):
+            return False
+        try:
+            data = path_map_setup.merge_path_map(existing, dialog.chosen())
+            backup = path_map_setup.save_path_map(config_dir, data, backup_existing=existing_error is not None)
+        except (paths.PathMapError, OSError) as exc:
+            QMessageBox.critical(parent, "변환표 저장 실패", f"{map_file}\n\n{exc}\n\n{traceback.format_exc()}")
+            return False
+
+        self.setup_shared_config()
+        self.reload_work_combo()
+        message = f"변환표를 저장했습니다: {map_file}"
+        if backup:
+            message += f"\n원래 파일은 {backup}으로 보관했습니다."
+        broken = self._works_not_opening()
+        if broken:
+            QMessageBox.warning(parent, "변환표 저장됨 — 열리지 않는 작품", message + "\n\n아직 열리지 않는 작품:\n" + "\n".join(broken))
+        else:
+            QMessageBox.information(parent, "변환표 저장됨", message)
+        return True
 
     def reload_work_combo(self):
         """작품 콤보박스를 self.work_paths로 다시 채웁니다."""
@@ -979,6 +1134,61 @@ class PlayerSidebarMixin:
             item.setData(Qt.UserRole, work_name)
             table.addItem(item)
 
+    def _confirm_work_paths_password(self, parent=None):
+        """작품 경로 관리 비밀번호를 확인합니다 (파일이 없으면 최초 설정). 확인되면 True. 문제는 창으로 알립니다."""
+        parent = parent or self
+        try:
+            password_hash = self.load_password_hash()
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(parent, "비밀번호 파일 오류", f"비밀번호 파일을 읽지 못했습니다:\n{self.work_paths_password_file}\n\n{exc}")
+            return False
+
+        if password_hash is None:
+            # 비밀번호가 설정되지 않은 경우, 초기 비밀번호 설정
+            password, ok = QInputDialog.getText(
+                parent,
+                "비밀번호 설정",
+                "작품 경로 관리를 위한 비밀번호를 설정하세요:\n(처음 한 번만 설정하면 됩니다)",
+                echo=QLineEdit.Password
+            )
+            if not ok or not password:
+                return False
+
+            password_confirm, ok = QInputDialog.getText(
+                parent,
+                "비밀번호 확인",
+                "비밀번호를 다시 입력하세요:",
+                echo=QLineEdit.Password
+            )
+            if not ok:
+                return False
+
+            if password != password_confirm:
+                QMessageBox.warning(parent, "오류", "비밀번호가 일치하지 않습니다.")
+                return False
+
+            try:
+                self.set_password(password)
+            except OSError as exc:
+                QMessageBox.critical(parent, "비밀번호 저장 실패", f"{self.work_paths_password_file}\n\n{exc}")
+                return False
+            QMessageBox.information(parent, "설정 완료", "비밀번호가 설정되었습니다.")
+            return True
+
+        # 비밀번호 입력 요청
+        password, ok = QInputDialog.getText(
+            parent,
+            "비밀번호 입력",
+            "작품 경로 관리를 위해 비밀번호를 입력하세요:",
+            echo=QLineEdit.Password
+        )
+        if not ok:
+            return False
+        if not self.verify_password(password):
+            QMessageBox.warning(parent, "오류", "비밀번호가 올바르지 않습니다.")
+            return False
+        return True
+
     def manage_work_paths(self):
         """작품 경로 관리 다이얼로그를 표시합니다."""
         # 공유 설정에 문제가 있으면 관리 금지 (깨진 파일을 빈 목록으로 덮어쓰거나 새 비밀번호를 받지 않도록)
@@ -988,58 +1198,9 @@ class PlayerSidebarMixin:
                 f"공유 설정에 문제가 있어 작품 경로를 관리할 수 없습니다.\n\n{self.shared_config_problem or '공유 설정 폴더 없음'}",
             )
             return
-        # 비밀번호 확인
-        try:
-            password_hash = self.load_password_hash()
-        except (OSError, ValueError) as exc:
-            QMessageBox.critical(self, "비밀번호 파일 오류", f"비밀번호 파일을 읽지 못했습니다:\n{self.work_paths_password_file}\n\n{exc}")
+        if not self._confirm_work_paths_password():
             return
 
-        if password_hash is None:
-            # 비밀번호가 설정되지 않은 경우, 초기 비밀번호 설정
-            password, ok = QInputDialog.getText(
-                self,
-                "비밀번호 설정",
-                "작품 경로 관리를 위한 비밀번호를 설정하세요:\n(처음 한 번만 설정하면 됩니다)",
-                echo=QLineEdit.Password
-            )
-            if not ok or not password:
-                return
-            
-            password_confirm, ok = QInputDialog.getText(
-                self,
-                "비밀번호 확인",
-                "비밀번호를 다시 입력하세요:",
-                echo=QLineEdit.Password
-            )
-            if not ok:
-                return
-            
-            if password != password_confirm:
-                QMessageBox.warning(self, "오류", "비밀번호가 일치하지 않습니다.")
-                return
-            
-            try:
-                self.set_password(password)
-            except OSError as exc:
-                QMessageBox.critical(self, "비밀번호 저장 실패", f"{self.work_paths_password_file}\n\n{exc}")
-                return
-            QMessageBox.information(self, "설정 완료", "비밀번호가 설정되었습니다.")
-        else:
-            # 비밀번호 입력 요청
-            password, ok = QInputDialog.getText(
-                self,
-                "비밀번호 입력",
-                "작품 경로 관리를 위해 비밀번호를 입력하세요:",
-                echo=QLineEdit.Password
-            )
-            if not ok:
-                return
-            
-            if not self.verify_password(password):
-                QMessageBox.warning(self, "오류", "비밀번호가 올바르지 않습니다.")
-                return
-        
         # 비밀번호 확인 후 다이얼로그 표시
         dialog = QDialog(self)
         dialog.setWindowTitle("작품 경로 관리")
@@ -1152,6 +1313,18 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         password_button = QPushButton("비밀번호 변경")
         password_button.clicked.connect(lambda: self.change_password(dialog))
         password_layout.addWidget(password_button)
+        if paths.IS_WINDOWS:
+            auto_button = QPushButton("변환표 자동 설정")
+            auto_button.setToolTip(
+                "이 PC에 연결된 네트워크 드라이브에서 작품 폴더가 열리는 곳을 찾아 path_map.json을 만들거나 보충합니다."
+            )
+
+            def on_auto_setup():
+                self.auto_setup_path_map(ask_password=False, parent=dialog)
+                self._refresh_work_path_table(table)
+
+            auto_button.clicked.connect(on_auto_setup)
+            password_layout.addWidget(auto_button)
         password_layout.addStretch()
         layout.addLayout(password_layout)
         
