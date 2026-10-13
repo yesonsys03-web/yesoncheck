@@ -76,3 +76,18 @@ def test_probe_korean_path(tmp_path, make_video):
          "stream=codec_name", "-of", "default=noprint_wrappers=1:nokey=1", video],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, **external_tools.subprocess_kwargs())
     assert external_tools.decode_output(result.stdout).strip() == "h264"
+
+
+def test_merge_registers_process_that_can_be_killed(tmp_path, make_video):
+    """병합이 실행 중인 ffmpeg를 알려 줌 → 창을 닫을 때 끝낼 수 있음. 끝내면 실패로 올라옴."""
+    a = make_video(str(tmp_path / "a.mov"))
+    registered = []
+
+    def kill_now(process):
+        registered.append(process)
+        process.kill()
+
+    with pytest.raises(RuntimeError, match="ffmpeg 병합 실패"):
+        external_tools.merge_videos_ffmpeg(external_tools.ffmpeg_path(), [a, a], str(tmp_path / "o.mov"),
+                                           register_process=kill_now)
+    assert len(registered) == 1 and registered[0].returncode not in (None, 0)

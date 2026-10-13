@@ -108,3 +108,93 @@ def test_annotation_export_reports_ffmpeg_stderr_on_failure(qapp, tmp_path, make
     assert "done" not in result, result
     error = result.get("error", "")
     assert "Error opening output" in error, error
+
+
+def test_merge_worker_stop_kills_process_and_removes_partial(qapp, tmp_path):
+    """FFmpegWorker.stop(): 등록된 ffmpeg를 끝내고, 끊긴 출력 파일을 지우고, 오류 창(error)은 내지 않음."""
+    import subprocess
+    import sys
+
+    from PyQt5.QtCore import Qt
+
+    from yesoncheck.workers import FFmpegWorker
+
+    partial = tmp_path / "합본.mov"
+    started = []
+
+    def fake_merge(worker):
+        partial.write_bytes(b"partial")
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        started.append(proc)
+        worker.register_process(proc)
+        proc.wait()
+        raise RuntimeError(f"ffmpeg 병합 실패 (종료 코드 {proc.returncode})")
+
+    worker = FFmpegWorker(fake_merge, partial_output=str(partial))
+    errors = []
+    worker.error.connect(errors.append, Qt.DirectConnection)
+    worker.start()
+    deadline = time.time() + 10
+    while not started and time.time() < deadline:
+        time.sleep(0.05)
+    assert started, "병합 프로세스가 시작되지 않았습니다"
+    worker.stop()
+    assert worker.wait(10000), "중지 후에도 병합 스레드가 끝나지 않았습니다"
+    assert started[0].returncode not in (None, 0)
+    assert errors == []
+    assert not partial.exists()
+
+
+def test_merge_worker_stop_before_process_starts(qapp):
+    """stop()이 ffmpeg 시작 전에 불려도 등록되는 즉시 끝냄."""
+    import subprocess
+    import sys
+
+    from yesoncheck.workers import FFmpegWorker
+
+    worker = FFmpegWorker(lambda w: None)
+    worker.stop()
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    worker.register_process(proc)
+    assert proc.wait(10) not in (None, 0)
+
+
+def test_close_window_stops_exports_and_merge(qapp, dialogs, monkeypatch, tmp_path, capsys):
+    """창을 닫으면 실행 중인 OCR 구간 내보내기·주석 내보내기·병합을 멈추고 기다림 (ffmpeg가 남지 않게)."""
+    config = tmp_path / ".yesoncheck"
+    config.mkdir()
+    (config / "work_paths.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("YESONCHECK_CONFIG_DIR", str(config))
+    from yesoncheck.main_window import VideoPlayer
+
+    player = VideoPlayer()
+    calls = []
+
+    class Job:
+        def __init__(self, name, finishes=True):
+            self.name, self.finishes, self.running = name, finishes, True
+
+        def isRunning(self):
+            return self.running
+
+        def blockSignals(self, block):
+            calls.append((self.name, "blockSignals", block))
+
+        def stop(self):
+            calls.append((self.name, "stop"))
+
+        def wait(self, ms):
+            calls.append((self.name, "wait", ms))
+            self.running = not self.finishes
+            return self.finishes
+
+    player.ocr_export_worker = Job("ocr")
+    player.annotation_export_worker = Job("annotation")
+    player.merge_worker = Job("merge", finishes=False)
+    player.close()
+    assert calls == [
+        ("ocr", "blockSignals", True), ("ocr", "stop"), ("ocr", "wait", 10000),
+        ("annotation", "blockSignals", True), ("annotation", "stop"), ("annotation", "wait", 10000),
+        ("merge", "blockSignals", True), ("merge", "stop"), ("merge", "wait", 10000),
+    ]
+    assert "영상 병합이(가) 10초 안에 끝나지 않았습니다" in capsys.readouterr().out

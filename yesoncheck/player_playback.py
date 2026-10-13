@@ -80,13 +80,16 @@ class PlayerPlaybackMixin:
         self.progress_dialog.setAutoClose(False)
         self.progress_dialog.show()
 
-        self.worker = FFmpegWorker(
-            lambda: external_tools.merge_videos_ffmpeg(ffmpeg, file_paths, output_file_path, self.worker.progress.emit)
+        self.merge_worker = FFmpegWorker(
+            lambda worker: external_tools.merge_videos_ffmpeg(
+                ffmpeg, file_paths, output_file_path, worker.progress.emit, worker.register_process
+            ),
+            partial_output=output_file_path,
         )
-        self.worker.progress.connect(self.update_progress)
-        self.worker.finished.connect(self.on_merge_finished)
-        self.worker.error.connect(self.on_merge_error)
-        self.worker.start()
+        self.merge_worker.progress.connect(self.update_progress)
+        self.merge_worker.finished.connect(self.on_merge_finished)
+        self.merge_worker.error.connect(self.on_merge_error)
+        self.merge_worker.start()
 
     def update_progress(self, value):
         self.progress_dialog.setValue(value)

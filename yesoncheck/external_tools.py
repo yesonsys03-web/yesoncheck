@@ -68,8 +68,11 @@ def concat_list_line(file_path):
     return "file '" + file_path.replace("'", "'\\''") + "'\n"
 
 
-def merge_videos_ffmpeg(ffmpeg, file_paths, output_path, on_progress=None):
-    """여러 영상을 하나로 합칩니다 (블랙 프레임 검사 필터 + libx264). 실패하면 RuntimeError(stderr 포함)."""
+def merge_videos_ffmpeg(ffmpeg, file_paths, output_path, on_progress=None, register_process=None):
+    """여러 영상을 하나로 합칩니다 (블랙 프레임 검사 필터 + libx264). 실패하면 RuntimeError(stderr 포함).
+
+    register_process(proc): ffmpeg를 띄운 직후 불림 → 부른 쪽이 proc.kill()로 병합을 멈출 수 있음 (창 닫기).
+    """
     temp_dir = tempfile.mkdtemp(prefix="yesoncheck_merge_")
     try:
         list_path = os.path.join(temp_dir, "video_list.txt")
@@ -85,11 +88,19 @@ def merge_videos_ffmpeg(ffmpeg, file_paths, output_path, on_progress=None):
             "-c:a", "aac", "-b:a", "192k", "-pix_fmt", "yuv420p",
             "-movflags", "faststart", "-f", "mov", output_path,
         ]
-        result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, **subprocess_kwargs())
-        if result.returncode != 0:
+        process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, **subprocess_kwargs())
+        try:
+            if register_process:
+                register_process(process)
+            _, stderr = process.communicate()
+        finally:
+            if process.poll() is None:  # 여기서 예외가 나도 ffmpeg가 남지 않게
+                process.kill()
+                process.wait()
+        if process.returncode != 0:
             raise RuntimeError(
-                f"ffmpeg 병합 실패 (종료 코드 {result.returncode})\n명령: {' '.join(cmd)}\n"
-                f"{decode_output(result.stderr)[-4000:]}"
+                f"ffmpeg 병합 실패 (종료 코드 {process.returncode})\n명령: {' '.join(cmd)}\n"
+                f"{decode_output(stderr)[-4000:]}"
             )
         if on_progress:
             on_progress(100)

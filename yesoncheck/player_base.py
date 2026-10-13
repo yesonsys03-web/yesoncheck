@@ -71,6 +71,14 @@ from yesoncheck import external_tools, image_io, paths, shared_config
 # from yesoncheck.player_timeline import CollapsibleBox
 # from yesoncheck.player_review import OCRReviewDialog
 
+
+def stored_and_native_path(stored_path, native_path):
+    """파일에 적힌 영상 경로와 이 PC에서 연 경로를 메시지용으로. 둘이 같으면(Mac) 한 줄 그대로 (스펙 2-4)."""
+    if stored_path == native_path:
+        return native_path
+    return f"저장된 경로: {stored_path}\n이 PC 경로: {native_path}"
+
+
 class VideoPlayerBase(QMainWindow):
     def __init__(self, ffmpeg_path=None):
         super().__init__()
@@ -3180,7 +3188,8 @@ QMessageBox {
                         QMessageBox.warning(
                             self,
                             "동영상 파일 없음",
-                            f"저장된 동영상 파일을 찾을 수 없습니다:\n{saved_video_path}\n\n수동으로 동영상을 로드한 후 다시 시도하세요."
+                            f"저장된 동영상 파일을 찾을 수 없습니다:\n{stored_and_native_path(stored_video_path, saved_video_path)}"
+                            "\n\n수동으로 동영상을 로드한 후 다시 시도하세요."
                         )
                         return
                 # 동영상 경로가 다른 경우
@@ -3196,7 +3205,10 @@ QMessageBox {
                         if os.path.exists(saved_video_path):
                             self.open_file('A', saved_video_path)
                         else:
-                            QMessageBox.warning(self, "파일 없음", f"동영상 파일을 찾을 수 없습니다:\n{saved_video_path}")
+                            QMessageBox.warning(
+                                self, "파일 없음",
+                                f"동영상 파일을 찾을 수 없습니다:\n{stored_and_native_path(stored_video_path, saved_video_path)}",
+                            )
                             return
                     elif reply == QMessageBox.Cancel:
                         return
@@ -3940,11 +3952,35 @@ QMessageBox {
     
     
     
+    def stop_running_jobs(self, timeout_ms=10000):
+        """창을 닫을 때: 실행 중인 OCR 구간 내보내기·주석 내보내기·병합을 멈추고 끝날 때까지 기다립니다.
+
+        멈추지 않으면 ffmpeg가 (Windows에서는 보이지 않은 채) 남아 NAS의 출력 파일을 잡고 있고,
+        실행 중인 QThread가 그대로 파괴됩니다.
+        """
+        jobs = [
+            ("OCR 구간 내보내기", "ocr_export_worker"),
+            ("주석 영상 내보내기", "annotation_export_worker"),
+            ("영상 병합", "merge_worker"),
+        ]
+        for label, attr in jobs:
+            worker = getattr(self, attr, None)
+            if worker is None or not worker.isRunning():
+                continue
+            print(f"창 닫기: {label} 중지 중…")
+            worker.blockSignals(True)  # 멈춘 뒤의 '취소됨'·오류 신호로 닫히는 중에 대화상자가 뜨지 않게
+            worker.stop()
+            if not worker.wait(timeout_ms):
+                print(f"창 닫기: {label}이(가) {timeout_ms // 1000}초 안에 끝나지 않았습니다")
+
     def closeEvent(self, event):
         """앱 종료 시 리소스를 빠르게 정리합니다."""
         try:
             print("앱 종료 중 - 빠른 리소스 정리 시작")
-            
+
+            # 실행 중인 내보내기·병합 중지 (ffmpeg 종료)
+            self.stop_running_jobs()
+
             # 백그라운드 썸네일 로딩 타이머 중지
             if hasattr(self, 'thumbnail_loading_timer'):
                 self.thumbnail_loading_timer.stop()
