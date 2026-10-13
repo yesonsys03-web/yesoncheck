@@ -17,6 +17,22 @@ case "$ARCH" in
     arm64)  LABEL="AppleSilicon" ;;
     *) echo "지원하지 않는 아키텍처: $ARCH"; exit 1 ;;
 esac
+# 어느 커밋으로 빌드했는지 기록 (빌드 시작 시점 기준, 아래에서 dmg 옆에 .commit.txt로 씀)
+COMMIT_TXT="dist/YesonCheck_Autocut_${LABEL}.commit.txt"
+rm -f "$COMMIT_TXT"  # 빌드가 중간에 실패하면 이전 빌드의 기록이 남지 않게
+# (이 폴더 자체가 저장소일 때만: 상위 폴더의 다른 저장소 커밋을 적지 않게)
+if [ "$(git rev-parse --show-toplevel 2>/dev/null)" = "$(pwd -P)" ]; then
+    BUILD_COMMIT="$(git rev-parse HEAD)"
+    if [ -n "$(git status --porcelain)" ]; then
+        BUILD_TREE="dirty (커밋 안 된 변경이 있는 상태로 빌드)"
+    else
+        BUILD_TREE="clean"
+    fi
+else
+    echo "경고: git 저장소가 아니어서 빌드한 커밋을 기록할 수 없습니다 (.commit.txt에 그대로 적음)"
+    BUILD_COMMIT="알 수 없음 (git 저장소가 아님)"
+    BUILD_TREE="알 수 없음"
+fi
 echo "빌드 시작 (YesonCheck_Autocut.spec, $ARCH)..."
 "$PY" -m PyInstaller --clean -y YesonCheck_Autocut.spec
 OUT="dist/YesonCheck_Autocut_${LABEL}.app"
@@ -37,5 +53,12 @@ ln -s /Applications "$STAGE/Applications"
 echo "배포용 디스크 이미지 생성: $DMG"
 hdiutil create -volname "YesonCheck_Autocut_${LABEL}" -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov "$DMG"
 rm -rf "$STAGE"
+{
+    echo "commit: $BUILD_COMMIT"
+    echo "tree: $BUILD_TREE"
+    echo "built: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "dmg: $(basename "$DMG")"
+} > "$COMMIT_TXT"
 echo "완료. 앱 위치: $OUT"
 echo "      배포 파일: $DMG (다른 Mac에는 이 .dmg를 옮겨서 설치)"
+echo "      빌드 커밋: $COMMIT_TXT ($BUILD_COMMIT, $BUILD_TREE)"

@@ -47,12 +47,18 @@ Intel 앱도 Apple Silicon에서 Rosetta로 실행되지만, macOS 26.4부터 �
 
 두 검사 모두 `통과`가 나와야 배포할 수 있습니다.
 
+빌드가 끝나면 `dist/YesonCheck_Autocut_<Intel|AppleSilicon>.commit.txt`에 이 빌드의 출처가 남습니다:
+`commit`(빌드를 시작할 때의 `git rev-parse HEAD`), `tree`(`clean` 또는 커밋 안 된 변경이 있었으면 `dirty`), 빌드 시각, dmg 이름.
+`dirty` 빌드는 커밋과 내용이 다를 수 있으니 배포하지 말고, 커밋한 뒤 다시 빌드하세요.
+git 저장소가 아닌 폴더(직접 복사한 폴더)에서 빌드하면 경고를 내고 커밋을 "알 수 없음"으로 적습니다.
+
 ## 3. 배포
 
 - **다른 Mac에는 반드시 `dist/YesonCheck_Autocut_<Intel|AppleSilicon>.dmg` 파일을 옮기세요.**
   `.app`은 폴더이고 안에 심볼릭 링크가 수백 개 있어서, 폴더째 NAS·메신저 등으로 옮기면 링크가 깨지고
   실행 시 `Fatal Python error ... No module named 'encodings'`로 멈춥니다. `.dmg`는 파일 하나라 안전합니다.
 - 받은 Mac에서 `.dmg`를 열고 앱을 `Applications` 폴더로 끌어다 놓으면 설치됩니다.
+- 배포할 때 같은 이름의 `.commit.txt`도 함께 보관하세요 (어느 커밋으로 만든 앱인지 확인용, `tree: clean`이어야 함).
 - 메신저·브라우저로 받은 앱은 격리 속성 때문에 처음 열 때 차단될 수 있습니다. Finder에서 우클릭 → **열기**로 한 번 열거나 `xattr -dr com.apple.quarantine YesonCheck_Autocut_*.app`을 실행하세요.
 - 작품 경로 설정(`/USA_DB/test_jn/.yesoncheck/work_paths.json`)은 모든 Mac이 같이 씁니다.
 
