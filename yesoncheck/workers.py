@@ -328,13 +328,20 @@ def paddleocr_base_dir(platform=sys.platform, environ=os.environ):
 
 
 def use_ascii_paddleocr_dir():
-    """PaddleOCR 생성 전에 호출: 모델 폴더(BASE_DIR)를 바꿈. 모델이 없으면 그 폴더에 내려받음."""
+    """PaddleOCR 생성 전에 호출: 모델 폴더(BASE_DIR)를 바꿈. 모델이 없으면 그 폴더에 내려받음.
+
+    BASE_DIR은 PaddleOCR 클래스를 정의한 모듈에 있다. 소스 환경에서는 그 모듈이 패키지
+    paddleocr.paddleocr이지만, 빌드된 Windows 앱에서는 pyi_rth_paddleocr_fixed.py 런타임 훅이
+    _MEIPASS/paddleocr를 sys.path 맨 앞에 넣어서 `import paddleocr`가 패키지가 아니라 그 안의
+    paddleocr.py 모듈 자체로 풀린다 (paddleocr.paddleocr는 없음). 그래서 모듈 이름을 직접 쓰지 않고
+    PaddleOCR.__module__로 실제 모듈을 찾아 패치한다.
+    """
     base_dir = paddleocr_base_dir()
     if base_dir is None:
         return
-    import paddleocr.paddleocr as paddleocr_module
+    from paddleocr import PaddleOCR
 
-    paddleocr_module.BASE_DIR = base_dir
+    sys.modules[PaddleOCR.__module__].BASE_DIR = base_dir
 
 
 class OCRWorker(QThread):
