@@ -55,3 +55,12 @@ Intel 앱도 Apple Silicon에서 Rosetta로 실행되지만, macOS 26.4부터 �
 - 받은 Mac에서 `.dmg`를 열고 앱을 `Applications` 폴더로 끌어다 놓으면 설치됩니다.
 - 메신저·브라우저로 받은 앱은 격리 속성 때문에 처음 열 때 차단될 수 있습니다. Finder에서 우클릭 → **열기**로 한 번 열거나 `xattr -dr com.apple.quarantine YesonCheck_Autocut_*.app`을 실행하세요.
 - 작품 경로 설정(`/USA_DB/test_jn/.yesoncheck/work_paths.json`)은 모든 Mac이 같이 씁니다.
+
+## 4. Windows 빌드 (GitHub Actions)
+
+- 빌드는 GitHub Actions의 `windows-build` 워크플로가 합니다. Windows PC에서 직접 빌드할 필요는 없습니다.
+- 실행: GitHub 저장소 → Actions → windows-build → **Run workflow** (또는 `gh workflow run windows-build.yml --ref main`). `v*` 태그를 푸시해도 실행됩니다.
+- 하는 일: Windows lock 설치 → ffmpeg(gyan 9.0.2) 받기 → 시험용 SMB 공유를 만들어 경로 시험 → PyInstaller 빌드 → 모듈 검사 → 빌드된 exe로 실행 시험(한글 UNC 경로의 작품 목록·ffprobe·OpenCV·OCR·내보내기·병합).
+- 결과: 실행 기록 페이지 아래 **Artifacts**의 `YesonCheck_Autocut_Windows_<커밋 7자리>` (zip, 크기는 실행 기록 페이지에 표시). 14일 보관. **GitHub Release에는 올리지 않습니다.**
+- Windows PC에서 직접 빌드하려면: Python 3.10 + uv 설치 → `uv venv .venv --python 3.10 --managed-python` → `uv pip install --python .venv\Scripts\python.exe -r requirements-build-windows.lock` → opencv contrib 재설치(워크플로 참고) → `./fetch_ffmpeg_windows.ps1` → `.venv\Scripts\python.exe -m PyInstaller --clean -y YesonCheck_Autocut.spec`.
+- 배포·첫 설정은 `docs/windows-deploy.md`.
