@@ -76,6 +76,11 @@ def _fold(parts):
     return [part.casefold() for part in parts]
 
 
+def unc_key(unc_path):
+    """UNC 비교 키: 대소문자·구분자·한글 정규화(NFC/NFD) 차이를 없앤 조각 튜플. UNC가 아니면 PathMapError."""
+    return tuple(_fold(_unc_parts(unc_path)))
+
+
 class PathMap:
     """path_map.json 내용. shares: [(Mac 앞부분 조각 목록, [UNC 조각 목록, ...]), ...]"""
 
