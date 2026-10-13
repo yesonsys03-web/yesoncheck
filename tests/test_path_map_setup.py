@@ -1,5 +1,7 @@
 import json
 import os
+import threading
+import time
 import unicodedata
 
 import pytest
@@ -146,6 +148,52 @@ def test_find_config_dirs_both_layouts():
 
 def test_find_config_dirs_requires_work_paths():
     assert pms.find_config_dirs([Share("\\\\s\\x", ["X:"])], is_file=lambda p: False) == []
+
+
+def test_find_config_dirs_probes_shares_concurrently_in_share_order():
+    """공유마다 동시에 확인 → 전체 시간은 가장 느린 공유 정도 (합이 아님). 결과 순서는 공유 순서 그대로.
+
+    a는 짧은 뒷부분에서 찾음(두 번 확인 → 가장 늦게 끝남), b·d는 긴 뒷부분에서 바로 찾음, c는 없음(두 번 확인).
+    """
+    a, b, c, d = (Share(f"\\\\srv\\{name}", [f"{name.upper()}:"]) for name in "abcd")
+    files = {
+        "\\\\srv\\a\\test_jn\\.yesoncheck\\work_paths.json",
+        "\\\\srv\\b\\usa_db\\test_jn\\.yesoncheck\\work_paths.json",
+        "\\\\srv\\d\\usa_db\\test_jn\\.yesoncheck\\work_paths.json",
+    }
+    lock = threading.Lock()
+    active = {"now": 0, "max": 0}
+    calls = []
+
+    def slow_is_file(path):
+        with lock:
+            active["now"] += 1
+            active["max"] = max(active["max"], active["now"])
+            calls.append(path)
+        time.sleep(0.3)
+        with lock:
+            active["now"] -= 1
+        return path.casefold() in files
+
+    started = time.monotonic()
+    found = pms.find_config_dirs([a, b, c, d], is_file=slow_is_file)
+    elapsed = time.monotonic() - started
+    assert found == [
+        "\\\\srv\\a\\test_jn\\.yesoncheck",
+        "\\\\srv\\b\\USA_DB\\test_jn\\.yesoncheck",
+        "\\\\srv\\d\\USA_DB\\test_jn\\.yesoncheck",
+    ]
+    assert len(calls) == 6  # a 2번, b 1번, c 2번, d 1번 → 차례로 하면 1.8초
+    assert active["max"] >= 2  # 실제로 겹쳐 실행됨
+    assert elapsed < 1.2, f"{elapsed:.2f}초 (차례로 하면 1.8초, 동시에 하면 약 0.6초)"
+
+
+def test_find_config_dirs_raises_probe_errors():
+    def broken(path):
+        raise OSError("확인 실패 (가짜 재현)")
+
+    with pytest.raises(OSError, match="가짜 재현"):
+        pms.find_config_dirs([Share("\\\\s\\x", ["X:"]), Share("\\\\s\\y", ["Y:"])], is_file=broken)
 
 
 def test_merge_keeps_existing_adds_new_and_alias():

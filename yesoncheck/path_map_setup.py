@@ -12,9 +12,11 @@ import os
 import shutil
 import string
 import tempfile
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
-from yesoncheck import paths, shared_config
+from yesoncheck import paths, shared_config, timing_log
 
 
 class SetupCancelled(Exception):
@@ -115,20 +117,38 @@ def find_config_dirs(shares, mac_config_dir=None, is_file=None):
 
     Mac 공유 설정 경로(/USA_DB/test_jn/.yesoncheck)의 뒷부분 조각을 길게부터 공유 아래에 붙여 봅니다
     (USA_DB\\test_jn\\.yesoncheck → test_jn\\.yesoncheck, 뒷부분은 두 조각 이상).
+
+    공유마다 동시에 확인합니다(서버가 꺼진 기억된 드라이브는 첫 확인에 20초쯤 걸림 → 전체 시간은 가장 느린 공유 정도).
+    결과 순서는 공유 순서, 한 공유 안에서는 긴 뒷부분 먼저(차례로 확인할 때와 같음). 확인 중 오류는 그대로 올립니다.
     """
     is_file = is_file or _default_is_file
     parts = paths._mac_parts(mac_config_dir or shared_config.MAC_CONFIG_DIR)
-    found = []
-    seen = set()
-    for share in shares:
+
+    def probe(share):
+        """이 공유에서 처음 찾은 폴더 (없으면 None)."""
+        timing_log.log("공유 설정", f"{share.unc} ({', '.join(share.drives)}) 확인 중…")
+        started = time.perf_counter()
         for k in range(0, len(parts) - 1):
             folder = _join_unc(share.unc, parts[k:])
             if is_file(folder + "\\" + shared_config.WORK_PATHS_FILENAME):
-                key = paths.unc_key(folder)
-                if key not in seen:
-                    seen.add(key)
-                    found.append(folder)
-                break
+                timing_log.log("공유 설정", f"{share.unc} 확인 {timing_log.since(started)} — 찾음: {folder}")
+                return folder
+        timing_log.log("공유 설정", f"{share.unc} 확인 {timing_log.since(started)} — 없음")
+        return None
+
+    if not shares:
+        return []
+    with ThreadPoolExecutor(max_workers=len(shares), thread_name_prefix="find_config_dirs") as pool:
+        results = list(pool.map(probe, shares))  # 공유 순서 그대로
+    found = []
+    seen = set()
+    for folder in results:
+        if folder is None:
+            continue
+        key = paths.unc_key(folder)
+        if key not in seen:
+            seen.add(key)
+            found.append(folder)
     return found
 
 
@@ -163,7 +183,12 @@ def propose_mapping(work_paths, shares, is_dir=None, progress=None):
     reachable = []
     share_problems = []
     for share in shares:
-        if opens(share, ()):
+        timing_log.log("변환표 자동 설정", f"{share.unc} ({', '.join(share.drives)}) 여는 중…")
+        started = time.perf_counter()
+        root_opens = opens(share, ())
+        timing_log.log("변환표 자동 설정",
+                       f"{share.unc} {timing_log.since(started)} — {'열림' if root_opens else '열리지 않음'}")
+        if root_opens:
             reachable.append(share)
         else:
             share_problems.append(
