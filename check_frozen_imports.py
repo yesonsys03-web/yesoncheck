@@ -164,12 +164,33 @@ def frozen_contents(bundle):
     return modules, files
 
 
-def frozen_location(name, path, is_package_dir=False):
+_WIN_EXT_DIR_CACHE = []
+
+
+def win_stdlib_ext_dir():
+    """Windows 표준 확장 모듈(.pyd, 예: _ctypes·_socket)이 실제로 있는 폴더.
+
+    `sys.base_prefix\\DLLs`라고 가정하지 않는다: uv 매니지드 파이썬의 venv는
+    sys.base_prefix가 실제 설치 경로와 다르게(혹은 다른 표기로) 잡힐 수 있어
+    (CI에서 _ctypes 등 13개 표준 확장 모듈이 모두 이 가정으로 위치 계산 실패) 빗나갈 수 있다.
+    대신 항상 내장되는 표준 확장 모듈(_socket)의 __file__을 realpath해 그 폴더를 역산한다.
+    다른 모듈 경로를 realpath하는 방식과 같은 방법이라 root 비교가 어긋나지 않는다.
+    """
+    if not _WIN_EXT_DIR_CACHE:
+        import _socket
+        _WIN_EXT_DIR_CACHE.append(os.path.dirname(os.path.realpath(_socket.__file__)))
+    return _WIN_EXT_DIR_CACHE[0]
+
+
+def frozen_location(name, path, is_package_dir=False, debug=None):
     """소스 환경의 모듈 위치를 빌드된 앱 Contents/Frameworks 기준 상대 경로로 바꿉니다.
 
     경로는 모듈 이름에서 계산합니다 (ppocr.utils.network → <루트>/ppocr/utils/network.py).
     루트가 site-packages 아래면 앱에서도 같은 상대 위치(paddleocr 등)에 있어야 합니다.
     계산할 수 없으면 None.
+
+    debug: None 또는 dict. 계산에 실패했을 때(None 반환) 진단 정보(root, base_prefix,
+    win_stdlib_ext_dir 등)를 채워 넣습니다 (호출부가 오류 메시지에 포함시킴).
     """
     path = os.path.realpath(path)
     parts = name.split(".")
@@ -183,11 +204,18 @@ def frozen_location(name, path, is_package_dir=False):
     if not os.path.normcase(path).endswith(os.path.normcase(os.sep + rel)):
         return None
     root = path[: -len(os.sep + rel)]
+    if debug is not None:
+        debug["root"] = root
+        debug["base_prefix"] = getattr(sys, "base_prefix", None)
     for site in SITE_DIRS:
         if root == site or root.startswith(site + os.sep):
             return os.path.normcase(os.path.normpath(os.path.join(os.path.relpath(root, site), rel)))
-    if sys.platform == "win32" and os.path.normcase(root) == os.path.normcase(os.path.join(sys.base_prefix, "DLLs")):
-        return os.path.normcase(rel)
+    if sys.platform == "win32":
+        ext_dir = win_stdlib_ext_dir()
+        if debug is not None:
+            debug["win_stdlib_ext_dir"] = ext_dir
+        if os.path.normcase(root) == os.path.normcase(ext_dir):
+            return os.path.normcase(rel)
     if root == os.path.join(STDLIB_DIR, "lib-dynload"):
         return os.path.normcase(os.path.join("lib-dynload", rel))
     if root in (STDLIB_DIR, PROJECT_ROOT):
@@ -232,9 +260,11 @@ def main():
                 continue
             missing.append(f"{name} (네임스페이스 패키지 {pkg_paths})")
             continue
-        rel = frozen_location(name, file_attr)
+        debug = {}
+        rel = frozen_location(name, file_attr, debug=debug)
         if rel is None:
-            missing.append(f"{name} (앱 안 위치를 계산할 수 없음: {file_attr})")
+            detail = ", ".join(f"{k}={v}" for k, v in debug.items())
+            missing.append(f"{name} (앱 안 위치를 계산할 수 없음: {file_attr} [{detail}])")
         elif rel not in files:
             missing.append(f"{name} (앱에 {rel} 없음)")
 
