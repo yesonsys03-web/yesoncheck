@@ -18,3 +18,15 @@ Homebrew ffmpeg는 빌드한 macOS 버전 이상에서만 실행되고 /usr/loca
 바이너리는 크기(합계 약 320MB) 때문에 git에 넣지 않습니다. clone한 뒤 프로젝트 폴더에서 `./fetch_ffmpeg.sh`를 실행하면 위 주소에서 받아 sha256을 대조해 넣습니다.
 
 교체할 때는 `check_min_macos.py`로 아키텍처·최소 macOS·외부 dylib 참조를 확인하고, `fetch_ffmpeg.sh`의 주소·sha256과 위 표도 같이 고치세요.
+
+## Windows (`windows/ffmpeg.exe`, `windows/ffprobe.exe`)
+
+- 버전: FFmpeg 9.0.2 essentials (gyan.dev, GPL, libx264 포함, 정적 빌드)
+- 출처: https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.zip
+  (zip sha256 60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba)
+- 받기: PowerShell에서 `./fetch_ffmpeg_windows.ps1` (zip과 exe의 sha256 대조)
+
+| 파일 | sha256 |
+|---|---|
+| windows/ffmpeg.exe | 3256173f3f8bffd7df12227c68adf68025edb1832273a9530688a7bb1ed8edec |
+| windows/ffprobe.exe | f0d36ecbbdd3bcfac3efa078c96c7271c2e68b3810595552ac3b7f17e9a65c52 |

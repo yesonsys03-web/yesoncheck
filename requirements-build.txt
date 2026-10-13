@@ -4,7 +4,11 @@
 #   MACOSX_DEPLOYMENT_TARGET=12.0 uv pip compile requirements-build.txt --python-version 3.10 \
 #     --python-platform x86_64-apple-darwin --no-header -o requirements-build-x86_64.lock
 #   (arm64는 --python-platform aarch64-apple-darwin, -o requirements-build-arm64.lock)
+#   Windows: uv pip compile requirements-build.txt --python-version 3.10 \
+#     --python-platform x86_64-pc-windows-msvc --no-header -o requirements-build-windows.lock
 PyQt5==5.15.11
+# Windows용 Qt 바이너리 휠은 5.15.2만 있음
+PyQt5-Qt5==5.15.2; sys_platform == "win32"
 numpy==1.26.4
 # paddleocr 2.7.3이 opencv <=4.6.0.66을 요구하고, pdf2docx가 headless 판을 끌어오므로 셋 다 같은 버전으로 고정
 opencv-python==4.6.0.66
@@ -13,8 +17,12 @@ opencv-python-headless==4.6.0.66
 # paddle은 아키텍처마다 몬터레이에서 도는 버전이 다름 (휠 안 라이브러리의 최소 macOS 기준)
 #   x86_64: 2.6.2는 macOS 13.0 필요 → 3.0.0(12.3)   arm64: 3.0.0은 libblas가 14.0 필요 → 2.6.2(11.4)
 #   paddleocr 2.7.3 OCR 결과는 두 버전에서 동일함을 확인
-paddlepaddle==3.0.0; platform_machine == "x86_64"
-paddlepaddle==2.6.2; platform_machine == "arm64"
+paddlepaddle==3.0.0; sys_platform == "darwin" and platform_machine == "x86_64"
+paddlepaddle==2.6.2; sys_platform == "darwin" and platform_machine == "arm64"
+# uv의 Windows 타깃 마커 환경은 platform_machine을 (실제 Windows의 AMD64가 아니라) "x86_64"로 보고해
+# 위 Mac 줄과 겹치므로, Mac 줄은 sys_platform == "darwin"으로 묶어 Windows와 분리함
+#   Windows: 2.6.2 (macOS용 3.0.0의 OCR 중단 버그가 없는 버전, 실리콘 Mac과 같은 버전)
+paddlepaddle==2.6.2; sys_platform == "win32"
 paddleocr==2.7.3
 scikit-image==0.24.0
 # 0.7부터 VideoManager가 없어져 auto_trim.py(Animatic 모드)가 꺼짐 → 0.6.x 고정

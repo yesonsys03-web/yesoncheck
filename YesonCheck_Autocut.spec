@@ -9,6 +9,8 @@ import platform
 import sys
 import sysconfig
 
+IS_WINDOWS = sys.platform == 'win32'
+
 # 빌드에 사용 중인 가상환경(p310)의 site-packages
 p310_site_packages = sysconfig.get_paths()['purelib']
 
@@ -19,12 +21,17 @@ project_root = SPECPATH
 # 12.3인 이유: Intel용 paddle 3.0.0 라이브러리가 12.3을 요구 (requirements-build.txt 참고)
 MIN_MACOS = '12.3'
 
-# 정적 ffmpeg/ffprobe (아키텍처별: vendor/ffmpeg/x86_64, vendor/ffmpeg/arm64)
-# Homebrew ffmpeg는 빌드한 macOS 버전 이상에서만 실행되므로 번들에 넣지 않음
-ffmpeg_dir = os.path.join(project_root, 'vendor', 'ffmpeg', platform.machine())
-for _tool in ('ffmpeg', 'ffprobe'):
+# 정적 ffmpeg/ffprobe: Mac은 아키텍처별(vendor/ffmpeg/x86_64·arm64, fetch_ffmpeg.sh),
+# Windows는 vendor/ffmpeg/windows(fetch_ffmpeg_windows.ps1). Homebrew ffmpeg는 빌드한 macOS 이상에서만 돌아 쓰지 않음
+if IS_WINDOWS:
+    ffmpeg_dir = os.path.join(project_root, 'vendor', 'ffmpeg', 'windows')
+    ffmpeg_files = ('ffmpeg.exe', 'ffprobe.exe')
+else:
+    ffmpeg_dir = os.path.join(project_root, 'vendor', 'ffmpeg', platform.machine())
+    ffmpeg_files = ('ffmpeg', 'ffprobe')
+for _tool in ffmpeg_files:
     if not os.path.isfile(os.path.join(ffmpeg_dir, _tool)):
-        raise SystemExit(f"[spec] {platform.machine()}용 정적 {_tool}가 없습니다: {ffmpeg_dir} (BUILD.md 참고)")
+        raise SystemExit(f"[spec] 정적 {_tool}가 없습니다: {ffmpeg_dir} (BUILD.md 참고)")
 
 # 기본 라이브러리 수집 (collect_all 사용)
 cv2_binaries, cv2_datas, cv2_hiddenimports = [], [], []
@@ -144,18 +151,16 @@ a = Analysis(
     ['yesoncheck/app.py'],
     pathex=[],
     binaries=[
-        (os.path.join(ffmpeg_dir, 'ffprobe'), '.'),
-        (os.path.join(ffmpeg_dir, 'ffmpeg'), '.')
+        (os.path.join(ffmpeg_dir, _tool), '.') for _tool in ffmpeg_files
     ] + cv2_binaries + transnet_binaries + scenedetect_binaries + paddleocr_binaries + paddle_binaries + skimage_binaries + imageio_binaries,
     datas=[
-        ('Info.plist', '.'),
         # PaddleOCR 전체 패키지를 Tree로 추가
         (os.path.join(p310_site_packages, 'paddleocr'), 'paddleocr'),
         # Paddle 전체 패키지를 Tree로 추가
         (os.path.join(p310_site_packages, 'paddle'), 'paddle'),
         # apted 모듈 추가 (PaddleOCR 분석에 필수)
         (os.path.join(project_root, 'apted'), 'apted'),
-    ] + cv2_datas + transnet_datas + scenedetect_datas + paddleocr_datas + paddle_datas + skimage_datas + imageio_datas + cython_datas,
+    ] + cv2_datas + transnet_datas + scenedetect_datas + paddleocr_datas + paddle_datas + skimage_datas + imageio_datas + cython_datas + ([] if IS_WINDOWS else [('Info.plist', '.')]),
     hiddenimports=[
         # apted 모듈 (PaddleOCR이 사용하는 fallback 구현)
         'apted',
@@ -249,20 +254,19 @@ a = Analysis(
 # arm64용 paddle 2.6.2 휠에는 x86_64 전용 dylib(libblas.3, liblapack.3, libgfortran.5 등)가 섞여 있음.
 # paddle 본체가 링크하지 않고(liblapack만 LAPACK 연산 때 dlopen) 이 아키텍처에서는 어차피 못 쓰므로 제외
 # (paddle 폴더를 datas로도 통째로 넣으므로 binaries와 datas 양쪽에서 거름)
-from PyInstaller.utils.osx import get_binary_architectures
+if sys.platform == 'darwin':
+    from PyInstaller.utils.osx import get_binary_architectures
 
+    def _lacks_target_arch(entry):
+        dest, src = entry[0], entry[1]
+        return (dest.startswith('paddle/libs/') and dest.endswith('.dylib')
+                and platform.machine() not in get_binary_architectures(src)[1])
 
-def _lacks_target_arch(entry):
-    dest, src = entry[0], entry[1]
-    return (dest.startswith('paddle/libs/') and dest.endswith('.dylib')
-            and platform.machine() not in get_binary_architectures(src)[1])
-
-
-_dropped = sorted({e[0] for e in list(a.binaries) + list(a.datas) if _lacks_target_arch(e)})
-if _dropped:
-    print(f"[spec] {platform.machine()} 슬라이스가 없는 paddle 라이브러리 제외: {_dropped}")
-    a.binaries = [e for e in a.binaries if e[0] not in _dropped]
-    a.datas = [e for e in a.datas if e[0] not in _dropped]
+    _dropped = sorted({e[0] for e in list(a.binaries) + list(a.datas) if _lacks_target_arch(e)})
+    if _dropped:
+        print(f"[spec] {platform.machine()} 슬라이스가 없는 paddle 라이브러리 제외: {_dropped}")
+        a.binaries = [e for e in a.binaries if e[0] not in _dropped]
+        a.datas = [e for e in a.datas if e[0] not in _dropped]
 
 pyz = PYZ(a.pure)
 
@@ -282,10 +286,12 @@ exe = EXE(
     runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
-    argv_emulation=True,
+    argv_emulation=not IS_WINDOWS,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='icon.ico' if IS_WINDOWS else None,
+    version='windows_version_info.txt' if IS_WINDOWS else None,
 )
 
 coll = COLLECT(
@@ -298,12 +304,13 @@ coll = COLLECT(
     name='YesonCheck_Autocut',
 )
 
-app = BUNDLE(
-    coll,
-    name='YesonCheck_Autocut.app',
-    icon='icon.icns',
-    bundle_identifier='com.yeson.check',
-    # BUNDLE은 dict만 병합함 (파일 경로 문자열은 무시됨)
-    info_plist={'LSMinimumSystemVersion': MIN_MACOS},
-)
+if not IS_WINDOWS:
+    app = BUNDLE(
+        coll,
+        name='YesonCheck_Autocut.app',
+        icon='icon.icns',
+        bundle_identifier='com.yeson.check',
+        # BUNDLE은 dict만 병합함 (파일 경로 문자열은 무시됨)
+        info_plist={'LSMinimumSystemVersion': MIN_MACOS},
+    )
 

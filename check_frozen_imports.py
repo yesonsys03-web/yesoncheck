@@ -11,7 +11,7 @@
 - paddle 3.0 입력 크기 변화 버그 회피(yesoncheck.workers.guard_paddle_buffer_growth)가 통하는지
 - PySceneDetect 씬 감지 (임시 합성 영상)
 
-사용법: python check_frozen_imports.py <앱 번들>
+사용법: python check_frozen_imports.py <앱 번들(.app) 또는 Windows 앱 폴더(dist\\YesonCheck_Autocut)>
 누락이 하나라도 있으면 목록을 출력하고 종료 코드 1로 끝납니다.
 """
 
@@ -131,28 +131,36 @@ def exercise_app():
 
 
 def frozen_contents(bundle):
-    """빌드된 앱의 PYZ·base_library.zip 모듈 이름과 Frameworks 파일 경로를 모읍니다."""
+    """빌드된 앱의 PYZ·base_library.zip 모듈 이름과 라이브러리 폴더 파일 경로를 모읍니다.
+
+    Mac: <앱>.app (Contents/MacOS/<실행 파일>, Contents/Frameworks)
+    Windows: dist\\YesonCheck_Autocut 폴더 (YesonCheck_Autocut.exe, _internal)
+    """
     from PyInstaller.archive.readers import CArchiveReader
 
-    with open(os.path.join(bundle, "Contents", "Info.plist"), "rb") as fh:
-        exe_name = plistlib.load(fh)["CFBundleExecutable"]
-    exe = os.path.join(bundle, "Contents", "MacOS", exe_name)
+    if sys.platform == "win32":
+        exe = os.path.join(bundle, "YesonCheck_Autocut.exe")
+        lib_dir = os.path.join(bundle, "_internal")
+    else:
+        with open(os.path.join(bundle, "Contents", "Info.plist"), "rb") as fh:
+            exe_name = plistlib.load(fh)["CFBundleExecutable"]
+        exe = os.path.join(bundle, "Contents", "MacOS", exe_name)
+        lib_dir = os.path.join(bundle, "Contents", "Frameworks")
     pkg = CArchiveReader(exe)
     pyz_name = next(n for n in pkg.toc if n.endswith(".pyz"))
     modules = set(pkg.open_embedded_archive(pyz_name).toc)
 
-    frameworks = os.path.join(bundle, "Contents", "Frameworks")
-    with zipfile.ZipFile(os.path.join(frameworks, "base_library.zip")) as zf:
+    with zipfile.ZipFile(os.path.join(lib_dir, "base_library.zip")) as zf:
         for entry in zf.namelist():
             if entry.endswith(".pyc"):
                 name = entry[:-4].replace("/", ".")
                 modules.add(name[: -len(".__init__")] if name.endswith(".__init__") else name)
 
     files = set()
-    # 데이터 폴더는 Contents/Resources에 있고 Frameworks에서 심볼릭 링크로 연결됨 → 링크를 따라감
-    for root, _dirs, names in os.walk(frameworks, followlinks=True):
+    # Mac: 데이터 폴더는 Contents/Resources에 있고 Frameworks에서 심볼릭 링크로 연결됨 → 링크를 따라감
+    for root, _dirs, names in os.walk(lib_dir, followlinks=True):
         for name in names:
-            files.add(os.path.relpath(os.path.join(root, name), frameworks))
+            files.add(os.path.normcase(os.path.relpath(os.path.join(root, name), lib_dir)))
     return modules, files
 
 
@@ -172,16 +180,18 @@ def frozen_location(name, path, is_package_dir=False):
         rel = os.path.join(*parts, base)
     else:
         rel = os.path.join(*parts[:-1], base)
-    if not path.endswith(os.sep + rel):
+    if not os.path.normcase(path).endswith(os.path.normcase(os.sep + rel)):
         return None
     root = path[: -len(os.sep + rel)]
     for site in SITE_DIRS:
         if root == site or root.startswith(site + os.sep):
-            return os.path.normpath(os.path.join(os.path.relpath(root, site), rel))
+            return os.path.normcase(os.path.normpath(os.path.join(os.path.relpath(root, site), rel)))
+    if sys.platform == "win32" and os.path.normcase(root) == os.path.normcase(os.path.join(sys.base_prefix, "DLLs")):
+        return os.path.normcase(rel)
     if root == os.path.join(STDLIB_DIR, "lib-dynload"):
-        return os.path.join("lib-dynload", rel)
+        return os.path.normcase(os.path.join("lib-dynload", rel))
     if root in (STDLIB_DIR, PROJECT_ROOT):
-        return rel
+        return os.path.normcase(rel)
     return None
 
 

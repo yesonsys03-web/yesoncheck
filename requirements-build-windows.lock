@@ -1,0 +1,313 @@
+altgraph==0.17.5
+    # via pyinstaller
+anyio==4.15.1
+    # via httpx
+astor==0.8.1
+    # via paddlepaddle
+attrdict==2.0.1
+    # via paddleocr
+autocommand==2.2.2
+    # via jaraco-text
+babel==2.18.0
+    # via flask-babel
+backports-tarfile==1.2.0
+    # via
+    #   -r requirements-build.txt
+    #   jaraco-context
+bce-python-sdk==0.9.79
+    # via visualdl
+beautifulsoup4==4.15.0
+    # via paddleocr
+blinker==1.9.0
+    # via flask
+cachetools==7.2.1
+    # via premailer
+certifi==2026.7.22
+    # via
+    #   httpcore
+    #   httpx
+    #   requests
+chardet==7.6.0
+    # via encutils
+charset-normalizer==3.5.2
+    # via requests
+click==8.2.1
+    # via
+    #   flask
+    #   scenedetect
+colorama==0.4.6
+    # via
+    #   click
+    #   tqdm
+contourpy==1.3.2
+    # via matplotlib
+crc32c==2.9.post0
+    # via bce-python-sdk
+cssselect==1.5.0
+    # via premailer
+cssutils==2.15.0
+    # via premailer
+cycler==0.12.1
+    # via matplotlib
+cython==3.3.0
+    # via paddleocr
+decorator==5.3.1
+    # via paddlepaddle
+encutils==1.0.0
+    # via cssutils
+et-xmlfile==2.0.0
+    # via openpyxl
+exceptiongroup==1.3.1
+    # via anyio
+fire==0.7.1
+    # via
+    #   paddleocr
+    #   pdf2docx
+flask==3.1.3
+    # via
+    #   flask-babel
+    #   visualdl
+flask-babel==4.0.0
+    # via visualdl
+fonttools==4.65.0
+    # via
+    #   matplotlib
+    #   paddleocr
+    #   pdf2docx
+future==1.0.0
+    # via bce-python-sdk
+h11==0.16.0
+    # via httpcore
+httpcore==1.0.9
+    # via httpx
+httpx==0.28.1
+    # via paddlepaddle
+idna==3.20
+    # via
+    #   anyio
+    #   httpx
+    #   requests
+imageio==2.38.0
+    # via
+    #   imgaug
+    #   scikit-image
+imgaug==0.4.0
+    # via paddleocr
+inflect==7.5.0
+    # via jaraco-text
+itsdangerous==2.2.0
+    # via flask
+jaraco-collections==5.1.0
+    # via -r requirements-build.txt
+jaraco-context==6.1.2
+    # via jaraco-text
+jaraco-functools==4.6.0
+    # via jaraco-text
+jaraco-text==3.12.1
+    # via
+    #   -r requirements-build.txt
+    #   jaraco-collections
+jinja2==3.1.6
+    # via
+    #   flask
+    #   flask-babel
+kiwisolver==1.5.1
+    # via matplotlib
+lazy-loader==0.6
+    # via scikit-image
+lmdb==3.0.0
+    # via paddleocr
+lxml==6.1.3
+    # via
+    #   paddleocr
+    #   premailer
+    #   python-docx
+markupsafe==3.0.4
+    # via
+    #   flask
+    #   jinja2
+    #   werkzeug
+matplotlib==3.10.9
+    # via
+    #   imgaug
+    #   visualdl
+more-itertools==11.1.0
+    # via
+    #   cssutils
+    #   inflect
+    #   jaraco-functools
+    #   jaraco-text
+networkx==3.4.2
+    # via scikit-image
+numpy==1.26.4
+    # via
+    #   -r requirements-build.txt
+    #   contourpy
+    #   imageio
+    #   imgaug
+    #   matplotlib
+    #   opencv-contrib-python
+    #   opencv-python
+    #   opencv-python-headless
+    #   opt-einsum
+    #   paddleocr
+    #   paddlepaddle
+    #   pandas
+    #   pdf2docx
+    #   scenedetect
+    #   scikit-image
+    #   scipy
+    #   shapely
+    #   tifffile
+    #   visualdl
+opencv-contrib-python==4.6.0.66
+    # via
+    #   -r requirements-build.txt
+    #   paddleocr
+opencv-python==4.6.0.66
+    # via
+    #   -r requirements-build.txt
+    #   imgaug
+    #   paddleocr
+opencv-python-headless==4.6.0.66
+    # via
+    #   -r requirements-build.txt
+    #   pdf2docx
+openpyxl==3.1.5
+    # via paddleocr
+opt-einsum==3.3.0
+    # via paddlepaddle
+packaging==26.3
+    # via
+    #   lazy-loader
+    #   matplotlib
+    #   pyinstaller
+    #   pyinstaller-hooks-contrib
+    #   scikit-image
+    #   visualdl
+paddleocr==2.7.3
+    # via -r requirements-build.txt
+paddlepaddle==2.6.2
+    # via -r requirements-build.txt
+pandas==2.3.3
+    # via visualdl
+pdf2docx==0.5.13
+    # via paddleocr
+pefile==2023.2.7
+    # via pyinstaller
+pillow==12.3.0
+    # via
+    #   imageio
+    #   imgaug
+    #   matplotlib
+    #   paddleocr
+    #   paddlepaddle
+    #   scikit-image
+    #   visualdl
+platformdirs==4.12.4
+    # via scenedetect
+premailer==3.10.0
+    # via paddleocr
+protobuf==3.20.2
+    # via
+    #   paddlepaddle
+    #   visualdl
+psutil==7.2.2
+    # via visualdl
+pyclipper==1.4.0
+    # via paddleocr
+pycryptodome==3.24.1
+    # via bce-python-sdk
+pyinstaller==6.14.1
+    # via -r requirements-build.txt
+pyinstaller-hooks-contrib==2026.8
+    # via pyinstaller
+pymupdf==1.28.2
+    # via pdf2docx
+pyparsing==3.3.3
+    # via matplotlib
+pyqt5==5.15.11
+    # via -r requirements-build.txt
+pyqt5-qt5==5.15.2
+    # via
+    #   -r requirements-build.txt
+    #   pyqt5
+pyqt5-sip==12.20.0
+    # via pyqt5
+python-dateutil==2.9.0.post0
+    # via
+    #   matplotlib
+    #   pandas
+python-docx==1.2.0
+    # via
+    #   paddleocr
+    #   pdf2docx
+pytz==2026.5
+    # via
+    #   flask-babel
+    #   pandas
+pywin32-ctypes==0.2.3
+    # via pyinstaller
+pyyaml==6.0.3
+    # via paddleocr
+rapidfuzz==3.14.5
+    # via paddleocr
+rarfile==4.5
+    # via visualdl
+requests==2.34.2
+    # via
+    #   premailer
+    #   visualdl
+scenedetect==0.6.7.1
+    # via -r requirements-build.txt
+scikit-image==0.24.0
+    # via
+    #   -r requirements-build.txt
+    #   imgaug
+    #   paddleocr
+scipy==1.15.3
+    # via
+    #   imgaug
+    #   scikit-image
+setuptools==75.8.0
+    # via
+    #   -r requirements-build.txt
+    #   pyinstaller
+shapely==2.1.2
+    # via
+    #   imgaug
+    #   paddleocr
+six==1.17.0
+    # via
+    #   attrdict
+    #   bce-python-sdk
+    #   imgaug
+    #   python-dateutil
+    #   visualdl
+soupsieve==2.10
+    # via beautifulsoup4
+termcolor==3.3.0
+    # via fire
+tifffile==2025.5.10
+    # via scikit-image
+tqdm==4.70.1
+    # via
+    #   paddleocr
+    #   scenedetect
+typeguard==4.6.0
+    # via inflect
+typing-extensions==4.16.0
+    # via
+    #   anyio
+    #   beautifulsoup4
+    #   exceptiongroup
+    #   python-docx
+    #   typeguard
+tzdata==2026.5
+    # via pandas
+urllib3==2.8.0
+    # via requests
+visualdl==2.5.3
+    # via paddleocr
+werkzeug==3.1.9
+    # via flask
