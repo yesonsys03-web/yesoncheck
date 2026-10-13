@@ -1,3 +1,4 @@
+import json
 import os
 import unicodedata
 
@@ -159,3 +160,29 @@ def test_read_existing_and_save_with_backup(tmp_path):
     assert "여기에_붙여넣기" in open(backup, encoding="utf-8").read()
     data, error = pms.read_existing(str(tmp_path))
     assert error is None and data["shares"][0]["windows"] == ["\\\\s\\a"]
+
+
+def test_save_path_map_leaves_original_untouched_when_replace_fails(tmp_path, monkeypatch):
+    path = tmp_path / "path_map.json"
+    original = {"version": 1, "shares": [{"mac": "/usadata2", "windows": ["\\\\203.0.113.3\\usadata2"]}]}
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(original, fh, ensure_ascii=False, indent=2)
+        fh.write("\n")
+    with open(path, "rb") as fh:
+        original_bytes = fh.read()
+
+    def boom(src, dst):
+        raise OSError("디스크가 가득 찼습니다")
+
+    monkeypatch.setattr(pms.os, "replace", boom)
+
+    with pytest.raises(OSError):
+        pms.save_path_map(
+            str(tmp_path),
+            {"version": 1, "shares": [{"mac": "/usadata2", "windows": ["\\\\NAS3\\usadata2"]}]},
+            backup_existing=False,
+        )
+
+    with open(path, "rb") as fh:
+        assert fh.read() == original_bytes
+    assert [name for name in os.listdir(tmp_path) if name.startswith("path_map.json.tmp")] == []

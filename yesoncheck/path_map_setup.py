@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import string
+import tempfile
 from dataclasses import dataclass, field
 
 from yesoncheck import paths, shared_config
@@ -243,18 +244,31 @@ def save_path_map(config_dir, data, backup_existing):
     """path_map.json을 씁니다 → 백업 경로 또는 None. 실패는 OSError로 올립니다.
 
     backup_existing이면 쓰기 전에 기존 파일을 path_map.json.bak-<YYYYMMDD-HHMMSS>로 복사합니다.
+    쓰기는 원자적입니다: 같은 폴더의 임시 파일에 다 쓴 뒤 os.replace로 바꿔치기하므로,
+    쓰다가 실패해도(NAS 연결 끊김, 디스크 가득 참, 권한 해제 등) 원래 파일은 그대로 남습니다.
     """
     path = os.path.join(config_dir, paths.PATH_MAP_FILENAME)
     backup = None
     if backup_existing and os.path.exists(path):
         backup = f"{path}.bak-{datetime.datetime.now():%Y%m%d-%H%M%S}"
         shutil.copy2(path, backup)
+    temp = None
     try:
-        with open(path, "w", encoding="utf-8") as fh:
+        fd, temp = tempfile.mkstemp(dir=config_dir, prefix=f"{paths.PATH_MAP_FILENAME}.tmp-")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(data, fh, ensure_ascii=False, indent=2)
             fh.write("\n")
+        os.replace(temp, path)
     except OSError as exc:
+        notes = []
+        if temp is not None:
+            try:
+                os.remove(temp)
+            except OSError:
+                notes.append(f"지우지 못한 임시 파일이 남았습니다: {temp}")
         if backup:
-            raise OSError(f"{exc}\n(쓰기 전에 만든 백업: {backup})") from exc
+            notes.append(f"쓰기 전에 만든 백업: {backup}")
+        if notes:
+            raise OSError(str(exc) + "".join(f"\n({note})" for note in notes)) from exc
         raise
     return backup
