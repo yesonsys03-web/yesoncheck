@@ -161,6 +161,20 @@ class PathMap:
         mac_prefix, uncs = best
         return "\\\\" + "\\".join(uncs[0] + parts[len(mac_prefix):])
 
+    def with_preferred_aliases(self, share_uncs):
+        """이 PC에 연결된 공유(share_uncs)와 서버·공유 이름이 같은 별칭을 각 항목의 앞으로 옮긴 새 PathMap.
+
+        mac_to_windows는 첫 별칭을 쓰므로, 같은 공유를 PC마다 다른 주소(IP·서버 이름)로 연결해도 각 PC는 자기
+        드라이브가 연결된 주소를 엽니다(맞는 것이 없으면 원래 첫 주소). 나머지 순서는 유지하고(안정 정렬),
+        windows_to_mac은 모든 별칭을 그대로 씁니다. path_map.json은 바꾸지 않습니다.
+        """
+        connected = {tuple(_fold(_unc_parts(unc)[:2])) for unc in share_uncs}
+        shares = []
+        for mac_prefix, uncs in self.shares:
+            ordered = sorted(uncs, key=lambda alias: tuple(_fold(alias[:2])) not in connected)
+            shares.append((mac_prefix, ordered))
+        return PathMap(shares, self.source)
+
     def windows_to_mac(self, unc_path):
         parts = _unc_parts(unc_path)
         folded = _fold(parts)
@@ -262,7 +276,9 @@ def activate(path_map):
 
 def active_map():
     if _active_map is None:
-        raise PathMapError("변환표(path_map.json)가 로드되지 않았습니다. 시작할 때 표시된 공유 설정 오류를 확인하세요.")
+        raise PathMapError(
+            "변환표(path_map.json)가 로드되지 않았습니다. 시작할 때 표시된 변환표 오류(또는 공유 설정 오류)를 확인하세요."
+        )
     return _active_map
 
 

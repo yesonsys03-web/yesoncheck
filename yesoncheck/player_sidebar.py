@@ -834,10 +834,16 @@ class PlayerSidebarMixin:
             problems.append(f"{exc}\n\n{traceback.format_exc()}")
         if paths.IS_WINDOWS:
             try:
-                paths.activate(paths.PathMap.load(config_dir))
+                path_map = paths.PathMap.load(config_dir)
             except paths.PathMapError as exc:
                 paths.activate(None)
                 self.path_map_problem = f"{exc}\n\n{traceback.format_exc()}"
+            else:
+                # 같은 공유를 PC마다 다른 주소로 연결했을 수 있음 → 이 PC 드라이브가 연결된 주소를 먼저 씀 (파일은 그대로)
+                shares, share_problems = path_map_setup.connected_shares()
+                for problem in share_problems:
+                    print(f"[변환표] 드라이브 연결 정보를 읽지 못함: {problem}")
+                paths.activate(path_map.with_preferred_aliases([share.unc for share in shares]))
         if problems:
             self.shared_config_problem = "\n\n".join(problems)
 
@@ -892,16 +898,20 @@ class PlayerSidebarMixin:
             if picked:
                 return  # _use_config_dir가 문제 알림·변환표 자동 설정까지 처리함
         if self.shared_config_problem:
-            message = self.shared_config_problem
-            if self.path_map_problem:
-                message += f"\n\n{self.path_map_problem}"
             QMessageBox.critical(
                 self,
                 "공유 설정 오류",
-                f"{message}\n\n작품 목록 없이 계속합니다. 파일 직접 열기와 드래그는 쓸 수 있습니다.",
+                f"{self._shared_config_problem_text()}\n\n작품 목록 없이 계속합니다. 파일 직접 열기와 드래그는 쓸 수 있습니다.",
             )
             return
         self._offer_path_map_setup()
+
+    def _shared_config_problem_text(self):
+        """공유 설정 오류 창에 보일 내용: 공유 설정 문제 + (함께 있으면) 변환표 문제."""
+        message = self.shared_config_problem
+        if self.path_map_problem:
+            message += f"\n\n{self.path_map_problem}"
+        return message
 
     def choose_shared_config_dir(self, reason=None):
         """(Windows) 공유 설정 폴더를 고르게 하고 PC별 설정에 저장합니다. 골랐으면 True."""
@@ -933,7 +943,7 @@ class PlayerSidebarMixin:
         self.setup_shared_config()
         self.reload_work_combo()
         if self.shared_config_problem:
-            QMessageBox.critical(self, "공유 설정 오류", self.shared_config_problem)
+            QMessageBox.critical(self, "공유 설정 오류", self._shared_config_problem_text())
         else:
             self._offer_path_map_setup()
         return True
@@ -956,7 +966,13 @@ class PlayerSidebarMixin:
         return self._use_config_dir(item)
 
     def _works_not_opening(self):
-        """(Windows) 이 PC에서 열리지 않는 작품 목록 ['작품: 이유']."""
+        """(Windows) 이 PC에서 열리지 않는 작품 목록 ['작품: 이유'].
+
+        작품 경로의 공유 루트(\\\\서버\\공유)를 공유마다 한 번만 열어 보고, 열리지 않으면(서버가 꺼짐 등) 그 공유의
+        작품 폴더는 열어 보지 않습니다 — 작품마다 SMB 시간 초과를 기다리지 않도록.
+        """
+        is_dir = path_map_setup._default_is_dir
+        root_opens = {}  # 접은 (서버, 공유) → 열리는지
         broken = []
         for work_name, stored in sorted(self.work_paths.items()):
             try:
@@ -964,7 +980,14 @@ class PlayerSidebarMixin:
             except paths.PathMapError:
                 broken.append(f"{work_name}: 변환표에 없음 ({stored})")
                 continue
-            if not os.path.isdir(native):
+            root_parts = paths._unc_parts(native)[:2]
+            key = tuple(paths._fold(root_parts))
+            root = "\\\\" + "\\".join(root_parts)
+            if key not in root_opens:
+                root_opens[key] = is_dir(root)
+            if not root_opens[key]:
+                broken.append(f"{work_name}: 열 수 없음 ({native}) — 공유 폴더 {root}가 열리지 않음 (서버가 꺼졌거나 연결이 끊김)")
+            elif not is_dir(native):
                 broken.append(f"{work_name}: 열 수 없음 ({native})")
         return broken
 
@@ -985,15 +1008,29 @@ class PlayerSidebarMixin:
 
         startup이면 기존 변환표에 더할 것이 없을 때 창을 띄우지 않고 변환표 문제만 알립니다(저장 없이 끝나는 모든
         경로에서 한 번만). 저장했으면 True(다시 읽기에 실패해도 저장은 된 것이므로 True이며, 공유 설정 오류를 따로 알립니다).
+
+        확인 창·비밀번호는 몇 분이 걸릴 수 있으므로, 저장 직전에 path_map.json을 다시 읽어 그 내용에 합칩니다
+        (그 사이 다른 PC가 쓴 항목을 지우지 않도록, 백업 여부도 다시 읽은 내용으로 정함).
         """
         parent = parent or self
         config_dir = self.work_paths_config_dir
         map_file = os.path.join(config_dir, paths.PATH_MAP_FILENAME)
-        try:
-            existing, existing_error = path_map_setup.read_existing(config_dir)
-        except OSError as exc:
-            QMessageBox.critical(parent, "변환표를 읽지 못함", f"{map_file}\n\n{exc}\n\n{traceback.format_exc()}")
+
+        def read_map_file():
+            """→ (existing, existing_error) 또는 읽지 못하면 오류 창을 띄우고 None."""
+            try:
+                return path_map_setup.read_existing(config_dir)
+            except OSError as exc:
+                QMessageBox.critical(parent, "변환표를 읽지 못함", f"{map_file}\n\n{exc}\n\n{traceback.format_exc()}")
+                return None
+
+        def report_save_failure(exc):
+            QMessageBox.critical(parent, "변환표 저장 실패", f"{map_file}\n\n{exc}\n\n{traceback.format_exc()}")
+
+        read = read_map_file()
+        if read is None:
             return False
+        existing, existing_error = read
         shares, share_problems = path_map_setup.connected_shares()
         progress = QProgressDialog("연결된 네트워크 드라이브에서 작품 폴더를 찾는 중…", "취소", 0, 100, parent)
         progress.setWindowModality(Qt.WindowModal)
@@ -1012,7 +1049,8 @@ class PlayerSidebarMixin:
             return False
         finally:
             progress.close()
-        proposal.share_problems = share_problems
+            progress.deleteLater()
+        proposal.share_problems = share_problems + proposal.share_problems
 
         if startup and not path_map_setup.has_additions(existing, proposal):
             if self.path_map_problem:
@@ -1020,20 +1058,32 @@ class PlayerSidebarMixin:
                     parent, note="연결된 네트워크 드라이브에서 새로 찾은 짝이 없습니다. NAS 드라이브 연결을 확인하세요.",
                 )
             return False
-        dialog = PathMapSetupDialog(proposal, existing_error, parent)
+        _ok, rejected = path_map_setup.split_mergeable(existing, proposal.ordered_default_choices())
+        blocked = {mac_prefix: reason for mac_prefix, _unc, reason in rejected}
+        dialog = PathMapSetupDialog(proposal, existing_error, parent, blocked=blocked)
         if dialog.exec_() != QDialog.Accepted:
             if startup and self.path_map_problem:
                 self._report_path_map_problem(parent)
+            return False
+        chosen = dialog.chosen()
+        try:
+            path_map_setup.merge_path_map(existing, chosen)  # 비밀번호를 묻기 전에: 합칠 수 없는 짝을 골랐으면 여기서 알림
+        except paths.PathMapError as exc:
+            report_save_failure(exc)
             return False
         if ask_password and not self._confirm_work_paths_password(parent):
             if startup and self.path_map_problem:
                 self._report_path_map_problem(parent)
             return False
+        read = read_map_file()  # 확인 창·비밀번호 사이에 다른 PC가 바꿨을 수 있음 → 저장 직전 내용에 합침
+        if read is None:
+            return False
+        fresh, fresh_error = read
         try:
-            data = path_map_setup.merge_path_map(existing, dialog.chosen())
-            backup = path_map_setup.save_path_map(config_dir, data, backup_existing=existing_error is not None)
+            data = path_map_setup.merge_path_map(fresh, chosen)
+            backup = path_map_setup.save_path_map(config_dir, data, backup_existing=fresh_error is not None)
         except (paths.PathMapError, OSError) as exc:
-            QMessageBox.critical(parent, "변환표 저장 실패", f"{map_file}\n\n{exc}\n\n{traceback.format_exc()}")
+            report_save_failure(exc)
             return False
 
         self.setup_shared_config()

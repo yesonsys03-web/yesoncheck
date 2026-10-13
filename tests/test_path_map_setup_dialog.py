@@ -51,3 +51,14 @@ def test_no_shares_disables_save(qapp):
 def test_existing_error_note(qapp):
     dialog = PathMapSetupDialog(make_proposal(), existing_error="변환표 형식 오류: 여기에_붙여넣기")
     assert "path_map.json.bak-" in label_text(dialog)
+
+
+def test_blocked_row_starts_unchecked_with_reason(qapp):
+    reason = "같은 Windows 주소가 이미 다른 Mac 경로(/usadata2)에 쓰여 있어 넣을 수 없음 — 작품 경로를 Mac에서 같은 경로로 맞추세요"
+    dialog = PathMapSetupDialog(make_proposal(), blocked={"/Volumes/colordata": reason})
+    assert dialog._rows[0][0].isChecked()
+    assert not dialog._rows[1][0].isChecked()
+    assert dialog.chosen() == [("/usadata2", "\\\\203.0.113.3\\usadata2")]
+    assert reason in label_text(dialog)
+    dialog._rows[1][0].setChecked(True)  # 사용자가 그래도 고를 수 있음 (저장할 때 검증)
+    assert dialog.chosen()[1] == ("/Volumes/colordata", "\\\\203.0.113.19\\colordata")

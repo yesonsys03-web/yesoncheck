@@ -10,8 +10,12 @@ from yesoncheck.path_map_setup import Candidate, PairChoice, Proposal, Share
 
 
 def dirs(*items):
-    """주어진 폴더만 열리는 가짜 is_dir (대소문자 무시)."""
-    keys = {item.casefold() for item in items}
+    """주어진 폴더와 그 위 폴더들(공유 루트 \\\\서버\\공유까지)이 열리는 가짜 is_dir (대소문자 무시)."""
+    keys = set()
+    for item in items:
+        parts = [part for part in item[2:].split("\\") if part]
+        for n in range(2, len(parts) + 1):
+            keys.add(("\\\\" + "\\".join(parts[:n])).casefold())
     return lambda path: path.casefold() in keys
 
 
@@ -86,15 +90,44 @@ def test_each_folder_checked_once():
 
     def is_dir(path):
         calls.append(path.casefold())
-        return False
+        return path.casefold() == S_USA2.unc.casefold()  # 공유 루트만 열림 → 작품 폴더도 확인함
 
     pms.propose_mapping({"A": "/usadata2/X/A", "B": "/usadata2/X/A"}, [S_USA2], is_dir)
+    assert len(calls) > 1
     assert len(calls) == len(set(calls))
 
 
 def test_progress_cancel():
     with pytest.raises(pms.SetupCancelled):
-        pms.propose_mapping({"A": "/usadata2/A"}, [S_USA2], dirs(), progress=lambda done, total: False)
+        pms.propose_mapping({"A": "/usadata2/A"}, [S_USA2], dirs("\\\\203.0.113.3\\usadata2"),
+                            progress=lambda done, total: False)
+
+
+def test_unreachable_share_skipped_once_and_reported():
+    """서버가 꺼진(기억만 된) 드라이브: 루트를 한 번만 열어 보고 건너뜀 (작품마다 SMB 시간 초과를 기다리지 않음)."""
+    dead = Share("\\\\localhost\\yc_fake_dead", ["X:", "W:"])
+    calls = []
+    alive = dirs("\\\\203.0.113.3\\usadata2\\KOTH", "\\\\203.0.113.3\\usadata2\\FLORIDA")
+
+    def is_dir(path):
+        calls.append(path.casefold())
+        return alive(path)
+
+    progress = []
+    proposal = pms.propose_mapping(
+        {"KOTH": "/usadata2/KOTH", "FL": "/usadata2/FLORIDA"}, [dead, S_USA2], is_dir,
+        progress=lambda done, total: progress.append((done, total)),
+    )
+    assert [c for c in calls if c.startswith(dead.unc.casefold())] == [dead.unc.casefold()]
+    assert [(p.mac_prefix, [c.unc for c in p.candidates]) for p in proposal.pairs] == [
+        ("/usadata2", [S_USA2.unc])
+    ]
+    assert proposal.pairs[0].candidates[0].works == ["FL", "KOTH"]
+    assert len(proposal.share_problems) == 1
+    problem = proposal.share_problems[0]
+    assert "X:, W:" in problem and dead.unc in problem and "열리지 않음" in problem
+    assert progress and progress[-1][0] == progress[-1][1]  # 진행 표시는 끝까지 감
+    assert all(done <= total for done, total in progress)
 
 
 def test_find_config_dirs_both_layouts():
@@ -148,6 +181,59 @@ def test_has_additions():
     assert not pms.has_additions(EXIST, Proposal(pairs=[], unmatched={}, shares=[]))
 
 
+NAS_C = "\\\\nas\\colordata"
+S_NAS_C = Share(NAS_C, ["Z:"])
+
+
+def two_prefixes_one_share():
+    """Mac이 같은 공유를 두 번째로 연결하면 /Volumes/colordata-1이 됨 → 같은 UNC가 두 Mac 앞부분에 맞음."""
+    return Proposal(
+        pairs=[
+            PairChoice("/Volumes/colordata", [Candidate("/Volumes/colordata", NAS_C, ["Z:"], ["KOTH"])]),
+            PairChoice("/Volumes/colordata-1", [
+                Candidate("/Volumes/colordata-1", NAS_C, ["Z:"], ["FLORIDA", "FL_Animatic"]),
+            ]),
+        ],
+        unmatched={}, shares=[S_NAS_C],
+    )
+
+
+def test_ordered_default_choices_most_works_first():
+    proposal = two_prefixes_one_share()
+    assert proposal.ordered_default_choices() == [("/Volumes/colordata-1", NAS_C), ("/Volumes/colordata", NAS_C)]
+
+
+def test_split_mergeable_two_prefixes_claim_one_unc():
+    ok, rejected = pms.split_mergeable(None, two_prefixes_one_share().ordered_default_choices())
+    assert ok == [("/Volumes/colordata-1", NAS_C)]
+    assert len(rejected) == 1
+    mac, unc, reason = rejected[0]
+    assert (mac, unc) == ("/Volumes/colordata", NAS_C)
+    assert "/Volumes/colordata-1" in reason and "같은 경로로 맞추세요" in reason
+
+
+def test_split_mergeable_unc_already_used_by_existing_entry():
+    existing = {"version": 1, "shares": [{"mac": "/Volumes/colordata", "windows": [NAS_C]}]}
+    choices = [("/usadata2", "\\\\203.0.113.3\\usadata2"), ("/Volumes/colordata-1", "//NAS/ColorData")]
+    ok, rejected = pms.split_mergeable(existing, choices)
+    assert ok == [("/usadata2", "\\\\203.0.113.3\\usadata2")]  # 주어진 순서 유지
+    assert [(mac, unc) for mac, unc, _reason in rejected] == [("/Volumes/colordata-1", "//NAS/ColorData")]
+    assert "/Volumes/colordata" in rejected[0][2]
+
+
+def test_has_additions_ignores_choices_that_cannot_be_merged():
+    """합칠 수 없는 짝 때문에 시작할 때마다 창이 뜨지 않도록: 합칠 수 있는 짝으로 달라지는 것이 있을 때만 True."""
+    proposal = two_prefixes_one_share()
+    assert pms.has_additions(None, proposal)  # 하나는 넣을 수 있음
+    saved = pms.merge_path_map(None, [("/Volumes/colordata-1", NAS_C)])
+    assert not pms.has_additions(saved, proposal)  # 넣을 수 있는 것은 이미 들어 있음, 나머지는 넣을 수 없음
+    existing = {"version": 1, "shares": [{"mac": "/Volumes/colordata", "windows": [NAS_C]}]}
+    assert not pms.has_additions(existing, Proposal(
+        pairs=[PairChoice("/Volumes/colordata-1", [Candidate("/Volumes/colordata-1", NAS_C, ["Z:"], ["FL"])])],
+        unmatched={}, shares=[S_NAS_C],
+    ))
+
+
 def test_read_existing_and_save_with_backup(tmp_path):
     assert pms.read_existing(str(tmp_path)) == (None, None)
     (tmp_path / "path_map.json").write_text(
@@ -186,3 +272,39 @@ def test_save_path_map_leaves_original_untouched_when_replace_fails(tmp_path, mo
     with open(path, "rb") as fh:
         assert fh.read() == original_bytes
     assert [name for name in os.listdir(tmp_path) if name.startswith("path_map.json.tmp")] == []
+
+
+def test_read_existing_raises_when_nas_hiccups(tmp_path, monkeypatch):
+    """NAS가 잠깐 끊겨 파일 정보를 못 읽으면(stat 실패) '파일 없음'으로 보고 덮어쓰지 않도록 오류를 그대로 올림."""
+    path = str(tmp_path / "path_map.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(EXIST, fh)
+    real_stat = os.stat
+
+    def flaky_stat(target, *args, **kwargs):
+        if os.fspath(target) == path:
+            raise PermissionError(13, "네트워크 연결이 잠깐 끊김 (가짜 재현)", path)
+        return real_stat(target, *args, **kwargs)
+
+    def flaky_open(target, *args, **kwargs):
+        raise PermissionError(13, "네트워크 연결이 잠깐 끊김 (가짜 재현)", os.fspath(target))
+
+    monkeypatch.setattr(os, "stat", flaky_stat)
+    monkeypatch.setattr(pms, "open", flaky_open, raising=False)
+    with pytest.raises(PermissionError):
+        pms.read_existing(str(tmp_path))
+
+
+@pytest.mark.parametrize("encoding", ["cp949", "utf-16"])
+def test_read_existing_non_utf8_is_backed_up_and_recreated(tmp_path, encoding):
+    """메모장 ANSI(CP949)·UTF-16으로 저장된 파일: 읽을 수 없는 이유를 돌려주고, 저장할 때 원래 바이트 그대로 백업."""
+    raw = json.dumps(
+        {"version": 1, "shares": [{"mac": "/Volumes/작품", "windows": ["\\\\nas\\작품"]}]}, ensure_ascii=False,
+    ).encode(encoding)
+    (tmp_path / "path_map.json").write_bytes(raw)
+    data, error = pms.read_existing(str(tmp_path))
+    assert data is None and error
+    backup = pms.save_path_map(
+        str(tmp_path), {"version": 1, "shares": [{"mac": "/a", "windows": ["\\\\s\\a"]}]}, backup_existing=True)
+    with open(backup, "rb") as fh:
+        assert fh.read() == raw

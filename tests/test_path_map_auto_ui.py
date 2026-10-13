@@ -9,7 +9,8 @@ import os
 from types import SimpleNamespace
 
 import pytest
-from PyQt5.QtWidgets import QDialog, QInputDialog
+from PyQt5.QtCore import QCoreApplication, QEvent
+from PyQt5.QtWidgets import QDialog, QInputDialog, QLabel, QProgressDialog
 
 from yesoncheck import path_map_setup, paths, shared_config
 from yesoncheck.path_map_setup import Share
@@ -22,10 +23,10 @@ WORK = {"W": "/Volumes/yc/작품"}
 
 @pytest.fixture
 def win(qapp, dialogs, monkeypatch, tmp_path):
-    """Windows 동작 + 가짜 네트워크 드라이브 Y: = NAS (그 아래 '작품' 폴더만 열림)."""
+    """Windows 동작 + 가짜 네트워크 드라이브 Y: = NAS (공유 루트와 그 아래 '작품' 폴더만 열림)."""
     monkeypatch.setattr(paths, "IS_WINDOWS", True)
     monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
-    state = SimpleNamespace(shares=[Share(NAS, ["Y:"])], folders={f"{NAS}\\작품".casefold()},
+    state = SimpleNamespace(shares=[Share(NAS, ["Y:"])], folders={NAS.casefold(), f"{NAS}\\작품".casefold()},
                             answers=[], accept=True, shown=[], players=[])
     monkeypatch.setattr(path_map_setup, "connected_shares", lambda remote_of_drive=None: (state.shares, []))
     monkeypatch.setattr(path_map_setup, "_default_is_dir", lambda p: p.casefold() in state.folders)
@@ -125,7 +126,12 @@ def test_existing_entry_gets_alias(win, dialogs, tmp_path):
     player = win.player(config)
     assert player.path_map_problem is None
     player.resolve_shared_config_problem()  # 변환표는 정상이지만 작품이 열리지 않음 → 자동 설정 제안
-    assert read_map(config)["shares"] == [{"mac": "/Volumes/yc", "windows": [old, NAS]}]
+    assert read_map(config)["shares"] == [{"mac": "/Volumes/yc", "windows": [old, NAS]}]  # 첫 주소는 그대로
+    # 이 PC는 연결된 드라이브(NAS)와 맞는 주소를 먼저 엶 → 저장 후 바로, 그리고 다음 시작에도 작품이 열림
+    assert paths.to_native("/Volumes/yc/작품") == NAS + "\\작품"
+    assert dialogs.errors() == []
+    win.player(config)
+    assert paths.to_native("/Volumes/yc/작품") == NAS + "\\작품"
 
 
 def test_manage_opens_with_only_path_map_problem(win, dialogs, tmp_path, monkeypatch):
@@ -247,3 +253,137 @@ def test_reread_failure_after_save_shows_shared_config_error(win, dialogs, tmp_p
     assert "변환표를 저장했습니다" in criticals[0]
     assert "읽기 실패 (가짜 재현)" in criticals[0]
     assert not any(kind == "information" and title == "변환표 저장됨" for kind, title, _text in dialogs.messages)
+
+
+def test_one_share_under_two_mac_prefixes_asks_once(win, dialogs, tmp_path):
+    """Final #2: Mac이 같은 공유를 /Volumes/yc와 /Volumes/yc-1로 연결해 둔 작품들 → 한 UNC가 두 앞부분에 맞음.
+
+    작품이 더 많은 /Volumes/yc만 기본으로 넣고 /Volumes/yc-1 줄은 이유와 함께 꺼 둠. 다음 시작에는 창·오류 없음.
+    """
+    works = {"A": "/Volumes/yc/작품", "B": "/Volumes/yc/작품B", "C": "/Volumes/yc-1/작품C"}
+    win.folders |= {f"{NAS}\\작품B".casefold(), f"{NAS}\\작품C".casefold()}
+    config = make_config(str(tmp_path), works)
+    win.answers.extend([("pw", True), ("pw", True)])
+    player = win.player(config)
+    player.resolve_shared_config_problem()
+    assert len(win.shown) == 1
+    dialog = win.shown[0]
+    rows = {pair.mac_prefix: check for check, _combo, pair in dialog._rows}
+    assert rows["/Volumes/yc"].isChecked() and not rows["/Volumes/yc-1"].isChecked()
+    assert "/Volumes/yc-1" in "\n".join(label.text() for label in dialog.findChildren(QLabel))
+    assert dialog.chosen() == [("/Volumes/yc", NAS)]
+    assert read_map(config)["shares"] == [{"mac": "/Volumes/yc", "windows": [NAS]}]
+    assert path_map_criticals(dialogs) == []
+
+    before = len(dialogs.messages)
+    second = win.player(config)
+    assert second.path_map_problem is None
+    second.resolve_shared_config_problem()
+    assert len(win.shown) == 1  # 두 번째 시작: 창 없음
+    assert [m for m in dialogs.messages[before:] if m[0] == "critical"] == []
+    assert win.answers == []  # 비밀번호도 묻지 않음
+
+
+def test_user_checked_unmergeable_row_fails_before_password(win, dialogs, tmp_path, monkeypatch):
+    """Final #2: 꺼 둔 줄을 사용자가 켜서 저장하면 비밀번호를 묻기 전에 "변환표 저장 실패"로 알림."""
+    works = {"A": "/Volumes/yc/작품", "B": "/Volumes/yc/작품B", "C": "/Volumes/yc-1/작품C"}
+    win.folders |= {f"{NAS}\\작품B".casefold(), f"{NAS}\\작품C".casefold()}
+    config = make_config(str(tmp_path), works)
+
+    def check_all(self):
+        win.shown.append(self)
+        for check, _combo, _pair in self._rows:
+            check.setChecked(True)
+        return QDialog.Accepted
+
+    monkeypatch.setattr(PathMapSetupDialog, "exec_", check_all)
+    player = win.player(config)
+    assert player.auto_setup_path_map(ask_password=True) is False  # win.answers가 비어 있음 → 비밀번호를 물으면 실패
+    assert not os.path.exists(os.path.join(config, "path_map.json"))
+    failures = [text for kind, title, text in dialogs.messages if kind == "critical" and title == "변환표 저장 실패"]
+    assert len(failures) == 1
+    assert "번째 항목에도 있습니다" in failures[0] and "Traceback" in failures[0]
+
+
+def test_entry_written_by_another_pc_during_dialog_is_kept(win, dialogs, tmp_path, monkeypatch):
+    """Final #3: 확인 창·비밀번호 사이에 다른 PC가 쓴 항목을 덮어쓰지 않음 (저장 직전에 다시 읽어 합침)."""
+    config = make_config(str(tmp_path), WORK)
+    other = {"mac": "/Volumes/other", "windows": ["\\\\localhost\\yc_fake_other"]}
+
+    def other_pc_writes(self):
+        win.shown.append(self)
+        with open(os.path.join(config, "path_map.json"), "w", encoding="utf-8") as fh:
+            json.dump({"version": 1, "shares": [other]}, fh)
+        return QDialog.Accepted
+
+    monkeypatch.setattr(PathMapSetupDialog, "exec_", other_pc_writes)
+    win.answers.extend([("pw", True), ("pw", True)])
+    player = win.player(config)
+    player.resolve_shared_config_problem()
+    assert read_map(config)["shares"] == [other, {"mac": "/Volumes/yc", "windows": [NAS]}]
+    assert [n for n in os.listdir(config) if n.startswith("path_map.json.bak-")] == []
+    assert path_map_criticals(dialogs) == []
+
+
+def test_cp949_path_map_is_backed_up_at_startup(win, dialogs, tmp_path):
+    """Final #4: 메모장 ANSI(CP949)로 저장된 path_map.json → 오류 대신 백업 후 새로 만듦."""
+    config = make_config(str(tmp_path), WORK)
+    raw = '{"version": 1, "shares": [{"mac": "/Volumes/작품", "windows": ["여기에_붙여넣기"]}]}'.encode("cp949")
+    with open(os.path.join(config, "path_map.json"), "wb") as fh:
+        fh.write(raw)
+    win.answers.extend([("pw", True), ("pw", True)])
+    player = win.player(config)
+    assert player.path_map_problem
+    player.resolve_shared_config_problem()
+    backups = [n for n in os.listdir(config) if n.startswith("path_map.json.bak-")]
+    assert len(backups) == 1
+    with open(os.path.join(config, backups[0]), "rb") as fh:
+        assert fh.read() == raw
+    assert read_map(config)["shares"] == [{"mac": "/Volumes/yc", "windows": [NAS]}]
+
+
+def test_works_not_opening_probes_dead_share_root_once(win, dialogs, tmp_path, monkeypatch):
+    """Final #5: 서버가 꺼진 공유의 작품들은 공유 루트를 한 번만 열어 보고 작품 폴더는 열어 보지 않음."""
+    dead = "\\\\localhost\\yc_fake_dead"
+    works = {"A": "/Volumes/dead/A", "B": "/Volumes/dead/B", "W": "/Volumes/yc/작품", "X": "/Volumes/yc/없음"}
+    config = make_config(str(tmp_path), works, {"version": 1, "shares": [
+        {"mac": "/Volumes/dead", "windows": [dead]}, {"mac": "/Volumes/yc", "windows": [NAS]},
+    ]})
+    player = win.player(config)
+    calls = []
+
+    def is_dir(path):
+        calls.append(path.casefold())
+        return path.casefold() in win.folders
+
+    monkeypatch.setattr(path_map_setup, "_default_is_dir", is_dir)
+    broken = player._works_not_opening()
+    assert [c for c in calls if c.startswith(dead.casefold())] == [dead.casefold()]
+    assert calls.count(NAS.casefold()) == 1
+    assert len(broken) == 3
+    assert broken[0].startswith("A: ") and dead in broken[0] and "공유 폴더" in broken[0]
+    assert broken[1].startswith("B: ") and dead in broken[1]
+    assert broken[2].startswith("X: ") and f"{NAS}\\없음" in broken[2]
+
+
+def test_use_config_dir_reports_both_problems(win, dialogs, tmp_path, monkeypatch):
+    """Minor: 공유 설정 폴더를 고른 뒤의 "공유 설정 오류"도 변환표 오류를 함께 보여 줌 (시작 오류와 같게)."""
+    good = make_config(str(tmp_path / "good"), WORK, {"version": 1, "shares": [{"mac": "/Volumes/yc", "windows": [NAS]}]})
+    player = win.player(good)
+    monkeypatch.delenv("YESONCHECK_CONFIG_DIR")  # 이제부터는 PC별 설정(고른 폴더)을 씀
+    broken = make_config(str(tmp_path / "broken"), None, raw="{broken")  # path_map.json도 없음
+    assert player._use_config_dir(broken) is True
+    criticals = [text for kind, title, text in dialogs.messages if kind == "critical" and title == "공유 설정 오류"]
+    assert len(criticals) == 1
+    assert "읽지 못했습니다" in criticals[0] and "변환표 파일이 없습니다" in criticals[0]
+
+
+def test_progress_dialog_is_deleted(win, dialogs, tmp_path):
+    """Minor: 진행 창은 닫은 뒤 deleteLater로 지움 (자동 설정을 여러 번 해도 창 객체가 쌓이지 않음)."""
+    config = make_config(str(tmp_path), WORK)
+    player = win.player(config)
+    win.accept = False
+    for _ in range(2):
+        player.auto_setup_path_map(ask_password=False)
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    assert player.findChildren(QProgressDialog) == []

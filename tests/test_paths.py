@@ -171,7 +171,7 @@ def test_path_key_drive_letters_differ(windows):
 def test_active_map_required(monkeypatch):
     monkeypatch.setattr(paths, "IS_WINDOWS", True)
     paths.activate(None)
-    with pytest.raises(PathMapError, match="로드되지 않았습니다"):
+    with pytest.raises(PathMapError, match="로드되지 않았습니다.*변환표 오류"):
         paths.to_native("/usadata2/x")
 
 
@@ -252,3 +252,34 @@ def test_same_unc_alias_under_two_mac_entries_rejected(alias_a, alias_b):
 def test_same_unc_alias_within_one_entry_allowed():
     data = {"version": 1, "shares": [{"mac": "/a", "windows": ["\\\\nas\\a", "\\\\NAS\\A"]}]}
     assert PathMap.from_dict(data, "ok").windows_to_mac("\\\\nas\\a\\x") == "/a/x"
+
+
+def _alias_lists(path_map):
+    return [["\\\\" + "\\".join(alias) for alias in uncs] for _mac, uncs in path_map.shares]
+
+
+def test_with_preferred_aliases_puts_connected_share_first():
+    """각 PC는 자기 드라이브가 연결된 주소를 먼저 엶 (서버·공유 이름이 같으면, 대소문자 무시·더 깊은 별칭 포함)."""
+    data = {
+        "version": 1,
+        "shares": [
+            {"mac": "/Volumes/colordata",
+             "windows": ["\\\\203.0.113.19\\colordata", "\\\\NAS\\Data\\sub", "\\\\nas19\\colordata"]},
+            {"mac": "/usadata2", "windows": ["\\\\203.0.113.3\\usadata2", "\\\\NAS3\\usadata2"]},
+        ],
+    }
+    original = PathMap.from_dict(data, "test-map")
+    before = _alias_lists(original)
+    preferred = original.with_preferred_aliases(["\\\\nas\\DATA", "\\\\NAS19\\ColorData\\"])
+    assert preferred is not original and preferred.source == "test-map"
+    assert _alias_lists(preferred) == [
+        ["\\\\NAS\\Data\\sub", "\\\\nas19\\colordata", "\\\\203.0.113.19\\colordata"],  # 맞는 것끼리는 원래 순서
+        ["\\\\203.0.113.3\\usadata2", "\\\\NAS3\\usadata2"],  # 맞는 것이 없으면 그대로
+    ]
+    assert _alias_lists(original) == before  # 원래 표는 그대로
+    assert preferred.mac_to_windows("/Volumes/colordata/FL") == "\\\\NAS\\Data\\sub\\FL"
+    assert original.mac_to_windows("/Volumes/colordata/FL") == "\\\\203.0.113.19\\colordata\\FL"
+    for entry in data["shares"]:
+        for alias in entry["windows"]:  # Windows → Mac은 모든 별칭이 그대로
+            assert preferred.windows_to_mac(alias + "\\x") == entry["mac"] + "/x"
+    assert _alias_lists(original.with_preferred_aliases([])) == before
