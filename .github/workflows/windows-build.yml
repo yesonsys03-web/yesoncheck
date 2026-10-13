@@ -19,13 +19,47 @@ jobs:
 
       - uses: astral-sh/setup-uv@v10.3.0
 
-      - name: 시험 환경 (Python 3.10)
+      - name: 빌드 환경 (Python 3.10, Windows lock)
         run: |
           uv venv .venv --python 3.10 --managed-python
-          uv pip install --python .venv\Scripts\python.exe -r requirements-test.txt
+          $py = ".venv\Scripts\python.exe"
+          uv pip install --python $py -r requirements-build-windows.lock
+          # opencv 세 패키지가 같은 cv2 폴더를 씀 → contrib 판이 최종으로 남도록 재설치 (setup_build_env.sh와 같음)
+          uv pip install --python $py --reinstall-package opencv-contrib-python opencv-contrib-python==4.6.0.66
+          uv pip install --python $py -r requirements-test.txt
+          & $py -c "import cv2; from cv2 import version; assert version.contrib and not version.headless; import paddle; print('cv2', cv2.__version__, 'paddle', paddle.__version__); paddle.utils.run_check()"
+
+      - name: ffmpeg (gyan 9.0.2)
+        run: ./fetch_ffmpeg_windows.ps1
 
       - name: 시험용 SMB 공유
         run: ./ci/setup_test_share.ps1
 
-      - name: 경로 시험
-        run: .venv\Scripts\python.exe -m pytest tests/test_paths.py tests/test_shared_config.py tests/test_paths_windows.py -v -rs
+      - name: 소스 시험 (pytest)
+        run: .venv\Scripts\python.exe -m pytest tests -v -rs
+
+      - name: PyInstaller 빌드
+        run: .venv\Scripts\python.exe -m PyInstaller --clean -y YesonCheck_Autocut.spec
+
+      - name: 모듈 검사
+        run: .venv\Scripts\python.exe check_frozen_imports.py dist\YesonCheck_Autocut
+
+      - name: 실행 시험 데이터 (시험 공유에 한글 작품 폴더·공유 설정·PC별 설정)
+        run: |
+          $env:PATH = "$PWD\vendor\ffmpeg\windows;$env:PATH"
+          .venv\Scripts\python.exe ci\make_test_data.py --share-root $env:YC_TEST_SHARE_ROOT --mac-root /Volumes/yc_test --unc $env:YC_TEST_UNC --workdir C:\yc_smoke --settings "$env:APPDATA\YesonCheck\settings.json"
+
+      - name: 실행 시험 (빌드된 exe)
+        run: ./ci/run_smoke_test.ps1
+
+      - name: artifact 이름
+        run: |
+          $short = "${{ github.sha }}".Substring(0, 7)
+          "ARTIFACT_NAME=YesonCheck_Autocut_Windows_$short" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: dist/YesonCheck_Autocut
+          retention-days: 14
+          if-no-files-found: error
