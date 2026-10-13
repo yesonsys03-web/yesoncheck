@@ -473,7 +473,7 @@ def _generate_html(segments, video_name, fps, total_frames, ocr_mode, video_path
         .frame-info {{
             color: #ffae00;
             font-weight: bold;
-            font-family: 'Roboto Mono', 'Menlo', monospace;
+            font-family: 'Roboto Mono', 'Menlo', Consolas, monospace;
             font-size: 14px;
             min-width: 150px;
             text-align: center;
@@ -514,7 +514,7 @@ def _generate_html(segments, video_name, fps, total_frames, ocr_mode, video_path
         .volume-info {{
             color: #ffae00;
             font-weight: bold;
-            font-family: 'Roboto Mono', 'Menlo', monospace;
+            font-family: 'Roboto Mono', 'Menlo', Consolas, monospace;
             font-size: 14px;
             min-width: 40px;
             text-align: center;
@@ -816,7 +816,7 @@ def _generate_html(segments, video_name, fps, total_frames, ocr_mode, video_path
         .frame {{
             color: #66ccff;
             text-align: right;
-            font-family: 'Roboto Mono', 'Menlo', monospace;
+            font-family: 'Roboto Mono', 'Menlo', Consolas, monospace;
             font-size: 12px;
             width: 80px;
         }}
@@ -824,7 +824,7 @@ def _generate_html(segments, video_name, fps, total_frames, ocr_mode, video_path
         .time {{
             color: #88ee88;
             text-align: right;
-            font-family: 'Roboto Mono', 'Menlo', monospace;
+            font-family: 'Roboto Mono', 'Menlo', Consolas, monospace;
             font-size: 12px;
             width: 90px;
         }}
@@ -832,7 +832,7 @@ def _generate_html(segments, video_name, fps, total_frames, ocr_mode, video_path
         .duration {{
             color: #ff88ff;
             text-align: right;
-            font-family: 'Roboto Mono', 'Menlo', monospace;
+            font-family: 'Roboto Mono', 'Menlo', Consolas, monospace;
             font-size: 12px;
             width: 80px;
         }}

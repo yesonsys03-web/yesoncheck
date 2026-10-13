@@ -1,6 +1,7 @@
 """Threaded worker helpers for media processing and thumbnail management."""
 
 import copy
+import ntpath
 import os
 import re
 import subprocess
@@ -317,6 +318,23 @@ def guard_paddle_buffer_growth(ocr_engine):
         stages.append(ocr_engine.text_classifier)
     for stage in stages:
         stage.input_tensor = _ClearBeforeInput(stage.input_tensor, stage.predictor)
+
+
+def paddleocr_base_dir(platform=sys.platform, environ=os.environ):
+    """Windows: OCR 모델을 둘 ASCII 경로 (사용자 이름이 한글이면 paddle이 홈 폴더의 모델을 못 읽음). 그 외 None."""
+    if platform != "win32":
+        return None
+    return ntpath.join(environ["ProgramData"], "YesonCheck", "paddleocr") + "\\"
+
+
+def use_ascii_paddleocr_dir():
+    """PaddleOCR 생성 전에 호출: 모델 폴더(BASE_DIR)를 바꿈. 모델이 없으면 그 폴더에 내려받음."""
+    base_dir = paddleocr_base_dir()
+    if base_dir is None:
+        return
+    import paddleocr.paddleocr as paddleocr_module
+
+    paddleocr_module.BASE_DIR = base_dir
 
 
 class OCRWorker(QThread):
@@ -1212,29 +1230,6 @@ class OCRWorker(QThread):
                 let_matches = re.findall(r'[A-Z]+', part)
                 letters.extend(let_matches)
         
-        # #region agent log
-        import json
-        try:
-            with open('/Users/studio01/coding/.cursor/debug.log', 'a') as f:
-                f.write(json.dumps({
-                    "sessionId": "debug-session",
-                    "runId": "run1",
-                    "hypothesisId": "A",
-                    "location": "workers.py:_correct_all_pattern:extraction",
-                    "message": "Text extraction after correction",
-                    "data": {
-                        "original_text": text,
-                        "cleaned": cleaned,
-                        "corrected_parts": corrected_parts,
-                        "numbers": numbers,
-                        "letters": letters,
-                        "pattern": pattern
-                    },
-                    "timestamp": int(__import__('time').time() * 1000)
-                }) + '\n')
-        except:
-            pass
-        # #endregion
         
         # 6. 패턴에 맞게 매칭 (순서 보장 - 역전 방지)
         result = []
@@ -1260,30 +1255,6 @@ class OCRWorker(QThread):
                 else:
                     # 숫자 부족 - 0으로 채움
                     result.append('0' * count)
-                    # #region agent log
-                    import json
-                    try:
-                        with open('/Users/studio01/coding/.cursor/debug.log', 'a') as f:
-                            f.write(json.dumps({
-                                "sessionId": "debug-session",
-                                "runId": "run1",
-                                "hypothesisId": "E",
-                                "location": "workers.py:_correct_all_pattern:padding_zeros",
-                                "message": "Padding with zeros due to missing numbers",
-                                "data": {
-                                    "original_text": text,
-                                    "count": count,
-                                    "num_idx": num_idx,
-                                    "numbers": numbers,
-                                    "let_idx": let_idx,
-                                    "letters": letters,
-                                    "result_so_far": result
-                                },
-                                "timestamp": int(__import__('time').time() * 1000)
-                            }) + '\n')
-                    except:
-                        pass
-                    # #endregion
                     
             elif part_type == '#':
                 # 영문 그룹
@@ -1300,60 +1271,10 @@ class OCRWorker(QThread):
                         # 부족하면 X로 패딩하여 패턴 길이 맞추기
                         padded = let_str.ljust(count, 'X')
                         result.append(padded)
-                        # #region agent log
-                        import json
-                        try:
-                            with open('/Users/studio01/coding/.cursor/debug.log', 'a') as f:
-                                f.write(json.dumps({
-                                    "sessionId": "debug-session",
-                                    "runId": "run1",
-                                    "hypothesisId": "F",
-                                    "location": "workers.py:_correct_all_pattern:letter_padding",
-                                    "message": "Letter segment padded to pattern length",
-                                    "data": {
-                                        "original_text": text,
-                                        "let_str": let_str,
-                                        "padded": padded,
-                                        "expected_len": count,
-                                        "num_idx": num_idx,
-                                        "numbers": numbers,
-                                        "let_idx": let_idx,
-                                        "letters": letters,
-                                        "result_so_far": result
-                                    },
-                                    "timestamp": int(__import__('time').time() * 1000)
-                                }) + '\n')
-                        except:
-                            pass
-                        # #endregion
                         let_idx += 1
                 else:
                     # 영문 부족 - X로 채움
                     result.append('X' * count)
-                    # #region agent log
-                    import json
-                    try:
-                        with open('/Users/studio01/coding/.cursor/debug.log', 'a') as f:
-                            f.write(json.dumps({
-                                "sessionId": "debug-session",
-                                "runId": "run1",
-                                "hypothesisId": "B",
-                                "location": "workers.py:_correct_all_pattern:padding_X",
-                                "message": "Padding with X due to missing letters",
-                                "data": {
-                                    "original_text": text,
-                                    "count": count,
-                                    "let_idx": let_idx,
-                                    "letters": letters,
-                                    "num_idx": num_idx,
-                                    "numbers": numbers,
-                                    "result_so_far": result
-                                },
-                                "timestamp": int(__import__('time').time() * 1000)
-                            }) + '\n')
-                    except:
-                        pass
-                    # #endregion
                     
             elif part_type == 'sep':
                 # 구분자 (패턴에 명시된 구분자만 사용)
@@ -1364,27 +1285,6 @@ class OCRWorker(QThread):
         # 5. 패턴 형식 검증: -, _ 외 특수문자나 공백이 있으면 제거
         normalized = re.sub(r'[^A-Z0-9_-]', '', normalized)
         
-        # #region agent log
-        import json
-        try:
-            with open('/Users/studio01/coding/.cursor/debug.log', 'a') as f:
-                f.write(json.dumps({
-                    "sessionId": "debug-session",
-                    "runId": "run1",
-                    "hypothesisId": "C",
-                    "location": "workers.py:_correct_all_pattern:final_result",
-                    "message": "Final normalized result",
-                    "data": {
-                        "original_text": text,
-                        "normalized": normalized,
-                        "result_parts": result,
-                        "pattern": pattern
-                    },
-                    "timestamp": int(__import__('time').time() * 1000)
-                }) + '\n')
-        except:
-            pass
-        # #endregion
         
         return normalized
 
@@ -1804,28 +1704,6 @@ class OCRWorker(QThread):
                 next_text = next_seg.get('text', '')
                 next_norm = self._normalize_all_for_comparison(next_text, self.pattern)
                 
-                # #region agent log
-                import json
-                try:
-                    with open('/Users/studio01/coding/.cursor/debug.log', 'a') as f:
-                        f.write(json.dumps({
-                            "sessionId": "debug-session",
-                            "runId": "run1",
-                            "hypothesisId": "C",
-                            "location": "workers.py:_merge_same_scene_segments:comparison",
-                            "message": "Segment merge comparison",
-                            "data": {
-                                "current_text": current_text,
-                                "current_norm": current_norm,
-                                "next_text": next_text,
-                                "next_norm": next_norm,
-                                "are_equal": next_norm == current_norm if (next_norm and current_norm) else False
-                            },
-                            "timestamp": int(__import__('time').time() * 1000)
-                        }) + '\n')
-                except:
-                    pass
-                # #endregion
                 
                 # 정규화된 텍스트가 같으면 그룹에 추가
                 if next_norm and next_norm == current_norm:
@@ -1840,28 +1718,6 @@ class OCRWorker(QThread):
                         
                         # 이전(현재)과 그 다음이 같으면 중간도 병합
                         if next_next_norm and next_next_norm == current_norm:
-                            # #region agent log
-                            try:
-                                with open('/Users/studio01/coding/.cursor/debug.log', 'a') as f:
-                                    f.write(json.dumps({
-                                        "sessionId": "debug-session",
-                                        "runId": "run1",
-                                        "hypothesisId": "C",
-                                        "location": "workers.py:_merge_same_scene_segments:bridge_merge",
-                                        "message": "Bridge merge detected",
-                                        "data": {
-                                            "current_text": current_text,
-                                            "next_text": next_text,
-                                            "next_next_text": next_next_text,
-                                            "current_norm": current_norm,
-                                            "next_norm": next_norm,
-                                            "next_next_norm": next_next_norm
-                                        },
-                                        "timestamp": int(__import__('time').time() * 1000)
-                                    }) + '\n')
-                            except:
-                                pass
-                            # #endregion
                             group.append(next_seg)
                             group.append(next_next_seg)
                             j += 2
@@ -1951,29 +1807,6 @@ class OCRWorker(QThread):
             norm1 = self._normalize_all_for_comparison(text1, self.pattern)
             norm2 = self._normalize_all_for_comparison(text2, self.pattern)
 
-            # #region agent log
-            import json
-            try:
-                with open('/Users/studio01/coding/.cursor/debug.log', 'a') as f:
-                    f.write(json.dumps({
-                        "sessionId": "debug-session",
-                        "runId": "run1",
-                        "hypothesisId": "A",
-                        "location": "workers.py:_is_similar_text:all_mode",
-                        "message": "All mode comparison",
-                        "data": {
-                            "text1": text1,
-                            "text2": text2,
-                            "norm1": norm1,
-                            "norm2": norm2,
-                            "scene_only": scene_only,
-                            "pattern": self.pattern
-                        },
-                        "timestamp": int(__import__('time').time() * 1000)
-                    }) + '\n')
-            except:
-                pass
-            # #endregion
 
             if norm1 and norm2:
                 if scene_only:
@@ -1981,49 +1814,11 @@ class OCRWorker(QThread):
                     # 사용자 요구사항: "이름이 완전히 다른 건 병합하지 마. MS101_A001, MS101_A002"
                     # MS109_J000, MS109_J002, MS109_J003은 모두 다른 씬이므로 병합하지 않음
                     result = norm1 == norm2
-                    # #region agent log
-                    try:
-                        with open('/Users/studio01/coding/.cursor/debug.log', 'a') as f:
-                            f.write(json.dumps({
-                                "sessionId": "debug-session",
-                                "runId": "run1",
-                                "hypothesisId": "A",
-                                "location": "workers.py:_is_similar_text:all_mode:scene_only",
-                                "message": "Noise merge comparison (full text)",
-                                "data": {
-                                    "norm1": norm1,
-                                    "norm2": norm2,
-                                    "result": result
-                                },
-                                "timestamp": int(__import__('time').time() * 1000)
-                            }) + '\n')
-                    except:
-                        pass
-                    # #endregion
                     return result
                 else:
                     # 세그먼트 생성 시: 전체 텍스트를 완전히 일치해야 함 (Panel ID가 다르면 다른 세그먼트)
                     # MS109_D006과 MS109_D007은 숫자가 다르므로 반드시 다른 세그먼트로 처리
                     result = norm1 == norm2
-                    # #region agent log
-                    try:
-                        with open('/Users/studio01/coding/.cursor/debug.log', 'a') as f:
-                            f.write(json.dumps({
-                                "sessionId": "debug-session",
-                                "runId": "run1",
-                                "hypothesisId": "A",
-                                "location": "workers.py:_is_similar_text:all_mode:segment_creation",
-                                "message": "Segment creation comparison result",
-                                "data": {
-                                    "norm1": norm1,
-                                    "norm2": norm2,
-                                    "result": result
-                                },
-                                "timestamp": int(__import__('time').time() * 1000)
-                            }) + '\n')
-                    except:
-                        pass
-                    # #endregion
                     return result
 
             # 정규화 실패 시 처리
@@ -2035,25 +1830,6 @@ class OCRWorker(QThread):
                 # 세그먼트 생성 시: 정규화 실패는 다른 세그먼트로 처리
                 # 하나라도 정규화 실패하면 다른 세그먼트로 간주
                 if not norm1 or not norm2:
-                    # #region agent log
-                    try:
-                        with open('/Users/studio01/coding/.cursor/debug.log', 'a') as f:
-                            f.write(json.dumps({
-                                "sessionId": "debug-session",
-                                "runId": "run1",
-                                "hypothesisId": "B",
-                                "location": "workers.py:_is_similar_text:all_mode:normalization_failed",
-                                "message": "Normalization failed",
-                                "data": {
-                                    "norm1": norm1,
-                                    "norm2": norm2,
-                                    "result": False
-                                },
-                                "timestamp": int(__import__('time').time() * 1000)
-                            }) + '\n')
-                    except:
-                        pass
-                    # #endregion
                     return False
             
             # 둘 다 정규화 실패했지만 scene_only=False인 경우는 위에서 처리됨
@@ -2282,6 +2058,8 @@ class OCRWorker(QThread):
                         print("[OCRWorker] CUDA 사용 가능 - GPU 가속 활성화")
                 except Exception:
                     print("[OCRWorker] GPU 사용 불가 - CPU 모드로 실행")
+
+                use_ascii_paddleocr_dir()
 
                 # OCR 모드에 따라 PaddleOCR 설정
                 if self.ocr_mode == 'king':
@@ -2843,27 +2621,6 @@ class OCRWorker(QThread):
                     self.status.emit(log_msg)
                 else:
                     is_similar = self._is_similar_text(text, current_text)
-                    # #region agent log
-                    import json
-                    try:
-                        with open('/Users/studio01/coding/.cursor/debug.log', 'a') as f:
-                            f.write(json.dumps({
-                                "sessionId": "debug-session",
-                                "runId": "run1",
-                                "hypothesisId": "D",
-                                "location": "workers.py:segment_creation:_is_similar_text",
-                                "message": "Segment creation: _is_similar_text call",
-                                "data": {
-                                    "frame": zero_index,
-                                    "text": text,
-                                    "current_text": current_text,
-                                    "is_similar": is_similar
-                                },
-                                "timestamp": int(__import__('time').time() * 1000)
-                            }) + '\n')
-                    except:
-                        pass
-                    # #endregion
                     
                     if not is_similar:
                         # 텍스트가 달라졌음 - 새 세그먼트 생성

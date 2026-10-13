@@ -236,7 +236,7 @@ class OCRReviewDialog(QDialog):
         self.sequenceEdit.setReadOnly(True)
         self.sequenceEdit.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
         self.sequenceEdit.setStyleSheet(
-            "QPlainTextEdit { background: #050505; color: #f0f0f0; border: 1px solid #222; font-family: 'Roboto Mono', 'Menlo', monospace; }"
+            "QPlainTextEdit { background: #050505; color: #f0f0f0; border: 1px solid #222; font-family: 'Roboto Mono', 'Menlo', Consolas, monospace; }"
         )
         log_content_layout.addWidget(self.sequenceEdit)
         

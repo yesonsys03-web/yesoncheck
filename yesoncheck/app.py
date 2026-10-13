@@ -1,11 +1,13 @@
 """Application entry helpers."""
 
+import datetime
 import os
 import sys
+import traceback
 
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont, QPixmap
-from PyQt5.QtWidgets import QApplication, QSplashScreen, QLabel
+from PyQt5.QtWidgets import QApplication, QLabel, QMessageBox, QSplashScreen
 
 if __package__ in (None, ""):
     # Allow running the file directly (python yesoncheck/app.py)
@@ -13,6 +15,31 @@ if __package__ in (None, ""):
     from yesoncheck.main_window import VideoPlayer  # type: ignore  # pylint: disable=import-error
 else:
     from .main_window import VideoPlayer
+
+
+def setup_windows_logging():
+    """Windows 빌드 앱(창 모드): stdout·stderr가 없으므로 로그 파일로 보내고, 잡히지 않은 예외를 로그+오류 창으로.
+
+    로그: %LOCALAPPDATA%\\YesonCheck\\logs\\yesoncheck_<날짜>.log. 그 외 환경에서는 아무것도 안 하고 None.
+    """
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        return None
+    log_dir = os.path.join(os.environ["LOCALAPPDATA"], "YesonCheck", "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, f"yesoncheck_{datetime.date.today():%Y%m%d}.log")
+    stream = open(log_path, "a", encoding="utf-8", buffering=1)
+    sys.stdout = stream
+    sys.stderr = stream
+    print(f"===== YesonCheck 시작 {datetime.datetime.now():%Y-%m-%d %H:%M:%S} =====")
+
+    def excepthook(exc_type, exc, tb):
+        text = "".join(traceback.format_exception(exc_type, exc, tb))
+        print(text, file=sys.stderr)
+        if QApplication.instance() is not None:
+            QMessageBox.critical(None, "YesonCheck 오류", f"{text[-3000:]}\n\n로그: {log_path}")
+
+    sys.excepthook = excepthook
+    return log_path
 
 
 def launch(argv=None):
@@ -62,6 +89,7 @@ def launch(argv=None):
 
 def main():
     """CLI entrypoint."""
+    setup_windows_logging()
     return launch(sys.argv)
 
 

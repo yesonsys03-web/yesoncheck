@@ -110,7 +110,7 @@ class VideoPlayerBase(QMainWindow):
 QMainWindow, QWidget {
     background: #232323;
     color: #e0e0e0;
-    font-family: 'Segoe UI', Arial, sans-serif;
+    font-family: 'Segoe UI', 'Malgun Gothic', Arial, sans-serif;
     font-size: 12px;
 }
 QLabel {
@@ -1490,7 +1490,7 @@ QSlider::add-page:horizontal {
 QMainWindow, QWidget {
     background: #232323;
     color: #e0e0e0;
-    font-family: 'Segoe UI', Arial, sans-serif;
+    font-family: 'Segoe UI', 'Malgun Gothic', Arial, sans-serif;
     font-size: 12px;
 }
 QLabel {
@@ -1624,13 +1624,13 @@ QMessageBox {
 QMainWindow {
     background: #fafafa;
     color: #2c3e50;
-    font-family: 'Segoe UI', Arial, sans-serif;
+    font-family: 'Segoe UI', 'Malgun Gothic', Arial, sans-serif;
     font-size: 12px;
 }
 QWidget {
     background: transparent;
     color: #2c3e50;
-    font-family: 'Segoe UI', Arial, sans-serif;
+    font-family: 'Segoe UI', 'Malgun Gothic', Arial, sans-serif;
 }
 QPushButton {
     background: #ffffff;
@@ -2106,7 +2106,7 @@ QMessageBox {
                 border: 1px solid #444444;
                 border-radius: 4px;
                 padding: 8px;
-                font-family: 'Menlo', 'Monaco', monospace;
+                font-family: 'Menlo', 'Monaco', Consolas, monospace;
                 font-size: 11px;
             }
         """)
@@ -2327,7 +2327,7 @@ QMessageBox {
                 border: 1px solid #444444;
                 border-radius: 4px;
                 padding: 8px;
-                font-family: 'Menlo', 'Monaco', monospace;
+                font-family: 'Menlo', 'Monaco', Consolas, monospace;
                 font-size: 11px;
             }
         """)
@@ -3390,7 +3390,7 @@ QMessageBox {
                 border: 1px solid #444444;
                 border-radius: 4px;
                 padding: 8px;
-                font-family: 'Menlo', 'Monaco', monospace;
+                font-family: 'Menlo', 'Monaco', Consolas, monospace;
                 font-size: 11px;
             }
         """)
@@ -3635,9 +3635,10 @@ QMessageBox {
         help_action.setShortcut('F1')
         help_action.triggered.connect(self.show_help)
         
-        # 실행 및 빌드 (원클릭)
-        run_build_action = help_menu.addAction('실행 및 빌드')
-        run_build_action.triggered.connect(self.show_run_and_build_dialog)
+        # 실행 및 빌드 (원클릭, Mac 개발 환경 전용: run_app.sh·build_app.sh)
+        if not paths.IS_WINDOWS:
+            run_build_action = help_menu.addAction('실행 및 빌드')
+            run_build_action.triggered.connect(self.show_run_and_build_dialog)
 
         # About 액션
         about_action = help_menu.addAction('정보')
