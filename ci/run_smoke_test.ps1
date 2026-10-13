@@ -6,6 +6,8 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $env:QT_QPA_PLATFORM = "offscreen"
+# 워크플로 전체에 PYTHONUTF8=1이 있지만 사용자 PC에는 없음 → exe는 사용자 PC와 같은 조건으로 시험
+if (Test-Path Env:PYTHONUTF8) { Remove-Item Env:PYTHONUTF8 }
 $p = Start-Process -FilePath $Exe -ArgumentList @("--smoke-test", $Workdir) -PassThru
 $timedOut = -not $p.WaitForExit($TimeoutSeconds * 1000)
 if ($timedOut) {
