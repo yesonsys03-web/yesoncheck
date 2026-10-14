@@ -7,7 +7,7 @@ import time
 import traceback
 
 from PyQt5.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal, pyqtSlot
-from PyQt5.QtGui import QFont, QPixmap
+from PyQt5.QtGui import QFont, QGuiApplication, QPixmap
 from PyQt5.QtWidgets import QApplication, QLabel, QMessageBox, QSplashScreen
 
 if __package__ in (None, ""):
@@ -88,6 +88,44 @@ def make_excepthook(log_path):
     return excepthook
 
 
+def apply_high_dpi_rounding_policy():
+    """Windows: 화면 배율을 반올림하지 않고 그대로(PassThrough) — QApplication을 만들기 전에 불러야 함.
+
+    Qt 5.15 기본값(Round)은 125%를 1배, 150%를 2배로 그려서 앱이 다른 앱보다 20% 작거나 33% 컸다
+    (150%에서는 최소 창이 실제 픽셀로 화면보다 커서 줄일 수 없었음). Mac은 배율이 정수라 바꾸지 않는다.
+    """
+    if sys.platform != "win32":
+        return
+    if not hasattr(QApplication, "setHighDpiScaleFactorRoundingPolicy"):
+        raise RuntimeError(
+            "이 PyQt5에는 QApplication.setHighDpiScaleFactorRoundingPolicy가 없습니다 (Qt 5.14 이상 필요) — "
+            "Windows 125%·150% 배율이 1배·2배로 반올림됩니다"
+        )
+    QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+
+
+def create_application(argv):
+    """QApplication을 만들기 전에 정해야 하는 설정(고해상도)을 하고 만든다 — app.launch와 실행 시험(smoke_test)이 같은 설정."""
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    apply_high_dpi_rounding_policy()
+    return QApplication(argv)
+
+
+def screen_report(screen):
+    """시작 로그용 한 줄: 화면의 논리 크기·작업 영역·devicePixelRatio·논리 DPI·Qt 배율 반올림 정책
+    (Windows 150%가 2배로 반올림되는지 등을 사용자 로그로 알 수 있게)."""
+    geometry = screen.geometry()
+    available = screen.availableGeometry()
+    policy = QGuiApplication.highDpiScaleFactorRoundingPolicy()
+    return (
+        f"화면: 논리 {geometry.width()}×{geometry.height()} (위치 {geometry.x()},{geometry.y()}), "
+        f"작업 영역 {available.width()}×{available.height()} (위치 {available.x()},{available.y()}), "
+        f"devicePixelRatio {screen.devicePixelRatio():g}, 논리 DPI {screen.logicalDotsPerInch():g}, "
+        f"배율 반올림 {getattr(policy, 'name', policy)}"
+    )
+
+
 def open_startup_file(player, file_path):
     """명령줄로 받은 파일을 영상 A로 엶 (없으면 로그만)."""
     print(f"Opening file: {file_path}")
@@ -105,12 +143,11 @@ def launch(argv=None):
     app = QApplication.instance()
     owns_app = app is None
     if owns_app:
-        # 고해상도 디스플레이 지원 (QApplication 생성 전에 설정해야 함)
-        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+        # 고해상도 디스플레이 지원 (QApplication 생성 전에 설정해야 함, Windows는 배율 반올림 없이)
         timing_log.startup("QApplication 만드는 중…")
-        app = QApplication(argv)
+        app = create_application(argv)
     timing_log.startup("QApplication 준비")
+    timing_log.startup(screen_report(app.primaryScreen()))
 
     # 스플래시 스크린 생성 (즉시 표시)
     pixmap = QPixmap(500, 300)

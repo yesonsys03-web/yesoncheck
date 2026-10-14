@@ -101,7 +101,10 @@ def run(workdir):
             report["checks"].append({"name": name, "ok": False, "detail": traceback.format_exc()})
             return None
 
-    app = QApplication.instance() or QApplication([sys.argv[0]])
+    from yesoncheck.app import create_application
+
+    # app.launch와 같은 고해상도 설정 (Windows: 배율 반올림 없이)으로 만듦
+    app = QApplication.instance() or create_application([sys.argv[0]])
     from yesoncheck.main_window import VideoPlayer
 
     player = None
