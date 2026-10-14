@@ -3400,9 +3400,14 @@ class TransNetV2Worker(QThread):
                 return
 
             if not TRANSNETV2_AVAILABLE:
-                self.error.emit(
-                    "TransNetV2가 설치되지 않았습니다.\n"
+                # 개발자용 설치 안내는 로그에만 (사용자 대화상자에는 쓸모가 없으므로)
+                print(
+                    "[TransNetV2Worker] TransNetV2가 설치되지 않았습니다. "
                     "설치: pip install git+https://github.com/soCzech/TransNetV2.git"
+                )
+                self.error.emit(
+                    "이 빌드에는 Animatic2(TransNetV2) 씬 감지가 포함되지 않았습니다. "
+                    "Animatic (Auto Cut) 모드를 쓰세요."
                 )
                 return
 

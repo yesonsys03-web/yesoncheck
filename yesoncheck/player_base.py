@@ -74,6 +74,18 @@ from yesoncheck.window_layout import ElidedLabel, InfoRowLayout, VerticalScrollA
 # from yesoncheck.player_review import OCRReviewDialog
 
 
+def _transnetv2_available():
+    """TransNetV2(딥러닝 씬 감지, 애니매틱2)가 이 환경에 설치돼 있는지.
+
+    transnetv2_detector는 무거운 모듈(cv2/numpy + transnetv2)이라 lazy import로 확인한다.
+    """
+    try:
+        from yesoncheck.transnetv2_detector import TRANSNETV2_AVAILABLE
+        return TRANSNETV2_AVAILABLE
+    except ImportError:
+        return False
+
+
 def stored_and_native_path(stored_path, native_path):
     """파일에 적힌 영상 경로와 이 PC에서 연 경로를 메시지용으로. 둘이 같으면(Mac) 한 줄 그대로 (스펙 2-4)."""
     if stored_path == native_path:
@@ -472,16 +484,22 @@ QMessageBox {
         self.ocrModeComboBox.addItem('Bento', 'bento')
         self.ocrModeComboBox.addItem('All (사용자 패턴)', 'all')
         self.ocrModeComboBox.addItem('애니매틱 (Auto Cut)', 'animatic')
-        self.ocrModeComboBox.addItem('애니매틱2 (TransNetV2)', 'animatic2')
-        self.ocrModeComboBox.setToolTip(
+        ocr_mode_tooltip = (
             '이미지에 따라 분석 정확도가 다를 수 있으므로 적합한 방식을 선택하세요.\n'
             '- Titmouse: 기본 OCR 설정\n'
             '- King: 빨간색 텍스트 인식 최적화\n'
             '- Bento: 작은 텍스트 및 특수 패턴 인식 최적화 (예: Seq 02A_S09 - Panel 6)\n'
             '- All: 사용자 정의 패턴으로 텍스트 인식 (#=영문, W=숫자, 예: "### WW#_#WW - #### W")\n'
-            '- 애니매틱: PySceneDetect를 사용한 자동 컷 감지 (ROI 불필요)\n'
-            '- 애니매틱2: TransNetV2(딥러닝)를 사용한 컷 감지 (디졸브/페이드 감지 향상, ROI 불필요)'
+            '- 애니매틱: PySceneDetect를 사용한 자동 컷 감지 (ROI 불필요)'
         )
+        # 애니매틱2(TransNetV2)는 선택적 의존성 — 설치되지 않은 빌드/환경에서는 목록에 보이지 않음
+        # (선택해도 분석이 되지 않는 개발자용 pip 안내 오류를 사용자가 보지 않도록)
+        if _transnetv2_available():
+            self.ocrModeComboBox.addItem('애니매틱2 (TransNetV2)', 'animatic2')
+            ocr_mode_tooltip += (
+                '\n- 애니매틱2: TransNetV2(딥러닝)를 사용한 컷 감지 (디졸브/페이드 감지 향상, ROI 불필요)'
+            )
+        self.ocrModeComboBox.setToolTip(ocr_mode_tooltip)
         self.ocrModeComboBox.currentIndexChanged.connect(self.on_ocr_mode_changed)
         ocr_mode_layout.addWidget(ocr_mode_label)
         ocr_mode_layout.addWidget(self.ocrModeComboBox)
@@ -3460,7 +3478,13 @@ QMessageBox {
             final_total_frames = actual_total_frames or load_data.get("total_frames") or (self.total_frames_a if hasattr(self, 'total_frames_a') and self.total_frames_a else 1)
             # OCR 모드 로드 (JSON 파일에서 가져오거나 기본값 사용)
             ocr_mode = load_data.get("ocr_mode", 'titmouse')
-            
+            if ocr_mode == 'animatic2' and not _transnetv2_available():
+                print(
+                    "[OCR 로드] 저장된 결과의 모드가 '애니매틱2(TransNetV2)'이지만 "
+                    "이 빌드/환경에는 TransNetV2가 포함되어 있지 않아 '애니매틱 (Auto Cut)'으로 대체합니다."
+                )
+                ocr_mode = 'animatic'
+
             self.pending_ocr_metadata = {
                 "fps": final_fps,
                 "total_frames": final_total_frames,
