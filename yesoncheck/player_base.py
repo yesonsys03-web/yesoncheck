@@ -78,12 +78,11 @@ def _transnetv2_available():
     """TransNetV2(딥러닝 씬 감지, 애니매틱2)가 이 환경에 설치돼 있는지.
 
     transnetv2_detector는 무거운 모듈(cv2/numpy + transnetv2)이라 lazy import로 확인한다.
+    transnetv2가 없는 경우는 transnetv2_detector가 스스로 처리해 TRANSNETV2_AVAILABLE=False로 둔다.
+    여기서 ImportError를 잡지 않는다 — transnetv2_detector 자체가 깨졌다면 그대로 드러나야 한다(조용히 '없음'으로 숨기지 않음).
     """
-    try:
-        from yesoncheck.transnetv2_detector import TRANSNETV2_AVAILABLE
-        return TRANSNETV2_AVAILABLE
-    except ImportError:
-        return False
+    from yesoncheck.transnetv2_detector import TRANSNETV2_AVAILABLE
+    return TRANSNETV2_AVAILABLE
 
 
 def stored_and_native_path(stored_path, native_path):
