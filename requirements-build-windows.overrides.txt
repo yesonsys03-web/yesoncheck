@@ -1,0 +1,6 @@
+# Windows lock을 만들 때와 설치할 때 모두 --override로 넘기는 파일
+#   uv pip compile requirements-build.txt --override requirements-build-windows.overrides.txt ... -o requirements-build-windows.lock
+#   uv pip install -r requirements-build-windows.lock --override requirements-build-windows.overrides.txt
+# paddlepaddle 2.6.2 Windows 휠은 protobuf <=3.20.2를 요구하고, TensorFlow 2.12 이상은 >=3.20.3을 요구함.
+# paddle 2.6.2 Windows의 _pb2 파일(예전 protoc로 생성)은 3.20.3에서도 똑같이 동작함 (4.x에서는 깨짐) → 3.20.3으로 덮어씀
+protobuf==3.20.3; sys_platform == "win32"

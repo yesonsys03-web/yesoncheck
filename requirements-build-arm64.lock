@@ -1,3 +1,7 @@
+absl-py==2.5.1
+    # via
+    #   tensorboard
+    #   tensorflow
 altgraph==0.17.5
     # via
     #   macholib
@@ -6,6 +10,8 @@ anyio==4.15.1
     # via httpx
 astor==0.8.1
     # via paddlepaddle
+astunparse==1.6.3
+    # via tensorflow
 attrdict==2.0.1
     # via paddleocr
 autocommand==2.2.2
@@ -29,6 +35,8 @@ certifi==2026.7.22
     #   httpcore
     #   httpx
     #   requests
+cffi==2.1.1
+    # via cryptography
 chardet==7.6.0
     # via encutils
 charset-normalizer==3.5.2
@@ -41,6 +49,10 @@ contourpy==1.3.2
     # via matplotlib
 crc32c==2.9.post0
     # via bce-python-sdk
+cryptography==48.0.1
+    # via
+    #   -r requirements-build.txt
+    #   google-auth
 cssselect==1.5.0
     # via premailer
 cssutils==2.15.0
@@ -67,6 +79,8 @@ flask==3.1.3
     #   visualdl
 flask-babel==4.0.0
     # via visualdl
+flatbuffers==25.12.19
+    # via tensorflow
 fonttools==4.65.0
     # via
     #   matplotlib
@@ -74,8 +88,24 @@ fonttools==4.65.0
     #   pdf2docx
 future==1.0.0
     # via bce-python-sdk
+gast==0.7.0
+    # via tensorflow
+google-auth==2.62.0
+    # via
+    #   google-auth-oauthlib
+    #   tensorboard
+google-auth-oauthlib==1.5.0
+    # via tensorboard
+google-pasta==0.2.0
+    # via tensorflow
+grpcio==1.84.0
+    # via
+    #   tensorboard
+    #   tensorflow
 h11==0.16.0
     # via httpcore
+h5py==3.16.0
+    # via tensorflow
 httpcore==1.0.9
     # via httpx
 httpx==0.28.1
@@ -109,10 +139,14 @@ jinja2==3.1.6
     # via
     #   flask
     #   flask-babel
+keras==2.15.0
+    # via tensorflow
 kiwisolver==1.5.1
     # via matplotlib
 lazy-loader==0.6
     # via scikit-image
+libclang==18.1.1
+    # via tensorflow
 lmdb==3.0.0
     # via paddleocr
 lxml==6.1.3
@@ -122,6 +156,8 @@ lxml==6.1.3
     #   python-docx
 macholib==1.16.4
     # via pyinstaller
+markdown==3.10.3
+    # via tensorboard
 markupsafe==3.0.4
     # via
     #   flask
@@ -131,6 +167,8 @@ matplotlib==3.10.9
     # via
     #   imgaug
     #   visualdl
+ml-dtypes==0.3.2
+    # via tensorflow
 more-itertools==11.1.0
     # via
     #   cssutils
@@ -143,9 +181,11 @@ numpy==1.26.4
     # via
     #   -r requirements-build.txt
     #   contourpy
+    #   h5py
     #   imageio
     #   imgaug
     #   matplotlib
+    #   ml-dtypes
     #   opencv-contrib-python
     #   opencv-python
     #   opencv-python-headless
@@ -158,8 +198,12 @@ numpy==1.26.4
     #   scikit-image
     #   scipy
     #   shapely
+    #   tensorboard
+    #   tensorflow
     #   tifffile
     #   visualdl
+oauthlib==4.0.0
+    # via requests-oauthlib
 opencv-contrib-python==4.6.0.66
     # via
     #   -r requirements-build.txt
@@ -176,7 +220,9 @@ opencv-python-headless==4.6.0.66
 openpyxl==3.1.5
     # via paddleocr
 opt-einsum==3.3.0
-    # via paddlepaddle
+    # via
+    #   paddlepaddle
+    #   tensorflow
 packaging==26.3
     # via
     #   lazy-loader
@@ -184,7 +230,9 @@ packaging==26.3
     #   pyinstaller
     #   pyinstaller-hooks-contrib
     #   scikit-image
+    #   tensorflow
     #   visualdl
+    #   wheel
 paddleocr==2.7.3
     # via -r requirements-build.txt
 paddlepaddle==2.6.2
@@ -206,14 +254,22 @@ platformdirs==4.12.3
     # via scenedetect
 premailer==3.10.0
     # via paddleocr
-protobuf==7.36.2
+protobuf==4.25.9
     # via
     #   paddlepaddle
+    #   tensorboard
+    #   tensorflow
     #   visualdl
 psutil==7.2.2
     # via visualdl
+pyasn1==0.6.4
+    # via pyasn1-modules
+pyasn1-modules==0.4.2
+    # via google-auth
 pyclipper==1.4.0
     # via paddleocr
+pycparser==3.11
+    # via cffi
 pycryptodome==3.24.0
     # via bce-python-sdk
 pyinstaller==6.14.1
@@ -251,7 +307,11 @@ rarfile==4.5
 requests==2.34.2
     # via
     #   premailer
+    #   requests-oauthlib
+    #   tensorboard
     #   visualdl
+requests-oauthlib==2.0.0
+    # via google-auth-oauthlib
 scenedetect==0.6.7.1
     # via -r requirements-build.txt
 scikit-image==0.24.0
@@ -267,21 +327,41 @@ setuptools==75.8.0
     # via
     #   -r requirements-build.txt
     #   pyinstaller
+    #   tensorboard
+    #   tensorflow
 shapely==2.1.2
     # via
     #   imgaug
     #   paddleocr
 six==1.17.0
     # via
+    #   astunparse
     #   attrdict
     #   bce-python-sdk
+    #   google-pasta
     #   imgaug
     #   python-dateutil
+    #   tensorboard
+    #   tensorflow
     #   visualdl
 soupsieve==2.10
     # via beautifulsoup4
+tensorboard==2.15.2
+    # via tensorflow
+tensorboard-data-server==0.7.2
+    # via tensorboard
+tensorflow==2.15.1
+    # via -r requirements-build.txt
+tensorflow-estimator==2.15.0
+    # via tensorflow
+tensorflow-io-gcs-filesystem==0.34.0
+    # via
+    #   -r requirements-build.txt
+    #   tensorflow
 termcolor==3.3.0
-    # via fire
+    # via
+    #   fire
+    #   tensorflow
 tifffile==2025.5.10
     # via scikit-image
 tqdm==4.70.1
@@ -294,8 +374,11 @@ typing-extensions==4.16.0
     # via
     #   anyio
     #   beautifulsoup4
+    #   cryptography
     #   exceptiongroup
+    #   grpcio
     #   python-docx
+    #   tensorflow
     #   typeguard
 tzdata==2026.5
     # via pandas
@@ -304,4 +387,10 @@ urllib3==2.8.0
 visualdl==2.5.3
     # via paddleocr
 werkzeug==3.1.9
-    # via flask
+    # via
+    #   flask
+    #   tensorboard
+wheel==0.48.0
+    # via astunparse
+wrapt==1.14.2
+    # via tensorflow

@@ -4,8 +4,9 @@
 #   MACOSX_DEPLOYMENT_TARGET=12.0 uv pip compile requirements-build.txt --python-version 3.10 \
 #     --python-platform x86_64-apple-darwin --no-header -o requirements-build-x86_64.lock
 #   (arm64는 --python-platform aarch64-apple-darwin, -o requirements-build-arm64.lock)
-#   Windows: uv pip compile requirements-build.txt --python-version 3.10 \
-#     --python-platform x86_64-pc-windows-msvc --no-header -o requirements-build-windows.lock
+#   Windows: uv pip compile requirements-build.txt --override requirements-build-windows.overrides.txt \
+#     --python-version 3.10 --python-platform x86_64-pc-windows-msvc --no-header -o requirements-build-windows.lock
+#   (Windows는 설치할 때도 같은 --override가 필요함 — requirements-build-windows.overrides.txt 참고)
 PyQt5==5.15.11
 # Windows용 Qt 바이너리 휠은 5.15.2만 있음
 PyQt5-Qt5==5.15.2; sys_platform == "win32"
@@ -37,3 +38,11 @@ jaraco.collections==5.1.0
 # jaraco.collections가 요구함. 4.x는 typer·rich까지 끌어오므로 setuptools 내장판과 같은 3.12.1로 고정
 jaraco.text==3.12.1
 pyinstaller==6.14.1
+# 애니매틱2(TransNetV2 딥러닝 씬 감지) — 세 타깃 모두 TensorFlow 2.15.1 (Keras 2)
+#   Windows는 tensorflow-intel 2.15.1을 끌어옴. Mac x86_64 휠은 macOS 10.15, arm64 휠은 12.0 기준
+#   TransNetV2 코드·가중치는 pip가 아니라 저장소에 넣어 둠 (yesoncheck/transnetv2_model.py, vendor/transnetv2-weights)
+tensorflow==2.15.1
+# 0.36/0.37 Mac 휠은 이름과 달리 안의 .so가 macOS 13.1~14.0을 요구함 → 0.34.0 (앱에는 넣지 않음, spec excludes)
+tensorflow-io-gcs-filesystem==0.34.0; sys_platform == "darwin"
+# 49 이상은 x86_64 macOS 휠이 없음
+cryptography==48.0.1
