@@ -219,6 +219,20 @@ def module_name_from_path(path):
     return None
 
 
+def tensorflow_alias_of(name, file_attr, modules):
+    """TensorFlow가 같은 파일을 다른 이름으로도 등록한 모듈이면 앱(PYZ)에 있는 실제 이름, 아니면 None.
+
+    예: tensorflow.compat.v1 → 파일 tensorflow/_api/v2/compat/v1/__init__.py → tensorflow._api.v2.compat.v1.
+    tensorflow. 이름공간에만 적용 (다른 패키지의 진짜 누락을 별칭으로 가리지 않게).
+    """
+    if not name.startswith("tensorflow."):
+        return None
+    real_name = module_name_from_path(file_attr)
+    if real_name and real_name != name and real_name in modules:
+        return real_name
+    return None
+
+
 def frozen_location(name, path, is_package_dir=False, debug=None):
     """소스 환경의 모듈 위치를 빌드된 앱 Contents/Frameworks 기준 상대 경로로 바꿉니다.
 
@@ -272,6 +286,7 @@ def main():
 
     modules, files = frozen_contents(bundle)
     missing = []
+    aliases = []  # (이름, 앱에 있는 실제 이름) — 별칭으로 통과시킨 모듈은 모두 출력함
     for name, mod in sorted(used.items()):
         # 별칭 등록(requests.packages.urllib3 → urllib3 등)은 같은 객체가 실제 이름으로 검사되므로 건너뜀
         # (paddle._C_ops처럼 __name__만 바뀐 실제 모듈은 객체가 달라 계속 검사됨)
@@ -300,10 +315,11 @@ def main():
         debug = {}
         rel = frozen_location(name, file_attr, debug=debug)
         if rel is None or rel not in files:
-            # 같은 파일이 다른 이름으로도 등록된 모듈 (TensorFlow: tensorflow.compat.v1 ↔ 실제 파일
+            # 같은 파일이 다른 이름으로도 등록된 TensorFlow 모듈 (tensorflow.compat.v1 ↔ 실제 파일
             # tensorflow/_api/v2/compat/v1/__init__.py): 파일 경로가 가리키는 실제 이름이 앱(PYZ)에 있으면 됨
-            alias_of = module_name_from_path(file_attr)
-            if alias_of and alias_of != name and alias_of in modules:
+            alias_of = tensorflow_alias_of(name, file_attr, modules)
+            if alias_of:
+                aliases.append((name, alias_of))
                 continue
         if rel is None:
             detail = ", ".join(f"{k}={v}" for k, v in debug.items())
@@ -312,6 +328,10 @@ def main():
             missing.append(f"{name} (앱에 {rel} 없음)")
 
     print(f"앱 경로 실행: OCR 결과 {texts}, 애니매틱2(TransNetV2) 씬 시작 {cuts}, 사용 모듈 {len(used)}개")
+    if aliases:
+        print(f"TensorFlow 별칭 모듈 {len(aliases)}개 (같은 파일이 앱에는 실제 이름으로 들어 있어 통과):")
+        for name, real_name in aliases:
+            print(f"  {name} → {real_name}")
     if skipped:
         print(f"소스 환경에도 없어 건너뛴 선택 모듈 {len(skipped)}개:")
         for line in skipped:
