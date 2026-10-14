@@ -65,6 +65,7 @@ from PyQt5.QtWidgets import (
 
 from yesoncheck.video_widget import CustomVideoWidget
 from yesoncheck import external_tools, image_io, paths, shared_config, timing_log
+from yesoncheck.slider_style import jump_to_click
 # 무거운 모듈들은 lazy import로 변경 (실제 사용 시점에만 로드)
 # from yesoncheck.workers import OCRWorker, OCRExportWorker, SceneDetectWorker
 # from yesoncheck.player_timeline import CollapsibleBox
@@ -1110,6 +1111,8 @@ QSlider::add-page:horizontal {
     border-radius: 4px;
 }
 """)
+        # Windows(Fusion 포함)에서도 Mac처럼 왼쪽 클릭으로 그 위치로 바로 이동 + 드래그 계속되게
+        jump_to_click(self.positionScroll)
 
         # 모든 주요 위젯들의 focusPolicy를 Qt.NoFocus로 설정 (전역 단축키 방해 방지)
         self.positionScroll.setFocusPolicy(Qt.NoFocus)
@@ -4375,6 +4378,8 @@ QMessageBox {
                 margin: 0px;
             }
         ''')
+        # Windows(Fusion 포함)에서도 Mac처럼 왼쪽 클릭으로 그 위치로 바로 이동 + 드래그 계속되게
+        jump_to_click(self.overlaySlider)
         self.overlaySlider.sliderMoved.connect(self.on_overlay_slider_moved)
         self.overlaySlider.sliderReleased.connect(self.on_overlay_slider_released)
         self.overlaySlider.sliderPressed.connect(self.on_overlay_slider_pressed)

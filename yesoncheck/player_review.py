@@ -57,6 +57,7 @@ from PyQt5.QtWidgets import (
     QPlainTextEdit,
 )
 from yesoncheck.player_timeline import OCRTimelineWidget
+from yesoncheck.slider_style import jump_to_click
 class OCRReviewDialog(QDialog):
     """Dialog for reviewing and editing OCR-detected segments before export."""
     
@@ -487,6 +488,8 @@ class OCRReviewDialog(QDialog):
             }
         """)
         self.frame_slider.setFixedWidth(150)  # 200 → 150으로 축소
+        # Windows(Fusion 포함)에서도 Mac처럼 왼쪽 클릭으로 그 위치로 바로 이동 + 드래그 계속되게
+        jump_to_click(self.frame_slider)
         self.frame_slider.sliderPressed.connect(self._on_slider_pressed)
         self.frame_slider.sliderMoved.connect(self._on_slider_moved)
         self.frame_slider.sliderReleased.connect(self._on_slider_released)
