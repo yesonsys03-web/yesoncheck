@@ -39,6 +39,7 @@ from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QInputDialog,
+    QLayout,
     QLabel,
     QLineEdit,
     QPlainTextEdit,
@@ -317,13 +318,10 @@ QMessageBox {
         self.show_overlay = False
         self.isFullScreen = False
         
-        # 처음 창 크기: 예전처럼 1080×720 이상, 레이아웃이 원하는 크기까지, 화면 작업 영역 안으로.
+        # 처음 창 크기: 예전처럼 1080×720 이상, 레이아웃이 원하는 크기까지, 화면 작업 영역 안으로 (+ initial_geometry).
         # 예전에는 최소 크기가 이 역할을 해서 화면보다 커질 수 있었음 — 이제 줄일 수도 있음.
-        self.setGeometry(startup_geometry(self.sizeHint(), self.minimumSizeHint(),
-                                          QApplication.primaryScreen().availableGeometry()))
-
-        # 초기 창 크기 저장 (앱 처음 실행 시)
-        self.initial_geometry = self.geometry()
+        self._startup_geometry_checked = False
+        self.apply_startup_geometry()
         
         # 윈도우 포커스 설정 (빌드된 앱에서 키 이벤트 처리를 위해)
         self.setFocusPolicy(Qt.StrongFocus)
@@ -595,15 +593,21 @@ QPushButton:pressed {
     border: 1px solid #343a40;
 }
 """)
-        # 정보 줄 라벨 (예전 고정 너비 200·200·150이 창의 최소 너비를 묶었음): 자리가 있으면 예전과 같은 너비
-        # (숫자가 바뀌어도 그대로), 모자라면 InfoRowLayout이 숫자 라벨의 빈 공간 → 파일 이름 → 모두 순서로 작은
-        # 최소 너비까지 줄이고 넘치는 글자는 …로 줄여 그림. 파일 이름은 가운데를 줄이고 전체 이름은 툴팁에.
-        self.filenameLabel = ElidedLabel(Qt.ElideMiddle, min_width=90, shrinks_first=True, full_text_tooltip=True)
-        self.labelFrameCount = ElidedLabel(Qt.ElideRight, min_width=100, hint_width=200, fit_text="Current: 00000")
-        self.labelTotalFrames = ElidedLabel(Qt.ElideRight, min_width=85, hint_width=200,
-                                            fit_text="Total: 00000 (000F 00f)")
-        self.labelPlaybackFPS = ElidedLabel(Qt.ElideRight, min_width=50, hint_width=150,
-                                            fit_text="재생: 00.000 FPS")  # 재생 FPS 표시 위젯 추가
+        # 정보 줄 라벨 (예전 고정 너비 200·200·150이 창의 최소 너비를 묶었음). 너비는 글꼴로 잼 (플랫폼·테마마다 다름):
+        # 자리가 있으면 예전과 같은 너비(글자가 더 넓은 글꼴이면 글자 너비, 숫자가 바뀌어도 그대로). 모자라면
+        # InfoRowLayout이 숫자 라벨의 빈 공간 → 재생 FPS·시간('…'까지) → 파일 이름('…'까지) → Total의 '(…F …f)' 순서로
+        # 줄이고 (줄여 그려지면 전체 글자는 툴팁. 좁으면 글자가 안쪽 여백까지 씀), 창이 최소 너비 근처일 때만 마지막으로
+        # 재생 FPS·시간·파일 이름 칸을 접음 (그래서 Windows의 넓은 글꼴로도 최소 너비 ≤ 900).
+        # 프레임 숫자는 창이 최소 너비여도 다 보임: Current는 'Current: 00000', Total은 'Total: 00000…'까지.
+        # 파일 이름은 가운데를 줄이고 전체 이름은 늘 툴팁에.
+        self.filenameLabel = ElidedLabel(Qt.ElideMiddle, min_text="…", shrink_order=2, collapse_order=6,
+                                         full_text_tooltip=True)
+        self.labelFrameCount = ElidedLabel(Qt.ElideRight, min_text="Current: 00000", hint_width=200,
+                                           fit_text="Current: 00000", shrink_order=4)
+        self.labelTotalFrames = ElidedLabel(Qt.ElideRight, min_text="Total: 00000…", hint_width=200,
+                                            fit_text="Total: 00000 (000F 00f)", shrink_order=3)
+        self.labelPlaybackFPS = ElidedLabel(Qt.ElideRight, min_text="…", hint_width=150, fit_text="재생: 00.000 FPS",
+                                            shrink_order=1, collapse_order=5)  # 재생 FPS 표시 위젯 추가
         font = QFont(); font.setPointSize(16)
         self.filenameLabel.setFont(font)
         self.labelFrameCount.setFont(font)
@@ -728,7 +732,8 @@ QSlider::add-page:horizontal {
         self.volumeSlider = QSlider(Qt.Horizontal)
         self.volumeSlider.setRange(0, 100)
         self.volumeSlider.setValue(50)
-        self.volumeSlider.setFixedWidth(150)
+        self.volumeSlider.setMinimumWidth(100)  # 자리가 있으면 예전처럼 150, 가운데 열이 좁으면 100까지
+        self.volumeSlider.setMaximumWidth(150)
         self.volumeSlider.setToolTip("오디오 볼륨")
         self.volumeSlider.valueChanged.connect(self.setVolume)
         self.volumeSlider.setStyleSheet("""
@@ -892,7 +897,7 @@ QPushButton {
     border-radius: 6px;
     color: white;
     font-weight: 500;
-    padding: 8px 16px;
+    padding: 8px 6px;
 }
 QPushButton:hover {
     background: #218838;
@@ -913,7 +918,7 @@ QPushButton {
     border-radius: 6px;
     color: white;
     font-weight: 500;
-    padding: 8px 16px;
+    padding: 8px 6px;
 }
 QPushButton:hover {
     background: #138496;
@@ -935,7 +940,7 @@ QPushButton {
     border-radius: 6px;
     color: white;
     font-weight: 500;
-    padding: 8px 16px;
+    padding: 8px 6px;
 }
 QPushButton:hover {
     background: #5a32a3;
@@ -962,7 +967,7 @@ QPushButton {
     border-radius: 6px;
     color: white;
     font-weight: 500;
-    padding: 8px 16px;
+    padding: 8px 6px;
 }
 QPushButton:hover {
     background: #5a32a3;
@@ -989,7 +994,7 @@ QPushButton {
     border-radius: 6px;
     color: white;
     font-weight: 500;
-    padding: 8px 16px;
+    padding: 8px 6px;
 }
 QPushButton:hover {
     background: #e8690b;
@@ -1026,19 +1031,25 @@ QPushButton:checked {
         sidebarLayout.addWidget(self.sidebar)
         sidebarContainer = QWidget()
         sidebarContainer.setLayout(sidebarLayout); sidebarContainer.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
-        
+
         middleContainer = QWidget()
         middleLayout = QVBoxLayout()
         middleLayout.addLayout(controlLayoutMiddle)
         middleLayout.addStretch(1)
         middleContainer.setLayout(middleLayout)
-        middleContainer.setMinimumWidth(200)  # 최소 너비 설정으로 버튼 텍스트가 잘리지 않도록 (OCR 메뉴 고려)
+        # 두 열의 버튼: 좌우 안쪽 여백만 16 → 6px (글자는 가운데 정렬이라 버튼이 글자보다 넓으면 모습은 그대로, 최소 너비만
+        # 작아짐 — 창 최소 너비). 위아래 여백·색은 창 스타일시트(테마) 그대로. 버튼 최소 너비가 글자를 지켜서
+        # 예전 setMinimumWidth(200)은 뺌 (가운데 열의 처음 너비는 스플리터 setSizes의 220 그대로).
+        compact_buttons = "QPushButton { padding-left: 6px; padding-right: 6px; }"
+        sidebarContainer.setStyleSheet(compact_buttons)
+        middleContainer.setStyleSheet(compact_buttons)
 
         # 가운데 열은 세로 스크롤 영역 안에: 창이 낮으면 스크롤 (예전에는 이 열의 최소 높이가 창의 최소 높이를 묶어
         # Windows 150% 배율에서 창이 화면보다 컸음). 창이 충분히 크면 스크롤바 없이 예전과 같음.
         self.middleScrollArea = VerticalScrollArea(middleContainer)
         mainSplitter = QSplitter(Qt.Horizontal); mainSplitter.addWidget(sidebarContainer)
         mainSplitter.addWidget(self.middleScrollArea); mainSplitter.addWidget(splitter)
+        self.mainSplitter = mainSplitter
         mainSplitter.setStretchFactor(0,0); mainSplitter.setStretchFactor(1,0); mainSplitter.setStretchFactor(2,1)
         mainSplitter.setSizes([200, 220, 1000]); layout = QVBoxLayout(); layout.addWidget(mainSplitter)  # middle 영역 초기 너비를 220으로 증가하여 OCR 버튼 텍스트가 잘리지 않도록
         layout.addLayout(controlLayoutRight); layout.setContentsMargins(0,0,0,0); layout.setSpacing(5)
@@ -1049,7 +1060,9 @@ QPushButton:checked {
             self.loopCheckBox, self.playPauseButton, self.playSelectedButton,
             self.volumeSlider, self.frameRateComboBox, self.wipeCheckBox, self.sidebar, self.wipeXButton, self.wipeYButton, openButtonA, openButtonB, self.volumeSlider, selectFolderButton, bookmarkButton, bookmarkListButton, workPathButton, self.listModeButton, self.thumbnailModeButton, self.thumbnailProgressBar
         ]
-        self.timeLabel = ElidedLabel(Qt.ElideRight, min_width=90)  # 창을 줄이면 뒤쪽(전체 시간)부터 …로
+        # 시간: 줄이면 뒤쪽(전체 시간)부터 …로. 너비는 예전처럼 이 모양의 글자 너비로 고정 (숫자가 바뀌어도 그대로)
+        self.timeLabel = ElidedLabel(Qt.ElideRight, min_text="…", hint_text="00:00:00.000 / 00:00:00.000",
+                                     shrink_order=1, collapse_order=5)
         self.timeLabel.setText("00:00:00.000 / 00:00:00.000"); self.timeLabel.setFont(QFont("Arial", 16))
         self.timeLabel.setStyleSheet("""
 QLabel {
@@ -1412,6 +1425,48 @@ QSlider::add-page:horizontal {
             if self.isActiveWindow():
                 QTimer.singleShot(100, self.force_focus)
         super().changeEvent(event)
+
+    def _measure_polished_layout(self):
+        """스타일시트·글꼴이 적용된 크기로 레이아웃을 다시 잼. 창을 보이기 전에는 레이아웃이 위젯마다 스타일 적용 전
+        크기를 저장해 두고 있어서 (Windows에서 처음 창이 가운데 열보다 9px 낮았고 정보 줄 라벨이 좁았음) 모든 위젯을
+        스타일 적용(ensurePolished)한 뒤 저장된 크기를 버리고(updateGeometry) 레이아웃 요청을 바로 처리한다."""
+        self.ensurePolished()
+        for widget in self.findChildren(QWidget):
+            widget.ensurePolished()  # 창이 이미 스타일 적용됐으면 창의 ensurePolished는 자식으로 내려가지 않음
+            widget.updateGeometry()  # 레이아웃 항목에 저장된 위젯 크기를 버림
+        for layout in self.findChildren(QLayout):
+            layout.invalidate()  # 보이기 전에는 updateGeometry가 부모 레이아웃까지 알리지 않음 (위젯이 아직 숨김 상태)
+        for _ in range(2):  # 처리하면서 부모에 다시 요청이 쌓임
+            QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
+
+    def apply_startup_geometry(self):
+        """처음 창 크기·위치와 열 너비 (예전 모습): max(1080×720, 레이아웃이 원하는 크기)를 화면 작업 영역 안으로,
+        사이드바·가운데 열은 예전 처음 너비(스플리터 setSizes 200·220, 최소 너비가 더 크면 최소 너비)."""
+        self._measure_polished_layout()
+        rect = startup_geometry(self.sizeHint(), self.minimumSizeHint(),
+                                QApplication.primaryScreen().availableGeometry())
+        self.setGeometry(rect)
+        splitter = self.mainSplitter
+        side, middle = (max(start, w.minimumSizeHint().width(), w.minimumWidth())
+                        for start, w in ((200, splitter.widget(0)), (220, splitter.widget(1))))
+        splitter.setSizes([side, middle, max(0, rect.width() - side - middle)])
+        # 초기 창 크기 저장 (앱 처음 실행 시) — 동영상 전용 전체화면을 끝내면 이 크기로 돌아옴
+        self.initial_geometry = self.geometry()
+
+    def showEvent(self, event):
+        """처음 보일 때(자식 위젯이 다 보이고 스타일이 적용된 뒤, 실제 창이 화면에 나타나기 전) 처음 크기를 한 번 더 잼:
+        그사이 누가 창 크기를 바꾸지 않았고 결과가 다르면 맞춤 — 화면에 나타나기 전이라 크기가 바뀌는 게 보이지 않음."""
+        super().showEvent(event)
+        if self._startup_geometry_checked or event.spontaneous():
+            return
+        self._startup_geometry_checked = True
+        if self.geometry() != self.initial_geometry or self.windowState() != Qt.WindowNoState:
+            return
+        before = self.geometry()
+        self.apply_startup_geometry()
+        if self.geometry() != before:
+            timing_log.startup(f"창: 처음 크기 다시 맞춤 {before.width()}×{before.height()} → "
+                               f"{self.width()}×{self.height()} (스타일 적용 뒤 레이아웃 크기)")
 
     def resizeEvent(self, event):
         """윈도우 크기 변경 이벤트 처리"""

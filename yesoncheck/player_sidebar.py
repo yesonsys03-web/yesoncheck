@@ -29,6 +29,7 @@ from PyQt5.QtWidgets import (
     QProgressDialog,
     QPushButton,
     QVBoxLayout,
+    QWIDGETSIZE_MAX,
 )
 
 from yesoncheck.workers import ThumbnailLoaderWorker, ThumbnailWorker
@@ -1857,6 +1858,15 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             return
         QMessageBox.information(dialog, "변경 완료", "비밀번호가 변경되었습니다.")
 
+    def _resize_sidebar_column(self, list_width):
+        """사이드바 목록이 list_width가 되도록 메인 스플리터의 왼쪽 칸 너비를 바꿈 — 늘어난 만큼 영상 쪽에서 가져오고
+        줄어든 만큼 영상 쪽에 줌. 창이 좁아 다 못 가져오면 스플리터가 최소 너비 안에서 맞춤."""
+        sizes = self.mainSplitter.sizes()
+        column = sizes[0] + list_width - self.sidebar.width()
+        sizes[2] = max(0, sizes[2] - (column - sizes[0]))
+        sizes[0] = column
+        self.mainSplitter.setSizes(sizes)
+
     def switch_to_list_mode(self):
         self.listModeButton.setChecked(True)
         self.thumbnailModeButton.setChecked(False)
@@ -1864,9 +1874,11 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         self.sidebar.setSpacing(0)  # 리스트 아이템 사이 공란 제거
         self.is_thumbnail_mode = False
         
-        # 사이드바 폭을 원래대로 되돌리기
+        # 사이드바 폭을 원래대로 되돌리기 (고정 너비가 아니라 스플리터 칸 너비 — 창을 줄이면 같이 줄어듦)
+        self.sidebar.setMinimumWidth(0)
+        self.sidebar.setMaximumWidth(QWIDGETSIZE_MAX)
         if self.default_sidebar_width is not None:
-            self.sidebar.setFixedWidth(self.default_sidebar_width)
+            self._resize_sidebar_column(self.default_sidebar_width)
             print(f"사이드바 폭을 원래대로 복원: {self.default_sidebar_width}")
         
         self.update_sidebar_display()
@@ -1896,9 +1908,13 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             self.default_sidebar_width = self.sidebar.width()
             print(f"기본 사이드바 폭 저장: {self.default_sidebar_width}")
         
-        # 사이드바 폭을 2배로 설정
+        # 사이드바 폭을 2배로 설정: 예전처럼 2배 너비로 시작하지만 고정 너비(setFixedWidth)가 아니라 스플리터 칸 너비 —
+        # 고정 너비는 창의 최소 너비를 그만큼 늘려 창을 줄일 수 없게 했음. 최소 너비는 썸네일 한 개가 보일 만큼.
         new_width = self.default_sidebar_width * 2
-        self.sidebar.setFixedWidth(new_width)
+        self.sidebar.setMaximumWidth(QWIDGETSIZE_MAX)
+        self.sidebar.setMinimumWidth(self.thumbnail_size + 2 * self.sidebar.spacing() + 2 * self.sidebar.frameWidth()
+                                     + self.sidebar.verticalScrollBar().sizeHint().width())
+        self._resize_sidebar_column(new_width)
         print(f"사이드바 폭을 2배로 조정: {self.default_sidebar_width} -> {new_width}")
         
         # 캐시된 썸네일을 즉시 적용
