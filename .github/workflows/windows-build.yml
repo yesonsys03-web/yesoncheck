@@ -28,11 +28,13 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           uv venv .venv --python 3.10 --managed-python
           $py = ".venv\Scripts\python.exe"
-          uv pip install --python $py -r requirements-build-windows.lock
+          # paddle 2.6.2(Windows)는 protobuf <=3.20.2, TensorFlow 2.15는 >=3.20.3 → 설치할 때도 lock 만들 때와 같은 덮어쓰기 필요
+          uv pip install --python $py -r requirements-build-windows.lock --override requirements-build-windows.overrides.txt
           # opencv 세 패키지가 같은 cv2 폴더를 씀 → contrib 판이 최종으로 남도록 재설치 (setup_build_env.sh와 같음)
           uv pip install --python $py --reinstall-package opencv-contrib-python opencv-contrib-python==4.6.0.66
           uv pip install --python $py -r requirements-test.txt
           & $py -c "import cv2; from cv2 import version; assert version.contrib and not version.headless; import paddle; print('cv2', cv2.__version__, 'paddle', paddle.__version__); paddle.utils.run_check()"
+          & $py -c "import google.protobuf, tensorflow as tf; print('protobuf', google.protobuf.__version__, 'tensorflow', tf.__version__)"
 
       - name: ffmpeg (gyan 9.0.2)
         run: ./fetch_ffmpeg_windows.ps1
@@ -45,6 +47,16 @@ jobs:
 
       - name: PyInstaller 빌드
         run: .venv\Scripts\python.exe -m PyInstaller --clean -y YesonCheck_Autocut.spec
+
+      - name: TensorFlow가 찾는 VC++ DLL (_internal 맨 위)
+        run: |
+          # TensorFlow는 import할 때(self_check.preload_check) msvcp140.dll·msvcp140_1.dll을 이름으로 불러봄
+          # → VC++ 재배포 패키지가 없는 PC에서도 되도록 앱에 있어야 함 (spec이 넣음)
+          foreach ($dll in @("msvcp140.dll", "msvcp140_1.dll")) {
+            $path = "dist\YesonCheck_Autocut\_internal\$dll"
+            if (-not (Test-Path $path)) { throw "빌드된 앱에 ${dll}이 없습니다: $path" }
+            Write-Host "$path ($((Get-Item $path).Length) 바이트)"
+          }
 
       - name: 모듈 검사
         run: .venv\Scripts\python.exe check_frozen_imports.py dist\YesonCheck_Autocut

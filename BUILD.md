@@ -11,6 +11,13 @@
 
 Intel 앱도 Apple Silicon에서 Rosetta로 실행되지만, macOS 26.4부터 실행 시 경고가 뜨고 macOS 28부터는 실행되지 않습니다.
 
+애니매틱2(TransNetV2 딥러닝 씬 감지)는 Mac·Windows 빌드 모두에 들어갑니다 (2026-10-14부터):
+- 빌드 환경에 TensorFlow 2.15.1이 설치됩니다 (lock에 고정). TransNetV2 코드는 `yesoncheck/transnetv2_model.py`,
+  가중치는 `vendor/transnetv2-weights/`(git에 들어 있음, 출처·sha256은 그 폴더의 `README.md`)에 있습니다.
+- spec이 가중치 세 파일의 sha256을 확인하고 앱의 `transnetv2-weights/`에 넣습니다. 없거나 다르면 빌드가 멈춥니다.
+- TensorFlow 때문에 앱 크기가 이전의 약 두 배가 됩니다. 앱 시작 때는 TensorFlow를 불러오지 않고,
+  애니매틱2 분석을 시작할 때 불러옵니다 (로그에 `[애니매틱2 …] TensorFlow 불러오는 중…` / `불러옴 (n초)`).
+
 ## 1. 빌드 환경 만들기 (Mac마다 최초 1회)
 
 1. 소스 받기: `git clone https://github.com/yesonsys03-web/yesoncheck.git` (비공개 저장소라 GitHub 로그인 필요)
@@ -22,10 +29,24 @@ Intel 앱도 Apple Silicon에서 Rosetta로 실행되지만, macOS 26.4부터 �
    ```bash
    ./setup_build_env.sh
    ```
-   - `~/coding/p310`에 uv가 관리하는 Python 3.10 가상환경을 만들고, 아키텍처별 lock 파일
-     (`requirements-build-x86_64.lock` / `requirements-build-arm64.lock`)의 고정 버전을 설치합니다.
+   - `~/coding/p310_tf`에 uv가 관리하는 Python 3.10 가상환경을 만들고, 아키텍처별 lock 파일
+     (`requirements-build-x86_64.lock` / `requirements-build-arm64.lock`)의 고정 버전을 설치합니다 (TensorFlow 포함).
+     마지막에 cv2·paddle·protobuf·tensorflow를 불러 확인합니다.
      설치할 버전을 바꾸려면 `requirements-build.txt`를 고친 뒤 파일 맨 위 명령으로 lock을 다시 만드세요.
-   - 이미 `~/coding/p310`이 있으면 멈춥니다. 다른 경로를 쓰려면 `VENV=경로 ./setup_build_env.sh`, 빌드할 때는 `PY=경로/bin/python ./build_app.sh`.
+   - 이미 `~/coding/p310_tf`가 있으면 멈춥니다. 다른 경로를 쓰려면 `VENV=경로 ./setup_build_env.sh`, 빌드할 때는 `PY=경로/bin/python ./build_app.sh`.
+   - TensorFlow 이전의 환경 `~/coding/p310`은 지우지 않아도 됩니다 (되돌릴 때용). 스크립트의 기본 경로는 이제 `~/coding/p310_tf`입니다.
+     `~/coding/p310`으로는 빌드할 수 없습니다 (TensorFlow가 없어 `check_frozen_imports.py`가 실패).
+   - 소스 시험(pytest)도 이 환경에서: `uv pip install --python ~/coding/p310_tf/bin/python -r requirements-test.txt` 후
+     `~/coding/p310_tf/bin/python -m pytest tests -q` (애니매틱2 시험은 TensorFlow가 없으면 실패합니다 — 건너뛰지 않음).
+
+### Apple Silicon Mac
+
+같은 순서입니다 (`./fetch_ffmpeg.sh` → `./setup_build_env.sh` → `./build_app.sh`). 스크립트가 venv Python의 아키텍처를 보고
+`requirements-build-arm64.lock`을 고릅니다: paddle 2.6.2, TensorFlow 2.15.1(`macosx_12_0_arm64` 휠, 최소 macOS 12.0),
+tensorflow-io-gcs-filesystem 0.34.0(앱에는 넣지 않음). Rosetta 터미널에서 만든 x86_64 Python이 아닌지 확인하세요
+(`~/coding/p310_tf/bin/python -c 'import platform; print(platform.machine())'` → `arm64`).
+TensorFlow를 넣은 Apple Silicon 빌드는 아직 실제로 만들어 보지 않았습니다 — 첫 빌드에서 두 검사가 `통과`인지,
+아래 2절의 실행 시험에서 `애니매틱2 (TransNetV2)`가 `[0, 30, 60]`을 찾는지 꼭 확인하세요.
 
 ## 2. 빌드
 
@@ -41,11 +62,23 @@ Intel 앱도 Apple Silicon에서 Rosetta로 실행되지만, macOS 26.4부터 �
    - `/usr/local`, `/opt/homebrew` 같은 빌드 Mac에만 있는 경로의 dylib를 참조하지 않는지
    - `@rpath` 등 상대 참조가 앱 안의 실제 파일을 가리키는지, 심볼릭 링크가 앱 밖을 가리키지 않는지
 2. `check_frozen_imports.py` — 앱 안의 파이썬 모듈
-   - 빌드 환경에서 OCR 인식과 씬 감지를 실제로 실행해 쓰인 모듈을 모으고, 그 모듈이 앱 안에 모두 있는지 대조합니다.
+   - 빌드 환경에서 OCR 인식과 씬 감지(애니매틱, 애니매틱2 TransNetV2)를 실제로 실행해 쓰인 모듈을 모으고, 그 모듈이 앱 안에 모두 있는지 대조합니다.
+   - 애니매틱2는 합성 3샷 영상(30프레임씩)에서 씬 시작 `[0, 30, 60]`을 찾아야 하고, TensorFlow나 가중치가 없으면 검사가 실패합니다.
    - PyInstaller가 놓친 모듈 때문에 앱이 실행 중 `No module named ...`로 죽는 문제를 빌드 단계에서 잡습니다.
    - OCR 모델이 없으면 `~/.paddleocr`에 내려받으므로 인터넷 연결이 필요합니다.
 
 두 검사 모두 `통과`가 나와야 배포할 수 있습니다.
+
+배포 전에 빌드된 앱으로 실행 시험도 해 보세요 (화면 없이 공유 설정·작품 목록·OCR·애니매틱2·내보내기·병합을 실제 앱 코드로 실행):
+
+```bash
+~/coding/p310_tf/bin/python ci/make_test_data.py --share-root /tmp/yc --mac-root /tmp/yc --workdir /tmp/yc_smoke
+QT_QPA_PLATFORM=offscreen YESONCHECK_CONFIG_DIR=/tmp/yc/.yesoncheck \
+  dist/YesonCheck_Autocut_<Intel|AppleSilicon>.app/Contents/MacOS/YesonCheck_Autocut --smoke-test /tmp/yc_smoke
+```
+
+종료 코드 0, `/tmp/yc_smoke/smoke_result.json`의 `"ok": true`, `애니매틱2 (TransNetV2)` 항목의 `"cuts": [0, 30, 60]`이면 정상입니다
+(`/tmp/yc`·`/tmp/yc_smoke`가 이미 있으면 지우고 다시 만드세요).
 
 빌드가 끝나면 `dist/YesonCheck_Autocut_<Intel|AppleSilicon>.commit.txt`에 이 빌드의 출처가 남습니다:
 `commit`(빌드를 시작할 때의 `git rev-parse HEAD`), `tree`(`clean` 또는 커밋 안 된 변경이 있었으면 `dirty`), 빌드 시각, dmg 이름.
@@ -66,7 +99,10 @@ git 저장소가 아닌 폴더(직접 복사한 폴더)에서 빌드하면 경�
 
 - 빌드는 GitHub Actions의 `windows-build` 워크플로가 합니다. Windows PC에서 직접 빌드할 필요는 없습니다.
 - 실행: GitHub 저장소 → Actions → windows-build → **Run workflow** (또는 `gh workflow run windows-build.yml --ref main`). `v*` 태그를 푸시해도 실행됩니다.
-- 하는 일: Windows lock 설치 → ffmpeg(gyan 9.0.2) 받기 → 시험용 SMB 공유를 만들어 경로 시험 → PyInstaller 빌드 → 모듈 검사 → 빌드된 exe로 실행 시험(한글 UNC 경로의 작품 목록·ffprobe·OpenCV·OCR·내보내기·병합).
+- 하는 일: Windows lock 설치 → ffmpeg(gyan 9.0.2) 받기 → 시험용 SMB 공유를 만들어 경로 시험 → PyInstaller 빌드 → `_internal`에 msvcp140.dll·msvcp140_1.dll 확인 → 모듈 검사 → 빌드된 exe로 실행 시험(한글 UNC 경로의 작품 목록·ffprobe·OpenCV·OCR·애니매틱2·내보내기·병합) → 설치 파일 시험.
+- Windows lock은 `--override requirements-build-windows.overrides.txt`(protobuf 3.20.3)와 함께 설치해야 합니다:
+  paddle 2.6.2 Windows 휠은 protobuf <=3.20.2를, TensorFlow 2.15는 >=3.20.3을 요구해 덮어쓰지 않으면 uv가 설치를 거부합니다.
+- TensorFlow는 import할 때 msvcp140.dll·msvcp140_1.dll을 찾습니다. spec이 두 DLL을 `_internal` 맨 위에 넣고(의존성 분석에 없으면 빌드 PC의 System32에서), 워크플로가 있는지 확인합니다.
 - 결과: 실행 기록 페이지 아래 **Artifacts**의 `YesonCheck_Autocut_Windows_<커밋 7자리>` (zip, 크기는 실행 기록 페이지에 표시). 14일 보관. **GitHub Release에는 올리지 않습니다.**
-- Windows PC에서 직접 빌드하려면: Python 3.10 + uv 설치 → `uv venv .venv --python 3.10 --managed-python` → `uv pip install --python .venv\Scripts\python.exe -r requirements-build-windows.lock` → opencv contrib 재설치(워크플로 참고) → `./fetch_ffmpeg_windows.ps1` → `.venv\Scripts\python.exe -m PyInstaller --clean -y YesonCheck_Autocut.spec`.
+- Windows PC에서 직접 빌드하려면: Python 3.10 + uv 설치 → `uv venv .venv --python 3.10 --managed-python` → `uv pip install --python .venv\Scripts\python.exe -r requirements-build-windows.lock --override requirements-build-windows.overrides.txt` → opencv contrib 재설치(워크플로 참고) → `./fetch_ffmpeg_windows.ps1` → `.venv\Scripts\python.exe -m PyInstaller --clean -y YesonCheck_Autocut.spec`.
 - 배포·첫 설정은 `docs/windows-deploy.md`.

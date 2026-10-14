@@ -5,7 +5,7 @@
 #   Apple Silicon Mac → dist/YesonCheck_Autocut_AppleSilicon.app
 set -e
 cd "$(dirname "$0")"
-PY="${PY:-$HOME/coding/p310/bin/python}"
+PY="${PY:-$HOME/coding/p310_tf/bin/python}"
 if [ ! -x "$PY" ]; then
     echo "Python not found: $PY"
     echo "먼저 ./setup_build_env.sh 로 빌드 환경을 만들거나 PY=... 로 지정하세요."

@@ -3,7 +3,8 @@
 # 필요: uv (brew install uv)
 set -e
 cd "$(dirname "$0")"
-VENV="${VENV:-$HOME/coding/p310}"
+# 기본 경로 p310_tf: TensorFlow(애니매틱2)가 들어간 환경. TF 이전 환경(~/coding/p310)은 되돌릴 때를 위해 그대로 둠
+VENV="${VENV:-$HOME/coding/p310_tf}"
 if ! command -v uv >/dev/null 2>&1; then
     echo "uv가 필요합니다: brew install uv"
     exit 1
@@ -38,6 +39,10 @@ print('cv2', cv2.__version__, 'contrib 확인')
 import paddle
 print('paddle', paddle.__version__)
 paddle.utils.run_check()
+import google.protobuf
+print('protobuf', google.protobuf.__version__)
+import tensorflow as tf
+print('tensorflow', tf.__version__)
 "
 echo "완료: $VENV ($ARCH)"
 echo "다음: ./build_app.sh  (PY=$VENV/bin/python ./build_app.sh)"
