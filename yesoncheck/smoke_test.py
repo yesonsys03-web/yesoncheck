@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import traceback
 
@@ -35,6 +36,8 @@ def ocr_model_files(base_dir):
 
 # 애니매틱2 시험 영상(write_three_shot_clip)에서 TransNetV2가 찾아야 할 씬 시작 프레임
 THREE_SHOT_STARTS = [0, 30, 60]
+# 애니매틱2 실행 시험의 최대 시간 (빌드된 앱의 첫 TensorFlow·모델 불러오기는 약 12초)
+ANIMATIC2_TIMEOUT_S = 300
 
 
 def write_three_shot_clip(path):
@@ -299,7 +302,9 @@ def run(workdir):
         return texts
 
     def animatic2():
-        """애니매틱2(TransNetV2): 콤보박스에 항목이 있고, 앱과 같은 설정의 워커가 합성 3샷 영상에서 컷을 찾는지."""
+        """애니매틱2(TransNetV2): 콤보박스에 항목이 있고, 앱과 같은 설정의 워커가 앱처럼 워커 스레드에서
+        합성 3샷 영상의 컷을 찾는지 (빌드된 앱에서 TensorFlow를 워커 스레드로 처음 불러오는 경로까지)."""
+        from yesoncheck.player_base import release_worker
         from yesoncheck.workers import TransNetV2Worker
 
         assert player is not None and player.ocrModeComboBox.findData("animatic2") >= 0, \
@@ -313,12 +318,30 @@ def run(workdir):
                                   detect_gradual_transitions=True, post_process_histogram=True)
         worker.completed.connect(lambda r: result.update(r))
         worker.error.connect(lambda m: result.update(error=m))
+        # 상태 신호를 보낸 스레드 (DirectConnection: 보낸 스레드에서 바로 실행) — 앱처럼 워커 스레드에서 돌았는지
+        threads = set()
+        worker.status.connect(lambda _message: threads.add(threading.get_ident()), type=Qt.DirectConnection)
+        # 앱처럼 QThread.start()로 워커 스레드에서 돌리고(TensorFlow도 그 스레드에서 처음 불러옴), 끝날 때까지
+        # 이벤트를 처리하며 기다림 → 워커가 보낸 completed·error(대기열 신호)를 받음
         started = time.perf_counter()
-        worker.run()
+        worker.start()
+        deadline = started + ANIMATIC2_TIMEOUT_S
+        while not worker.isFinished():
+            if time.perf_counter() > deadline:
+                worker.stop()
+                # 실행 중인 QThread를 놓으면 파괴되며 앱이 죽어 결과 파일도 못 씀 → 끝날 때까지 붙잡아 둠
+                release_worker(worker, "애니매틱2 실행 시험")
+                raise TimeoutError(f"애니매틱2 컷 감지가 {ANIMATIC2_TIMEOUT_S}초 안에 끝나지 않았습니다")
+            app.processEvents()
+            time.sleep(0.01)
+        assert worker.wait(10000), "TransNetV2Worker 스레드가 끝나지 않았습니다"
+        app.processEvents()  # 끝나기 직전에 보낸 신호까지 처리
+        assert threads and threading.get_ident() not in threads, \
+            "TransNetV2Worker가 메인 스레드에서 돌았습니다 (앱은 QThread.start()로 워커 스레드에서 돌림)"
         assert "error" not in result, result.get("error")
         starts = [s["start_frame"] for s in result.get("segments", [])]
         assert starts == THREE_SHOT_STARTS, f"씬 시작 프레임 {starts} (기대 {THREE_SHOT_STARTS})"
-        return {"cuts": starts, "seconds": round(time.perf_counter() - started, 2)}
+        return {"cuts": starts, "seconds": round(time.perf_counter() - started, 2), "thread": "worker"}
 
     def export(mode):
         from yesoncheck.workers import OCRExportWorker
