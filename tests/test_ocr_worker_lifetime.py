@@ -119,10 +119,26 @@ import time
 
 sys.path.insert(0, sys.argv[1])
 from PyQt5.QtCore import QTimer
+from PyQt5.QtWidgets import QMessageBox
 
 from yesoncheck import app as app_module, workers
 
 app_module.EXIT_WAIT_S = float(sys.argv[2])
+
+
+# 이 시험은 종료 동작만 본다: 시작할 때 뜰 수 있는 알림 창(Windows의 '변환표 오류' 등)은 띄우지 않고 기록만 한다.
+# (Windows CI의 offscreen에서 진짜 QMessageBox가 떠 있는 동안 시험 프로세스가 0xC0000005로 끝난 적이 있음 —
+#  다른 시험·실행 시험처럼 대화상자를 가짜로 바꿈)
+def _record_dialog(kind):
+    def fake(parent, title, text, *args, **kwargs):
+        print(f"DIALOG {kind}: {title}", flush=True)
+        return QMessageBox.Ok
+    return staticmethod(fake)
+
+
+for _kind in ("critical", "warning", "information"):
+    setattr(QMessageBox, _kind, _record_dialog(_kind))
+QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.No)
 
 
 class StubbornWorker(workers.TransNetV2Worker):
