@@ -590,8 +590,10 @@ DEAD = "\\\\localhost\\yc_fake_dead"
 
 @pytest.fixture
 def short_timeout(monkeypatch):
-    monkeypatch.setattr(path_map_setup, "SHARE_PROBE_TIMEOUT_S", 0.3)
-    return 0.3
+    """공유 확인 시간 제한을 1.5초로. 이 시험들은 실제 파일 시스템도 열어 보므로(%SystemDrive% 아래 Harmony 경로 등)
+    느린 Windows 러너에서도 그쪽은 제한 안에 끝나도록 너무 짧게 하지 않음."""
+    monkeypatch.setattr(path_map_setup, "SHARE_PROBE_TIMEOUT_S", 1.5)
+    return 1.5
 
 
 @pytest.fixture
@@ -626,8 +628,8 @@ def test_config_search_skips_share_that_never_answers(win, dialogs, short_timeou
     win.shares = [Share(DEAD, ["W:"])]
     started = time.monotonic()
     player = win.player()
-    assert time.monotonic() - started < 3
-    line = f"W: ({DEAD}) — 0.3초 안에 응답 없음 (서버가 꺼졌거나 느림)"
+    assert time.monotonic() - started < short_timeout + 3
+    line = f"W: ({DEAD}) — {short_timeout:g}초 안에 응답 없음 (서버가 꺼졌거나 느림)"
     assert player.config_dir_search_problems == [line] and player.config_dir_search_failed
     player.resolve_shared_config_problem()  # 폴더 선택 안내에 보임 (dialogs.folders 비어 있음 → 취소)
     infos = [text for kind, title, text in dialogs.messages if kind == "information" and title == "공유 설정 폴더 선택"]
@@ -656,10 +658,10 @@ def test_configured_config_dir_that_never_answers(win, dialogs, short_timeout, t
     try:
         started = time.monotonic()
         player = win.player()
-        assert time.monotonic() - started < 3
+        assert time.monotonic() - started < short_timeout + 3
     finally:
         release.set()
-    expected = f"공유 설정 폴더가 0.3초 안에 응답하지 않습니다: {slow} (서버가 꺼졌거나 느림)"
+    expected = f"공유 설정 폴더가 {short_timeout:g}초 안에 응답하지 않습니다: {slow} (서버가 꺼졌거나 느림)"
     assert player.shared_config_problem == expected
     assert player.work_paths_config_dir is None  # GUI 스레드의 resolve가 그 폴더를 다시 열어 보지 않게
     player.resolve_shared_config_problem()
@@ -686,10 +688,10 @@ def test_works_check_skips_root_that_never_answers(win, dialogs, short_timeout, 
     monkeypatch.setattr(path_map_setup, "_default_is_dir", is_dir)
     started = time.monotonic()
     broken = player_sidebar.list_works_not_opening(works, path_map.mac_to_windows)
-    assert time.monotonic() - started < 3
+    assert time.monotonic() - started < short_timeout + 3
     assert [c for c in calls if c.startswith(DEAD.casefold())] == [DEAD.casefold()]  # 루트만 한 번
     assert len(broken) == 2
-    assert broken[0].startswith("A: ") and f"공유 폴더 {DEAD}가 0.3초 안에 응답 없음" in broken[0]
+    assert broken[0].startswith("A: ") and f"공유 폴더 {DEAD}가 {short_timeout:g}초 안에 응답 없음" in broken[0]
     assert broken[1].startswith("B: ") and "응답 없음" in broken[1]
 
 
@@ -702,10 +704,10 @@ def test_auto_setup_skips_root_that_never_answers(win, dialogs, short_timeout, d
     player = win.player(config)
     started = time.monotonic()
     player.resolve_shared_config_problem()
-    assert time.monotonic() - started < 3
+    assert time.monotonic() - started < short_timeout + 3
     assert len(win.shown) == 1
     text = label_texts(win.shown[0])
-    assert f"W: ({DEAD}) — 공유 폴더가 0.3초 안에 응답 없음 (서버가 꺼졌거나 느림)" in text
+    assert f"W: ({DEAD}) — 공유 폴더가 {short_timeout:g}초 안에 응답 없음 (서버가 꺼졌거나 느림)" in text
     assert win.shown[0].chosen() == [("/Volumes/yc", NAS)]  # 응답한 공유의 짝은 그대로
 
 
@@ -723,3 +725,55 @@ def test_auto_setup_cancel_while_waiting_for_root(win, dialogs, dead_share_hangs
     assert time.monotonic() - started < 3
     assert win.shown == []
     assert len(path_map_criticals(dialogs)) == 1  # 시작할 때의 변환표 문제는 한 번 알림 (취소한 경우도)
+
+
+def test_progress_dialog_appears_while_waiting_for_root(win, dialogs, dead_share_hangs, tmp_path, monkeypatch):
+    """응답 없는 공유 루트를 기다리는 동안 0.5초쯤이면 '취소'가 있는 진행 창이 보임 (실제 QProgressDialog, wasCanceled 흉내 없음)."""
+    from PyQt5.QtCore import QTimer
+
+    monkeypatch.setattr(path_map_setup, "SHARE_PROBE_TIMEOUT_S", 2)
+    win.shares = [Share(DEAD, ["W:"])]
+    config = make_config(str(tmp_path), WORK)
+    win.accept = False
+    player = win.player(config)
+    seen = []
+
+    def look():
+        seen.extend(dialog.isVisible() for dialog in player.findChildren(QProgressDialog))
+
+    timer = QTimer()
+    timer.timeout.connect(look)
+    timer.start(50)
+    try:
+        player.auto_setup_path_map(ask_password=False)
+    finally:
+        timer.stop()
+    assert True in seen, "공유 루트를 기다리는 2초 동안 진행 창이 보이지 않았습니다"
+
+
+def test_sync_works_check_shows_wait_cursor(win, dialogs, tmp_path, monkeypatch):
+    """GUI 스레드의 '열리지 않는 작품' 확인(공유 루트를 최대 10초 기다릴 수 있음) 동안 대기 커서, 끝나면(오류여도) 되돌림."""
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QApplication
+
+    from yesoncheck import player_sidebar
+
+    player = win.player(make_config(str(tmp_path), WORK, {"version": 1, "shares": [{"mac": "/Volumes/yc", "windows": [NAS]}]}))
+    cursors = []
+
+    def recording(work_paths, to_native, timeout=None):
+        cursor = QApplication.overrideCursor()
+        cursors.append(None if cursor is None else cursor.shape())
+        return []
+
+    monkeypatch.setattr(player_sidebar, "list_works_not_opening", recording)
+    assert player._works_not_opening() == []
+    assert cursors == [Qt.WaitCursor] and QApplication.overrideCursor() is None
+
+    def failing(*args, **kwargs):
+        raise OSError("확인 실패 (가짜 재현)")
+
+    monkeypatch.setattr(player_sidebar, "list_works_not_opening", failing)
+    with pytest.raises(OSError, match="가짜 재현"):
+        player._works_not_opening()
+    assert QApplication.overrideCursor() is None

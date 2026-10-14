@@ -1269,8 +1269,14 @@ class PlayerSidebarMixin:
         return self._use_config_dir(item)
 
     def _works_not_opening(self):
-        """(Windows) 이 PC에서 열리지 않는 작품 목록 ['작품: 이유'] (활성 변환표로, 이 스레드에서 바로 확인)."""
-        return list_works_not_opening(self.work_paths, paths.to_native)
+        """(Windows) 이 PC에서 열리지 않는 작품 목록 ['작품: 이유'] (활성 변환표로, 이 스레드에서 바로 확인).
+
+        GUI 스레드에서 공유 루트마다 최대 SHARE_PROBE_TIMEOUT_S초를 기다릴 수 있어 그동안 대기 커서."""
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            return list_works_not_opening(self.work_paths, paths.to_native)
+        finally:
+            QApplication.restoreOverrideCursor()
 
     def _offer_path_map_setup(self, works_not_opening=None):
         """(Windows) 변환표가 없거나 열리지 않는 작품이 있으면 변환표 자동 설정을 제안합니다.
@@ -1327,6 +1333,7 @@ class PlayerSidebarMixin:
         progress = QProgressDialog("연결된 네트워크 드라이브에서 작품 폴더를 찾는 중…", "취소", 0, 100, parent)
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(500)
+        progress.setValue(0)  # 0.5초 뒤 저절로 보이게 — 응답 없는 공유 루트를 기다리는 동안에도 '취소'를 누를 수 있게
 
         def on_progress(done, total):
             progress.setValue(int(done * 100 / total))

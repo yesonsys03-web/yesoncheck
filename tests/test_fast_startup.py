@@ -228,8 +228,16 @@ def test_start_returns_while_gather_is_blocked(win, dialogs, tmp_path, monkeypat
         timer.stop()
         assert player.shared_config_loading and player.work_paths == {}
         assert combo_items(player.workComboBox) == [LOADING_ITEM]  # 빈 목록 대신 불러오는 중임을 보임
-        player.workComboBox.setCurrentIndex(0)  # 골라도 아무 일 없음
-        assert combo_items(player.seasonComboBox) == ["시즌선택"] and dialogs.messages == []
+        # 그 항목을 골라도 아무 일 없음: 고르기 신호(연결된 update_season_list)를 실제로 보냄
+        looked_up = []
+        real_get_work_path = player.get_work_path
+        player.get_work_path = lambda name: looked_up.append(name) or real_get_work_path(name)
+        player.workComboBox.activated.emit(0)
+        player.workComboBox.currentIndexChanged.emit(0)
+        assert looked_up and set(looked_up) == {LOADING_ITEM}  # update_season_list(·job 목록)가 실행됨
+        assert combo_items(player.seasonComboBox) == ["시즌선택"] and combo_items(player.jobComboBox) == ["job선택"]
+        assert dialogs.messages == [] and player.shared_config_loading
+        del player.get_work_path
 
         # 불러오는 동안: 작품 경로 관리·공유 설정 폴더 변경은 안내만 (입력 창이 열리면 win의 getText가 실패시킴)
         player.manage_work_paths()
