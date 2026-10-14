@@ -1,6 +1,7 @@
 import contextlib
 import json
 import os
+import stat
 import threading
 import time
 import unicodedata
@@ -379,10 +380,12 @@ def fake_entry(name, link=None, root="C:\\", is_dir=True):
     (Windows에서 디렉터리 링크·정션은 FILE_ATTRIBUTE_DIRECTORY, 파일 링크는 없음)."""
     tag = {"junction": pms.IO_REPARSE_TAG_MOUNT_POINT, "symlink": pms.IO_REPARSE_TAG_SYMLINK}.get(link, 0)
     attributes = pms.FILE_ATTRIBUTE_DIRECTORY if is_dir else 0
+    mode = stat.S_IFLNK if link == "symlink" else (stat.S_IFDIR if is_dir else stat.S_IFREG)
     return SimpleNamespace(
         name=name, path=root + name,
         is_symlink=lambda: link == "symlink",
-        stat=lambda follow_symlinks=True: SimpleNamespace(st_reparse_tag=tag, st_file_attributes=attributes),
+        is_file=lambda follow_symlinks=True: link is None and not is_dir,
+        stat=lambda follow_symlinks=True: SimpleNamespace(st_reparse_tag=tag, st_file_attributes=attributes, st_mode=mode),
     )
 
 
@@ -678,6 +681,7 @@ def test_local_link_shares_accepts_shortcuts_to_unc(monkeypatch):
         fake_entry("USA_DB_link", "symlink"),
         shortcut_entry("USA_DB.lnk"), shortcut_entry("usadata2.lnk"), shortcut_entry("usadata3.lnk"),
         shortcut_entry("Local.lnk"), shortcut_entry("Broken.lnk"), shortcut_entry("readme.txt"),
+        fake_entry("Folder.lnk"),  # 이름만 .lnk인 폴더 → 바로 가기 아님
     ]
     calls = []
     resolver = shortcut_resolver({
@@ -744,21 +748,49 @@ def test_resolve_shortcuts_runs_one_hidden_powershell(monkeypatch):
 
     def fake_run(cmd, **kwargs):
         runs.append((cmd, kwargs))
-        out = "\ufeffOK\t\\\\Mainnas\\USA_DB\r\nERR\t손상된 바로 가기 (가짜 재현)\r\nOK\t\r\n"
+        # 오류 문구 안의 줄 구분 문자(U+2028·\x0b)로는 나누지 않음 — "\n"으로만
+        out = "\ufeffOK\t\\\\Mainnas\\USA_DB\r\nERR\t손상된\u2028바로 가기\x0b(가짜 재현)\r\nOK\t\r\n"
         return completed(stdout=out.encode("utf-8"))
 
     monkeypatch.setattr(pms.subprocess, "run", fake_run)
-    result = pms.resolve_shortcuts(["C:\\USA_DB.lnk", "C:\\it's.lnk", "C:\\empty.lnk"])
+    tricky = "C:\\it\u2019s 작품.lnk"  # 타이포그래피 작은따옴표 (PowerShell에서는 따옴표로 취급됨)
+    result = pms.resolve_shortcuts(["C:\\USA_DB.lnk", tricky, "C:\\empty.lnk"])
     assert len(runs) == 1
     cmd, kwargs = runs[0]
     assert cmd[1:4] == ["-NoProfile", "-NonInteractive", "-Command"]
     script = cmd[4]
     assert "[Console]::OutputEncoding=[Text.Encoding]::UTF8" in script and "WScript.Shell" in script
-    assert "'C:\\it''s.lnk'" in script  # 작은따옴표는 두 번
+    assert "$env:YC_LNKS" in script and "USA_DB" not in script and "작품" not in script  # 경로는 명령에 넣지 않음
+    assert kwargs["env"]["YC_LNKS"] == "\n".join(["C:\\USA_DB.lnk", tricky, "C:\\empty.lnk"])
+    assert "-replace" in script  # 오류 문구의 CR/LF는 공백으로
+    assert kwargs["stdin"] is pms.subprocess.DEVNULL
     assert kwargs["timeout"] == pms.SHORTCUT_TIMEOUT_S and kwargs["capture_output"] is True
     assert result["C:\\USA_DB.lnk"] == "\\\\Mainnas\\USA_DB"
-    assert isinstance(result["C:\\it's.lnk"], pms.ShortcutError) and "가짜 재현" in str(result["C:\\it's.lnk"])
+    assert isinstance(result[tricky], pms.ShortcutError) and "가짜 재현" in str(result[tricky])
     assert result["C:\\empty.lnk"] == ""
+
+
+def test_blocked_powershell_is_a_problem_line_not_a_crash(monkeypatch):
+    """AppLocker·SRP·WDAC 등으로 PowerShell 실행이 막힘(PermissionError/WinError 5, 1260 …) → ShortcutError → 문제 줄."""
+    for error in (PermissionError(13, "액세스가 거부되었습니다 (가짜 재현)"),
+                  OSError(1260, "그룹 정책에 의해 차단되었습니다 (가짜 재현)")):
+        def blocked(cmd, error=error, **kwargs):
+            raise error
+
+        monkeypatch.setattr(pms.subprocess, "run", blocked)
+        with pytest.raises(pms.ShortcutError, match="PowerShell을 실행하지 못했습니다.*가짜 재현"):
+            pms.resolve_shortcuts(["C:\\USA_DB.lnk"])
+        shares, problems = pms.local_link_shares(  # 기본 resolver로 — 불러오기는 계속됨
+            root="C:\\", scandir=lambda root: contextlib.nullcontext([fake_entry("USA_DB.lnk", is_dir=False)]),
+            realpath=lambda p: pytest.fail(p),
+        )
+        assert shares == [] and len(problems) == 1 and "가짜 재현" in problems[0]
+
+
+def test_shortcut_unc_rejects_device_and_long_path_prefixes():
+    for target in ("\\\\?\\C:\\USA_DB", "\\\\?\\UNC\\Mainnas\\USA_DB", "\\\\.\\pipe\\x"):
+        assert pms._shortcut_unc(target) is None, target
+    assert pms._shortcut_unc("\\\\Mainnas\\USA_DB") == "\\\\Mainnas\\USA_DB"
 
 
 def test_resolve_shortcuts_errors(monkeypatch):
@@ -785,3 +817,177 @@ def test_resolve_shortcuts_errors(monkeypatch):
         pms.resolve_shortcuts(["C:\\a.lnk", "C:\\b.lnk"])  # 출력 줄 수가 맞지 않음
 
     assert pms.resolve_shortcuts([]) == {}
+
+
+# --- 바로 가기 대상 캐시 (lnk 경로, 수정 시각) — 백그라운드 불러오기와 GUI 스레드가 같은 결과를 씀 ---
+
+def test_shortcut_targets_are_cached_per_path_and_mtime(monkeypatch):
+    lnk = "C:\\USA_DB.lnk"
+    mtimes = {lnk: 1000}
+    monkeypatch.setattr(pms, "_default_mtime", lambda path: mtimes[path])
+    calls = []
+    resolver = shortcut_resolver({lnk: "\\\\Mainnas\\USA_DB"}, calls)
+    entries = [fake_entry("USA_DB.lnk", is_dir=False)]
+    files = {lnk.casefold(), "\\\\mainnas\\usa_db\\test_jn\\.yesoncheck\\work_paths.json"}
+
+    def scan():
+        return pms.local_link_shares(root="C:\\", scandir=lambda root: contextlib.nullcontext(entries),
+                                     realpath=lambda p: pytest.fail(p), resolve_shortcuts=resolver)
+
+    def mirror():
+        return pms.find_local_config_dir("C:", is_file=lambda p: p.casefold() in files, is_dir=lambda p: False,
+                                         resolve_shortcuts=resolver, timeout=5)
+
+    assert [s.unc for s in scan()[0]] == ["\\\\Mainnas\\USA_DB"]
+    assert [s.unc for s in scan()[0]] == ["\\\\Mainnas\\USA_DB"]  # 두 번째 호출 (GUI 스레드의 자동 설정 등)
+    assert mirror() == ("\\\\Mainnas\\USA_DB\\test_jn\\.yesoncheck", None)  # Harmony 경로도 같은 캐시
+    assert calls == [[lnk]]
+    mtimes[lnk] = 2000  # 바로 가기를 바꿈 → 다시 읽음
+    assert mirror()[0] == "\\\\Mainnas\\USA_DB\\test_jn\\.yesoncheck"
+    assert calls == [[lnk], [lnk]]
+
+
+def test_shortcut_errors_are_not_cached(monkeypatch):
+    lnk = "C:\\USA_DB.lnk"
+    monkeypatch.setattr(pms, "_default_mtime", lambda path: 1000)
+    answers = [pms.ShortcutError("바로 가기를 읽지 못함 (가짜 재현)"), "\\\\Mainnas\\USA_DB"]
+    calls = []
+
+    def resolver(paths_):
+        calls.append(list(paths_))
+        return {lnk: answers.pop(0)}
+
+    entries = [fake_entry("USA_DB.lnk", is_dir=False)]
+
+    def scan():
+        return pms.local_link_shares(root="C:\\", scandir=lambda root: contextlib.nullcontext(entries),
+                                     realpath=lambda p: pytest.fail(p), resolve_shortcuts=resolver)
+
+    shares, problems = scan()
+    assert shares == [] and "가짜 재현" in problems[0]
+    shares, problems = scan()  # 다음번에는 다시 읽어 봄
+    assert [s.unc for s in shares] == ["\\\\Mainnas\\USA_DB"] and problems == []
+    assert len(calls) == 2
+
+    def failing(paths_):
+        calls.append(list(paths_))
+        raise pms.ShortcutError("PowerShell을 실행하지 못했습니다 (가짜 재현)")
+
+    pms.clear_shortcut_cache()
+    for _ in range(2):  # 호출 전체가 실패해도 캐시하지 않음
+        assert pms.local_link_shares(root="C:\\", scandir=lambda root: contextlib.nullcontext(entries),
+                                     realpath=lambda p: pytest.fail(p), resolve_shortcuts=failing)[0] == []
+    assert len(calls) == 4
+
+
+# --- 바로 가기 짐작이 틀렸을 때도 다음 로그로 알 수 있게 (항목 종류) ---
+
+def lstat_of(kinds):
+    """가짜 lstat: {경로: 'dir'·'file'·'dirlink'·'filelink'·'junction'} (없으면 FileNotFoundError)."""
+    def fake(path):
+        kind = kinds.get(path)
+        if kind is None:
+            raise FileNotFoundError(2, "없음", path)
+        mode = {"dir": stat.S_IFDIR, "file": stat.S_IFREG, "junction": stat.S_IFDIR}.get(kind, stat.S_IFLNK)
+        tag = {"dirlink": pms.IO_REPARSE_TAG_SYMLINK, "filelink": pms.IO_REPARSE_TAG_SYMLINK,
+               "junction": pms.IO_REPARSE_TAG_MOUNT_POINT}.get(kind, 0)
+        attributes = pms.FILE_ATTRIBUTE_DIRECTORY if kind in ("dir", "dirlink", "junction") else 0
+        return SimpleNamespace(st_mode=mode, st_reparse_tag=tag, st_file_attributes=attributes)
+    return fake
+
+
+def test_find_local_config_dir_logs_what_c_usa_db_is(monkeypatch, capsys):
+    resolver = lambda paths_: pytest.fail("바로 가기를 읽었습니다")  # noqa: E731
+    # 진짜 폴더 (링크 아님) → 그 아래에 설정 폴더 없음
+    monkeypatch.setattr(pms, "_default_lstat", lstat_of({"C:\\USA_DB": "dir"}))
+    assert pms.find_local_config_dir("C:", is_file=lambda p: False, is_dir=lambda p: True,
+                                     resolve_shortcuts=resolver, timeout=5) == (None, None)
+    assert "C:\\USA_DB 는 폴더(링크 아님)" in capsys.readouterr().out
+    # /D 없이 만든 심볼릭 링크(파일 링크) → 따라가지 않음, 바로 가기도 없음
+    monkeypatch.setattr(pms, "_default_lstat", lstat_of({"C:\\USA_DB": "filelink"}))
+    assert pms.find_local_config_dir("C:", is_file=lambda p: False, is_dir=lambda p: False,
+                                     resolve_shortcuts=resolver, timeout=5) == (None, None)
+    log = capsys.readouterr().out
+    assert "C:\\USA_DB 는 파일 링크(/D 없는 심볼릭 링크) — 따라가지 않음" in log and "C:\\USA_DB.lnk 없음" in log
+    # 아무것도 없음
+    monkeypatch.setattr(pms, "_default_lstat", lstat_of({}))
+    assert pms.find_local_config_dir("C:", is_file=lambda p: False, is_dir=lambda p: False,
+                                     resolve_shortcuts=resolver, timeout=5) == (None, None)
+    log = capsys.readouterr().out
+    assert "C:\\USA_DB 없음" in log and "C:\\USA_DB.lnk 없음" in log
+
+
+def test_link_scan_summary_names_harmony_entry_kinds(monkeypatch, capsys):
+    monkeypatch.setattr(paths, "_remote_name_of_drive", lambda drive: None)  # D:는 로컬 디스크
+    entries = [
+        fake_entry("USA_DB.lnk", is_dir=False), fake_entry("usadata2"), fake_entry("usadata3", "symlink"),
+        fake_entry("Users"), fake_entry("Windows"),
+    ]
+    pms.local_link_shares(root="C:\\", scandir=lambda root: contextlib.nullcontext(entries),
+                          realpath=lambda p: "D:\\x", resolve_shortcuts=lambda paths_: {p: "D:\\y" for p in paths_})
+    log = capsys.readouterr().out
+    summary = [line for line in log.splitlines() if "Harmony 항목" in line]
+    assert len(summary) == 1
+    line = summary[0]
+    assert "USA_DB.lnk=바로 가기(.lnk)" in line and "usadata2=폴더(링크 아님)" in line and "usadata3=디렉터리 링크" in line
+    assert "Users" not in line
+
+
+# --- 늦은 오류: 시간 안에 온 오류는 올리고, 호출한 쪽이 포기한 뒤의 오류는 로그에 (on_wait 예외 포함) ---
+
+def test_probe_logs_late_error_after_on_wait_raises(capsys):
+    func, entered, release, finished = hanging(raises=OSError("늦은 오류 (가짜 재현)"))
+
+    def broken_on_wait():
+        raise RuntimeError("on_wait 실패 (가짜 재현)")
+
+    try:
+        with pytest.raises(RuntimeError, match="on_wait 실패"):
+            pms.probe(func, "\\\\dead\\y", timeout=30, on_wait=broken_on_wait)
+    finally:
+        release.set()
+    assert finished.wait(5)
+    deadline = time.monotonic() + 5
+    log = ""
+    while "늦은 오류 (가짜 재현)" not in log and time.monotonic() < deadline:
+        time.sleep(0.01)
+        log += capsys.readouterr().out
+    assert "\\\\dead\\y" in log and "늦은 오류 (가짜 재현)" in log
+
+
+def test_probe_error_in_time_is_raised_not_logged_as_late(capsys):
+    def broken(path):
+        raise OSError("바로 난 오류 (가짜 재현)")
+
+    for _ in range(50):
+        with pytest.raises(OSError, match="바로 난 오류"):
+            pms.probe(broken, "\\\\s\\x", timeout=5)
+    time.sleep(0.05)
+    assert "늦게 난 오류" not in capsys.readouterr().out
+
+
+def test_find_config_dirs_late_suffix_only_for_shares_that_missed_the_deadline(capsys):
+    a, dead = Share("\\\\srv\\a", ["A:"]), Share("\\\\srv\\dead", ["W:"])
+    release, late_done = threading.Event(), threading.Event()
+
+    def is_file(path):
+        if path.startswith(dead.unc):
+            release.wait(30)
+            late_done.set()
+        return False
+
+    problems = []
+    try:
+        assert pms.find_config_dirs([a, dead], is_file=is_file, problems=problems, timeout=0.3) == []
+    finally:
+        release.set()
+    assert late_done.wait(5)
+    deadline = time.monotonic() + 5
+    log = capsys.readouterr().out
+    while "\\\\srv\\dead 확인" not in log and time.monotonic() < deadline:
+        time.sleep(0.01)
+        log += capsys.readouterr().out
+    lines = log.splitlines()
+    assert any("\\\\srv\\a 확인" in line and "없음" in line and "늦게" not in line for line in lines)
+    assert any("\\\\srv\\dead 확인" in line and "늦게 응답 — 이미 건너뜀" in line for line in lines)
+    assert len(problems) == 1

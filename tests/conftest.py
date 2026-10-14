@@ -110,3 +110,13 @@ def make_video():
         return path
 
     return make
+
+
+@pytest.fixture(autouse=True)
+def _fresh_shortcut_cache():
+    """바로 가기 대상 캐시는 프로세스 전체에 하나 → 시험마다 비움 (가짜 경로가 다른 시험의 결과를 쓰지 않게)."""
+    from yesoncheck import path_map_setup
+
+    if hasattr(path_map_setup, "clear_shortcut_cache"):
+        path_map_setup.clear_shortcut_cache()
+    yield
