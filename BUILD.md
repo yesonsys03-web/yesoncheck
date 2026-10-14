@@ -17,6 +17,11 @@ Intel 앱도 Apple Silicon에서 Rosetta로 실행되지만, macOS 26.4부터 �
 - spec이 가중치 세 파일의 sha256을 확인하고 앱의 `transnetv2-weights/`에 넣습니다. 없거나 다르면 빌드가 멈춥니다.
 - TensorFlow 때문에 앱 크기가 이전의 약 두 배가 됩니다. 앱 시작 때는 TensorFlow를 불러오지 않고,
   애니매틱2 분석을 시작할 때 불러옵니다 (로그에 `[애니매틱2 …] TensorFlow 불러오는 중…` / `불러옴 (n초)`).
+- x86(Intel Mac, Windows)에서는 **CPU가 AVX를 지원해야** 애니매틱2가 보입니다. TensorFlow 2.15 x86 빌드는 AVX가 없는
+  CPU에서 import하는 순간 오류 메시지 없이 죽기 때문에, 앱이 TensorFlow를 부르기 전에 numpy의 CPU 기능 표로 확인해
+  AVX가 없으면 항목을 숨기고 시작 로그에 이유를 남깁니다 (`[시작 …] 애니매틱2(TransNetV2) 항목 숨김 — …`).
+  해당: 오래된 펜티엄·셀러론, CPU 기능을 가린 가상 머신, macOS 12~14에서 Rosetta 2로 돌린 Intel 앱
+  (Apple Silicon Mac에는 Apple Silicon 앱을 쓰세요). arm64 TensorFlow는 AVX와 무관합니다.
 
 ## 1. 빌드 환경 만들기 (Mac마다 최초 1회)
 

@@ -7,6 +7,7 @@ TransNetV2 로더 코드는 yesoncheck/transnetv2_model.py, 가중치는 vendor/
 
 import importlib.util
 import os
+import platform
 import sys
 import time
 
@@ -34,9 +35,27 @@ def transnetv2_weights_dir():
     return os.path.join(repo_root, "vendor", "transnetv2-weights")
 
 
+# platform.machine()의 x86 표기 (소문자 비교): Mac·Linux x86_64, Windows AMD64, 32비트 i386/i686/x86
+X86_MACHINES = {"x86_64", "amd64", "i386", "i686", "x86"}
+
+
+def cpu_features():
+    """numpy가 실행 중에 확인한 CPU 기능 표 ({'AVX': True, ...}). TensorFlow를 불러오지 않고 확인하는 용도.
+    numpy 1.26은 OS가 AVX 레지스터 저장을 지원하는지까지 확인함 (Rosetta 2·CPU를 가린 가상 머신에서는 False)."""
+    from numpy.core._multiarray_umath import __cpu_features__
+
+    return __cpu_features__
+
+
 def transnetv2_missing():
     """애니매틱2에 필요한데 이 빌드/환경에 없는 것 목록 (비어 있으면 사용 가능). TensorFlow를 불러오지 않고 확인."""
     missing = []
+    # TensorFlow 2.15 x86 빌드(Mac x86_64, Windows tensorflow-intel)는 AVX 명령을 씀: AVX가 없는 CPU(오래된
+    # 펜티엄·셀러론, CPU를 가린 가상 머신, macOS 12~14의 Rosetta 2에서 돌린 Intel 앱)에서는 import하는 순간
+    # 파이썬 예외 없이 프로세스가 죽으므로 TensorFlow를 부르기 전에 걸러냄. arm64 TensorFlow는 AVX와 무관
+    machine = platform.machine()
+    if machine.lower() in X86_MACHINES and not cpu_features()["AVX"]:
+        missing.append(f"CPU가 AVX를 지원하지 않음 (TensorFlow x86 빌드에 필요, platform.machine()={machine})")
     if importlib.util.find_spec("tensorflow") is None:
         missing.append("tensorflow 모듈 없음")
     weights_dir = transnetv2_weights_dir()

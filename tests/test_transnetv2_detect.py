@@ -8,6 +8,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 from tests.conftest import ROOT
 from tests.test_work_paths_ui import make_config
 
@@ -80,3 +82,44 @@ def test_startup_does_not_import_tensorflow(tmp_path):
     assert report["after_imports"] is False, report
     assert report["after_window"] is False, report
     assert report["animatic2_index"] >= 0, report  # TensorFlow를 불러오지 않고도 항목은 보임
+
+
+# ---------------------------------------------------------------------------
+# x86 CPU에 AVX가 없으면 TensorFlow 2.15 x86 빌드는 import할 때 파이썬 예외 없이 죽음(SIGILL/abort)
+# → TensorFlow를 불러오지 않고 numpy의 CPU 기능 표로 확인해 애니매틱2를 숨김
+# ---------------------------------------------------------------------------
+
+def test_x86_cpu_without_avx_is_reported_missing(monkeypatch):
+    monkeypatch.setattr(transnetv2_detector.platform, "machine", lambda: "AMD64")  # Windows의 x86_64 표기
+    monkeypatch.setattr(transnetv2_detector, "cpu_features", lambda: {"AVX": False, "SSE2": True})
+    missing = transnetv2_detector.transnetv2_missing()
+    assert len(missing) == 1 and "AVX" in missing[0], missing
+
+
+def test_x86_cpu_with_avx_is_fine(monkeypatch):
+    monkeypatch.setattr(transnetv2_detector.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(transnetv2_detector, "cpu_features", lambda: {"AVX": True})
+    assert transnetv2_detector.transnetv2_missing() == []
+
+
+def test_arm64_does_not_need_avx(monkeypatch):
+    """arm64 TensorFlow는 AVX와 무관 (numpy 표에 AVX 항목이 없어도 확인하지 않음)."""
+    monkeypatch.setattr(transnetv2_detector.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(transnetv2_detector, "cpu_features", lambda: {})
+    assert transnetv2_detector.transnetv2_missing() == []
+
+
+def test_detection_refuses_without_avx(tmp_path, monkeypatch):
+    """감지 함수도 TensorFlow를 불러오기 전에 이유와 함께 실패 (조용히 죽지 않게)."""
+    monkeypatch.setattr(transnetv2_detector.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(transnetv2_detector, "cpu_features", lambda: {"AVX": False})
+    clip = write_three_shot_clip(str(tmp_path / "three_shots.mp4"))
+    with pytest.raises(RuntimeError, match="AVX"):
+        transnetv2_detector.detect_scene_cuts_transnetv2(clip)
+
+
+def test_real_cpu_features_answer_avx_on_x86():
+    """이 빌드 PC의 numpy가 CPU 기능 표를 주는지 (x86이면 AVX 항목이 있어야 함)."""
+    features = transnetv2_detector.cpu_features()
+    if transnetv2_detector.platform.machine().lower() in transnetv2_detector.X86_MACHINES:
+        assert "AVX" in features, sorted(features)
