@@ -206,3 +206,66 @@ def test_load_ocr_result_keeps_animatic2_when_available(new_player, dialogs, tmp
 
     assert player.pending_ocr_metadata["ocr_mode"] == "animatic2"
     assert dialogs.errors() == []
+
+
+# ---------------------------------------------------------------------------
+# 4) 첫 애니매틱2 분석: TensorFlow 첫 import가 몇 초 동안 GIL을 잡아 화면이 멈출 수 있으므로,
+#    워커를 시작하기 전에 진행 창에 안내를 쓰고 이벤트를 처리해 먼저 그려지게 함
+# ---------------------------------------------------------------------------
+
+FIRST_LOAD_NOTICE = "TensorFlow 불러오는 중 (처음 한 번, 수 초 걸릴 수 있음)…"
+
+
+def _run_animatic2_recording(player, runner, monkeypatch, model_loaded):
+    """animatic2를 골라 runner로 분석을 시작하고 [('processEvents',) | ('start', 그때의 진행 창 글)] 순서를 돌려줌."""
+    from PyQt5.QtWidgets import QInputDialog
+
+    from yesoncheck import transnetv2_detector
+
+    events = []
+
+    class RecordingTransNetV2Worker(FakeTransNetV2Worker):
+        def start(self):
+            events.append(("start", player.ocr_log_text.toPlainText()))
+            super().start()
+
+    monkeypatch.setattr(workers, "TransNetV2Worker", RecordingTransNetV2Worker)
+    monkeypatch.setattr(transnetv2_detector, "transnetv2_model_loaded", lambda weights_dir=None: model_loaded)
+    real_process_events = QApplication.processEvents
+
+    def recording_process_events(*args):
+        events.append(("processEvents",))
+        return real_process_events(*args)
+
+    monkeypatch.setattr(QApplication, "processEvents", staticmethod(recording_process_events))
+    answers = iter([(1, True), (24, True)])  # 선택 구간: 시작·종료 프레임
+    monkeypatch.setattr(QInputDialog, "getInt", staticmethod(lambda *a, **k: next(answers)))
+    player.ocrModeComboBox.setCurrentIndex(player.ocrModeComboBox.findData("animatic2"))
+    getattr(player, runner)()
+    worker = player.ocr_worker
+    assert isinstance(worker, RecordingTransNetV2Worker)
+    _wait_finished(worker)
+    monkeypatch.setattr(QApplication, "processEvents", staticmethod(real_process_events))
+    player.ocr_progress_dialog.close()
+    return events
+
+
+@pytest.mark.parametrize("runner", ["run_ocr_analysis", "run_ocr_analysis_range"])
+def test_first_animatic2_run_paints_tensorflow_notice_before_starting(new_player, dialogs, tmp_path, monkeypatch, runner):
+    monkeypatch.setattr(player_base, "_transnetv2_available", lambda: True)
+    player = _prepare_player(new_player, tmp_path)
+    events = _run_animatic2_recording(player, runner, monkeypatch, model_loaded=False)
+    starts = [i for i, e in enumerate(events) if e[0] == "start"]
+    assert len(starts) == 1, events
+    start = starts[0]
+    assert FIRST_LOAD_NOTICE in events[start][1], events  # 시작할 때 진행 창에 이미 안내가 있음
+    assert ("processEvents",) in events[:start], events  # 시작 전에 이벤트를 처리해 그려지게 함
+
+
+@pytest.mark.parametrize("runner", ["run_ocr_analysis", "run_ocr_analysis_range"])
+def test_later_animatic2_runs_skip_tensorflow_notice(new_player, dialogs, tmp_path, monkeypatch, runner):
+    monkeypatch.setattr(player_base, "_transnetv2_available", lambda: True)
+    player = _prepare_player(new_player, tmp_path)
+    events = _run_animatic2_recording(player, runner, monkeypatch, model_loaded=True)
+    start = next(e for e in events if e[0] == "start")
+    assert FIRST_LOAD_NOTICE not in start[1], events

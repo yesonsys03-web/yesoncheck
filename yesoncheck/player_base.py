@@ -2362,9 +2362,24 @@ QMessageBox {
         else:
             self.ocr_log_text.appendPlainText("OCR 분석을 준비 중입니다…")
         self.ocr_progress_dialog.show()
+        if ocr_mode == 'animatic2':
+            self._notice_first_tensorflow_load()
 
         # 로그는 팝업창에 표시되므로 여기서는 제거
         self.ocr_worker.start()
+
+    # 첫 애니매틱2 분석 전에 진행 창에 쓰는 안내 (TensorFlow 첫 import가 수 초 동안 화면을 멈출 수 있음)
+    FIRST_TENSORFLOW_LOAD_NOTICE = "TensorFlow 불러오는 중 (처음 한 번, 수 초 걸릴 수 있음)…"
+
+    def _notice_first_tensorflow_load(self):
+        """이 실행에서 TransNetV2 모델을 아직 불러오지 않았으면 진행 창에 안내를 쓰고 이벤트를 처리해 먼저 그려지게 함.
+        워커의 첫 TensorFlow import는 몇 초 동안 GIL을 잡아 그동안 창이 다시 그려지지 않을 수 있음."""
+        from yesoncheck.transnetv2_detector import transnetv2_model_loaded
+
+        if transnetv2_model_loaded():
+            return
+        self.ocr_log_text.appendPlainText(self.FIRST_TENSORFLOW_LOAD_NOTICE)
+        QApplication.processEvents()
 
     def run_ocr_analysis_range(self):
         """지정한 프레임 범위만 OCR 분석합니다."""
@@ -2577,6 +2592,9 @@ QMessageBox {
         
         self.ocr_log_text.appendPlainText(f"OCR 분석 중: 프레임 {start_frame}-{end_frame}")
         self.ocr_progress_dialog.show()
+
+        if ocr_mode == 'animatic2':
+            self._notice_first_tensorflow_load()
 
         print(f"[선택구간 분석] OCR 워커 시작...")
         # 로그는 팝업창에 표시되므로 여기서는 제거
