@@ -156,6 +156,8 @@ def run(workdir):
                 return original_resolve(*args, **kwargs)
 
             player.resolve_shared_config_problem = recording_resolve
+            # 이 시간은 미리 데워진 러너에서 잼 (앞의 단계들이 Qt·모듈을 이미 불러옴) — 진짜 확인은 아래
+            # "시작할 때 소리 재생기 없음"(창을 만들고 공유 설정을 불러올 때까지 QMediaPlayer를 만들지 않음)
             assert shown_s < 3, f"창을 만들어 보이는 데 {shown_s:.2f}초 걸렸습니다 (3초 미만이어야 함)"
             return {"construct_show_s": round(shown_s, 3)}
 
@@ -163,6 +165,14 @@ def run(workdir):
             load_s = wait_shared_config_load(player, app, timeout_s=120)
             assert startup, "공유 설정 불러오기가 끝났는데 resolve_shared_config_problem이 불리지 않았습니다"
             return {"load_with_resolve_s": round(load_s, 3), "background_gather_s": round(player.shared_config_load_seconds, 3)}
+
+        def no_media_player_at_startup():
+            # 시작할 때 멀티미디어를 만들지 않는다는 구조적 확인 (창 생성·표시·공유 설정 불러오기·자동 설정까지).
+            # 작품 목록 확인에서 job을 고르면 첫 영상이 열려(setMedia) 그때 만들어지므로 그 전에 확인
+            from PyQt5.QtMultimedia import QMediaPlayer
+
+            assert player.findChildren(QMediaPlayer) == [], "시작할 때 소리 재생기(QMediaPlayer)가 이미 만들어졌습니다"
+            return "QMediaPlayer 없음"
 
         def auto_config_dir():
             assert startup["shared_config_problem"] is None, startup["shared_config_problem"]
@@ -194,25 +204,25 @@ def run(workdir):
             return reported
 
         def media_player():
-            # 소리 재생기는 처음 쓸 때 만듦 (시작할 때 만들지 않음) — 여기서 처음 만들고 걸린 시간을 남김
+            # 기록만: 이미 만들어졌는지(작품 목록에서 첫 영상을 열면 만들어짐)와 만드는 데 걸린 시간 (없으면 여기서 만듦)
             from PyQt5.QtMultimedia import QMediaPlayer
 
-            assert player.findChildren(QMediaPlayer) == [], "소리 재생기가 처음 쓰기 전에 이미 만들어져 있습니다"
-            started = time.perf_counter()
+            already = bool(player.findChildren(QMediaPlayer))
             media = player.mediaPlayer
-            elapsed = time.perf_counter() - started
             assert player.findChildren(QMediaPlayer) == [media]
-            return {"media_player_create_s": round(elapsed, 3)}
+            return {"created_before_this_check": already,
+                    "media_player_create_s": round(player.media_player_create_seconds, 3)}
 
         listed = (check("창 바로 표시", window_shown)
                   and check("공유 설정 불러오기 (백그라운드)", shared_config_load)
+                  and check("시작할 때 소리 재생기 없음", no_media_player_at_startup)
                   and check("공유 설정 자동 찾기", auto_config_dir)
                   and check("변환표 자동 설정", auto_path_map)
                   and check("작품 목록", work_listing))
         if listed and config.get("dead_share"):
             listed = check("끊긴 공유는 문제로 알림", dead_share_reported)
         if player is not None:
-            check("소리 재생기 준비 (처음 쓸 때)", media_player)
+            check("소리 재생기 (처음 쓸 때 만든 시간)", media_player)
         return finish(bool(listed))
 
     player = VideoPlayer()  # 기존 실행 시험: 동기 생성자(공유 설정을 여기서 읽음)
