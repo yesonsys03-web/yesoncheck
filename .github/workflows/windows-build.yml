@@ -92,3 +92,125 @@ jobs:
           path: dist/YesonCheck_Autocut
           retention-days: 14
           if-no-files-found: error
+
+      - name: 설치 파일 버전 정보
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $shortSha = "${{ github.sha }}".Substring(0, 7)
+          $ref = "${{ github.ref }}"
+          if ($ref -like "refs/tags/v*") {
+            $version = $ref.Substring("refs/tags/v".Length)
+          } else {
+            $version = "0.0.0-$shortSha"
+          }
+          "INSTALLER_SHA=$shortSha" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "INSTALLER_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "설치 파일 버전: $version (커밋 $shortSha)"
+
+      - name: Inno Setup(ISCC) 찾기
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $cmd = Get-Command iscc -ErrorAction SilentlyContinue
+          $known = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if ($cmd) {
+            $isccPath = $cmd.Source
+          } elseif (Test-Path $known) {
+            $isccPath = $known
+          } else {
+            Write-Host "ISCC.exe를 찾지 못해 choco로 설치합니다"
+            choco install innosetup -y --no-progress
+            if (Test-Path $known) {
+              $isccPath = $known
+            } else {
+              $cmd2 = Get-Command iscc -ErrorAction SilentlyContinue
+              if ($cmd2) { $isccPath = $cmd2.Source } else { throw "choco install innosetup 이후에도 ISCC.exe를 찾을 수 없습니다" }
+            }
+          }
+          "ISCC_PATH=$isccPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "ISCC: $isccPath"
+
+      - name: 설치 파일 빌드 (Inno Setup)
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          & $env:ISCC_PATH /DAppVersion="$env:INSTALLER_VERSION" /DAppSha="$env:INSTALLER_SHA" installer\yesoncheck.iss
+          $setupExe = "installer\YesonCheck_Setup_$($env:INSTALLER_SHA).exe"
+          if (-not (Test-Path $setupExe)) { throw "설치 파일이 만들어지지 않았습니다: $setupExe" }
+          "SETUP_EXE=$setupExe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "설치 파일 생성됨: $setupExe"
+
+      - name: 설치 파일 시험 — 자동 설치(무음)
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $log = "C:\yc_install_log.txt"
+          try {
+            $p = Start-Process -FilePath $env:SETUP_EXE -ArgumentList @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/DIR=C:\yc_install","/LOG=$log") -PassThru
+            $p.WaitForExit()
+            if ($p.ExitCode -ne 0) { throw "자동 설치 실패 (종료 코드 $($p.ExitCode))" }
+            if (-not (Test-Path "C:\yc_install\YesonCheck_Autocut.exe")) { throw "설치 후 YesonCheck_Autocut.exe가 없습니다" }
+            if (-not (Test-Path "C:\yc_install\_internal")) { throw "설치 후 _internal 폴더가 없습니다" }
+            $startMenu = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Yeson Checker.lnk"
+            if (-not (Test-Path $startMenu)) { throw "시작 메뉴 바로 가기가 없습니다: $startMenu" }
+            $desktop = Join-Path ([Environment]::GetFolderPath("Desktop")) "Yeson Checker.lnk"
+            if (-not (Test-Path $desktop)) { throw "바탕 화면 바로 가기가 없습니다: $desktop" }
+            Write-Host "설치·바로 가기 확인 완료"
+          } catch {
+            if (Test-Path $log) { Write-Host "===== 설치 로그 ($log)"; Get-Content $log -Encoding utf8 | Write-Host }
+            throw
+          }
+
+      - name: 설치 파일 시험 — 설치된 exe 실행 시험
+        run: ./ci/run_smoke_test.ps1 -Exe C:\yc_install\YesonCheck_Autocut.exe -Workdir C:\yc_smoke
+
+      - name: 설치 파일 시험 — 업데이트(같은 Setup 재실행)
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $dummy = "C:\yc_install\_internal\__stale_from_old_build.txt"
+          Set-Content -Path $dummy -Value "stale" -Encoding utf8
+          $log2 = "C:\yc_install_log_upgrade.txt"
+          try {
+            $p = Start-Process -FilePath $env:SETUP_EXE -ArgumentList @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/DIR=C:\yc_install","/LOG=$log2") -PassThru
+            $p.WaitForExit()
+            if ($p.ExitCode -ne 0) { throw "업데이트 설치 실패 (종료 코드 $($p.ExitCode))" }
+            if (Test-Path $dummy) { throw "업데이트 후에도 예전 _internal 파일이 남아 있습니다: $dummy" }
+            if (-not (Test-Path "C:\yc_install\YesonCheck_Autocut.exe")) { throw "업데이트 후 YesonCheck_Autocut.exe가 없습니다" }
+            Write-Host "업데이트(교체) 확인 완료"
+          } catch {
+            if (Test-Path $log2) { Write-Host "===== 업데이트 설치 로그 ($log2)"; Get-Content $log2 -Encoding utf8 | Write-Host }
+            throw
+          }
+
+      - name: 설치 파일 시험 — 무음 제거
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $uninst = "C:\yc_install\unins000.exe"
+          if (-not (Test-Path $uninst)) { throw "제거 프로그램이 없습니다: $uninst" }
+          $log3 = "C:\yc_uninstall_log.txt"
+          try {
+            $p = Start-Process -FilePath $uninst -ArgumentList @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/LOG=$log3") -PassThru
+            $p.WaitForExit()
+            # unins000.exe는 자신을 임시 폴더로 복사해 실제 제거를 맡기고 먼저 끝나 버리므로,
+            # 설치 폴더의 exe가 실제로 사라질 때까지 따로 기다린다
+            $deadline = (Get-Date).AddSeconds(60)
+            while ((Test-Path "C:\yc_install\YesonCheck_Autocut.exe") -and ((Get-Date) -lt $deadline)) {
+              Start-Sleep -Seconds 2
+            }
+            if (Test-Path "C:\yc_install\YesonCheck_Autocut.exe") { throw "제거 후에도 YesonCheck_Autocut.exe가 남아 있습니다 (시간 초과)" }
+            $settingsPath = Join-Path $env:APPDATA "YesonCheck\settings.json"
+            if (-not (Test-Path $settingsPath)) { throw "제거 후 PC별 설정이 사라졌습니다 (지우면 안 됨): $settingsPath" }
+            Write-Host "무음 제거·설정 보존 확인 완료"
+          } catch {
+            if (Test-Path $log3) { Write-Host "===== 제거 로그 ($log3)"; Get-Content $log3 -Encoding utf8 | Write-Host }
+            throw
+          }
+
+      - name: 설치 파일 artifact 이름
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          "SETUP_ARTIFACT_NAME=YesonCheck_Setup_Windows_$($env:INSTALLER_SHA)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.SETUP_ARTIFACT_NAME }}
+          path: ${{ env.SETUP_EXE }}
+          retention-days: 14
+          if-no-files-found: error
