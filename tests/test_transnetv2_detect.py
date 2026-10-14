@@ -23,18 +23,31 @@ def test_build_environment_has_tensorflow_and_weights():
     assert transnetv2_detector.transnetv2_weights_dir() == os.path.join(ROOT, "vendor", "transnetv2-weights")
 
 
-def test_detects_three_shot_clip(tmp_path, capsys):
-    """합성 3샷 영상(30프레임씩)에서 앱과 같은 설정으로 씬 시작 [0, 30, 60]을 찾음 (실제 TensorFlow 추론, 약 10초)."""
+def test_detects_three_shot_clip_and_reuses_model(tmp_path, capsys, monkeypatch):
+    """합성 3샷 영상(30프레임씩)에서 앱과 같은 설정으로 씬 시작 [0, 30, 60]을 찾음 (실제 TensorFlow 추론, 약 10초).
+    두 번째 실행은 이 프로세스에서 이미 불러온 모델을 다시 씀 (약 4초 걸리는 모델 불러오기를 건너뜀)."""
+    monkeypatch.setattr(transnetv2_detector, "_MODELS", {})  # 다른 시험이 불러 둔 모델과 상관없이 '처음'부터
+    weights_dir = transnetv2_detector.transnetv2_weights_dir()
+    assert transnetv2_detector.transnetv2_model_loaded() is False
     clip = write_three_shot_clip(str(tmp_path / "three_shots.mp4"))
-    segments = transnetv2_detector.detect_scene_cuts_transnetv2(
-        clip, threshold=0.3, min_scene_len=10, detect_gradual_transitions=True, post_process_histogram=True,
-    )
+    settings = dict(threshold=0.3, min_scene_len=10, detect_gradual_transitions=True, post_process_histogram=True)
+
+    segments = transnetv2_detector.detect_scene_cuts_transnetv2(clip, **settings)
     assert [s["start_frame"] for s in segments] == THREE_SHOT_STARTS
     assert [s["end_frame"] for s in segments] == [29, 59, 89]
     out = capsys.readouterr().out
     # 시간 기록: TensorFlow·모델을 불러오는 단계 앞뒤로 남김 (멈추면 마지막 줄이 그 단계를 가리킴)
     for message in ("TensorFlow 불러오는 중…", "TensorFlow 불러옴 (", "TransNetV2 모델 불러오는 중…", "TransNetV2 모델 불러옴 ("):
         assert message in out, out
+    assert transnetv2_detector.transnetv2_model_loaded() is True
+    model = transnetv2_detector._MODELS[weights_dir]
+
+    segments = transnetv2_detector.detect_scene_cuts_transnetv2(clip, **settings)
+    assert [s["start_frame"] for s in segments] == THREE_SHOT_STARTS
+    out = capsys.readouterr().out
+    assert "TransNetV2 모델 다시 씀" in out, out
+    assert "TransNetV2 모델 불러오는 중…" not in out and "TensorFlow 불러오는 중…" not in out, out
+    assert transnetv2_detector._MODELS == {weights_dir: model}  # 같은 모델 객체 하나만
 
 
 _STARTUP_CODE = r"""
@@ -123,3 +136,32 @@ def test_real_cpu_features_answer_avx_on_x86():
     features = transnetv2_detector.cpu_features()
     if transnetv2_detector.platform.machine().lower() in transnetv2_detector.X86_MACHINES:
         assert "AVX" in features, sorted(features)
+
+
+def test_concurrent_first_loads_build_one_model(monkeypatch):
+    """두 워커가 동시에 처음 불러도 모델은 한 번만 만듦 (잠금). TensorFlow 대신 느린 가짜 로더로 확인."""
+    import threading
+    import time
+    import types
+
+    built = []
+
+    class SlowTransNetV2:
+        def __init__(self, model_dir):
+            time.sleep(0.3)
+            built.append(model_dir)
+
+    monkeypatch.setitem(sys.modules, "yesoncheck.transnetv2_model", types.SimpleNamespace(TransNetV2=SlowTransNetV2))
+    monkeypatch.setattr(transnetv2_detector, "_MODELS", {})
+    results, logs = [], []
+    threads = [
+        threading.Thread(target=lambda: results.append(transnetv2_detector.load_transnetv2_model("/w", logs.append)))
+        for _ in range(2)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+    assert built == ["/w"], built
+    assert len(results) == 2 and results[0] is results[1]
+    assert sum(line.startswith("TransNetV2 모델 다시 씀") for line in logs) == 1, logs

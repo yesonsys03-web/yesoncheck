@@ -9,6 +9,7 @@ import importlib.util
 import os
 import platform
 import sys
+import threading
 import time
 
 import cv2
@@ -68,6 +69,41 @@ def transnetv2_missing():
 
 TRANSNETV2_AVAILABLE = not transnetv2_missing()
 
+# 이 프로세스에서 불러온 TransNetV2 모델 (가중치 폴더 → 모델). 두 번째 애니매틱2 분석부터는 약 4초 걸리는
+# 모델 불러오기를 건너뜀. 워커 스레드 둘이 동시에 처음 불러오지 않게 잠금
+_MODELS = {}
+_MODELS_LOCK = threading.Lock()
+
+
+def transnetv2_model_loaded(weights_dir=None):
+    """이 프로세스에서 모델을 이미 불러왔는지 (아니면 다음 분석이 TensorFlow·모델을 불러오느라 수 초 걸림)."""
+    return (weights_dir or transnetv2_weights_dir()) in _MODELS
+
+
+def load_transnetv2_model(weights_dir, log):
+    """가중치 폴더의 TransNetV2 모델 (처음이면 TensorFlow와 모델을 불러오고, 이후에는 불러 둔 것을 다시 씀).
+    log(message): 단계마다 부름 (처음: 불러오는 중…/불러옴 (n초), 이후: 다시 씀)."""
+    with _MODELS_LOCK:
+        model = _MODELS.get(weights_dir)
+        if model is not None:
+            log(f"TransNetV2 모델 다시 씀 (이 실행에서 이미 불러옴: {weights_dir})")
+            return model
+        # TensorFlow는 여기서 처음 불러옴 (transnetv2_model이 import 시 tensorflow를 불러옴)
+        started = time.perf_counter()
+        log("TensorFlow 불러오는 중…")
+        from yesoncheck.transnetv2_model import TransNetV2
+        log(f"TensorFlow 불러옴 ({timing_log.since(started)})")
+
+        started = time.perf_counter()
+        log(f"TransNetV2 모델 불러오는 중… ({weights_dir})")
+        try:
+            model = TransNetV2(model_dir=weights_dir)
+        except Exception as e:
+            raise RuntimeError(f"TransNetV2 모델 로드 실패 ({weights_dir}): {e}") from e
+        log(f"TransNetV2 모델 불러옴 ({timing_log.since(started)}, 처음 한 번)")
+        _MODELS[weights_dir] = model
+        return model
+
 
 def detect_scene_cuts_transnetv2(
     video_path: str,
@@ -118,20 +154,7 @@ def detect_scene_cuts_transnetv2(
         if log_callback:
             log_callback(message)
 
-    # TensorFlow는 여기서 처음 불러옴 (transnetv2_model이 import 시 tensorflow를 불러옴)
-    started = time.perf_counter()
-    timed("TensorFlow 불러오는 중…")
-    from yesoncheck.transnetv2_model import TransNetV2
-    timed(f"TensorFlow 불러옴 ({timing_log.since(started)})")
-
-    weights_dir = transnetv2_weights_dir()
-    started = time.perf_counter()
-    timed(f"TransNetV2 모델 불러오는 중… ({weights_dir})")
-    try:
-        model = TransNetV2(model_dir=weights_dir)
-    except Exception as e:
-        raise RuntimeError(f"TransNetV2 모델 로드 실패 ({weights_dir}): {e}") from e
-    timed(f"TransNetV2 모델 불러옴 ({timing_log.since(started)})")
+    model = load_transnetv2_model(transnetv2_weights_dir(), timed)
 
     # Open video to get basic info
     cap = cv2.VideoCapture(video_path)
