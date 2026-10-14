@@ -593,21 +593,24 @@ QPushButton:pressed {
     border: 1px solid #343a40;
 }
 """)
-        # 정보 줄 라벨 (예전 고정 너비 200·200·150이 창의 최소 너비를 묶었음). 너비는 글꼴로 잼 (플랫폼·테마마다 다름):
-        # 자리가 있으면 예전과 같은 너비(글자가 더 넓은 글꼴이면 글자 너비, 숫자가 바뀌어도 그대로). 모자라면
-        # InfoRowLayout이 숫자 라벨의 빈 공간 → 재생 FPS·시간('…'까지) → 파일 이름('…'까지) → Total의 '(…F …f)' 순서로
-        # 줄이고 (줄여 그려지면 전체 글자는 툴팁. 좁으면 글자가 안쪽 여백까지 씀), 창이 최소 너비 근처일 때만 마지막으로
-        # 재생 FPS·시간·파일 이름 칸을 접음 (그래서 Windows의 넓은 글꼴로도 최소 너비 ≤ 900).
-        # 프레임 숫자는 창이 최소 너비여도 다 보임: Current는 'Current: 00000', Total은 'Total: 00000…'까지.
-        # 파일 이름은 가운데를 줄이고 전체 이름은 늘 툴팁에.
-        self.filenameLabel = ElidedLabel(Qt.ElideMiddle, min_text="…", shrink_order=2, collapse_order=6,
+        # 정보 줄 라벨 (예전 고정 너비 200·200·150이 창의 최소 너비를 묶었음). 너비는 글꼴로, 최소 너비는 라벨이 실제로
+        # 그리는 방법 그대로 잼 (플랫폼·테마마다 글꼴이 다름). 자리가 있으면 예전과 같은 너비(글자가 더 넓은 글꼴이면
+        # 글자 너비, 숫자가 바뀌어도 그대로). 모자라면 InfoRowLayout이 이 순서로 줄임 (줄여 그려지면 전체 글자는 툴팁,
+        # 좁으면 글자가 안쪽 여백까지 씀):
+        #   숫자 라벨의 빈 공간 → 파일 이름(가운데를 줄여 'A: H….mov'까지) → 재생 FPS('…'까지) →
+        #   시간('00:00:00.000 / …'까지) → Total의 '(…F …f)'('Total: 00000…'까지)
+        #   → 그래도 모자랄 때만(창이 최소 너비 근처) 칸을 접음: 재생 FPS → 파일 이름 → 시간.
+        # 프레임 숫자는 창이 최소 너비여도 언제나 다 보임 (Current 전부, Total은 'Total: 00000'까지).
+        self.filenameLabel = ElidedLabel(Qt.ElideMiddle, keep_ends=(4, 4), shrink_order=1, collapse_order=7,
                                          full_text_tooltip=True)
-        self.labelFrameCount = ElidedLabel(Qt.ElideRight, min_text="Current: 00000", hint_width=200,
+        self.labelFrameCount = ElidedLabel(Qt.ElideRight, keep_text="Current: 00000", hint_width=200,
                                            fit_text="Current: 00000", shrink_order=4)
-        self.labelTotalFrames = ElidedLabel(Qt.ElideRight, min_text="Total: 00000…", hint_width=200,
-                                            fit_text="Total: 00000 (000F 00f)", shrink_order=3)
-        self.labelPlaybackFPS = ElidedLabel(Qt.ElideRight, min_text="…", hint_width=150, fit_text="재생: 00.000 FPS",
-                                            shrink_order=1, collapse_order=5)  # 재생 FPS 표시 위젯 추가
+        self.labelTotalFrames = ElidedLabel(Qt.ElideRight, keep_text="Total: 00000 (000F 00f)",
+                                            keep_prefix="Total: 00000", hint_width=200,
+                                            fit_text="Total: 00000 (000F 00f)", shrink_order=4)
+        self.labelPlaybackFPS = ElidedLabel(Qt.ElideRight, keep_text="재생: 00.000 FPS", keep_prefix="",
+                                            hint_width=150, fit_text="재생: 00.000 FPS", shrink_order=2,
+                                            collapse_order=6)  # 재생 FPS 표시 위젯 추가
         font = QFont(); font.setPointSize(16)
         self.filenameLabel.setFont(font)
         self.labelFrameCount.setFont(font)
@@ -1060,9 +1063,10 @@ QPushButton:checked {
             self.loopCheckBox, self.playPauseButton, self.playSelectedButton,
             self.volumeSlider, self.frameRateComboBox, self.wipeCheckBox, self.sidebar, self.wipeXButton, self.wipeYButton, openButtonA, openButtonB, self.volumeSlider, selectFolderButton, bookmarkButton, bookmarkListButton, workPathButton, self.listModeButton, self.thumbnailModeButton, self.thumbnailProgressBar
         ]
-        # 시간: 줄이면 뒤쪽(전체 시간)부터 …로. 너비는 예전처럼 이 모양의 글자 너비로 고정 (숫자가 바뀌어도 그대로)
-        self.timeLabel = ElidedLabel(Qt.ElideRight, min_text="…", hint_text="00:00:00.000 / 00:00:00.000",
-                                     shrink_order=1, collapse_order=5)
+        # 시간: 줄이면 뒤쪽(전체 시간)부터 …로 ('00:00:00.000 / …'까지). 너비는 예전처럼 이 모양의 글자 너비로 고정
+        self.timeLabel = ElidedLabel(Qt.ElideRight, keep_text="00:00:00.000 / 00:00:00.000",
+                                     keep_prefix="00:00:00.000 /", hint_text="00:00:00.000 / 00:00:00.000",
+                                     shrink_order=3, collapse_order=8)
         self.timeLabel.setText("00:00:00.000 / 00:00:00.000"); self.timeLabel.setFont(QFont("Arial", 16))
         self.timeLabel.setStyleSheet("""
 QLabel {

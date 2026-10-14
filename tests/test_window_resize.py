@@ -188,7 +188,16 @@ def _tooltip_shown_for(label):
     return shown
 
 
+def _assert_collapse_order(player, report):
+    """칸을 접는 순서: 재생 FPS → 파일 이름 → 시간 (뒤의 것이 접혔으면 앞의 것도 접혀 있어야 함)."""
+    widths = [player.labelPlaybackFPS.width(), player.filenameLabel.width(), player.timeLabel.width()]
+    for later in range(1, 3):
+        if widths[later] == 0:
+            assert all(width == 0 for width in widths[:later]), (widths, report)
+
+
 def test_info_labels_readable_at_target(player, tmp_path):
+    """900×600: 프레임 숫자는 언제나 다 보이고, 나머지는 이 플랫폼 글꼴로 자리가 되는 만큼 (정해진 순서대로)."""
     _open_video(player, tmp_path, LONG_NAME)
     player.resize(TARGET)
     _settle()
@@ -196,10 +205,14 @@ def test_info_labels_readable_at_target(player, tmp_path):
     assert player.size() == TARGET, report
     assert player.labelFrameCount.displayed_text() == player.labelFrameCount.text(), report
     assert player.labelTotalFrames.displayed_text().startswith("Total: 48"), report
+    _assert_collapse_order(player, report)
+    time = player.timeLabel
+    if time.width() >= time.floor_width():  # 시간은 접히기 전까지 '00:00:00.000 /'을 지킴
+        assert time.displayed_text().startswith("00:00:00.000 /"), report
     for name in INFO_LABELS:
         label = getattr(player, name)
-        assert label.isVisible() and label.width() > 0, report
-        if label.displayed_text() != label.text():  # 줄여 그려지면 전체 글자는 툴팁으로 (파일 이름은 언제나 툴팁)
+        assert label.isVisibleTo(player), name  # 접혀도(너비 0) 사라지지 않음 — 창을 넓히면 다시 보임
+        if label.width() > 0 and label.displayed_text() != label.text():  # 줄여 그려지면 전체 글자는 툴팁으로
             assert _tooltip_shown_for(label) == label.text(), (name, report)
 
 
@@ -222,18 +235,25 @@ def test_tooltips_only_when_elided(player, tmp_path):
 
 
 def test_long_file_name_is_elided_instead_of_widening(player, tmp_path):
-    """예전에는 파일 이름이 길수록 창의 최소 너비가 늘었음 (긴 이름 → 창이 화면보다 넓어짐)."""
+    """예전에는 파일 이름이 길수록 창의 최소 너비가 늘었음 (긴 이름 → 창이 화면보다 넓어짐). 이제 창은 그대로이고
+    파일 이름이 먼저 가운데를 줄임 ('A: H….mov'처럼 앞과 확장자를 남김, 전체 이름은 툴팁)."""
     _open_video(player, tmp_path, "sc012.mov")
     short_name_minimum = player.minimumSizeHint()
     _open_video(player, tmp_path, LONG_NAME)
     assert player.minimumSizeHint() == short_name_minimum
     player.resize(TARGET)
     _settle()
-    assert player.size() == TARGET, _layout_report(player)
+    report = _layout_report(player)
+    assert player.size() == TARGET, report
     label = player.filenameLabel
     assert label.text() == f"A: {LONG_NAME}"  # 전체 이름은 그대로 (복사·툴팁용)
-    shown = label.displayed_text()
-    assert shown != label.text() and shown.startswith("A") and shown.endswith("v"), shown  # 가운데를 줄임
+    if label.width() >= label.floor_width():  # 이 플랫폼 글꼴로 줄인 파일 이름이 들어갈 자리가 있음
+        shown = label.displayed_text()
+        assert shown != label.text() and "…" in shown, (shown, report)  # 가운데를 줄임
+        assert shown.startswith("A: H") and shown.endswith(".mov"), (shown, report)
+    else:  # 자리가 없으면 그보다 먼저 재생 FPS 칸이 접혀 있어야 함
+        assert player.labelPlaybackFPS.width() == 0, report
+    _assert_collapse_order(player, report)
     assert _tooltip_shown_for(label) == label.text()
 
 
@@ -258,14 +278,15 @@ def test_info_labels_get_designed_widths_when_there_is_room(player, tmp_path):
 
 def test_shrink_order_of_info_row():
     """줄이는 순서 (실제 라벨 대신 크기가 정해진 위젯으로 — 글꼴과 상관없이):
-    1) 숫자 라벨의 빈 공간(원하는 너비 → 글자가 다 들어가는 너비) 2) 재생 FPS·시간 3) 파일 이름 4) Total의 '(…F …f)'.
-    Current는 'Current: 00000'(= 최소 너비) 밑으로 줄지 않음."""
+    1) 숫자 라벨의 빈 공간 2) 파일 이름(가운데를 줄인 최소까지) 3) 재생 FPS 4) 시간('00:00:00.000 / …'까지)
+    5) Total의 '(…F …f)'(+ Current는 안쪽 여백까지) 6) 접기: 재생 FPS → 파일 이름 → 시간.
+    Current·Total은 접히지 않음."""
     from yesoncheck.window_layout import InfoRowLayout
 
     class Box(QWidget):
-        def __init__(self, hint, comfortable, minimum, order):
+        def __init__(self, hint, comfortable, stages, minimum):
             super().__init__()
-            self._hint, self._comfortable, self._minimum, self.shrink_order = hint, comfortable, minimum, order
+            self._hint, self._comfortable, self._stages, self._minimum = hint, comfortable, stages, minimum
 
         def sizeHint(self):
             return QSize(self._hint, 30)
@@ -276,31 +297,56 @@ def test_shrink_order_of_info_row():
         def comfortable_width(self):
             return self._comfortable
 
+        def shrink_stages(self):
+            return self._stages
+
     row = QWidget()
     layout = InfoRowLayout(row)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(0)
-    #          hint comfortable min order
-    name = Box(300, 300, 30, 2)
-    current = Box(200, 120, 120, 4)
-    total = Box(200, 180, 100, 3)
-    fps = Box(150, 110, 30, 1)
-    time = Box(200, 200, 30, 1)
+    #          hint comfortable stages                minimum
+    name = Box(300, 300, [(1, 50), (7, 0)], 0)
+    current = Box(200, 120, [(4, 110)], 110)
+    total = Box(200, 180, [(4, 100)], 100)
+    fps = Box(150, 110, [(2, 20), (6, 0)], 0)
+    time = Box(200, 200, [(3, 150), (8, 0)], 0)
     for box in (name, current, total, fps, time):
         layout.addWidget(box)
     layout.setAlignment(time, Qt.AlignRight)
 
-    assert layout.widths_for(1050) == [300, 200, 200, 150, 200]  # 자리가 있음
-    assert layout.widths_for(1050 - 60) == [300, 180, 180, 130, 200]  # 1) 빈 공간 (똑같이 20씩, 각자 글자 너비까지)
-    assert layout.widths_for(910 - 100) == [300, 120, 180, 60, 150]  # 2) FPS·시간 (똑같이 50씩)
-    assert layout.widths_for(910 - 340) == [210, 120, 180, 30, 30]  # 3) 파일 이름
-    assert layout.widths_for(910 - 340 - 180 - 50) == [30, 120, 130, 30, 30]  # 4) Total
-    assert layout.widths_for(100) == [30, 120, 100, 30, 30]  # 최소보다 좁아도 최소 너비 밑으로는 안 감
+    full = 1050
+    assert layout.widths_for(full) == [300, 200, 200, 150, 200]  # 자리가 있음
+    assert layout.widths_for(full - 60) == [300, 180, 180, 130, 200]  # 1) 빈 공간 (똑같이 20씩, 각자 글자 너비까지)
+    step1 = full - 140  # 빈 공간을 다 냄: 300 + 120 + 180 + 110 + 200
+    assert layout.widths_for(step1 - 100) == [200, 120, 180, 110, 200]  # 2) 파일 이름 먼저
+    assert layout.widths_for(step1 - 250 - 40) == [50, 120, 180, 70, 200]  # 3) 그다음 재생 FPS
+    assert layout.widths_for(step1 - 250 - 90 - 30) == [50, 120, 180, 20, 170]  # 4) 그다음 시간
+    assert layout.widths_for(step1 - 250 - 90 - 50 - 20) == [50, 110, 170, 20, 150]  # 5) Total(+Current 여백)
+    floors = 50 + 110 + 100 + 20 + 150
+    assert layout.widths_for(floors - 10) == [50, 110, 100, 10, 150]  # 6) 접기: 재생 FPS 먼저
+    assert layout.widths_for(floors - 20 - 30) == [20, 110, 100, 0, 150]  # 그다음 파일 이름
+    assert layout.widths_for(floors - 20 - 50 - 100) == [0, 110, 100, 0, 50]  # 마지막에 시간
+    assert layout.widths_for(100) == [0, 110, 100, 0, 0]  # Current·Total은 최소 너비 밑으로 안 감
     row.resize(1100, 30)
     row.show()
     _settle()
     assert time.geometry().right() == row.width() - 1  # 시간은 오른쪽 끝 (예전 addStretch 뒤)
     assert [w.x() for w in (name, current, total, fps)] == [0, 300, 500, 700]
+
+
+def test_real_info_labels_follow_the_shrink_order(player):
+    """실제 정보 줄 라벨의 단계가 위 순서대로인지 (글꼴과 상관없는 설정 확인)."""
+    stages = {name: dict(getattr(player, name).shrink_stages()) for name in INFO_LABELS}
+    soft = {name: min(order for order, floor in stages[name].items() if floor > 0) for name in INFO_LABELS}
+    assert soft["filenameLabel"] < soft["labelPlaybackFPS"] < soft["timeLabel"] < soft["labelTotalFrames"]
+    assert soft["labelFrameCount"] == soft["labelTotalFrames"]
+    collapse = {name: order for name in INFO_LABELS for order, floor in stages[name].items() if floor == 0}
+    assert set(collapse) == {"labelPlaybackFPS", "filenameLabel", "timeLabel"}  # 숫자 라벨은 접히지 않음
+    assert collapse["labelPlaybackFPS"] < collapse["filenameLabel"] < collapse["timeLabel"]
+    assert min(collapse.values()) > max(soft.values())  # 접기는 모든 최소 너비 다음
+    for name in ("labelFrameCount", "labelTotalFrames"):
+        label = getattr(player, name)
+        assert label.minimumSizeHint().width() == label.floor_width() > 0
 
 
 def test_collapse_stage_comes_last():
@@ -354,6 +400,70 @@ def test_light_theme_does_not_elide_at_normal_size(player, tmp_path):
     for name in INFO_LABELS:
         label = getattr(player, name)
         assert label.displayed_text() == label.text(), (name, _layout_report(player))
+
+
+LABEL_FONTS = [("Arial", "12px"), ("Helvetica", "22px"), ("Segoe UI", "12px"), ("Segoe UI", "13px"),
+               ("Times New Roman", "16pt"), ("Courier New", "14px"), ("Verdana", "23px")]
+
+
+def _info_label(qapp, family, size, **kwargs):
+    from yesoncheck.window_layout import ElidedLabel
+
+    label = ElidedLabel(Qt.ElideRight, **kwargs)
+    label.setStyleSheet(f"QLabel {{ padding: 10px; border: 1px solid black; font-family: '{family}'; "
+                        f"font-size: {size}; font-weight: 500; }}")
+    label.ensurePolished()
+    return label
+
+
+@pytest.mark.parametrize("family,size", LABEL_FONTS)
+def test_frame_number_minimums_come_from_the_paint_path(qapp, family, size):
+    """최소 너비는 라벨이 실제로 그리는 방법(…로 줄이기 포함)으로 잰 값: 그 너비에서 어떤 숫자든 Current는 다,
+    Total은 'Total: ddddd'까지 보이고, 1px만 좁아도 어떤 숫자는 안 보임 (따로 잰 글자 너비가 몇 px 모자라서
+    Windows에서 'Total: 1234…'가 되던 문제). 숫자 너비가 서로 다른 글꼴도 있음."""
+    total = _info_label(qapp, family, size, keep_text="Total: 00000 (000F 00f)", keep_prefix="Total: 00000",
+                        hint_width=200, fit_text="Total: 00000 (000F 00f)")
+    current = _info_label(qapp, family, size, keep_text="Current: 00000", hint_width=200, fit_text="Current: 00000")
+
+    def total_ok(width, digit):
+        total.resize(width, 40)
+        total.setText(f"Total: {digit * 5} ({digit * 3}F {digit * 2}f)")
+        return total.displayed_text().startswith(f"Total: {digit * 5}")
+
+    def current_ok(width, digit):
+        current.resize(width, 40)
+        current.setText(f"Current: {digit * 5}")
+        return current.displayed_text() == current.text()
+
+    for label, ok in ((total, total_ok), (current, current_ok)):
+        minimum = label.minimumSizeHint().width()
+        assert all(ok(minimum, digit) for digit in "0123456789"), (family, size, minimum)
+        assert not all(ok(minimum - 1, digit) for digit in "0123456789"), (family, size, minimum)
+
+
+@pytest.mark.parametrize("family,size", LABEL_FONTS)
+def test_file_name_and_time_floors(qapp, family, size):
+    """파일 이름의 최소(줄인) 너비: 가운데를 줄여 앞 4글자와 확장자를 남김. 시간: '00:00:00.000 /'을 남김."""
+    from yesoncheck.window_layout import ElidedLabel
+
+    name = _info_label(qapp, family, size, keep_ends=(4, 4))
+    name._elide_mode = Qt.ElideMiddle
+    name.setText(f"A: {LONG_NAME}")
+    name.resize(name.floor_width(), 40)
+    shown = name.displayed_text()
+    assert shown.startswith("A: H") and shown.endswith(".mov") and "…" in shown, (family, size, shown)
+    name.resize(name.floor_width() - 1, 40)
+    assert not (name.displayed_text().startswith("A: H") and name.displayed_text().endswith(".mov"))
+    name.setText("A: a.mov")  # 짧으면 줄이지 않음
+    name.resize(name.floor_width(), 40)
+    assert name.displayed_text() == "A: a.mov"
+
+    time = _info_label(qapp, family, size, keep_text="00:00:00.000 / 00:00:00.000", keep_prefix="00:00:00.000 /",
+                       hint_text="00:00:00.000 / 00:00:00.000")
+    time.setText("12:34:56.789 / 23:45:01.958")
+    time.resize(time.floor_width(), 40)
+    assert time.displayed_text().startswith("12:34:56.789 /"), (family, size, time.displayed_text())
+    assert ElidedLabel is type(time)
 
 
 def test_elide_only_when_ink_overflows(qapp):
