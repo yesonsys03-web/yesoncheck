@@ -137,6 +137,26 @@ def open_startup_file(player, file_path):
         print(f"File does not exist: {file_path}")
 
 
+# 창을 닫은 뒤 끝나지 않은 작업(예: TensorFlow 추론 중인 애니매틱2)을 기다리는 최대 시간 (초).
+# 넘으면 로그를 남기고 프로세스를 강제로 끝냄 (finish_released_workers)
+EXIT_WAIT_S = 30
+
+
+def finish_released_workers(timeout_s):
+    """창을 닫을 때 붙잡아 둔 작업을 timeout_s초까지 기다리고, 그래도 안 끝나면 로그를 남긴 뒤 os._exit(0).
+
+    실행 중인 QThread가 남은 채 파이썬이 끝나면 모듈 정리 중에 파괴돼 오류로 죽음(Windows 0xC0000409)
+    → 창 없이 오래 남지도, 오류로 죽지도 않게 정해진 시간 뒤에는 드러나게(로그) 강제 종료."""
+    still_running = wait_for_released_workers(timeout_s)
+    if not still_running:
+        return
+    print(f"[닫기] 작업 {len(still_running)}개가 {timeout_s:g}초 안에 끝나지 않아 강제로 종료합니다: "
+          f"{', '.join(still_running)}", flush=True)
+    sys.stdout.flush()
+    sys.stderr.flush()  # Windows 빌드 앱은 stdout·stderr가 로그 파일 (setup_windows_logging)
+    os._exit(0)
+
+
 def launch(argv=None):
     """Create and run the QApplication event loop."""
     argv = list(sys.argv if argv is None else argv)
@@ -189,9 +209,9 @@ def launch(argv=None):
 
     if owns_app:
         code = app.exec_()
-        # 창을 닫을 때 끝나지 않아 붙잡아 둔 작업(예: TensorFlow 추론 중인 애니매틱2)이 끝날 때까지 기다림
-        # (파이썬이 끝나며 실행 중인 QThread가 파괴되면 앱이 오류로 죽음)
-        wait_for_released_workers()
+        # 창을 닫을 때 끝나지 않아 붙잡아 둔 작업(예: TensorFlow 추론 중인 애니매틱2)을 EXIT_WAIT_S초까지 기다림
+        # (넘으면 로그를 남기고 강제 종료 — 실행 중인 QThread가 파이썬 종료 중에 파괴되면 앱이 오류로 죽음)
+        finish_released_workers(EXIT_WAIT_S)
         return code
     return 0
 

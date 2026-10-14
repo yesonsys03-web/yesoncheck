@@ -33,7 +33,9 @@ except ImportError:
 
 # TransNetV2(애니매틱2): transnetv2_detector는 TensorFlow를 불러오지 않음 (감지를 시작할 때만 불러옴).
 # 이 모듈이 깨졌다면 조용히 '없음'으로 숨기지 않고 그대로 실패해야 하므로 ImportError를 잡지 않음
-from yesoncheck.transnetv2_detector import detect_scene_cuts_transnetv2, transnetv2_missing, TRANSNETV2_AVAILABLE
+from yesoncheck.transnetv2_detector import (
+    TRANSNETV2_AVAILABLE, TransNetV2Stopped, detect_scene_cuts_transnetv2, transnetv2_missing,
+)
 
 
 class FFmpegWorker(QThread):
@@ -3445,8 +3447,21 @@ class TransNetV2Worker(QThread):
                     post_process_histogram=self.post_process_histogram,
                     start_frame=self.start_frame,
                     end_frame=self.end_frame,
-                    log_callback=log_callback
+                    log_callback=log_callback,
+                    should_stop=lambda: not self._is_running,
                 )
+            except TransNetV2Stopped as stopped:
+                # 멈추라는 요청(취소·영상 바꿈·창 닫기)으로 중간에 끝남: 오류가 아니라 취소로 알림 (결과 없음)
+                print(f"[TransNetV2Worker] {stopped}")
+                self.status.emit(str(stopped))
+                self.progress.emit(100)
+                self.completed.emit({
+                    "segments": [],
+                    "fps": fps,
+                    "total_frames": total_frames,
+                    "cancelled": True,
+                })
+                return
             except Exception as e:
                 error_msg = f"TransNetV2 실패: {e}"
                 self.status.emit(error_msg)

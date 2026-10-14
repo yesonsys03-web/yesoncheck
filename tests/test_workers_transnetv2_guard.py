@@ -58,3 +58,31 @@ def test_run_still_works_when_transnetv2_available(tmp_path, monkeypatch):
 
     assert errors == [], errors
     assert len(completed) == 1 and len(completed[0]["segments"]) == 1
+
+
+def test_worker_passes_stop_flag_and_reports_stop_as_cancelled(tmp_path, monkeypatch):
+    """감지 함수에 워커의 멈춤 상태를 넘기고, 감지가 '중지됨'으로 끝나면 오류가 아니라 취소(cancelled)로 알림."""
+    from yesoncheck import transnetv2_detector
+
+    seen = {}
+
+    def fake_detect(*args, **kwargs):
+        seen["should_stop"] = kwargs["should_stop"]
+        raise transnetv2_detector.TransNetV2Stopped("애니매틱2 컷 감지 중지됨 (프레임 추출 중 20/300)")
+
+    monkeypatch.setattr(workers, "TRANSNETV2_AVAILABLE", True)
+    monkeypatch.setattr(workers, "detect_scene_cuts_transnetv2", fake_detect)
+    video = write_test_video(str(tmp_path / "v" / "a.mp4"))
+    worker = workers.TransNetV2Worker(video)
+    completed, errors, statuses = [], [], []
+    worker.completed.connect(lambda r: completed.append(r))
+    worker.error.connect(lambda m: errors.append(m))
+    worker.status.connect(lambda m: statuses.append(m))
+
+    worker.stop()
+    worker.run()
+
+    assert seen["should_stop"]() is True  # 워커의 stop()을 따름
+    assert errors == [], errors
+    assert len(completed) == 1 and completed[0]["cancelled"] is True and completed[0]["segments"] == []
+    assert any("중지됨" in s for s in statuses), statuses

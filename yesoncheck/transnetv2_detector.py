@@ -105,6 +105,19 @@ def load_transnetv2_model(weights_dir, log):
         return model
 
 
+# 프레임 추출 중 멈춤 요청을 확인하는 간격 (프레임 수)
+STOP_CHECK_INTERVAL_FRAMES = 10
+
+
+class TransNetV2Stopped(Exception):
+    """멈추라는 요청(취소·영상 바꿈·창 닫기)으로 감지를 중간에 끝냄. 빈 결과를 성공처럼 돌려주지 않고 이 예외로 알림."""
+
+
+def _raise_if_stopped(should_stop, where):
+    if should_stop is not None and should_stop():
+        raise TransNetV2Stopped(f"애니매틱2 컷 감지 중지됨 ({where})")
+
+
 def detect_scene_cuts_transnetv2(
     video_path: str,
     threshold: float = 0.5,
@@ -114,7 +127,8 @@ def detect_scene_cuts_transnetv2(
     post_process_histogram: bool = False,
     start_frame: Optional[int] = None,
     end_frame: Optional[int] = None,
-    log_callback: Optional[Callable[[str], None]] = None
+    log_callback: Optional[Callable[[str], None]] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> List[Dict]:
     """
     Detect scene cuts in a video using TransNetV2 (deep learning-based).
@@ -131,6 +145,9 @@ def detect_scene_cuts_transnetv2(
         detect_gradual_transitions: If True, also detect gradual transitions (dissolves, fades)
         post_process_histogram: If True, apply histogram-based post-processing to find additional cuts
         log_callback: Optional callback function for logging (takes a string message)
+        should_stop: 멈춤 요청 확인 함수 (워커의 stop()). 시작 전·모델을 불러온 뒤·프레임 추출 중
+            (STOP_CHECK_INTERVAL_FRAMES마다)·예측 전후·히스토그램 후처리 전에 확인하고, True면 TransNetV2Stopped를 던짐.
+            TensorFlow 추론(predict_frames, upstream 코드) 자체는 중간에 멈출 수 없음
 
     Returns:
         List of segment dictionaries with keys:
@@ -154,7 +171,9 @@ def detect_scene_cuts_transnetv2(
         if log_callback:
             log_callback(message)
 
+    _raise_if_stopped(should_stop, "시작 전")
     model = load_transnetv2_model(transnetv2_weights_dir(), timed)
+    _raise_if_stopped(should_stop, "모델을 불러온 뒤")
 
     # Open video to get basic info
     cap = cv2.VideoCapture(video_path)
@@ -211,27 +230,31 @@ def detect_scene_cuts_transnetv2(
 
     frames = []
     frame_count = 0
-    while frame_count < frames_to_read:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    try:
+        while frame_count < frames_to_read:
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-        # Convert BGR to RGB
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # Convert BGR to RGB
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # Resize to TransNetV2 input size (48x27)
-        frame_resized = cv2.resize(frame_rgb, (TRANSNETV2_WIDTH, TRANSNETV2_HEIGHT), interpolation=cv2.INTER_AREA)
-        frames.append(frame_resized)
-        frame_count += 1
+            # Resize to TransNetV2 input size (48x27)
+            frame_resized = cv2.resize(frame_rgb, (TRANSNETV2_WIDTH, TRANSNETV2_HEIGHT), interpolation=cv2.INTER_AREA)
+            frames.append(frame_resized)
+            frame_count += 1
 
-        # Log progress every 100 frames
-        if frame_count % 100 == 0:
-            progress_msg = f"프레임 추출: {selection_start + frame_count}/{selection_start + frames_to_read}"
-            print(progress_msg)
-            if log_callback:
-                log_callback(progress_msg)
+            if frame_count % STOP_CHECK_INTERVAL_FRAMES == 0:
+                _raise_if_stopped(should_stop, f"프레임 추출 중 {frame_count}/{frames_to_read}")
 
-    cap.release()
+            # Log progress every 100 frames
+            if frame_count % 100 == 0:
+                progress_msg = f"프레임 추출: {selection_start + frame_count}/{selection_start + frames_to_read}"
+                print(progress_msg)
+                if log_callback:
+                    log_callback(progress_msg)
+    finally:
+        cap.release()
 
     if not frames:
         raise ValueError("비디오에서 프레임을 추출할 수 없습니다.")
@@ -250,7 +273,8 @@ def detect_scene_cuts_transnetv2(
     if log_callback:
         log_callback(shape_msg)
 
-    # Run TransNetV2 prediction
+    # Run TransNetV2 prediction (TensorFlow 추론은 중간에 멈출 수 없으므로 시작 전에 확인)
+    _raise_if_stopped(should_stop, "예측 전")
     predict_msg = "TransNetV2로 씬 전환 감지 중..."
     print(predict_msg)
     if log_callback:
@@ -267,6 +291,7 @@ def detect_scene_cuts_transnetv2(
     print(predict_done_msg)
     if log_callback:
         log_callback(predict_done_msg)
+    _raise_if_stopped(should_stop, "예측 뒤")
 
     # Find scene boundaries
     # predictions is a numpy array with shape (frames,) or (frames, 1)
@@ -441,6 +466,7 @@ def detect_scene_cuts_transnetv2(
 
     # 히스토그램 기반 후처리 (추가 컷 감지)
     if post_process_histogram and segments:
+        _raise_if_stopped(should_stop, "히스토그램 후처리 전")
         post_msg = "[TransNetV2] 히스토그램 기반 후처리 시작..."
         print(post_msg)
         if log_callback:

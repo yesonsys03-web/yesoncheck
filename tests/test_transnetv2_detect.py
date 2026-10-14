@@ -165,3 +165,47 @@ def test_concurrent_first_loads_build_one_model(monkeypatch):
     assert built == ["/w"], built
     assert len(results) == 2 and results[0] is results[1]
     assert sum(line.startswith("TransNetV2 모델 다시 씀") for line in logs) == 1, logs
+
+
+# ---------------------------------------------------------------------------
+# 멈춤: 프레임 추출 중·단계 사이에서 워커의 멈춤 신호를 확인해 "중지됨"으로 바로 끝냄
+# (창을 닫거나 영상을 바꾼 뒤 남은 분석이 오래 돌지 않게. 빈 결과를 성공처럼 돌려주지 않음)
+# ---------------------------------------------------------------------------
+
+class _NoPredictModel:
+    def __init__(self):
+        self.predicted = []
+
+    def predict_frames(self, frames):
+        self.predicted.append(len(frames))
+        raise AssertionError("멈춘 뒤 예측하면 안 됩니다")
+
+
+def test_frame_extraction_honors_stop(tmp_path, monkeypatch):
+    import re
+
+    from tests.conftest import write_test_video
+
+    model = _NoPredictModel()
+    monkeypatch.setattr(transnetv2_detector, "load_transnetv2_model", lambda weights_dir, log: model)
+    clip = write_test_video(str(tmp_path / "long.mp4"), frames=300, size=(64, 48))
+    calls = []
+
+    def should_stop():
+        calls.append(1)
+        return len(calls) > 3  # 시작 전·모델 뒤 확인은 지나고, 프레임 추출 중에 멈춤
+
+    with pytest.raises(transnetv2_detector.TransNetV2Stopped, match="중지됨") as info:
+        transnetv2_detector.detect_scene_cuts_transnetv2(clip, should_stop=should_stop)
+    found = re.search(r"프레임 추출 중 (\d+)/300", str(info.value))
+    assert found and 0 < int(found.group(1)) < 300, str(info.value)
+    assert model.predicted == []
+
+
+def test_stop_before_start_skips_model_load(tmp_path, monkeypatch):
+    loaded = []
+    monkeypatch.setattr(transnetv2_detector, "load_transnetv2_model", lambda weights_dir, log: loaded.append(1))
+    clip = write_three_shot_clip(str(tmp_path / "three_shots.mp4"))
+    with pytest.raises(transnetv2_detector.TransNetV2Stopped, match="중지됨"):
+        transnetv2_detector.detect_scene_cuts_transnetv2(clip, should_stop=lambda: True)
+    assert loaded == []

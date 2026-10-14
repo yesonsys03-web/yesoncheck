@@ -164,7 +164,7 @@ def test_close_window_stops_exports_and_merge(qapp, dialogs, monkeypatch, tmp_pa
     시간 안에 끝나지 않은 작업은 실행 중에 파괴되지 않게 끝날 때까지 붙잡아 둠 (player_base.release_worker)."""
     from yesoncheck import player_base
 
-    monkeypatch.setattr(player_base, "_RELEASED_WORKERS", set())
+    monkeypatch.setattr(player_base, "_RELEASED_WORKERS", {})
     config = tmp_path / ".yesoncheck"
     config.mkdir()
     (config / "work_paths.json").write_text("{}", encoding="utf-8")
@@ -207,5 +207,5 @@ def test_close_window_stops_exports_and_merge(qapp, dialogs, monkeypatch, tmp_pa
     ]
     out = capsys.readouterr().out
     assert "영상 병합이(가) 10초 안에 끝나지 않았습니다" in out
-    assert player_base._RELEASED_WORKERS == {player.merge_worker}, "끝나지 않은 병합을 붙잡아 두지 않았습니다"
+    assert player_base._RELEASED_WORKERS == {player.merge_worker: "영상 병합"}, "끝나지 않은 병합을 붙잡아 두지 않았습니다"
     assert "영상 병합: 아직 실행 중 — 끝날 때까지 붙잡아 둠" in out
