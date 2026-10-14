@@ -162,9 +162,16 @@ def run(workdir):
             return {"construct_show_s": round(shown_s, 3)}
 
         def shared_config_load():
+            from yesoncheck import path_map_setup
+
             load_s = wait_shared_config_load(player, app, timeout_s=120)
             assert startup, "공유 설정 불러오기가 끝났는데 resolve_shared_config_problem이 불리지 않았습니다"
-            return {"load_with_resolve_s": round(load_s, 3), "background_gather_s": round(player.shared_config_load_seconds, 3)}
+            gather_s = player.shared_config_load_seconds
+            # 끊긴 기억된 드라이브(W:)가 있어도 공유 확인은 정해진 시간까지만 기다림 (예전에는 ~21초, 무한히 걸릴 수도)
+            bound_s = path_map_setup.SHARE_PROBE_TIMEOUT_S + 5
+            assert gather_s < bound_s, f"백그라운드 불러오기 {gather_s:.1f}초 (응답 없는 공유를 {bound_s}초 안에 건너뛰어야 함)"
+            return {"load_with_resolve_s": round(load_s, 3), "background_gather_s": round(gather_s, 3),
+                    "background_gather_bound_s": bound_s}
 
         def no_media_player_at_startup():
             # 시작할 때 멀티미디어를 만들지 않는다는 구조적 확인 (창 생성·표시·공유 설정 불러오기·자동 설정까지).
