@@ -305,10 +305,16 @@ def run(workdir):
         """애니매틱2(TransNetV2): 콤보박스에 항목이 있고, 앱과 같은 설정의 워커가 앱처럼 워커 스레드에서
         합성 3샷 영상의 컷을 찾는지 (빌드된 앱에서 TensorFlow를 워커 스레드로 처음 불러오는 경로까지)."""
         from yesoncheck.player_base import release_worker
+        from yesoncheck.transnetv2_detector import transnetv2_weights_dir
         from yesoncheck.workers import TransNetV2Worker
 
         assert player is not None and player.ocrModeComboBox.findData("animatic2") >= 0, \
             "분석 방식 목록에 '애니매틱2 (TransNetV2)'가 없습니다 (TensorFlow 또는 가중치가 빌드에 없음)"
+        # TransNetV2 MIT 라이선스 고지가 가중치 옆에 함께 들어 있어야 함 (spec)
+        license_path = os.path.join(transnetv2_weights_dir(), "LICENSE")
+        assert os.path.isfile(license_path), f"TransNetV2 라이선스 고지(LICENSE)가 없습니다: {license_path}"
+        with open(license_path, encoding="utf-8") as fh:
+            assert "MIT License" in fh.read(), f"LICENSE 내용이 MIT 고지가 아닙니다: {license_path}"
         # 시작·OCR 경로는 TensorFlow를 불러오지 않아야 함 (애니매틱2 감지를 시작할 때 처음 불러옴)
         assert "tensorflow" not in sys.modules, "애니매틱2 감지 전에 TensorFlow가 이미 불려 있습니다"
         path = write_three_shot_clip(os.path.join(workdir, "animatic2_three_shots.mp4"))
@@ -341,7 +347,8 @@ def run(workdir):
         assert "error" not in result, result.get("error")
         starts = [s["start_frame"] for s in result.get("segments", [])]
         assert starts == THREE_SHOT_STARTS, f"씬 시작 프레임 {starts} (기대 {THREE_SHOT_STARTS})"
-        return {"cuts": starts, "seconds": round(time.perf_counter() - started, 2), "thread": "worker"}
+        return {"cuts": starts, "seconds": round(time.perf_counter() - started, 2), "thread": "worker",
+                "license": license_path}
 
     def export(mode):
         from yesoncheck.workers import OCRExportWorker

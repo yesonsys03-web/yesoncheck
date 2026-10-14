@@ -54,6 +54,13 @@ for _rel, _expected in TRANSNETV2_WEIGHTS_SHA256.items():
                          " (Git LFS 포인터 파일이거나 손상됨, vendor/transnetv2-weights/README.md 참고)")
     transnet_datas.append((_path, os.path.dirname('transnetv2-weights/' + _rel)))
 print(f"[spec] TransNetV2 가중치 sha256 확인: {len(transnet_datas)}개 파일 ({TRANSNETV2_WEIGHTS_DIR})")
+# TransNetV2 MIT 라이선스 고지(LICENSE)와 출처(README.md)도 가중치 옆에 넣음 (MIT: 복사본에 고지를 포함해야 함.
+# 로더 코드의 머리말 주석은 바이트코드로 바뀌며 사라지므로 파일로 넣음)
+for _name in ('LICENSE', 'README.md'):
+    _path = os.path.join(TRANSNETV2_WEIGHTS_DIR, _name)
+    if not os.path.isfile(_path):
+        raise SystemExit(f"[spec] TransNetV2 {_name}가 없습니다: {_path}")
+    transnet_datas.append((_path, 'transnetv2-weights'))
 
 # 기본 라이브러리 수집 (collect_all 사용)
 cv2_binaries, cv2_datas, cv2_hiddenimports = [], [], []
