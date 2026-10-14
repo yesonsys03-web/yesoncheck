@@ -160,7 +160,11 @@ def test_merge_worker_stop_before_process_starts(qapp):
 
 
 def test_close_window_stops_exports_and_merge(qapp, dialogs, monkeypatch, tmp_path, capsys):
-    """창을 닫으면 실행 중인 OCR 구간 내보내기·주석 내보내기·병합을 멈추고 기다림 (ffmpeg가 남지 않게)."""
+    """창을 닫으면 실행 중인 OCR 구간 내보내기·주석 내보내기·병합을 멈추고 기다림 (ffmpeg가 남지 않게).
+    시간 안에 끝나지 않은 작업은 실행 중에 파괴되지 않게 끝날 때까지 붙잡아 둠 (player_base.release_worker)."""
+    from yesoncheck import player_base
+
+    monkeypatch.setattr(player_base, "_RELEASED_WORKERS", set())
     config = tmp_path / ".yesoncheck"
     config.mkdir()
     (config / "work_paths.json").write_text("{}", encoding="utf-8")
@@ -188,6 +192,9 @@ def test_close_window_stops_exports_and_merge(qapp, dialogs, monkeypatch, tmp_pa
             self.running = not self.finishes
             return self.finishes
 
+        def deleteLater(self):
+            calls.append((self.name, "deleteLater"))
+
     player.ocr_export_worker = Job("ocr")
     player.annotation_export_worker = Job("annotation")
     player.merge_worker = Job("merge", finishes=False)
@@ -196,5 +203,9 @@ def test_close_window_stops_exports_and_merge(qapp, dialogs, monkeypatch, tmp_pa
         ("ocr", "blockSignals", True), ("ocr", "stop"), ("ocr", "wait", 10000),
         ("annotation", "blockSignals", True), ("annotation", "stop"), ("annotation", "wait", 10000),
         ("merge", "blockSignals", True), ("merge", "stop"), ("merge", "wait", 10000),
+        ("merge", "blockSignals", True),  # release_worker (이미 막혀 있음)
     ]
-    assert "영상 병합이(가) 10초 안에 끝나지 않았습니다" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "영상 병합이(가) 10초 안에 끝나지 않았습니다" in out
+    assert player_base._RELEASED_WORKERS == {player.merge_worker}, "끝나지 않은 병합을 붙잡아 두지 않았습니다"
+    assert "영상 병합: 아직 실행 중 — 끝날 때까지 붙잡아 둠" in out

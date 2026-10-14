@@ -15,9 +15,11 @@ if __package__ in (None, ""):
     sys.path.append(os.path.dirname(os.path.dirname(__file__)))
     from yesoncheck.main_window import VideoPlayer  # type: ignore  # pylint: disable=import-error
     from yesoncheck import timing_log  # type: ignore  # pylint: disable=import-error
+    from yesoncheck.player_base import wait_for_released_workers  # type: ignore  # pylint: disable=import-error
 else:
     from .main_window import VideoPlayer
     from . import timing_log
+    from .player_base import wait_for_released_workers
 
 
 def setup_windows_logging():
@@ -186,7 +188,11 @@ def launch(argv=None):
         QTimer.singleShot(0, lambda: open_startup_file(player, file_path))
 
     if owns_app:
-        return app.exec_()
+        code = app.exec_()
+        # 창을 닫을 때 끝나지 않아 붙잡아 둔 작업(예: TensorFlow 추론 중인 애니매틱2)이 끝날 때까지 기다림
+        # (파이썬이 끝나며 실행 중인 QThread가 파괴되면 앱이 오류로 죽음)
+        wait_for_released_workers()
+        return code
     return 0
 
 

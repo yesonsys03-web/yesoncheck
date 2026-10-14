@@ -85,6 +85,57 @@ def _transnetv2_available():
     return TRANSNETV2_AVAILABLE
 
 
+# 실행 중에 놓아 준 QThread 워커 (끝날 때까지 참조를 붙잡아 둠). 실행 중인 QThread의 마지막 참조가 사라지면
+# GC가 실행 중인 스레드를 파괴해 프로세스가 죽음 ("QThread: Destroyed while thread is still running",
+# Windows 0xC0000409). 애니매틱2(TensorFlow 추론)는 중간에 멈출 수 없어 영상을 바꾸거나 창을 닫은 뒤에도 돌 수 있음
+_RELEASED_WORKERS = set()
+_released_sweep_timer = None
+RELEASED_SWEEP_INTERVAL_MS = 200
+
+
+def _sweep_released_workers():
+    """붙잡아 둔 워커 중 끝난 것을 놓음 (메인 스레드 타이머)."""
+    for worker in [w for w in _RELEASED_WORKERS if not w.isRunning()]:
+        _RELEASED_WORKERS.discard(worker)
+        worker.deleteLater()
+        print(f"[작업] 붙잡아 둔 작업이 끝나 놓음 (남은 작업 {len(_RELEASED_WORKERS)}개)")
+    if not _RELEASED_WORKERS and _released_sweep_timer is not None:
+        _released_sweep_timer.stop()
+
+
+def release_worker(worker, label, block_signals=True):
+    """더 쓰지 않는 QThread 워커를 놓음: 이미 끝났으면 바로 deleteLater, 아직 실행 중이면 끝날 때까지
+    _RELEASED_WORKERS에 붙잡아 두고 메인 스레드 타이머가 끝난 것을 놓음 (finished 신호는 blockSignals로 막히므로 쓰지 않음).
+    block_signals: 놓은 뒤의 진행·완료·오류 신호가 창의 새 상태(새 영상·새 분석)를 건드리지 않게 막음."""
+    global _released_sweep_timer
+    if block_signals:
+        worker.blockSignals(True)
+    if not worker.isRunning():
+        worker.deleteLater()
+        return
+    _RELEASED_WORKERS.add(worker)
+    print(f"[작업] {label}: 아직 실행 중 — 끝날 때까지 붙잡아 둠 (멈추라고 알렸지만 중간에 멈출 수 없는 작업일 수 있음)")
+    if _released_sweep_timer is None:
+        _released_sweep_timer = QTimer()
+        _released_sweep_timer.setInterval(RELEASED_SWEEP_INTERVAL_MS)
+        _released_sweep_timer.timeout.connect(_sweep_released_workers)
+    _released_sweep_timer.start()
+
+
+def wait_for_released_workers():
+    """붙잡아 둔 워커가 모두 끝날 때까지 기다림. app.launch가 이벤트 루프가 끝난 뒤 부름
+    (파이썬이 끝나며 모듈을 정리할 때 실행 중인 QThread가 파괴되지 않게)."""
+    for worker in list(_RELEASED_WORKERS):
+        if worker.isRunning():
+            started = time.perf_counter()
+            print("[작업] 종료 전에 끝나지 않은 작업을 기다리는 중…", flush=True)
+            worker.wait()
+            print(f"[작업] 기다림 끝 ({timing_log.since(started)})", flush=True)
+    _RELEASED_WORKERS.clear()
+    if _released_sweep_timer is not None:
+        _released_sweep_timer.stop()
+
+
 def stored_and_native_path(stored_path, native_path):
     """파일에 적힌 영상 경로와 이 PC에서 연 경로를 메시지용으로. 둘이 같으면(Mac) 한 줄 그대로 (스펙 2-4)."""
     if stored_path == native_path:
@@ -95,6 +146,8 @@ def stored_and_native_path(stored_path, native_path):
 class VideoPlayerBase(QMainWindow):
     # 창을 닫을 때 실행 중인 공유 설정 불러오기를 기다리는 최대 시간 (그 뒤에는 로그만 남기고 닫음)
     SHARED_CONFIG_CLOSE_WAIT_MS = 5000
+    # 창을 닫을 때 실행 중인 분석·내보내기·병합을 기다리는 최대 시간 (그 뒤에는 끝날 때까지 붙잡아 둠)
+    JOB_CLOSE_WAIT_MS = 10000
 
     def __init__(self, ffmpeg_path=None, load_shared_config=True):
         """load_shared_config=False: 공유 설정(NAS)을 읽지 않고 빈 '불러오는 중' 상태로 만듦 — 창을 보인 뒤
@@ -2100,12 +2153,22 @@ QMessageBox {
         
         # 모드에 따라 버튼 활성화 상태 업데이트
         self.on_ocr_mode_changed()
-        if self.ocr_worker and self.ocr_worker.isRunning():
-            self.ocr_worker.stop()
-        self.ocr_worker = None
-        if self.ocr_export_worker and self.ocr_export_worker.isRunning():
-            self.ocr_export_worker.stop()
-        self.ocr_export_worker = None
+        # 실행 중인 워커는 멈추라고만 하고 끝날 때까지 붙잡아 둠 (마지막 참조를 놓으면 실행 중에 파괴돼 앱이 죽음)
+        worker, self.ocr_worker = self.ocr_worker, None
+        if worker is not None:
+            if worker.isRunning():
+                worker.stop()
+                self.ocr_cancelled = False
+                # 놓은 분석의 진행 창: 신호를 막으므로 더는 갱신되지 않음 → 닫음
+                print("[OCR] 영상이 바뀌어 실행 중인 분석·컷 감지를 멈추고 진행 창을 닫음")
+                self.close_ocr_progress_dialog()
+            release_worker(worker, "OCR 분석·컷 감지 (영상이 바뀜)")
+        export_worker, self.ocr_export_worker = self.ocr_export_worker, None
+        if export_worker is not None:
+            if export_worker.isRunning():
+                export_worker.stop()
+            # 내보내기의 취소·오류 알림은 지금처럼 받음 (신호를 막지 않음)
+            release_worker(export_worker, "OCR 구간 내보내기 (영상이 바뀜)", block_signals=False)
         if hasattr(self, 'ocr_review_dialog') and self.ocr_review_dialog is not None:
             self.ocr_review_dialog.close()
             self.ocr_review_dialog.deleteLater()
@@ -2547,7 +2610,8 @@ QMessageBox {
             # self.ocr_progress_dialog = None   # 주석 처리
 
         if self.ocr_worker:
-            self.ocr_worker.deleteLater()
+            # 신호를 보낸 직후라 run()이 아직 안 끝났을 수 있음 → 끝날 때까지 붙잡아 두었다가 지움
+            release_worker(self.ocr_worker, "OCR 분석·컷 감지")
             self.ocr_worker = None
 
         was_cancelled = bool(result.get("cancelled")) if isinstance(result, dict) else False
@@ -2716,7 +2780,8 @@ QMessageBox {
             self.ocr_progress_dialog.close()
             self.ocr_progress_dialog = None
         if self.ocr_worker:
-            self.ocr_worker.deleteLater()
+            # 신호를 보낸 직후라 run()이 아직 안 끝났을 수 있음 → 끝날 때까지 붙잡아 두었다가 지움
+            release_worker(self.ocr_worker, "OCR 분석·컷 감지")
             self.ocr_worker = None
         self.ocr_cancelled = False
         QMessageBox.critical(self, "OCR 오류", message)
@@ -2785,7 +2850,8 @@ QMessageBox {
             # self.ocr_progress_dialog = None   # 주석 처리
 
         if self.ocr_worker:
-            self.ocr_worker.deleteLater()
+            # 신호를 보낸 직후라 run()이 아직 안 끝났을 수 있음 → 끝날 때까지 붙잡아 두었다가 지움
+            release_worker(self.ocr_worker, "OCR 분석·컷 감지")
             self.ocr_worker = None
 
         was_cancelled = bool(result.get("cancelled")) if isinstance(result, dict) else False
@@ -4110,13 +4176,18 @@ QMessageBox {
     
     
     
-    def stop_running_jobs(self, timeout_ms=10000):
-        """창을 닫을 때: 실행 중인 OCR 구간 내보내기·주석 내보내기·병합을 멈추고 끝날 때까지 기다립니다.
+    def stop_running_jobs(self, timeout_ms=None):
+        """창을 닫을 때: 실행 중인 OCR 분석·컷 감지, OCR 구간 내보내기·주석 내보내기·병합을 멈추고 끝날 때까지 기다립니다
+        (최대 timeout_ms, 기본 JOB_CLOSE_WAIT_MS).
 
         멈추지 않으면 ffmpeg가 (Windows에서는 보이지 않은 채) 남아 NAS의 출력 파일을 잡고 있고,
-        실행 중인 QThread가 그대로 파괴됩니다.
+        실행 중인 QThread가 그대로 파괴됩니다. 시간 안에 끝나지 않은 작업(예: TensorFlow 추론 중인 애니매틱2)은
+        끝날 때까지 붙잡아 둡니다 (release_worker, 앱 종료 전에 wait_for_released_workers가 기다림).
         """
+        if timeout_ms is None:
+            timeout_ms = self.JOB_CLOSE_WAIT_MS
         jobs = [
+            ("OCR 분석·컷 감지", "ocr_worker"),
             ("OCR 구간 내보내기", "ocr_export_worker"),
             ("주석 영상 내보내기", "annotation_export_worker"),
             ("영상 병합", "merge_worker"),
@@ -4130,6 +4201,7 @@ QMessageBox {
             worker.stop()
             if not worker.wait(timeout_ms):
                 print(f"창 닫기: {label}이(가) {timeout_ms // 1000}초 안에 끝나지 않았습니다")
+                release_worker(worker, label)
 
     def closeEvent(self, event):
         """앱 종료 시 리소스를 빠르게 정리합니다."""
