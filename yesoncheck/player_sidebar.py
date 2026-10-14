@@ -120,24 +120,32 @@ def _auto_find_config_dir(state, shares, share_problems):
     """(Windows) 이 PC에서 쓸 수 있는 공유(shares: 연결된 네트워크 드라이브·시스템 드라이브의 UNC 링크)와 Harmony식
     C:\\USA_DB\\test_jn\\.yesoncheck에서 공유 설정 폴더를 찾습니다 (같은 폴더는 하나로).
 
+    Harmony 경로(%SystemDrive%\\USA_DB\\test_jn\\.yesoncheck — 링크·바로 가기로 NAS를 가리킬 때만)에서 찾으면 그것이
+    Mac 경로 /USA_DB/test_jn/.yesoncheck와 똑같은 폴더이므로 바로 씀 (네트워크 공유는 확인하지 않음 — 서버가 꺼진
+    기억된 드라이브의 시간 제한을 기다리지 않게). 아니면 공유에서 찾음:
     딱 하나면 PC별 설정에 저장하고 그 폴더를 돌려줍니다. 여러 개면 state.config_dir_candidates에 남기고
     (창 표시 후 고르게 함) None. 하나도 못 찾으면 state.config_dir_search_failed를 True로 남기고 None.
     PC별 설정 저장 실패는 state.shared_config_problem에 남기고 None. 확인하지 못한 곳(드라이브 연결 정보, 링크의 실제
-    위치)은 state.config_dir_search_problems에 남김 (폴더를 고르게 할 때 보임).
+    위치, 응답 없는 공유)은 state.config_dir_search_problems에 남김 (폴더를 고르게 할 때 보임).
     """
     timing_log.log("공유 설정", "PC별 설정의 공유 설정 폴더가 없거나 열리지 않음 → 이 PC의 공유에서 찾는 중…")
     started = time.perf_counter()
-    found = []
-    seen = set()
     local, local_problem = path_map_setup.find_local_config_dir()
     search_problems = list(share_problems) + ([local_problem] if local_problem else [])
-    on_shares = path_map_setup.find_config_dirs(shares, problems=search_problems)  # 응답 없는 공유는 problems로
     state.config_dir_search_problems = search_problems
-    for folder in ([local] if local else []) + on_shares:
-        key = path_map_setup.config_dir_key(folder)
-        if key not in seen:
-            seen.add(key)
-            found.append(folder)
+    if local:
+        timing_log.log("공유 설정", f"Harmony 경로({path_map_setup.system_drive()}\\"
+                                   f"{paths._mac_parts(shared_config.MAC_CONFIG_DIR)[0]})에서 찾음: {local} — "
+                                   "다른 공유는 확인하지 않음")
+        found = [local]
+    else:
+        found = []
+        seen = set()
+        for folder in path_map_setup.find_config_dirs(shares, problems=search_problems):  # 응답 없는 공유는 problems로
+            key = path_map_setup.config_dir_key(folder)
+            if key not in seen:
+                seen.add(key)
+                found.append(folder)
     timing_log.log("공유 설정", f"찾기 끝 ({timing_log.since(started)}): {', '.join(found) or '못 찾음'}")
     if len(found) != 1:
         state.config_dir_candidates = found

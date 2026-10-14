@@ -407,28 +407,60 @@ def settings_of(tmp_path):
         return json.load(fh)
 
 
-def test_config_dir_found_through_harmony_link(win, dialogs, tmp_path, monkeypatch):
+def no_share_search(*args, **kwargs):
+    raise AssertionError("Harmony 경로에서 찾았는데 네트워크 공유도 확인했습니다")
+
+
+def test_config_dir_found_through_harmony_link(win, dialogs, tmp_path, monkeypatch, capsys):
+    """C:\\USA_DB(링크)가 NAS를 가리킴 → Mac 경로와 똑같은 폴더이므로 바로 씀: 공유는 확인하지 않고 PC별 설정에 저장."""
     mirror = harmony_mirror(tmp_path)
     real = "\\\\localhost\\yc_fake_usadb\\test_jn\\.yesoncheck"
     monkeypatch.setattr(path_map_setup, "_default_is_file", lambda p: p.casefold() == f"{mirror}\\work_paths.json".casefold())
     monkeypatch.setattr(path_map_setup, "_default_realpath", lambda p: {mirror: real}[p])
+    monkeypatch.setattr(path_map_setup, "find_config_dirs", no_share_search)
     player = win.player()
     assert settings_of(tmp_path) == {"config_dir": real}  # 링크의 실제 UNC를 저장 (다른 PC와 같은 주소)
     assert player.work_paths_config_dir == real
     assert player.config_dir_candidates == []
+    drive = str(tmp_path / "sysdrive")  # win: %SystemDrive% (실제 PC에서는 C:)
+    assert f"Harmony 경로({drive}\\USA_DB)에서 찾음: {real} — 다른 공유는 확인하지 않음" in capsys.readouterr().out
 
 
-def test_harmony_link_and_drive_to_same_config_count_once(win, dialogs, tmp_path, monkeypatch):
-    share = "\\\\localhost\\yc_fake_usadb"
-    win.shares = [Share(share, ["U:"])]
+def test_harmony_mirror_wins_over_drive_configs(win, dialogs, tmp_path, monkeypatch):
+    """Harmony 경로에서 찾으면 다른 드라이브의 설정 폴더(서버가 꺼진 공유 포함)는 확인하지 않음 → 고르는 목록 없이 바로 씀.
+
+    (예전 '링크와 드라이브가 같은 폴더면 하나로' 시험을 바꿈: 이제 드라이브는 확인하지 않으므로 겹칠 일이 없음)
+    """
+    win.shares = [Share("\\\\localhost\\yc_fake_b", ["B:"]), Share("\\\\localhost\\yc_fake_dead", ["W:"])]
     mirror = harmony_mirror(tmp_path)
-    real = f"{share}\\test_jn\\.yesoncheck"
-    files = {f"{mirror}\\work_paths.json".casefold(), f"{real}\\work_paths.json".casefold()}
+    real = "\\\\localhost\\yc_fake_usadb\\test_jn\\.yesoncheck"
+    files = {f"{mirror}\\work_paths.json".casefold(), "\\\\localhost\\yc_fake_b\\test_jn\\.yesoncheck\\work_paths.json"}
     monkeypatch.setattr(path_map_setup, "_default_is_file", lambda p: p.casefold() in files)
-    monkeypatch.setattr(path_map_setup, "_default_realpath", lambda p: {mirror: real.upper()}[p])
+    monkeypatch.setattr(path_map_setup, "_default_realpath", lambda p: {mirror: real}[p])
+    monkeypatch.setattr(path_map_setup, "find_config_dirs", no_share_search)
     player = win.player()
-    assert player.config_dir_candidates == []  # 같은 폴더 → 후보 하나 → 바로 씀
-    assert paths.unc_key(settings_of(tmp_path)["config_dir"]) == paths.unc_key(real)
+    assert player.config_dir_candidates == []
+    assert settings_of(tmp_path) == {"config_dir": real}
+
+
+def test_shares_searched_when_harmony_mirror_not_found(win, dialogs, tmp_path, monkeypatch):
+    """Harmony 경로에 없으면 예전처럼 공유를 (시간 제한을 두고) 확인함."""
+    share = "\\\\localhost\\yc_fake_cfg"
+    win.shares = [Share(share, ["U:"])]
+    target = f"{share}\\test_jn\\.yesoncheck"
+    monkeypatch.setattr(path_map_setup, "_default_is_file", lambda p: p.casefold() == f"{target}\\work_paths.json".casefold())
+    searched = []
+    real_find = path_map_setup.find_config_dirs
+
+    def spy(shares, *args, **kwargs):
+        searched.append([s.unc for s in shares])
+        return real_find(shares, *args, **kwargs)
+
+    monkeypatch.setattr(path_map_setup, "find_config_dirs", spy)
+    player = win.player()
+    assert searched == [[share]]
+    assert settings_of(tmp_path) == {"config_dir": target}
+    assert player.work_paths_config_dir == target
 
 
 def test_local_harmony_folder_is_not_used(win, dialogs, tmp_path, monkeypatch, capsys):
