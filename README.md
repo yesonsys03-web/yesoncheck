@@ -4,7 +4,7 @@
 YesonCheck는 PyQt5 기반의 영상 비교/검토 툴입니다. 이번 리팩터링으로 코드가 패키지 구조(`yesoncheck/`)로 재정비되어 유지보수가 쉬워졌으며, 기능과 UI는 기존 버전과 동일하게 동작합니다.
 
 ## 준비 사항
-- Python 3.10 (권장: `/Users/studio01/coding/p310` 가상환경)
+- Python 3.10 (권장: `./setup_build_env.sh`가 만드는 `~/coding/p310_tf` 가상환경 — TensorFlow 포함. TF 이전의 `~/coding/p310`은 빌드에 쓰지 않음)
 - 시스템에 설치된 FFmpeg 6.x 이상 (`ffmpeg`, `ffprobe` 명령어가 PATH에서 동작해야 함)
 - pip 최신 버전: `python -m pip install --upgrade pip`
 
@@ -16,6 +16,8 @@ YesonCheck는 PyQt5 기반의 영상 비교/검토 툴입니다. 이번 리팩�
 - `numpy` : 배열 연산 및 영상 버퍼 처리
 - `pyinstaller` : macOS 앱 번들 패키징 시 사용 (개발 모드 실행만 필요하다면 생략 가능)
 - `paddlepaddle`, `paddleocr` : ROI 영역 글자 인식을 위한 PaddleOCR 엔진 (macOS의 경우 [Paddle 공식 안내](https://www.paddlepaddle.org.cn/install/quick)와 같이 OS별 설치 옵션을 참고하세요.)
+- `tensorflow` 2.15.1 : 애니매틱2(TransNetV2 딥러닝 컷 감지). TransNetV2 코드(`yesoncheck/transnetv2_model.py`)와
+  가중치(`vendor/transnetv2-weights/`)는 저장소에 들어 있어 pip로 따로 설치하지 않습니다. x86에서는 CPU가 AVX를 지원해야 합니다.
 
 ## 실행 방법
 
@@ -27,7 +29,7 @@ YesonCheck는 PyQt5 기반의 영상 비교/검토 툴입니다. 이번 리팩�
 | **앱 실행** | 터미널에서 `./run_app.sh` 실행 (또는 앱 메뉴 **Help → 실행 및 빌드** → **▶ 앱 실행**) |
 | **macOS 앱 빌드** | 터미널에서 `./build_app.sh` 실행 (또는 **Help → 실행 및 빌드** → **📦 macOS 앱 빌드**) |
 
-- `run_app.sh`, `build_app.sh`는 프로젝트 루트에 있으며, p310 가상환경(`~/coding/p310`)을 사용합니다.
+- `run_app.sh`, `build_app.sh`는 프로젝트 루트에 있으며, `~/coding/p310_tf` 가상환경을 사용합니다.
 - 앱이 떠 있는 상태에서는 **Help → 실행 및 빌드**에서 위 버튼을 누르면 새 터미널에서 실행/빌드됩니다.
 
 ### 수동 실행 (가상환경·명령어 직접 사용 시)
@@ -37,7 +39,7 @@ YesonCheck는 PyQt5 기반의 영상 비교/검토 툴입니다. 이번 리팩�
    ```
 2. 가상환경 활성화  
    ```bash
-   source ~/coding/p310/bin/activate
+   source ~/coding/p310_tf/bin/activate
    ```
 3. 애플리케이션 실행  
    ```bash
@@ -96,11 +98,12 @@ YesonCheck는 PyQt5 기반의 영상 비교/검토 툴입니다. 이번 리팩�
 - **원클릭**: 터미널에서 `./build_app.sh` 실행 또는 앱 메뉴 **Help → 실행 및 빌드** → **📦 macOS 앱 빌드**.
 - 생성된 앱은 `dist/YesonCheck_Autocut_Intel.app` 또는 `dist/YesonCheck_Autocut_AppleSilicon.app`(빌드한 Mac 기준)에 위치합니다.
 - 앱에는 `vendor/ffmpeg/<아키텍처>/`의 정적 ffmpeg·ffprobe가 들어갑니다 (Homebrew ffmpeg는 사용하지 않음).
-- 수동 빌드 시: `source ~/coding/p310/bin/activate` 후 `python -m PyInstaller --clean -y YesonCheck_Autocut.spec`, 이어서 `python check_min_macos.py dist/YesonCheck_Autocut.app $(uname -m)`로 번들을 검사하세요.
+- 수동 빌드 시: `source ~/coding/p310_tf/bin/activate` 후 `python -m PyInstaller --clean -y YesonCheck_Autocut.spec`, 이어서 `python check_min_macos.py dist/YesonCheck_Autocut.app $(uname -m)`로 번들을 검사하세요.
 
 ## 주요 기능
 - **OCR 분석**: PaddleOCR을 사용한 텍스트 인식 및 구간 추출
 - **애니매틱 모드**: PySceneDetect를 사용한 자동 씬 컷 감지
+- **애니매틱2 모드**: TransNetV2(TensorFlow)를 사용한 컷 감지 (디졸브·페이드 포함, Mac·Windows 빌드에 포함)
 - **웹UI 실시간 동기화**: WebSocket을 통한 데스크탑-웹 양방향 동기화
 - **씬 편집**: 병합, 삭제, 씬 분할, 스마트 병합, undo/redo
 - **우클릭 컨텍스트 메뉴**: 타임라인 및 테이블에서 우클릭으로 모든 편집 기능 접근 (데스크탑 및 웹UI)
@@ -133,6 +136,6 @@ yesoncheck/
 
 ## 트러블슈팅
 - **`ModuleNotFoundError: No module named 'cv2'`**  
-  가상환경이 올바르게 활성화되었는지 확인하세요. 환경이 깨졌다면 `~/coding/p310`을 지우고 `./setup_build_env.sh`로 다시 만드세요.
+  가상환경이 올바르게 활성화되었는지 확인하세요. 환경이 깨졌다면 `~/coding/p310_tf`를 지우고 `./setup_build_env.sh`로 다시 만드세요.
 - **FFmpeg 관련 오류**  
   개발 모드(`run_app.sh`)는 PATH의 `ffmpeg`·`ffprobe`를 씁니다(`brew install ffmpeg`). 빌드된 앱은 번들 안의 정적 ffmpeg를 씁니다.

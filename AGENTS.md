@@ -2,14 +2,15 @@
 
 ## 프로젝트 구조 및 모듈 구성
 - `yesoncheck/` 디렉토리에 런타임 코드가 있습니다. `app.py`는 Qt를 부트스트랩하고, `main_window.py`는 `player_base.py`, `player_playback.py`, `player_sidebar.py`로부터 `VideoPlayer`를 조립합니다. `player_review.py`와 `player_timeline.py`는 OCR 검토 UI를 담당하며, `player_review.py`는 WebSocket 서버를 포함합니다. `web_info.py`는 웹UI HTML 생성 및 WebSocket 통신을 담당합니다. `video_widget.py`는 커스텀 뷰포트를 렌더링하고, `workers.py`는 FFmpeg 및 썸네일 스레드를 포함합니다. 헬퍼 함수들은 `frame_utils.py`와 `styles.py`에 있습니다.
-- `YesonCheck_p310_apted.spec`이 PyInstaller를 제어합니다. 번들링이 제대로 작동하도록 `../Info.plist`, `icon.icns`, 그리고 FFmpeg 바이너리를 같은 디렉토리에 두세요.
+- `YesonCheck_Autocut.spec`이 PyInstaller를 제어합니다 (정적 ffmpeg는 `vendor/ffmpeg/`, TransNetV2 가중치는 `vendor/transnetv2-weights/`). 빌드 방법은 `BUILD.md`.
 - 썸네일과 같은 레거시 자산은 프로젝트별 `.yesoncheck_thumb/` 폴더에 캐시됩니다. 표시 문제를 보고하기 전에 오래된 캐시를 정리하세요.
-- 문서는 `README.md` (환경 설정)와 이 가이드에 있습니다. 아직 자동화된 테스트 디렉토리는 없습니다.
+- 문서는 `README.md` (환경 설정), `BUILD.md` (빌드)와 이 가이드에 있습니다. 자동화된 시험은 `tests/` (pytest)에 있습니다.
 
 ## 빌드, 테스트 및 개발 명령어
-- `source ~/coding/p310/bin/activate && pip install -r requirements.txt` (또는 나열된 패키지들)로 Python 3.10의 의존성을 새로고침합니다.
+- `./setup_build_env.sh`로 `~/coding/p310_tf`(Python 3.10, 아키텍처별 lock의 고정 버전, TensorFlow 2.15.1 포함)를 만듭니다. TransNetV2는 pip로 설치하지 않습니다 (코드·가중치가 저장소에 있음).
 - `python -m yesoncheck.app`로 개발 빌드를 실행합니다. 새로운 미디어 타입을 추가할 때 코덱 경고를 확인하세요.
-- `~/coding/p310/bin/python -m PyInstaller --clean -y YesonCheck_p310_apted.spec`로 `dist/YesonCheck_p310_apted.app`을 생성합니다. 상대 경로가 제대로 해석되도록 저장소 루트에서 실행하세요.
+- `./build_app.sh`(기본 `~/coding/p310_tf`)로 `dist/YesonCheck_Autocut_<Intel|AppleSilicon>.app`과 `.dmg`를 만들고 번들 검사(`check_min_macos.py`, `check_frozen_imports.py`)를 합니다. 저장소 루트에서 실행하세요.
+- `~/coding/p310_tf/bin/python -m pytest tests -q`로 시험합니다.
 - `python -m compileall yesoncheck`는 패치를 제출하기 전에 실행할 빠른 구문 검사입니다.
 
 ## 코딩 스타일 및 명명 규칙

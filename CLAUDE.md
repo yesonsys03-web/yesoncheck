@@ -12,18 +12,18 @@ YesonCheck는 PyQt5로 구축된 전문 비디오 비교 및 OCR 분석 도구�
 
 ### 개발 환경
 ```bash
-# 가상 환경 활성화 (Python 3.10 권장)
-source ~/coding/p310/bin/activate
+# 빌드·개발 환경 만들기 (최초 1회): ~/coding/p310_tf에 Python 3.10 + 아키텍처별 lock의 고정 버전
+# (PyQt5, opencv 4.6.0.66, paddle, paddleocr 2.7.3, scenedetect 0.6.7.1, TensorFlow 2.15.1 등 — BUILD.md)
+./setup_build_env.sh
 
-# 핵심 의존성 설치
-pip install PyQt5==5.15.11 opencv-python==4.10.0.84 numpy==1.26.4 \
-    pyinstaller==6.14.1 paddlepaddle==2.6.1 paddleocr==2.7.3.3
+# 가상 환경 활성화 (TF 이전의 ~/coding/p310은 빌드에 쓰지 않음)
+source ~/coding/p310_tf/bin/activate
 
-# 애니매틱 모드를 위한 PySceneDetect 설치
-pip install scenedetect[opencv]
+# TransNetV2(애니매틱2)는 pip로 설치하지 않음: 로더 코드 yesoncheck/transnetv2_model.py와
+# 가중치 vendor/transnetv2-weights/가 저장소에 들어 있음 (upstream 85cef72, MIT)
 
-# 향상된 점진적 전환 감지를 위한 TransNetV2 설치 (선택 사항)
-pip install git+https://github.com/soCzech/TransNetV2.git
+# 시험
+python -m pytest tests -q
 
 # 애플리케이션 실행
 python -m yesoncheck.app
@@ -37,14 +37,11 @@ python -m compileall yesoncheck
 
 ### macOS 애플리케이션 빌드
 ```bash
-# 이전 빌드 정리
-rm -rf build dist
-
-# PyInstaller로 빌드
-pyinstaller YesonCheck_Autocut.spec --noconfirm
+# 빌드 + 번들 검사(최소 macOS·모듈) + dmg (BUILD.md)
+./build_app.sh
 
 # 출력 위치
-# dist/YesonCheck_Autocut.app
+# dist/YesonCheck_Autocut_Intel.app 또는 dist/YesonCheck_Autocut_AppleSilicon.app (+ .dmg)
 ```
 
 ### 외부 의존성
@@ -199,7 +196,9 @@ class VideoPlayer(PlayerSidebarMixin, PlayerPlaybackMixin, VideoPlayerBase):
 - 딥러닝 기반 씬 경계 감지
 - 하드 컷 감지 (급격한 씬 변화)
 - 점진적 전환 감지 (디졸브, 페이드, 와이프)
-- `pip install git+https://github.com/soCzech/TransNetV2.git` 필요
+- TensorFlow 2.15.1 사용 (빌드에 포함). 코드·가중치는 저장소에 있음 (`yesoncheck/transnetv2_model.py`, `vendor/transnetv2-weights/`)
+- TensorFlow는 앱 시작 때 불러오지 않고 첫 애니매틱2 분석에서 불러옴 (불러온 모델은 프로세스 안에서 다시 씀)
+- x86에서는 CPU가 AVX를 지원해야 함 (없으면 항목을 숨기고 시작 로그에 이유)
 - 효율성을 위해 48x27 픽셀로 프레임 처리
 - 설정 가능한 임계값 (기본값 0.5) 및 최소 씬 길이 (15프레임)
 - ROI 선택 불필요
@@ -227,12 +226,12 @@ class VideoPlayer(PlayerSidebarMixin, PlayerPlaybackMixin, VideoPlayerBase):
 - scikit-image: morphology 모듈
 - apted: 트리 편집 거리 라이브러리 (프로젝트 디렉토리에 번들)
 
-**제외된 의존성** (번들 크기를 줄이기 위해):
-- torch, tensorflow, transformers
-- pandas, matplotlib, sympy
-- nltk, librosa, pygame
+- TensorFlow 2.15.1: pyinstaller-hooks-contrib의 hook-tensorflow가 수집, hiddenimports에 `yesoncheck.transnetv2_model`·`tensorflow`
+- TransNetV2 가중치: spec이 `vendor/transnetv2-weights/`의 sha256을 확인하고 앱의 `transnetv2-weights/`에 넣음 (LICENSE·README.md 포함)
 
-**참고**: TransNetV2는 현재 개발을 위한 선택적 의존성입니다. PyInstaller에 번들링하려면 적절한 hidden imports와 함께 spec 파일에 추가해야 합니다.
+**제외된 의존성** (번들 크기를 줄이기 위해, spec의 excludes):
+- torch, transformers, sklearn, matplotlib, sympy, nltk, librosa, pygame 등
+- tensorboard, tensorflow_io_gcs_filesystem (TensorFlow가 끌어오지만 앱은 쓰지 않음. keras·h5py는 TF import에 필요해 둠)
 
 ## 프레임 계산 시스템
 
@@ -299,15 +298,10 @@ else:  # 개발 환경
     ffmpeg_path = "ffmpeg"
 ```
 
-### 선택적 의존성 처리
-TransNetV2는 애플리케이션이 없이도 실행될 수 있도록 조건부로 임포트됩니다:
-```python
-try:
-    from transnetv2 import TransNetV2
-    TRANSNETV2_AVAILABLE = True
-except ImportError:
-    TRANSNETV2_AVAILABLE = False
-```
+### 애니매틱2(TransNetV2) 사용 가능 여부
+`transnetv2_detector.transnetv2_missing()`이 TensorFlow를 불러오지 않고 확인합니다 (tensorflow find_spec, 가중치 세 파일,
+x86이면 CPU AVX). `TRANSNETV2_AVAILABLE`이 False면 분석 방식 목록에서 애니매틱2를 숨기고 시작 로그에 이유를 남깁니다.
+ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈 자체 오류는 그대로 드러나야 함).
 
 ## 테스트 전략
 
@@ -356,7 +350,7 @@ except ImportError:
 - OCR은 현재 영어만 지원
 - ROI 추적은 빠른 움직임이나 씬 변경 시 실패할 수 있음
 - FFmpeg는 별도로 설치해야 함 (번들되지 않음)
-- TransNetV2는 선택 사항; 설치되지 않은 경우 애플리케이션이 자연스럽게 대체
+- 애니매틱2(TransNetV2)는 TensorFlow·가중치가 없거나 x86 CPU에 AVX가 없으면 목록에서 숨김 (시작 로그에 이유)
 - TransNetV2는 긴 비디오 처리를 위해 상당한 메모리 필요
 
 ## 파일 구성
@@ -407,7 +401,8 @@ except ImportError:
 - FFmpeg stderr는 인코딩 진단 제공
 - 프레임 캐시 통계 사용 가능: `cache_hits` 및 `cache_misses`
 - ROI 좌표는 픽셀과 백분율로 모두 표시
-- TransNetV2 가용성은 모듈을 임포트하면 시작 시 로그에 기록됨
+- 애니매틱2를 숨기면 시작 로그에 `애니매틱2(TransNetV2) 항목 숨김 — 이 빌드/환경에 없는 것: [...]`
+- 애니매틱2 분석 로그: `[애니매틱2 …] TensorFlow 불러오는 중…/불러옴 (n초)`, 모델 불러옴/다시 씀
 
 ## 새로운 씬 감지 방법 추가
 
@@ -454,6 +449,6 @@ except ImportError:
 - **Apted 통합**: 개선된 OCR 텍스트 비교를 위한 트리 편집 거리 라이브러리 추가
 
 ### 빌드 설정
-- **Python 버전**: Python 3.10 (p310 가상 환경)
+- **Python 버전**: Python 3.10 (`~/coding/p310_tf` 가상 환경, `./setup_build_env.sh` — TensorFlow 2.15.1 포함)
 - **Spec 파일**: TransNetV2 및 PySceneDetect 의존성을 포함한 `YesonCheck_Autocut.spec`
 - **런타임 훅**: PaddleOCR 호환성을 위한 `_fixed` 변형 사용
