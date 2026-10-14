@@ -1413,10 +1413,20 @@ QSlider::add-page:horizontal {
                 QTimer.singleShot(100, self.reposition_overlay_to_bottom_center)
     
     def force_focus(self):
-        """포커스를 강제로 메인 윈도우로 설정"""
+        """포커스를 메인 윈도우로 되돌림 (창 상태 변경·V 키·오버레이 위치 리셋 뒤 단축키가 먹도록).
+
+        보통 QTimer로 100ms 뒤에 불리므로 실행되는 그 순간에 다시 확인한다: 모달 대화상자·팝업이 떠 있거나 이 앱의
+        다른 창이 활성이면 아무것도 안 함. Windows에서는 여기의 activateWindow()가 모달 창(예: OCR 선택 구간 분석의
+        '종료 프레임' 입력 창)에서 키보드 포커스를 빼앗아 글자가 입력되지 않았음. 이 앱에 활성 창이 없으면
+        (다른 앱이 앞에 있음) 예전처럼 활성화를 시도한다.
+        """
+        if QApplication.activeModalWidget() is not None or QApplication.activePopupWidget() is not None:
+            return
+        active_window = QApplication.activeWindow()
+        if active_window is not None and active_window is not self:
+            return
         self.setFocus()
         self.activateWindow()
-        # 디버깅 출력 제거 - 과도한 로그 방지
 
     def reposition_overlay_to_bottom_center(self):
         """V 키 활성 상태에서 윈도우 크기 변경 시 오버레이 컨트롤러를 하단 중앙으로 재배치"""
