@@ -253,6 +253,15 @@ def test_close_while_loading_ignores_late_result(win, dialogs, tmp_path, monkeyp
     monkeypatch.setattr(shared_config, "read_work_paths", fake)
     monkeypatch.setattr(VideoPlayerBase, "SHARED_CONFIG_CLOSE_WAIT_MS", 100)
     player = loading_player(win, monkeypatch, config)
+    player.show()
+    visible_while_waiting = []
+    original_wait = player.wait_for_shared_config_load
+
+    def recording_wait(timeout_ms):
+        visible_while_waiting.append(player.isVisible())
+        return original_wait(timeout_ms)
+
+    player.wait_for_shared_config_load = recording_wait
     try:
         player.start_shared_config_load()
         assert entered.wait(5)
@@ -260,6 +269,7 @@ def test_close_while_loading_ignores_late_result(win, dialogs, tmp_path, monkeyp
         started = time.monotonic()
         player.close()
         assert time.monotonic() - started < 5  # 기다림은 정해진 시간까지만
+        assert visible_while_waiting == [False]  # 기다리기 전에 창을 숨김 (보이는 창이 멈춰 있지 않게)
         assert "끝나지 않았습니다" in capsys.readouterr().out
         assert load.isRunning()
     finally:
@@ -348,6 +358,48 @@ def test_launch_shows_window_then_loads_shared_config(qapp, monkeypatch):
     created[0].close()
 
 
+def test_launch_opens_command_line_file_after_window_is_shown(qapp, monkeypatch, tmp_path, capsys):
+    """명령줄로 받은 파일은 창을 보이고 스플래시를 닫은 뒤에 엶 (여는 중 소리 재생기를 만들고, 오류 창이 가려지지 않게)."""
+    from yesoncheck import app as app_module
+
+    video = tmp_path / "a.mov"
+    video.write_bytes(b"x")
+    events = []
+
+    class FakePlayer(QWidget):
+        def __init__(self, **kwargs):
+            super().__init__()
+
+        def show(self):
+            events.append("show")
+            super().show()
+
+        def start_shared_config_load(self):
+            events.append("load")
+
+        def open_file(self, video_type, file_path):
+            events.append(("open", video_type, file_path))
+
+    created = []
+    monkeypatch.setattr(app_module, "VideoPlayer", lambda **kwargs: created.append(FakePlayer(**kwargs)) or created[-1])
+    try:
+        assert app_module.launch(["yesoncheck", str(video)]) == 0
+        assert events == ["show"]  # launch 안에서는 열지 않음
+        wait_until(lambda: len(events) == 3)
+        assert events == ["show", "load", ("open", "A", str(video))]
+
+        events.clear()
+        missing = str(tmp_path / "없음.mov")
+        assert app_module.launch(["yesoncheck", missing]) == 0
+        wait_until(lambda: "load" in events)
+        QApplication.processEvents()
+        assert events == ["show", "load"]
+        assert f"File does not exist: {missing}" in capsys.readouterr().out
+    finally:
+        for player in created:
+            player.close()
+
+
 def test_launch_closes_splash_when_window_fails(qapp, monkeypatch):
     """창을 만들다 실패하면 오류 창이 스플래시(항상 위)에 가려지지 않도록 스플래시를 먼저 닫음."""
     from yesoncheck import app as app_module
@@ -391,3 +443,118 @@ def test_smoke_open_like_launch(qapp, dialogs, work_area, monkeypatch):
         player.close()
         paths.activate(None)
 
+
+def test_media_player_creation_shows_wait_cursor(win, dialogs, monkeypatch):
+    """처음 쓸 때 재생기를 만드는 동안(Windows에서 수 초) 대기 커서. 만들다 실패해도 커서는 되돌리고 오류는 그대로."""
+    from PyQt5.QtCore import Qt
+
+    from yesoncheck import player_base
+
+    real = player_base.QMediaPlayer
+    cursors = []
+
+    def recording(parent):
+        cursor = QApplication.overrideCursor()
+        cursors.append(None if cursor is None else cursor.shape())
+        return real(parent)
+
+    monkeypatch.setattr(player_base, "QMediaPlayer", recording)
+    player = loading_player(win, monkeypatch)
+    assert QApplication.overrideCursor() is None
+    player.mediaPlayer
+    assert cursors == [Qt.WaitCursor]
+    assert QApplication.overrideCursor() is None
+
+    def failing(parent):
+        raise RuntimeError("재생기 생성 실패 (시험)")
+
+    monkeypatch.setattr(player_base, "QMediaPlayer", failing)
+    other = loading_player(win, monkeypatch)
+    with pytest.raises(RuntimeError, match="재생기 생성 실패"):
+        other.mediaPlayer
+    assert QApplication.overrideCursor() is None
+
+
+EXIT_CHILD = r"""
+import sys, threading, time
+sys.path.insert(0, sys.argv[1])
+from PyQt5.QtCore import QTimer
+from yesoncheck import app as app_module, path_map_setup, player_sidebar
+from yesoncheck.path_map_setup import Share
+from yesoncheck.player_base import VideoPlayerBase
+
+VideoPlayerBase.SHARED_CONFIG_CLOSE_WAIT_MS = 200
+probing = threading.Event()
+
+
+def dead_share_is_file(path):
+    probing.set()
+    time.sleep(300)  # 서버가 꺼진 공유처럼 오래 걸림 (닫는 쪽은 이것을 기다리면 안 됨)
+    return False
+
+
+def blocked_gather(find_works_not_opening=False):
+    path_map_setup.find_config_dirs(
+        [Share("\\\\192.0.2.1\\dead", ["W:"]), Share("\\\\192.0.2.2\\dead", ["V:"])], is_file=dead_share_is_file)
+    raise AssertionError("여기까지 오면 안 됨")
+
+
+player_sidebar.gather_shared_config = blocked_gather
+real_player = app_module.VideoPlayer
+started = time.monotonic()
+
+
+def player_factory(**kwargs):
+    player = real_player(**kwargs)
+
+    def close_when_probing():
+        if probing.is_set():
+            print("CHILD: 공유 확인 중 → 1초 뒤 창 닫기", flush=True)
+            QTimer.singleShot(1000, player.close)
+        elif time.monotonic() - started > 60:
+            print("CHILD: 공유 확인이 시작되지 않음 → 창 닫기", flush=True)
+            player.close()
+        else:
+            QTimer.singleShot(50, close_when_probing)
+
+    QTimer.singleShot(0, close_when_probing)
+    return player
+
+
+app_module.VideoPlayer = player_factory
+code = app_module.launch([sys.argv[0]])
+print(f"CHILD: launch 끝 {code}", flush=True)
+sys.exit(code)
+"""
+
+
+def test_app_exits_cleanly_while_shared_config_load_runs(tmp_path):
+    """실제 app.launch 경로: 서버가 꺼진 공유를 확인하는 중에 창을 닫아도 정상 종료 (QThread 파괴 중단·예외 없음),
+    확인 스레드를 기다리지 않고 바로 끝남."""
+    import subprocess
+    import sys
+
+    from tests.conftest import ROOT
+
+    script = tmp_path / "exit_child.py"
+    script.write_text(EXIT_CHILD, encoding="utf-8")
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PYTHONIOENCODING="utf-8")
+    env.pop("YESONCHECK_CONFIG_DIR", None)
+    started = time.monotonic()
+    try:
+        result = subprocess.run([sys.executable, str(script), ROOT], cwd=ROOT, env=env, capture_output=True, timeout=90)
+    except subprocess.TimeoutExpired as exc:
+        pytest.fail(
+            "앱이 90초 안에 끝나지 않았습니다 (닫은 뒤에도 공유 확인을 기다림?)\n"
+            f"--- stdout ---\n{(exc.stdout or b'').decode('utf-8', 'replace')}\n"
+            f"--- stderr ---\n{(exc.stderr or b'').decode('utf-8', 'replace')}"
+        )
+    elapsed = time.monotonic() - started
+    out = result.stdout.decode("utf-8", "replace")
+    err = result.stderr.decode("utf-8", "replace")
+    report = f"종료 코드 {result.returncode}, {elapsed:.1f}초\n--- stdout ---\n{out}\n--- stderr ---\n{err}"
+    assert result.returncode == 0, report
+    assert "QThread: Destroyed" not in err and "Traceback" not in err, report
+    assert "CHILD: 공유 확인 중 → 1초 뒤 창 닫기" in out, report
+    assert "0.2초 안에 끝나지 않았습니다" in out, report  # 닫을 때 불러오기가 아직 실행 중이었음
+    assert "CHILD: launch 끝 0" in out, report

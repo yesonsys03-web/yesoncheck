@@ -190,6 +190,18 @@ def test_find_config_dirs_probes_shares_concurrently_in_share_order():
     assert elapsed < 1.2, f"{elapsed:.2f}초 (차례로 하면 1.8초, 동시에 하면 약 0.6초)"
 
 
+def test_find_config_dirs_uses_daemon_threads():
+    """공유 확인 스레드는 daemon — 서버가 꺼진 공유를 확인하는 중에 앱을 닫아도 프로세스가 그 확인을 기다리지 않음."""
+    daemons = []
+
+    def is_file(path):
+        daemons.append(threading.current_thread().daemon)
+        return False
+
+    assert pms.find_config_dirs([Share("\\\\s\\x", ["X:"]), Share("\\\\s\\y", ["Y:"])], is_file=is_file) == []
+    assert daemons and all(daemons)
+
+
 def test_find_config_dirs_raises_probe_errors():
     def broken(path):
         raise OSError("확인 실패 (가짜 재현)")
@@ -362,20 +374,23 @@ def test_read_existing_non_utf8_is_backed_up_and_recreated(tmp_path, encoding):
 
 # --- 시스템 드라이브의 Harmony용 링크 (C:\USA_DB → \\서버\USA_DB) ---
 
-def fake_entry(name, link=None, root="C:\\"):
-    """os.DirEntry 흉내: link='symlink'·'junction'·None(보통 폴더·파일)."""
+def fake_entry(name, link=None, root="C:\\", is_dir=True):
+    """os.DirEntry 흉내: link='symlink'·'junction'·None(보통 폴더·파일). is_dir: 링크 자체의 디렉터리 속성
+    (Windows에서 디렉터리 링크·정션은 FILE_ATTRIBUTE_DIRECTORY, 파일 링크는 없음)."""
     tag = {"junction": pms.IO_REPARSE_TAG_MOUNT_POINT, "symlink": pms.IO_REPARSE_TAG_SYMLINK}.get(link, 0)
+    attributes = pms.FILE_ATTRIBUTE_DIRECTORY if is_dir else 0
     return SimpleNamespace(
         name=name, path=root + name,
         is_symlink=lambda: link == "symlink",
-        stat=lambda follow_symlinks=True: SimpleNamespace(st_reparse_tag=tag),
+        stat=lambda follow_symlinks=True: SimpleNamespace(st_reparse_tag=tag, st_file_attributes=attributes),
     )
 
 
 def test_local_link_shares_resolves_only_links_to_unc():
     entries = [
         fake_entry("USA_DB", "symlink"), fake_entry("Users"), fake_entry("usadata2", "symlink"),
-        fake_entry("Documents and Settings", "junction"), fake_entry("dead", "symlink"), fake_entry("pagefile.sys"),
+        fake_entry("Documents and Settings", "junction"), fake_entry("dead", "symlink"),
+        fake_entry("pagefile.sys", is_dir=False), fake_entry("notes.lnk", "symlink", is_dir=False),  # 파일 링크는 건너뜀
     ]
     targets = {
         "C:\\USA_DB": "\\\\Mainnas\\USA_DB",
@@ -421,19 +436,33 @@ def test_merge_shares_keeps_letters_and_link_labels_together():
     assert connected[0].drives == ["U:"]  # 원본은 그대로
 
 
-def test_find_local_config_dir_uses_harmony_mirror_of_mac_path():
+def test_find_local_config_dir_uses_harmony_link_to_nas(capsys):
+    """C:\\USA_DB\\test_jn\\.yesoncheck → (폴더, 문제). 실제 위치가 UNC(NAS 링크)일 때만 씀."""
     checked = []
     files = {"c:\\usa_db\\test_jn\\.yesoncheck\\work_paths.json"}
+    mirror = "C:\\USA_DB\\test_jn\\.yesoncheck"
 
     def is_file(path):
         checked.append(path)
         return path.casefold() in files
 
-    real = {"C:\\USA_DB\\test_jn\\.yesoncheck": "\\\\Mainnas\\USA_DB\\test_jn\\.yesoncheck"}
+    real = {mirror: "\\\\Mainnas\\USA_DB\\test_jn\\.yesoncheck"}
     assert pms.find_local_config_dir("C:", is_file=is_file, realpath=real.__getitem__) == \
-        "\\\\Mainnas\\USA_DB\\test_jn\\.yesoncheck"
-    assert checked == ["C:\\USA_DB\\test_jn\\.yesoncheck\\work_paths.json"]
-    # 링크가 아니라 진짜 로컬 폴더 → 로컬 경로 그대로
-    assert pms.find_local_config_dir("C:", is_file=is_file, realpath=lambda p: p) == "C:\\USA_DB\\test_jn\\.yesoncheck"
-    # 없으면 None (실제 위치는 묻지 않음)
-    assert pms.find_local_config_dir("D:", is_file=is_file, realpath=lambda p: pytest.fail(p)) is None
+        ("\\\\Mainnas\\USA_DB\\test_jn\\.yesoncheck", None)
+    assert checked == [mirror + "\\work_paths.json"]
+    # 링크가 아니라 진짜 로컬 폴더 → 쓰지 않음 (로그에 보임)
+    capsys.readouterr()
+    assert pms.find_local_config_dir("C:", is_file=is_file, realpath=lambda p: p) == (None, None)
+    assert f"{mirror} 는 링크가 아니라 로컬 폴더 — 쓰지 않음" in capsys.readouterr().out
+    # 없으면 실제 위치는 묻지 않음
+    assert pms.find_local_config_dir("D:", is_file=is_file, realpath=lambda p: pytest.fail(p)) == (None, None)
+
+
+def test_find_local_config_dir_reports_realpath_error(capsys):
+    def broken(path):
+        raise OSError(53, "네트워크 경로를 찾을 수 없습니다 (가짜 재현)")
+
+    folder, problem = pms.find_local_config_dir("C:", is_file=lambda p: True, realpath=broken)
+    assert folder is None
+    assert problem.startswith("C:\\USA_DB\\test_jn\\.yesoncheck — ") and "가짜 재현" in problem
+    assert "가짜 재현" in capsys.readouterr().out

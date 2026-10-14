@@ -13,8 +13,8 @@ import os
 import shutil
 import string
 import tempfile
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from yesoncheck import paths, shared_config, timing_log
@@ -151,16 +151,22 @@ def _real_unc(real):
     return None
 
 
-# Windows 재분석 태그 (winnt.h; Python stat 모듈은 Windows에서만 정의)
+# Windows 재분석 태그·파일 속성 (winnt.h; Python stat 모듈은 Windows에서만 정의)
 IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003  # 정션
 IO_REPARSE_TAG_SYMLINK = 0xA000000C
+FILE_ATTRIBUTE_DIRECTORY = 0x10
 
 
 def _is_dir_link(entry):
-    """심볼릭 링크 또는 정션인지 (대상은 열지 않음 — Windows는 목록을 읽을 때 받은 재분석 태그를 봄)."""
-    if entry.is_symlink():
-        return True
-    return getattr(entry.stat(follow_symlinks=False), "st_reparse_tag", 0) == IO_REPARSE_TAG_MOUNT_POINT
+    """디렉터리 심볼릭 링크 또는 정션인지 (파일 링크는 아님). 대상은 열지 않음 — Windows는 목록을 읽을 때 받은
+    링크 자체의 속성(디렉터리 링크·정션은 FILE_ATTRIBUTE_DIRECTORY)과 재분석 태그를 봄."""
+    info = entry.stat(follow_symlinks=False)
+    if not (entry.is_symlink() or getattr(info, "st_reparse_tag", 0) == IO_REPARSE_TAG_MOUNT_POINT):
+        return False
+    attributes = getattr(info, "st_file_attributes", None)
+    if attributes is None:  # Windows가 아님 (실제로는 Windows에서만 씀): 대상을 따라가 봄
+        return entry.is_dir()
+    return bool(attributes & FILE_ATTRIBUTE_DIRECTORY)
 
 
 def local_link_shares(root=None, scandir=None, realpath=None):
@@ -219,8 +225,12 @@ def available_shares():
 
 
 def find_local_config_dir(drive=None, mac_config_dir=None, is_file=None, realpath=None):
-    """(Windows) 시스템 드라이브 아래의 Harmony식 공유 설정 폴더(Mac 경로를 그대로 옮긴 C:\\USA_DB\\test_jn\\.yesoncheck)에
-    work_paths.json이 있으면 그 폴더 → 실제 위치가 UNC면 그 UNC, 아니면 로컬 경로 그대로. 없으면 None.
+    """(Windows) 시스템 드라이브 아래의 Harmony식 공유 설정 폴더(Mac 경로를 그대로 옮긴 C:\\USA_DB\\test_jn\\.yesoncheck)
+    → (폴더 또는 None, 문제 줄 또는 None).
+
+    work_paths.json이 있고 실제 위치(realpath)가 UNC(NAS를 가리키는 링크)일 때만 그 UNC를 씀. 링크가 아닌 진짜
+    로컬 폴더는 쓰지 않음(로그에 남김 — 다른 PC와 공유되지 않는 사본). 실제 위치를 알 수 없으면(OSError) 문제 줄로
+    돌려주고 None — 호출하는 쪽은 드라이브 후보로 계속 찾음.
     """
     is_file = is_file or _default_is_file
     realpath = realpath or _default_realpath
@@ -230,11 +240,19 @@ def find_local_config_dir(drive=None, mac_config_dir=None, is_file=None, realpat
     started = time.perf_counter()
     if not is_file(folder + "\\" + shared_config.WORK_PATHS_FILENAME):
         timing_log.log("공유 설정", f"{folder} 확인 {timing_log.since(started)} — 없음")
-        return None
-    real = realpath(folder)
-    found = _real_unc(real) or folder
-    timing_log.log("공유 설정", f"{folder} 확인 {timing_log.since(started)} — 찾음: {found}")
-    return found
+        return None, None
+    try:
+        real = realpath(folder)
+    except OSError as exc:
+        problem = f"{folder} — 실제 위치(링크 대상)를 알 수 없음: {exc}"
+        timing_log.log("공유 설정", f"{problem} ({timing_log.since(started)})")
+        return None, problem
+    unc = _real_unc(real)
+    if unc is None:
+        timing_log.log("공유 설정", f"{folder} 는 링크가 아니라 로컬 폴더 — 쓰지 않음 ({timing_log.since(started)})")
+        return None, None
+    timing_log.log("공유 설정", f"{folder} 확인 {timing_log.since(started)} — 찾음: {unc}")
+    return unc, None
 
 
 def config_dir_key(folder):
@@ -268,10 +286,28 @@ def find_config_dirs(shares, mac_config_dir=None, is_file=None):
         timing_log.log("공유 설정", f"{share.unc} 확인 {timing_log.since(started)} — 없음")
         return None
 
-    if not shares:
-        return []
-    with ThreadPoolExecutor(max_workers=len(shares), thread_name_prefix="find_config_dirs") as pool:
-        results = list(pool.map(probe, shares))  # 공유 순서 그대로
+    # daemon 스레드: 서버가 꺼진 공유를 확인하는 중에 앱을 닫아도 프로세스가 그 확인(20초쯤)을 기다리지 않음
+    # (ThreadPoolExecutor의 작업 스레드는 인터프리터가 끝날 때 기다림)
+    results = [None] * len(shares)
+    errors = [None] * len(shares)
+
+    def run(index, share):
+        try:
+            results[index] = probe(share)
+        except BaseException as exc:  # 호출한 쪽에서 그대로 다시 올림 (삼키지 않음)
+            errors[index] = exc
+
+    threads = [
+        threading.Thread(target=run, args=(index, share), name=f"find_config_dirs-{share.unc}", daemon=True)
+        for index, share in enumerate(shares)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    for error in errors:
+        if error is not None:
+            raise error  # 스택 트레이스는 확인 스레드 안의 것 그대로
     found = []
     seen = set()
     for folder in results:

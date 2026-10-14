@@ -88,6 +88,15 @@ def make_excepthook(log_path):
     return excepthook
 
 
+def open_startup_file(player, file_path):
+    """명령줄로 받은 파일을 영상 A로 엶 (없으면 로그만)."""
+    print(f"Opening file: {file_path}")
+    if os.path.isfile(file_path):
+        player.open_file("A", file_path)
+    else:
+        print(f"File does not exist: {file_path}")
+
+
 def launch(argv=None):
     """Create and run the QApplication event loop."""
     argv = list(sys.argv if argv is None else argv)
@@ -126,14 +135,6 @@ def launch(argv=None):
         raise
     timing_log.startup(f"창 만듦 ({timing_log.since(started)})")
     
-    if len(argv) > 1:
-        file_path = argv[1]
-        print(f"Opening file: {file_path}")
-        if os.path.isfile(file_path):
-            player.open_file("A", file_path)
-        else:
-            print(f"File does not exist: {file_path}")
-    
     # 메인 윈도우 표시 후 스플래시 닫기
     player.show()
     splash.finish(player)
@@ -141,6 +142,11 @@ def launch(argv=None):
     # 공유 설정(설정 폴더·작품 경로·변환표)은 창을 보인 뒤 백그라운드에서 읽고, 끝나면 문제를 알림
     # (스플래시가 닫힌 뒤라 대화상자가 가려지지 않음)
     QTimer.singleShot(0, player.start_shared_config_load)
+    if len(argv) > 1:
+        # 명령줄로 받은 파일도 창을 보인 뒤에 엶: 여는 중 소리 재생기를 만들고(처음에는 수 초), 오류 창이
+        # 스플래시에 가려지지 않게. 공유 설정 불러오기를 먼저 시작해 두어 그동안 백그라운드에서 읽음
+        file_path = argv[1]
+        QTimer.singleShot(0, lambda: open_startup_file(player, file_path))
 
     if owns_app:
         return app.exec_()

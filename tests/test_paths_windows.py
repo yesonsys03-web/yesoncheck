@@ -96,8 +96,12 @@ def test_local_link_to_share_is_found(share, tmp_path):
     links.mkdir()
     (links / "plain").mkdir()  # 링크가 아닌 폴더는 건너뜀
     link = links / "USA_DB"
+    file_target = os.path.join(root, sub, "file.txt")
+    with open(file_target, "w", encoding="utf-8") as fh:
+        fh.write("x")
     try:
         os.symlink(target, str(link), target_is_directory=True)
+        os.symlink(f"{target}\\file.txt", str(links / "file_link.txt"))  # 파일 링크는 건너뜀 (디렉터리 링크만)
     except OSError as exc:
         if getattr(exc, "winerror", None) == 1314:  # ERROR_PRIVILEGE_NOT_HELD (정션은 UNC를 가리킬 수 없어 대신 못 씀)
             pytest.skip(f"이 러너에서는 심볼릭 링크를 만들 권한이 없습니다: {exc}")

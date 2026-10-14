@@ -54,6 +54,7 @@ class SharedConfigState:
     path_map_problem: str = None
     config_dir_candidates: list = field(default_factory=list)
     config_dir_search_failed: bool = False
+    config_dir_search_problems: list = field(default_factory=list)  # (Windows) 자동 찾기 중 확인하지 못한 곳
     activate_path_map: bool = False  # (Windows) 넣을 때 paths.activate(path_map) — 아니면 활성 변환표를 그대로 둠
     path_map: object = None  # paths.PathMap (이 PC에 연결된 주소를 앞으로 옮김) 또는 None(변환표 해제)
     works_not_opening: list = None  # (Windows) 시작할 때 미리 계산한 '열리지 않는 작품' — None이면 계산하지 않음
@@ -105,19 +106,21 @@ def _config_dir_usable(config_dir):
     return usable
 
 
-def _auto_find_config_dir(state, shares):
+def _auto_find_config_dir(state, shares, share_problems):
     """(Windows) 이 PC에서 쓸 수 있는 공유(shares: 연결된 네트워크 드라이브·시스템 드라이브의 UNC 링크)와 Harmony식
     C:\\USA_DB\\test_jn\\.yesoncheck에서 공유 설정 폴더를 찾습니다 (같은 폴더는 하나로).
 
     딱 하나면 PC별 설정에 저장하고 그 폴더를 돌려줍니다. 여러 개면 state.config_dir_candidates에 남기고
     (창 표시 후 고르게 함) None. 하나도 못 찾으면 state.config_dir_search_failed를 True로 남기고 None.
-    PC별 설정 저장 실패는 state.shared_config_problem에 남기고 None.
+    PC별 설정 저장 실패는 state.shared_config_problem에 남기고 None. 확인하지 못한 곳(드라이브 연결 정보, 링크의 실제
+    위치)은 state.config_dir_search_problems에 남김 (폴더를 고르게 할 때 보임).
     """
     timing_log.log("공유 설정", "PC별 설정의 공유 설정 폴더가 없거나 열리지 않음 → 이 PC의 공유에서 찾는 중…")
     started = time.perf_counter()
     found = []
     seen = set()
-    local = path_map_setup.find_local_config_dir()
+    local, local_problem = path_map_setup.find_local_config_dir()
+    state.config_dir_search_problems = list(share_problems) + ([local_problem] if local_problem else [])
     for folder in ([local] if local else []) + path_map_setup.find_config_dirs(shares):
         key = path_map_setup.config_dir_key(folder)
         if key not in seen:
@@ -152,9 +155,9 @@ def gather_shared_config(find_works_not_opening=False):
     shares_once = []  # (Windows) 이 PC의 공유는 한 번만 조사 (링크의 실제 위치 확인은 NAS를 열어 볼 수 있음)
 
     def available_shares():
+        """→ (shares, problems). 드라이브·링크 문제는 available_shares가 로그에도 남김."""
         if not shares_once:
-            shares, _problems = path_map_setup.available_shares()  # 드라이브·링크 문제는 거기서 로그에 남김
-            shares_once.append(shares)
+            shares_once.append(path_map_setup.available_shares())
         return shares_once[0]
 
     try:
@@ -164,7 +167,7 @@ def gather_shared_config(find_works_not_opening=False):
         return state
     if (paths.IS_WINDOWS and not os.environ.get(shared_config.CONFIG_DIR_ENV)
             and not _config_dir_usable(config_dir)):
-        found = _auto_find_config_dir(state, available_shares())
+        found = _auto_find_config_dir(state, *available_shares())
         if state.shared_config_problem:
             return state
         config_dir = found or config_dir
@@ -194,7 +197,8 @@ def gather_shared_config(find_works_not_opening=False):
         else:
             timing_log.log("변환표", f"읽음 ({timing_log.since(started)})")
             # 같은 공유를 PC마다 다른 주소로 연결했을 수 있음 → 이 PC에 연결된(드라이브·링크) 주소를 먼저 씀 (파일은 그대로)
-            state.path_map = path_map.with_preferred_aliases([share.unc for share in available_shares()])
+            shares, _problems = available_shares()
+            state.path_map = path_map.with_preferred_aliases([share.unc for share in shares])
     if problems:
         state.shared_config_problem = "\n\n".join(problems)
     if find_works_not_opening and state.path_map is not None and not state.shared_config_problem:
@@ -205,19 +209,20 @@ def gather_shared_config(find_works_not_opening=False):
 def config_dir_from_chosen_folder(folder):
     """(Windows) 고른 폴더 → 저장할 공유 설정 폴더 주소.
 
-    네트워크 드라이브·UNC는 drive_to_unc로. 로컬 드라이브의 링크(Harmony용 C:\\USA_DB → \\\\서버\\USA_DB)는
-    실제 위치(realpath)가 UNC면 그 UNC로. 둘 다 아니면 drive_to_unc의 오류(PathMapError)를 그대로 올림.
+    네트워크 드라이브·UNC는 drive_to_unc로. 네트워크 드라이브가 아닌 드라이브(로컬 디스크)의 링크(Harmony용
+    C:\\USA_DB → \\\\서버\\USA_DB)는 실제 위치(realpath)가 UNC면 그 UNC로 (원래 오류와 함께 로그에 남김).
+    그 밖의 드라이브 오류(연결 정보를 읽지 못함 등)와 링크가 아닌 로컬 폴더는 drive_to_unc의 오류를 그대로 올림.
     """
     try:
         return paths.drive_to_unc(folder)
-    except paths.PathMapError as exc:
+    except paths.NotNetworkDriveError as exc:
         try:
             real = path_map_setup._real_unc(path_map_setup._default_realpath(folder))
         except OSError as real_exc:
             raise paths.PathMapError(f"{exc}\n실제 위치(링크 대상)도 알 수 없습니다: {real_exc}") from real_exc
         if real is None:
-            raise exc
-        print(f"[공유 설정] 고른 폴더 {folder}는 링크 → 실제 위치 {real}")
+            raise
+        print(f"[공유 설정] 고른 폴더 {folder}: {exc} → 링크의 실제 위치 {real} 사용")
         return real
 
 
@@ -1043,6 +1048,7 @@ class PlayerSidebarMixin:
         self.path_map_problem = state.path_map_problem
         self.config_dir_candidates = state.config_dir_candidates
         self.config_dir_search_failed = state.config_dir_search_failed
+        self.config_dir_search_problems = state.config_dir_search_problems
         self.work_paths_config_dir = state.config_dir
         if state.config_dir is None:
             self.work_paths_file = None
@@ -1143,6 +1149,7 @@ class PlayerSidebarMixin:
                 reason = self.shared_config_problem
                 if self.config_dir_search_failed:
                     reason = "연결된 네트워크 드라이브에서 공유 설정 폴더를 찾지 못했습니다.\n\n" + reason
+                reason += self._config_dir_search_problems_text()
                 picked = self.choose_shared_config_dir(reason)
             if picked:
                 return  # _use_config_dir가 문제 알림·변환표 자동 설정까지 처리함
@@ -1154,6 +1161,13 @@ class PlayerSidebarMixin:
             )
             return
         self._offer_path_map_setup(works_not_opening)
+
+    def _config_dir_search_problems_text(self):
+        """공유 설정 폴더 자동 찾기 중 확인하지 못한 곳 (폴더를 고르게 할 때 덧붙임)."""
+        problems = getattr(self, "config_dir_search_problems", None)
+        if not problems:
+            return ""
+        return "\n\n확인하지 못한 곳:\n" + "\n".join(problems)
 
     def _shared_config_problem_text(self):
         """공유 설정 오류 창에 보일 내용: 공유 설정 문제 + (함께 있으면) 변환표 문제."""
@@ -1208,7 +1222,8 @@ class PlayerSidebarMixin:
         item, ok = QInputDialog.getItem(
             self,
             "공유 설정 폴더 선택",
-            "연결된 네트워크 드라이브에서 공유 설정 폴더를 여러 개 찾았습니다. 쓸 폴더를 고르세요:",
+            "연결된 네트워크 드라이브에서 공유 설정 폴더를 여러 개 찾았습니다. 쓸 폴더를 고르세요:"
+            + self._config_dir_search_problems_text(),
             list(self.config_dir_candidates) + [manual],
             0,
             False,

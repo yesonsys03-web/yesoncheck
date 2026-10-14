@@ -431,7 +431,8 @@ def test_harmony_link_and_drive_to_same_config_count_once(win, dialogs, tmp_path
     assert paths.unc_key(settings_of(tmp_path)["config_dir"]) == paths.unc_key(real)
 
 
-def test_local_harmony_folder_and_drive_config_are_both_offered(win, dialogs, tmp_path, monkeypatch):
+def test_local_harmony_folder_is_not_used(win, dialogs, tmp_path, monkeypatch, capsys):
+    """C:\\USA_DB\\test_jn\\.yesoncheck가 링크가 아닌 진짜 로컬 폴더 → 쓰지 않고(로그) 드라이브에서 찾은 폴더를 씀."""
     b = "\\\\localhost\\yc_fake_b"
     win.shares = [Share(b, ["B:"])]
     mirror = harmony_mirror(tmp_path)
@@ -440,10 +441,46 @@ def test_local_harmony_folder_and_drive_config_are_both_offered(win, dialogs, tm
     monkeypatch.setattr(path_map_setup, "_default_is_file", lambda p: p.casefold() in files)
     monkeypatch.setattr(path_map_setup, "_default_realpath", lambda p: p)  # 링크가 아닌 진짜 로컬 폴더
     player = win.player()
-    assert player.config_dir_candidates == [mirror, other]  # 여럿 → 창 표시 후 목록에서 고름
+    assert player.config_dir_candidates == []
+    assert settings_of(tmp_path) == {"config_dir": other}
+    assert f"{mirror} 는 링크가 아니라 로컬 폴더 — 쓰지 않음" in capsys.readouterr().out
 
 
-def test_choose_config_dir_on_link_uses_real_unc(win, dialogs, tmp_path, monkeypatch):
+def test_harmony_link_realpath_error_continues_with_drives(win, dialogs, tmp_path, monkeypatch, capsys):
+    b = "\\\\localhost\\yc_fake_b"
+    win.shares = [Share(b, ["B:"])]
+    mirror = harmony_mirror(tmp_path)
+    other = f"{b}\\test_jn\\.yesoncheck"
+    files = {f"{mirror}\\work_paths.json".casefold(), f"{other}\\work_paths.json".casefold()}
+    monkeypatch.setattr(path_map_setup, "_default_is_file", lambda p: p.casefold() in files)
+
+    def broken(path):
+        raise OSError(53, "네트워크 경로를 찾을 수 없습니다 (가짜 재현)")
+
+    monkeypatch.setattr(path_map_setup, "_default_realpath", broken)
+    player = win.player()
+    assert settings_of(tmp_path) == {"config_dir": other}  # 드라이브 후보로 계속
+    assert player.work_paths_config_dir == other and player.config_dir_candidates == []
+    assert "가짜 재현" in capsys.readouterr().out
+
+
+def test_harmony_link_realpath_error_shown_when_nothing_found(win, dialogs, tmp_path, monkeypatch):
+    win.shares = []
+    mirror = harmony_mirror(tmp_path)
+    monkeypatch.setattr(path_map_setup, "_default_is_file", lambda p: p.casefold() == f"{mirror}\\work_paths.json".casefold())
+
+    def broken(path):
+        raise OSError(53, "네트워크 경로를 찾을 수 없습니다 (가짜 재현)")
+
+    monkeypatch.setattr(path_map_setup, "_default_realpath", broken)
+    player = win.player()
+    assert player.config_dir_search_failed and player.shared_config_problem
+    player.resolve_shared_config_problem()  # 폴더 선택 안내에 확인하지 못한 곳이 보임 (dialogs.folders 비어 있음 → 취소)
+    infos = [text for kind, title, text in dialogs.messages if kind == "information" and title == "공유 설정 폴더 선택"]
+    assert len(infos) == 1 and mirror in infos[0] and "가짜 재현" in infos[0]
+
+
+def test_choose_config_dir_on_link_uses_real_unc(win, dialogs, tmp_path, monkeypatch, capsys):
     """C:\\USA_DB 아래를 고르면 drive_to_unc는 실패(로컬 드라이브) → 링크의 실제 UNC로 확인·저장."""
     player = win.player(make_config(str(tmp_path), WORK, {"version": 1, "shares": [{"mac": "/Volumes/yc", "windows": [NAS]}]}))
     monkeypatch.delenv("YESONCHECK_CONFIG_DIR")  # 이제부터는 PC별 설정(고른 폴더)을 씀
@@ -454,10 +491,28 @@ def test_choose_config_dir_on_link_uses_real_unc(win, dialogs, tmp_path, monkeyp
     validated = []
     monkeypatch.setattr(shared_config, "validate_config_dir", validated.append)
     dialogs.folders.append(folder)
+    capsys.readouterr()
     assert player.choose_shared_config_dir() is True
     assert validated[0] == real
     assert settings_of(tmp_path) == {"config_dir": real}
     assert not any(title == "다른 폴더를 고르세요" for _kind, title, _text in dialogs.messages)
+    log = capsys.readouterr().out
+    assert "네트워크 드라이브가 아닙니다" in log and f"→ 링크의 실제 위치 {real} 사용" in log  # 원래 오류도 남김
+
+
+def test_choose_folder_on_unreadable_network_drive_keeps_warning(win, dialogs, tmp_path, monkeypatch):
+    """드라이브 연결 정보를 읽지 못한 오류(로컬 드라이브라서가 아님)는 링크로 대신하지 않고 예전처럼 경고."""
+    player = win.player(make_config(str(tmp_path), WORK, {"version": 1, "shares": [{"mac": "/Volumes/yc", "windows": [NAS]}]}))
+
+    def unreadable(drive):
+        raise paths.PathMapError(f"{drive} 드라이브의 연결 정보를 읽지 못했습니다 (WNetGetConnectionW 오류 1203)")
+
+    monkeypatch.setattr(paths, "_remote_name_of_drive", unreadable)
+    monkeypatch.setattr(path_map_setup, "_default_realpath", lambda p: pytest.fail(f"realpath를 불렀습니다: {p}"))
+    dialogs.folders.append("Z:/USA_DB/test_jn/.yesoncheck")
+    assert player.choose_shared_config_dir() is False
+    warnings = [text for kind, title, text in dialogs.messages if kind == "warning" and title == "다른 폴더를 고르세요"]
+    assert len(warnings) == 1 and "WNetGetConnectionW 오류 1203" in warnings[0]
 
 
 def test_choose_plain_local_folder_still_warns(win, dialogs, tmp_path, monkeypatch):

@@ -35,6 +35,10 @@ class PathMapError(Exception):
     """변환표가 없거나 틀렸거나, 경로를 변환표로 바꿀 수 없을 때."""
 
 
+class NotNetworkDriveError(PathMapError):
+    """drive_to_unc: 드라이브 문자가 네트워크 드라이브가 아님 (로컬 디스크이거나 없는 드라이브)."""
+
+
 def _nfc(text):
     return unicodedata.normalize("NFC", text)
 
@@ -259,7 +263,7 @@ def drive_to_unc(path, resolver=None):
         raise PathMapError(f"드라이브 문자나 UNC로 시작하는 경로가 아닙니다: {path}")
     remote = (resolver or _remote_name_of_drive)(drive.upper())
     if not remote:
-        raise PathMapError(
+        raise NotNetworkDriveError(
             f"{drive.upper()}는 네트워크 드라이브가 아닙니다 (로컬 디스크이거나 없는 드라이브). NAS 공유 폴더를 고르세요: {path}"
         )
     return remote.rstrip("\\") + rest

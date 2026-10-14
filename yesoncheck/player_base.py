@@ -89,6 +89,7 @@ class VideoPlayerBase(QMainWindow):
         # 소리 재생기(QMediaPlayer)는 처음 쓸 때 만듦 (mediaPlayer 속성) — Windows에서 처음 만들 때 8초쯤 걸림
         self._media_player = None
         self._media_volume = 100  # 재생기를 만들기 전에 정한 볼륨 (QMediaPlayer 기본값과 같음)
+        self.media_player_create_seconds = None  # 재생기를 만드는 데 걸린 초 (만든 뒤에 채움)
         self._shared_config_load = None  # 실행 중인 공유 설정 불러오기 (SharedConfigLoad)
         self._shared_config_closed = False  # 창이 닫힘 → 늦게 온 공유 설정 결과는 버림
         self.setWindowTitle("Yeson Checker")
@@ -373,9 +374,14 @@ QMessageBox {
         if self._media_player is None:
             timing_log.log("소리", "재생기 만드는 중…")
             started = time.perf_counter()
-            player = QMediaPlayer(self)
-            player.setVolume(self._media_volume)
+            QApplication.setOverrideCursor(Qt.WaitCursor)  # Windows에서 처음 만들면 수 초 — 멈춘 것처럼 보이지 않게
+            try:
+                player = QMediaPlayer(self)
+                player.setVolume(self._media_volume)
+            finally:
+                QApplication.restoreOverrideCursor()
             self._media_player = player
+            self.media_player_create_seconds = time.perf_counter() - started
             timing_log.log("소리", f"재생기 준비 ({timing_log.since(started)})")
         return self._media_player
 
@@ -4030,7 +4036,10 @@ QMessageBox {
 
             # 실행 중인 공유 설정 불러오기: 정해진 시간까지만 기다리고, 늦게 오는 결과는 버림
             self._shared_config_closed = True
-            self.wait_for_shared_config_load(self.SHARED_CONFIG_CLOSE_WAIT_MS)
+            load = getattr(self, '_shared_config_load', None)
+            if load is not None and load.isRunning():
+                self.hide()  # 기다리는 동안(최대 몇 초) 보이는 창이 멈춰 있지 않게 먼저 숨김
+                self.wait_for_shared_config_load(self.SHARED_CONFIG_CLOSE_WAIT_MS)
 
             # 백그라운드 썸네일 로딩 타이머 중지
             if hasattr(self, 'thumbnail_loading_timer'):
