@@ -134,47 +134,61 @@ def test_force_focus_without_active_window(new_player, dialogs, tmp_path, monkey
     assert calls == ["setFocus", "activateWindow"]
 
 
+def _capture_player_timers(monkeypatch):
+    """player_base의 QTimer.singleShot 예약을 실행하지 않고 기록 → [(ms, callback)].
+
+    100ms 타이머가 실제로 언제 실행되는지에 기대지 않고, 모달 창을 띄운 뒤 시험이 직접 실행한다 (결정적).
+    QTimer 자체(생성 등)는 그대로 — singleShot만 바꾼 하위 클래스를 player_base 모듈에만 넣는다."""
+    from yesoncheck import player_base
+
+    scheduled = []
+
+    class RecordingTimer(player_base.QTimer):
+        @staticmethod
+        def singleShot(ms, callback):
+            scheduled.append((ms, callback))
+
+    monkeypatch.setattr(player_base, "QTimer", RecordingTimer)
+    return scheduled
+
+
+def _show_int_dialog(parent, title, windows):
+    dialog = QInputDialog(parent)
+    dialog.setInputMode(QInputDialog.IntInput)
+    dialog.setWindowTitle(title)
+    dialog.setModal(True)
+    windows.append(dialog)
+    dialog.show()
+    _wait_until(lambda: QApplication.activeWindow() is dialog, f"'{title}' 창이 활성")
+    return dialog
+
+
 def test_end_frame_dialog_keeps_focus(shown_player, monkeypatch, windows_to_close):
-    """실제 흐름 재현: '시작 프레임' 창이 닫혀 메인 창이 다시 활성(ActivationChange → 100ms 뒤 force_focus 예약)
-    → 바로 '종료 프레임' 창이 열림 → 타이머가 실행돼도 '종료 프레임' 창이 활성이고 입력칸에 포커스가 남아야 함."""
-    force_focus_runs = []
-    original_force_focus = shown_player.force_focus
-
-    def counting_force_focus():
-        force_focus_runs.append(QApplication.activeModalWidget())
-        original_force_focus()
-
-    monkeypatch.setattr(shown_player, "force_focus", counting_force_focus)  # changeEvent가 거는 타이머도 이걸 부름
+    """실제 흐름 재현: '시작 프레임' 창이 닫혀 메인 창이 다시 활성 → changeEvent(ActivationChange)가 100ms 뒤
+    force_focus를 예약 → 바로 '종료 프레임' 창이 열림 → 예약된 force_focus가 실행돼도 '종료 프레임' 창이 활성이고
+    입력칸에 포커스가 남아야 함. 예약된 콜백을 기록해 두었다가 '종료 프레임' 창을 띄운 뒤 직접 실행한다."""
+    scheduled = _capture_player_timers(monkeypatch)
     calls = _record_focus_calls(shown_player, monkeypatch)
 
-    start_dialog = QInputDialog(shown_player)
-    start_dialog.setInputMode(QInputDialog.IntInput)
-    start_dialog.setWindowTitle("시작 프레임")
-    start_dialog.setModal(True)
-    windows_to_close.append(start_dialog)
-    start_dialog.show()
-    _wait_until(lambda: QApplication.activeWindow() is start_dialog, "'시작 프레임' 창이 활성")
-
+    start_dialog = _show_int_dialog(shown_player, "시작 프레임", windows_to_close)
     start_dialog.accept()
     # 모달 창이 닫히면 Windows는 주인 창(메인 창)을 다시 활성화한다. offscreen 플랫폼은 이걸 하지 않으므로 OS가 하는
-    # 일을 직접: 기록용 대체 함수가 아니라 원래 QWidget.activateWindow로 → 진짜 ActivationChange가 와서
-    # changeEvent가 100ms 뒤 force_focus를 예약한다.
+    # 일을 직접: 기록용 대체 함수가 아니라 원래 QWidget.activateWindow로 → 진짜 ActivationChange → changeEvent
     QWidget.activateWindow(shown_player)
     _wait_until(lambda: QApplication.activeWindow() is shown_player, "'시작 프레임' 창이 닫힌 뒤 메인 창이 활성")
+    focus_callbacks = [callback for _ms, callback in scheduled if callback == shown_player.force_focus]
+    assert focus_callbacks, f"메인 창이 활성화될 때 force_focus가 예약되지 않음: {scheduled}"  # 시험이 헛돌지 않음
+    calls.clear()  # 여기까지는 메인 창이 활성인 정상 상태
 
-    end_dialog = QInputDialog(shown_player)
-    end_dialog.setInputMode(QInputDialog.IntInput)
-    end_dialog.setWindowTitle("종료 프레임")
-    end_dialog.setModal(True)
-    windows_to_close.append(end_dialog)
-    end_dialog.show()
-    _wait_until(lambda: QApplication.activeWindow() is end_dialog, "'종료 프레임' 창이 활성")
+    end_dialog = _show_int_dialog(shown_player, "종료 프레임", windows_to_close)
     end_input = QApplication.focusWidget()
     assert end_input is not None and end_dialog.isAncestorOf(end_input)
+    assert QApplication.activeModalWidget() is end_dialog
 
-    _pump(300)  # 100ms 타이머가 확실히 실행되도록
+    for callback in focus_callbacks:  # 100ms가 지나 타이머가 실행되는 순간 (모달 창의 이벤트 루프 안)
+        callback()
+    QApplication.processEvents()
 
-    assert end_dialog in force_focus_runs  # 시험이 헛돌지 않음: 모달 창이 떠 있는 동안 예약된 force_focus가 실제로 실행됨
     assert calls == []
     assert QApplication.activeWindow() is end_dialog
     assert QApplication.focusWidget() is end_input
