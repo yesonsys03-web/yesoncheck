@@ -10,6 +10,8 @@
 - PaddleOCR 생성 + 인식 (앱의 King 모드 설정, 모델이 없으면 ~/.paddleocr에 내려받음)
 - paddle 3.0 입력 크기 변화 버그 회피(yesoncheck.workers.guard_paddle_buffer_growth)가 통하는지
 - PySceneDetect 씬 감지 (임시 합성 영상)
+- 애니매틱2: TensorFlow + TransNetV2 씬 감지 (합성 3샷 영상, 씬 시작 [0, 30, 60]이어야 함).
+  TensorFlow나 가중치(vendor/transnetv2-weights)가 빌드 환경에 없으면 검사 실패
 
 사용법: python check_frozen_imports.py <앱 번들(.app) 또는 Windows 앱 폴더(dist\\YesonCheck_Autocut)>
 누락이 하나라도 있으면 목록을 출력하고 종료 코드 1로 끝납니다.
@@ -84,7 +86,8 @@ def exercise_app():
         try:
             importlib.import_module(name)
         except ImportError as exc:
-            # 선택 의존성(transnetv2 등)은 앱도 없는 상태로 동작하므로 건너뜀
+            # 앱이 부르지 않는 함수 안의 선택 import(transnetv2_model.predict_video의 ffmpeg 등)는 건너뜀 (목록은 출력함).
+            # TensorFlow는 여기서 건너뛰어도 아래 애니매틱2 실행에서 다시 불러 실패가 드러남
             skipped.append(f"{name} ({exc})")
 
     import cv2
@@ -127,7 +130,23 @@ def exercise_app():
             writer.write(np.full((180, 320, 3), 0 if i < 36 else 255, np.uint8))
         writer.release()
         detect_scene_cuts(video, min_scene_len=5)
-    return texts, skipped
+
+    # 애니매틱2(TransNetV2): 앱에 반드시 들어가야 하므로 빌드 환경에 없으면 검사를 실패로 끝냄
+    from yesoncheck.smoke_test import THREE_SHOT_STARTS, write_three_shot_clip
+    from yesoncheck.transnetv2_detector import detect_scene_cuts_transnetv2, transnetv2_missing
+
+    missing = transnetv2_missing()
+    if missing:
+        raise SystemExit(f"애니매틱2(TransNetV2)에 필요한 것이 빌드 환경에 없습니다: {missing}")
+    with tempfile.TemporaryDirectory() as tmp:
+        clip = write_three_shot_clip(os.path.join(tmp, "three_shots.mp4"))
+        # 앱(player_base의 애니매틱2 분석)과 같은 설정
+        segments = detect_scene_cuts_transnetv2(clip, threshold=0.3, min_scene_len=10,
+                                                detect_gradual_transitions=True, post_process_histogram=True)
+    cuts = [segment["start_frame"] for segment in segments]
+    if cuts != THREE_SHOT_STARTS:
+        raise SystemExit(f"TransNetV2 씬 감지 결과가 다릅니다: 씬 시작 {cuts} (기대 {THREE_SHOT_STARTS})")
+    return texts, cuts, skipped
 
 
 def frozen_contents(bundle):
@@ -182,6 +201,24 @@ def win_stdlib_ext_dir():
     return _WIN_EXT_DIR_CACHE[0]
 
 
+def module_name_from_path(path):
+    """site-packages 아래 모듈 파일 경로 → 그 파일의 실제 모듈 이름 (계산할 수 없으면 None).
+
+    예: …/site-packages/tensorflow/_api/v2/compat/v1/__init__.py → tensorflow._api.v2.compat.v1
+    """
+    path = os.path.realpath(path)
+    for site in SITE_DIRS:
+        if path.startswith(site + os.sep):
+            stem, ext = os.path.splitext(os.path.relpath(path, site))
+            if ext not in (".py", ".pyc"):
+                return None
+            parts = stem.split(os.sep)
+            if parts[-1] == "__init__":
+                parts = parts[:-1]
+            return ".".join(parts)
+    return None
+
+
 def frozen_location(name, path, is_package_dir=False, debug=None):
     """소스 환경의 모듈 위치를 빌드된 앱 Contents/Frameworks 기준 상대 경로로 바꿉니다.
 
@@ -230,7 +267,7 @@ def main():
     bundle = sys.argv[1]
 
     baseline = set(sys.modules)  # 인터프리터 시작 시 모듈(.pth 포함)은 앱과 무관
-    texts, skipped = exercise_app()
+    texts, cuts, skipped = exercise_app()
     used = {name: mod for name, mod in sys.modules.items() if name not in baseline and mod is not None}
 
     modules, files = frozen_contents(bundle)
@@ -262,13 +299,19 @@ def main():
             continue
         debug = {}
         rel = frozen_location(name, file_attr, debug=debug)
+        if rel is None or rel not in files:
+            # 같은 파일이 다른 이름으로도 등록된 모듈 (TensorFlow: tensorflow.compat.v1 ↔ 실제 파일
+            # tensorflow/_api/v2/compat/v1/__init__.py): 파일 경로가 가리키는 실제 이름이 앱(PYZ)에 있으면 됨
+            alias_of = module_name_from_path(file_attr)
+            if alias_of and alias_of != name and alias_of in modules:
+                continue
         if rel is None:
             detail = ", ".join(f"{k}={v}" for k, v in debug.items())
             missing.append(f"{name} (앱 안 위치를 계산할 수 없음: {file_attr} [{detail}])")
         elif rel not in files:
             missing.append(f"{name} (앱에 {rel} 없음)")
 
-    print(f"앱 경로 실행: OCR 결과 {texts}, 사용 모듈 {len(used)}개")
+    print(f"앱 경로 실행: OCR 결과 {texts}, 애니매틱2(TransNetV2) 씬 시작 {cuts}, 사용 모듈 {len(used)}개")
     if skipped:
         print(f"소스 환경에도 없어 건너뛴 선택 모듈 {len(skipped)}개:")
         for line in skipped:
