@@ -85,6 +85,12 @@ def _transnetv2_available():
     return TRANSNETV2_AVAILABLE
 
 
+def _transnetv2_missing():
+    """애니매틱2에 필요한데 이 빌드/환경에 없는 것 (숨길 때 로그에 남기는 이유)."""
+    from yesoncheck.transnetv2_detector import transnetv2_missing
+    return transnetv2_missing()
+
+
 # 실행 중에 놓아 준 QThread 워커 (끝날 때까지 참조를 붙잡아 둠). 실행 중인 QThread의 마지막 참조가 사라지면
 # GC가 실행 중인 스레드를 파괴해 프로세스가 죽음 ("QThread: Destroyed while thread is still running",
 # Windows 0xC0000409). 애니매틱2(TensorFlow 추론)는 중간에 멈출 수 없어 영상을 바꾸거나 창을 닫은 뒤에도 돌 수 있음
@@ -551,6 +557,9 @@ QMessageBox {
             ocr_mode_tooltip += (
                 '\n- 애니매틱2: TransNetV2(딥러닝)를 사용한 컷 감지 (디졸브/페이드 감지 향상, ROI 불필요)'
             )
+        else:
+            # 조용히 숨기지 않음: 왜 없는지(TensorFlow·가중치·CPU AVX) 시작 로그에 남김
+            timing_log.startup(f"애니매틱2(TransNetV2) 항목 숨김 — 이 빌드/환경에 없는 것: {_transnetv2_missing()}")
         self.ocrModeComboBox.setToolTip(ocr_mode_tooltip)
         self.ocrModeComboBox.currentIndexChanged.connect(self.on_ocr_mode_changed)
         ocr_mode_layout.addWidget(ocr_mode_label)

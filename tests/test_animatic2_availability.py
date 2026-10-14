@@ -269,3 +269,28 @@ def test_later_animatic2_runs_skip_tensorflow_notice(new_player, dialogs, tmp_pa
     events = _run_animatic2_recording(player, runner, monkeypatch, model_loaded=True)
     start = next(e for e in events if e[0] == "start")
     assert FIRST_LOAD_NOTICE not in start[1], events
+
+
+# ---------------------------------------------------------------------------
+# 5) 항목을 숨길 때는 이유(transnetv2_missing)를 시작 로그에 한 줄 남김 (조용히 숨기지 않음)
+# ---------------------------------------------------------------------------
+
+HIDDEN_LOG = "애니매틱2(TransNetV2) 항목 숨김 — 이 빌드/환경에 없는 것: "
+
+
+def test_hidden_animatic2_logs_reasons_at_startup(new_player, dialogs, tmp_path, monkeypatch, capsys):
+    reasons = ["CPU가 AVX를 지원하지 않음 (TensorFlow x86 빌드에 필요, platform.machine()=AMD64)"]
+    monkeypatch.setattr(player_base, "_transnetv2_available", lambda: False)
+    monkeypatch.setattr(player_base, "_transnetv2_missing", lambda: reasons)
+    capsys.readouterr()
+    _prepare_player(new_player, tmp_path)
+    lines = [line for line in capsys.readouterr().out.splitlines() if HIDDEN_LOG in line]
+    assert len(lines) == 1, lines
+    assert lines[0].startswith("[시작 ") and lines[0].endswith(HIDDEN_LOG + str(reasons)), lines
+
+
+def test_visible_animatic2_logs_nothing(new_player, dialogs, tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(player_base, "_transnetv2_available", lambda: True)
+    capsys.readouterr()
+    _prepare_player(new_player, tmp_path)
+    assert HIDDEN_LOG not in capsys.readouterr().out
