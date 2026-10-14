@@ -54,9 +54,9 @@ SolidCompression=yes
 ; 이 스크립트는 installer\ 안에 있으므로, 상대 Source 경로는 저장소 루트를 기준으로
 ; 삼도록 SourceDir을 한 단계 위로 돌린다 (dist\YesonCheck_Autocut\... 그대로 쓰기 위함)
 SourceDir=..
-; OutputDir은 SourceDir의 영향을 받지 않고 이 스크립트 파일이 있는 위치(installer\) 기준이라,
-; 결과물은 installer\YesonCheck_Setup_<sha>.exe 로 만들어진다
-OutputDir=.
+; OutputDir도 상대 경로면 SourceDir(저장소 루트) 기준이다 (Inno Setup 문서; CI에서 OutputDir=. 은
+; 저장소 루트에 만들어졌음) → 결과물이 installer\YesonCheck_Setup_<sha>.exe 로 만들어지도록 installer로 지정
+OutputDir=installer
 OutputBaseFilename=YesonCheck_Setup_{#AppSha}
 
 UninstallDisplayIcon={app}\{#MyAppExeName}
