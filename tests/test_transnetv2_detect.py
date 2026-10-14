@@ -67,7 +67,9 @@ def test_startup_does_not_import_tensorflow(tmp_path):
 
     pytest 프로세스는 다른 시험이 이미 TensorFlow를 불렀을 수 있으므로 새 파이썬 프로세스에서 확인한다.
     """
-    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", YESONCHECK_CONFIG_DIR=make_config(str(tmp_path), {}))
+    # PYTHONIOENCODING: 자식 프로세스의 한글 출력을 utf-8로 (Windows 기본 코드 페이지에서도 읽을 수 있게)
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PYTHONIOENCODING="utf-8",
+               YESONCHECK_CONFIG_DIR=make_config(str(tmp_path), {}))
     result = subprocess.run([sys.executable, "-c", _STARTUP_CODE, ROOT], cwd=ROOT, env=env,
                             capture_output=True, text=True, encoding="utf-8", timeout=300)
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
