@@ -66,6 +66,7 @@ from PyQt5.QtWidgets import (
 from yesoncheck.video_widget import CustomVideoWidget
 from yesoncheck import external_tools, image_io, paths, shared_config, timing_log
 from yesoncheck.slider_style import jump_to_click
+from yesoncheck.window_layout import ElidedLabel, InfoRowLayout, VerticalScrollArea, startup_geometry
 # 무거운 모듈들은 lazy import로 변경 (실제 사용 시점에만 로드)
 # from yesoncheck.workers import OCRWorker, OCRExportWorker, SceneDetectWorker
 # from yesoncheck.player_timeline import CollapsibleBox
@@ -316,6 +317,11 @@ QMessageBox {
         self.show_overlay = False
         self.isFullScreen = False
         
+        # 처음 창 크기: 예전처럼 1080×720 이상, 레이아웃이 원하는 크기까지, 화면 작업 영역 안으로.
+        # 예전에는 최소 크기가 이 역할을 해서 화면보다 커질 수 있었음 — 이제 줄일 수도 있음.
+        self.setGeometry(startup_geometry(self.sizeHint(), self.minimumSizeHint(),
+                                          QApplication.primaryScreen().availableGeometry()))
+
         # 초기 창 크기 저장 (앱 처음 실행 시)
         self.initial_geometry = self.geometry()
         
@@ -589,18 +595,20 @@ QPushButton:pressed {
     border: 1px solid #343a40;
 }
 """)
-        self.filenameLabel = QLabel()
-        self.labelFrameCount = QLabel()
-        self.labelTotalFrames = QLabel()
-        self.labelPlaybackFPS = QLabel()  # 재생 FPS 표시 위젯 추가
+        # 정보 줄 라벨 (예전 고정 너비 200·200·150이 창의 최소 너비를 묶었음): 자리가 있으면 예전과 같은 너비
+        # (숫자가 바뀌어도 그대로), 모자라면 InfoRowLayout이 숫자 라벨의 빈 공간 → 파일 이름 → 모두 순서로 작은
+        # 최소 너비까지 줄이고 넘치는 글자는 …로 줄여 그림. 파일 이름은 가운데를 줄이고 전체 이름은 툴팁에.
+        self.filenameLabel = ElidedLabel(Qt.ElideMiddle, min_width=90, shrinks_first=True, full_text_tooltip=True)
+        self.labelFrameCount = ElidedLabel(Qt.ElideRight, min_width=100, hint_width=200, fit_text="Current: 00000")
+        self.labelTotalFrames = ElidedLabel(Qt.ElideRight, min_width=85, hint_width=200,
+                                            fit_text="Total: 00000 (000F 00f)")
+        self.labelPlaybackFPS = ElidedLabel(Qt.ElideRight, min_width=50, hint_width=150,
+                                            fit_text="재생: 00.000 FPS")  # 재생 FPS 표시 위젯 추가
         font = QFont(); font.setPointSize(16)
         self.filenameLabel.setFont(font)
         self.labelFrameCount.setFont(font)
         self.labelTotalFrames.setFont(font)
         self.labelPlaybackFPS.setFont(font)  # FPS 위젯에도 폰트 적용
-        self.labelFrameCount.setFixedWidth(200)
-        self.labelTotalFrames.setFixedWidth(200)
-        self.labelPlaybackFPS.setFixedWidth(150)  # FPS 위젯 너비 설정
         self.filenameLabel.setStyleSheet("""
 QLabel {
     background: #f8f9fa;
@@ -852,9 +860,9 @@ QSlider::add-page:horizontal {
         controlLayoutRight.setContentsMargins(0,0,0,0)
         controlLayoutRight.setSpacing(5)
         
-        fileInfoLayout = QHBoxLayout()
+        fileInfoLayout = InfoRowLayout()  # 예전 QHBoxLayout + addStretch와 같은 배치 (시간 라벨은 오른쪽 끝)
         fileInfoLayout.addWidget(self.filenameLabel); fileInfoLayout.addWidget(self.labelFrameCount)
-        fileInfoLayout.addWidget(self.labelTotalFrames); fileInfoLayout.addWidget(self.labelPlaybackFPS); fileInfoLayout.addStretch(1)
+        fileInfoLayout.addWidget(self.labelTotalFrames); fileInfoLayout.addWidget(self.labelPlaybackFPS)
         fileInfoLayout.setContentsMargins(0,0,0,0); fileInfoLayout.setSpacing(5)
         splitter = QSplitter(Qt.Vertical); videoWidgetContainer = QWidget()
         videoWidgetLayout = QVBoxLayout(); videoWidgetLayout.addWidget(self.videoWidget)
@@ -1019,28 +1027,30 @@ QPushButton:checked {
         sidebarContainer = QWidget()
         sidebarContainer.setLayout(sidebarLayout); sidebarContainer.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         
-        # middleContainer를 스크롤 가능한 영역으로 만들기
         middleContainer = QWidget()
         middleLayout = QVBoxLayout()
         middleLayout.addLayout(controlLayoutMiddle)
         middleLayout.addStretch(1)
         middleContainer.setLayout(middleLayout)
         middleContainer.setMinimumWidth(200)  # 최소 너비 설정으로 버튼 텍스트가 잘리지 않도록 (OCR 메뉴 고려)
-        
-        # 스크롤바 제거 - 접을 수 있는 그룹박스 사용으로 스크롤 불필요
+
+        # 가운데 열은 세로 스크롤 영역 안에: 창이 낮으면 스크롤 (예전에는 이 열의 최소 높이가 창의 최소 높이를 묶어
+        # Windows 150% 배율에서 창이 화면보다 컸음). 창이 충분히 크면 스크롤바 없이 예전과 같음.
+        self.middleScrollArea = VerticalScrollArea(middleContainer)
         mainSplitter = QSplitter(Qt.Horizontal); mainSplitter.addWidget(sidebarContainer)
-        mainSplitter.addWidget(middleContainer); mainSplitter.addWidget(splitter)
+        mainSplitter.addWidget(self.middleScrollArea); mainSplitter.addWidget(splitter)
         mainSplitter.setStretchFactor(0,0); mainSplitter.setStretchFactor(1,0); mainSplitter.setStretchFactor(2,1)
         mainSplitter.setSizes([200, 220, 1000]); layout = QVBoxLayout(); layout.addWidget(mainSplitter)  # middle 영역 초기 너비를 220으로 증가하여 OCR 버튼 텍스트가 잘리지 않도록
         layout.addLayout(controlLayoutRight); layout.setContentsMargins(0,0,0,0); layout.setSpacing(5)
         widget = QWidget(); widget.setLayout(layout); self.setCentralWidget(widget)
         self.setAcceptDrops(True)
         self.control_widgets = [
-            sidebarContainer, middleContainer, workLabel, stopButton, self.frameRateLabel, volumeLabel, self.workComboBox, self.seasonComboBox, self.jobComboBox,
+            sidebarContainer, self.middleScrollArea, workLabel, stopButton, self.frameRateLabel, volumeLabel, self.workComboBox, self.seasonComboBox, self.jobComboBox,
             self.loopCheckBox, self.playPauseButton, self.playSelectedButton,
             self.volumeSlider, self.frameRateComboBox, self.wipeCheckBox, self.sidebar, self.wipeXButton, self.wipeYButton, openButtonA, openButtonB, self.volumeSlider, selectFolderButton, bookmarkButton, bookmarkListButton, workPathButton, self.listModeButton, self.thumbnailModeButton, self.thumbnailProgressBar
         ]
-        self.timeLabel = QLabel("00:00:00.000 / 00:00:00.000"); self.timeLabel.setFont(QFont("Arial", 16))
+        self.timeLabel = ElidedLabel(Qt.ElideRight, min_width=90)  # 창을 줄이면 뒤쪽(전체 시간)부터 …로
+        self.timeLabel.setText("00:00:00.000 / 00:00:00.000"); self.timeLabel.setFont(QFont("Arial", 16))
         self.timeLabel.setStyleSheet("""
 QLabel {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -1052,7 +1062,7 @@ QLabel {
     padding: 10px;
 }
 """)
-        fileInfoLayout.addWidget(self.timeLabel)
+        fileInfoLayout.addWidget(self.timeLabel); fileInfoLayout.setAlignment(self.timeLabel, Qt.AlignRight)
         
         # timeLabel을 control_widgets에 추가
         self.control_widgets.append(self.timeLabel)
