@@ -8,9 +8,9 @@ TransNetV2(선택적 딥러닝 의존성)가 없는 빌드/환경에서는:
 3. 그래도 워커가 직접 불리면(안전망) 사용자에게 개발자용 pip 안내가 아니라 한국어 안내가 떠야 한다
    (그 메시지 자체는 tests/test_workers_transnetv2_guard.py에서 확인).
 
-TRANSNETV2_AVAILABLE이 True인 개발 환경(실제로 transnetv2가 설치된 경우)에서는 항목이 그대로 보여야 하므로
-두 방향 모두 monkeypatch로 시험한다. baseline인 p310에는 transnetv2가 없으므로(실제 상태) 몽키패치 없는
-시험으로 실제 상태도 함께 확인한다.
+TensorFlow와 TransNetV2 가중치가 있는 빌드/환경(TRANSNETV2_AVAILABLE이 True)에서는 항목이 그대로 보여야 하므로
+두 방향 모두 monkeypatch로 시험한다. 빌드 환경(p310_tf)에는 TensorFlow·가중치가 반드시 있으므로(애니매틱2를
+Windows·Mac 빌드에 넣기로 함, 2026-10-14) 몽키패치 없는 시험으로 실제 상태(항목이 보임)도 함께 확인한다.
 """
 
 import json
@@ -89,13 +89,15 @@ def _prepare_player(new_player, tmp_path):
 # 1) 콤보박스에 항목이 보이는지/안 보이는지
 # ---------------------------------------------------------------------------
 
-def test_animatic2_hidden_in_real_p310_environment(new_player, dialogs, tmp_path):
-    """몽키패치 없이: p310에는 transnetv2가 설치되어 있지 않으므로(실제 상태) 항목이 보이면 안 된다."""
-    assert player_base._transnetv2_available() is False, "이 시험은 TransNetV2가 없는 실제 환경을 전제로 합니다"
+def test_animatic2_present_in_real_build_environment(new_player, dialogs, tmp_path):
+    """몽키패치 없이: 빌드 환경에는 TensorFlow와 가중치가 있으므로(실제 상태) 항목이 보여야 한다."""
+    assert player_base._transnetv2_available() is True, (
+        "빌드 환경에 TensorFlow 또는 TransNetV2 가중치가 없습니다 (setup_build_env.sh로 만든 p310_tf에서 실행)"
+    )
     player = _prepare_player(new_player, tmp_path)
     texts = combo_items(player.ocrModeComboBox)
-    assert "TransNetV2" not in " ".join(texts), texts
-    assert player.ocrModeComboBox.findData("animatic2") == -1
+    assert texts[-1] == "애니매틱2 (TransNetV2)", texts
+    assert player.ocrModeComboBox.findData("animatic2") >= 0
     assert player.ocrModeComboBox.findData("animatic") >= 0
 
 

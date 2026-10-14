@@ -75,10 +75,10 @@ from yesoncheck.window_layout import ElidedLabel, InfoRowLayout, VerticalScrollA
 
 
 def _transnetv2_available():
-    """TransNetV2(딥러닝 씬 감지, 애니매틱2)가 이 환경에 설치돼 있는지.
+    """TransNetV2(딥러닝 씬 감지, 애니매틱2)를 이 빌드/환경에서 쓸 수 있는지 (TensorFlow와 가중치가 있는지).
 
-    transnetv2_detector는 무거운 모듈(cv2/numpy + transnetv2)이라 lazy import로 확인한다.
-    transnetv2가 없는 경우는 transnetv2_detector가 스스로 처리해 TRANSNETV2_AVAILABLE=False로 둔다.
+    transnetv2_detector는 cv2/numpy를 불러오므로 lazy import로 확인한다. TensorFlow는 불러오지 않는다
+    (find_spec과 가중치 파일 존재만 확인 — 시작이 느려지지 않게. TF는 애니매틱2 감지를 시작할 때 불러옴).
     여기서 ImportError를 잡지 않는다 — transnetv2_detector 자체가 깨졌다면 그대로 드러나야 한다(조용히 '없음'으로 숨기지 않음).
     """
     from yesoncheck.transnetv2_detector import TRANSNETV2_AVAILABLE

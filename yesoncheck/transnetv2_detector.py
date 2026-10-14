@@ -1,4 +1,14 @@
-"""TransNetV2-based scene detection module for gradual transitions (dissolves, fades)."""
+"""TransNetV2-based scene detection module for gradual transitions (dissolves, fades).
+
+TensorFlow는 애니매틱2 감지를 시작할 때(detect_scene_cuts_transnetv2 안)에서만 불러온다.
+이 모듈을 import해도 TensorFlow를 불러오지 않는다 (앱 시작·콤보박스 구성이 느려지지 않게).
+TransNetV2 로더 코드는 yesoncheck/transnetv2_model.py, 가중치는 vendor/transnetv2-weights (빌드된 앱: transnetv2-weights).
+"""
+
+import importlib.util
+import os
+import sys
+import time
 
 import cv2
 import numpy as np
@@ -6,12 +16,38 @@ from pathlib import Path
 from typing import List, Dict, Optional, Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-try:
-    from transnetv2 import TransNetV2
-    TRANSNETV2_AVAILABLE = True
-except ImportError:
-    TRANSNETV2_AVAILABLE = False
-    print("Warning: TransNetV2 not available. Install with: pip install git+https://github.com/soCzech/TransNetV2.git")
+from yesoncheck import timing_log
+
+# 가중치 폴더 안의 파일 (TensorFlow SavedModel). 크기·sha256은 vendor/transnetv2-weights/README.md와 spec이 확인
+TRANSNETV2_WEIGHT_FILES = (
+    "saved_model.pb",
+    os.path.join("variables", "variables.data-00000-of-00001"),
+    os.path.join("variables", "variables.index"),
+)
+
+
+def transnetv2_weights_dir():
+    """TransNetV2 가중치 폴더. 빌드된 앱: <_MEIPASS>/transnetv2-weights, 소스: <저장소>/vendor/transnetv2-weights."""
+    if getattr(sys, "frozen", False):
+        return os.path.join(sys._MEIPASS, "transnetv2-weights")
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(repo_root, "vendor", "transnetv2-weights")
+
+
+def transnetv2_missing():
+    """애니매틱2에 필요한데 이 빌드/환경에 없는 것 목록 (비어 있으면 사용 가능). TensorFlow를 불러오지 않고 확인."""
+    missing = []
+    if importlib.util.find_spec("tensorflow") is None:
+        missing.append("tensorflow 모듈 없음")
+    weights_dir = transnetv2_weights_dir()
+    for name in TRANSNETV2_WEIGHT_FILES:
+        path = os.path.join(weights_dir, name)
+        if not os.path.isfile(path):
+            missing.append(f"가중치 파일 없음: {path}")
+    return missing
+
+
+TRANSNETV2_AVAILABLE = not transnetv2_missing()
 
 
 def detect_scene_cuts_transnetv2(
@@ -51,25 +87,32 @@ def detect_scene_cuts_transnetv2(
         - text: str (auto-generated segment name)
         - edited_text: str (same as text)
     """
-    if not TRANSNETV2_AVAILABLE:
-        raise ImportError(
-            "TransNetV2 is not installed. "
-            "Install with: pip install git+https://github.com/soCzech/TransNetV2.git"
-        )
+    missing = transnetv2_missing()
+    if missing:
+        raise RuntimeError("이 빌드/환경에는 애니매틱2(TransNetV2)에 필요한 것이 없습니다: " + "; ".join(missing))
 
     if not Path(video_path).exists():
         raise FileNotFoundError(f"Video file not found: {video_path}")
 
-    # Load TransNetV2 model
-    log_msg = "TransNetV2 모델 로드 중..."
-    print(log_msg)
-    if log_callback:
-        log_callback(log_msg)
+    def timed(message):
+        timing_log.log("애니매틱2", message)
+        if log_callback:
+            log_callback(message)
 
+    # TensorFlow는 여기서 처음 불러옴 (transnetv2_model이 import 시 tensorflow를 불러옴)
+    started = time.perf_counter()
+    timed("TensorFlow 불러오는 중…")
+    from yesoncheck.transnetv2_model import TransNetV2
+    timed(f"TensorFlow 불러옴 ({timing_log.since(started)})")
+
+    weights_dir = transnetv2_weights_dir()
+    started = time.perf_counter()
+    timed(f"TransNetV2 모델 불러오는 중… ({weights_dir})")
     try:
-        model = TransNetV2()
+        model = TransNetV2(model_dir=weights_dir)
     except Exception as e:
-        raise RuntimeError(f"TransNetV2 모델 로드 실패: {e}")
+        raise RuntimeError(f"TransNetV2 모델 로드 실패 ({weights_dir}): {e}") from e
+    timed(f"TransNetV2 모델 불러옴 ({timing_log.since(started)})")
 
     # Open video to get basic info
     cap = cv2.VideoCapture(video_path)
@@ -176,7 +219,7 @@ def detect_scene_cuts_transnetv2(
         # gradual_predictions shape: (frames, 1) for gradual transition predictions
         predictions, gradual_predictions = model.predict_frames(frames_array)
     except Exception as e:
-        raise RuntimeError(f"TransNetV2 예측 실패: {e}")
+        raise RuntimeError(f"TransNetV2 예측 실패: {e}") from e
 
     predict_done_msg = "TransNetV2 예측 완료"
     print(predict_done_msg)

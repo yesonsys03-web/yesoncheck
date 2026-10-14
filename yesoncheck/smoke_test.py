@@ -33,6 +33,30 @@ def ocr_model_files(base_dir):
     return files
 
 
+# 애니매틱2 시험 영상(write_three_shot_clip)에서 TransNetV2가 찾아야 할 씬 시작 프레임
+THREE_SHOT_STARTS = [0, 30, 60]
+
+
+def write_three_shot_clip(path):
+    """애니매틱2(TransNetV2) 시험용 합성 영상: 30프레임짜리 샷 3개 (샷마다 다른 단색 배경 + 움직이는 흰 원),
+    cv2.VideoWriter mp4v 24fps. 씬 시작 프레임은 THREE_SHOT_STARTS. check_frozen_imports.py·pytest도 같이 씀.
+    (Windows의 cv2.VideoWriter는 한글 경로를 못 쓰므로 ASCII 경로로)"""
+    import cv2
+    import numpy as np
+
+    width, height = 320, 180
+    writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), 24, (width, height))
+    if not writer.isOpened():
+        raise RuntimeError(f"VideoWriter를 열 수 없습니다: {path}")
+    for background in [(40, 40, 200), (40, 170, 40), (190, 110, 30)]:  # BGR
+        for i in range(30):
+            frame = np.full((height, width, 3), background, np.uint8)
+            cv2.circle(frame, (40 + i * 8, height // 2), 24, (255, 255, 255), -1)
+            writer.write(frame)
+    writer.release()
+    return path
+
+
 def show_like_launch(VideoPlayer, app):
     """app.launch처럼 공유 설정을 읽지 않고 창을 만들어 보임 → (player, 만들어 보이기까지 걸린 초)."""
     started = time.perf_counter()
@@ -274,6 +298,28 @@ def run(workdir):
         assert any("SC" in (t or "") and "001" in (t or "") for t in texts), texts
         return texts
 
+    def animatic2():
+        """애니매틱2(TransNetV2): 콤보박스에 항목이 있고, 앱과 같은 설정의 워커가 합성 3샷 영상에서 컷을 찾는지."""
+        from yesoncheck.workers import TransNetV2Worker
+
+        assert player is not None and player.ocrModeComboBox.findData("animatic2") >= 0, \
+            "분석 방식 목록에 '애니매틱2 (TransNetV2)'가 없습니다 (TensorFlow 또는 가중치가 빌드에 없음)"
+        # 시작·OCR 경로는 TensorFlow를 불러오지 않아야 함 (애니매틱2 감지를 시작할 때 처음 불러옴)
+        assert "tensorflow" not in sys.modules, "애니매틱2 감지 전에 TensorFlow가 이미 불려 있습니다"
+        path = write_three_shot_clip(os.path.join(workdir, "animatic2_three_shots.mp4"))
+        result = {}
+        # 앱(player_base의 애니매틱2 분석)과 같은 설정
+        worker = TransNetV2Worker(path, threshold=0.3, min_scene_len=10,
+                                  detect_gradual_transitions=True, post_process_histogram=True)
+        worker.completed.connect(lambda r: result.update(r))
+        worker.error.connect(lambda m: result.update(error=m))
+        started = time.perf_counter()
+        worker.run()
+        assert "error" not in result, result.get("error")
+        starts = [s["start_frame"] for s in result.get("segments", [])]
+        assert starts == THREE_SHOT_STARTS, f"씬 시작 프레임 {starts} (기대 {THREE_SHOT_STARTS})"
+        return {"cuts": starts, "seconds": round(time.perf_counter() - started, 2)}
+
     def export(mode):
         from yesoncheck.workers import OCRExportWorker
 
@@ -332,6 +378,7 @@ def run(workdir):
         check("병합", merge)
         check("주석 내보내기", annotation_export)
     check("OCR", ocr)
+    check("애니매틱2 (TransNetV2)", animatic2)
     check("OCR 모델 폴더", ocr_model_dir)
     check("긴 경로 허용", long_path_aware)
 

@@ -31,17 +31,9 @@ except ImportError:
         def detect_scene_cuts_with_opencv(*args, **kwargs):
             raise ImportError("auto_trim module not available")
 
-# TransNetV2 module import
-try:
-    from .transnetv2_detector import detect_scene_cuts_transnetv2, TRANSNETV2_AVAILABLE
-except ImportError:
-    try:
-        from yesoncheck.transnetv2_detector import detect_scene_cuts_transnetv2, TRANSNETV2_AVAILABLE
-    except ImportError:
-        # Fallback if transnetv2_detector is not available
-        TRANSNETV2_AVAILABLE = False
-        def detect_scene_cuts_transnetv2(*args, **kwargs):
-            raise ImportError("transnetv2_detector module not available")
+# TransNetV2(애니매틱2): transnetv2_detector는 TensorFlow를 불러오지 않음 (감지를 시작할 때만 불러옴).
+# 이 모듈이 깨졌다면 조용히 '없음'으로 숨기지 않고 그대로 실패해야 하므로 ImportError를 잡지 않음
+from yesoncheck.transnetv2_detector import detect_scene_cuts_transnetv2, transnetv2_missing, TRANSNETV2_AVAILABLE
 
 
 class FFmpegWorker(QThread):
@@ -3400,10 +3392,10 @@ class TransNetV2Worker(QThread):
                 return
 
             if not TRANSNETV2_AVAILABLE:
-                # 개발자용 설치 안내는 로그에만 (사용자 대화상자에는 쓸모가 없으므로)
+                # 개발자용 안내(무엇이 없는지·경로)는 로그에만 (사용자 대화상자에는 쓸모가 없으므로)
                 print(
-                    "[TransNetV2Worker] TransNetV2가 설치되지 않았습니다. "
-                    "설치: pip install git+https://github.com/soCzech/TransNetV2.git"
+                    "[TransNetV2Worker] 이 빌드에는 TensorFlow 또는 TransNetV2 가중치가 없습니다 "
+                    f"(빌드 환경·spec 확인, BUILD.md): {transnetv2_missing() or 'TRANSNETV2_AVAILABLE=False'}"
                 )
                 self.error.emit(
                     "이 빌드에는 Animatic2(TransNetV2) 씬 감지가 포함되지 않았습니다. "

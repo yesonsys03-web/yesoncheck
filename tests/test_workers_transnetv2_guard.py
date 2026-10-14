@@ -1,5 +1,5 @@
 """TransNetV2Worker의 안전망(TRANSNETV2_AVAILABLE이 False일 때)이 사용자에게는 한국어 안내만,
-개발자용 pip 설치 안내는 로그에만 보내는지 확인.
+개발자용 안내(TensorFlow·가중치 중 무엇이 없는지)는 로그에만 보내는지 확인.
 
 이 안전망은 콤보박스에서 애니매틱2 항목을 숨겨도(tests/test_animatic2_availability.py) 여전히 남아 있어야
 하는 마지막 방어선이다 — 예: 저장된 결과를 억지로 재생해 워커가 직접 불려도 개발자용 오류가 뜨지 않게.
@@ -10,8 +10,10 @@ from tests.conftest import write_test_video
 from yesoncheck import workers
 
 
-def test_run_emits_korean_user_message_and_logs_pip_hint_separately(tmp_path, capsys, monkeypatch):
+def test_run_emits_korean_user_message_and_logs_developer_hint_separately(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(workers, "TRANSNETV2_AVAILABLE", False)
+    missing = ["tensorflow 모듈 없음", "가중치 파일 없음: /x/transnetv2-weights/saved_model.pb"]
+    monkeypatch.setattr(workers, "transnetv2_missing", lambda: missing)
     video = write_test_video(str(tmp_path / "v" / "a.mp4"))
     worker = workers.TransNetV2Worker(video)
 
@@ -25,10 +27,13 @@ def test_run_emits_korean_user_message_and_logs_pip_hint_separately(tmp_path, ca
         "이 빌드에는 Animatic2(TransNetV2) 씬 감지가 포함되지 않았습니다. "
         "Animatic (Auto Cut) 모드를 쓰세요."
     )
-    # 개발자용 pip 안내는 대화상자(위 메시지)가 아니라 로그에만
-    assert "pip install" not in user_message
+    # 개발자용 안내(무엇이 없는지·경로)는 대화상자(위 메시지)가 아니라 로그에만
+    assert "TensorFlow" not in user_message and "가중치" not in user_message
     out = capsys.readouterr().out
-    assert "pip install git+https://github.com/soCzech/TransNetV2.git" in out
+    assert "이 빌드에는 TensorFlow 또는 TransNetV2 가중치가 없습니다" in out, out
+    assert str(missing) in out, out
+    # TransNetV2는 pip로 설치하지 않음 (코드·가중치를 저장소에 넣어 빌드에 포함) → pip 안내가 나오면 안 됨
+    assert "pip install" not in out, out
 
 
 def test_run_still_works_when_transnetv2_available(tmp_path, monkeypatch):
