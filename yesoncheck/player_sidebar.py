@@ -39,6 +39,8 @@ from yesoncheck.path_map_setup_dialog import PathMapSetupDialog
 
 LOADING_TITLE = "Yeson Checker — 공유 설정 불러오는 중…"
 LOADING_NOTICE = "공유 설정을 불러오는 중입니다. 잠시 뒤 다시 시도하세요."
+LOADING_WORK_ITEM = "공유 설정 불러오는 중…"  # 불러오는 동안 작품 목록의 첫 항목 ("작품선택" 대신)
+WORK_PLACEHOLDER = "작품선택"
 
 
 @dataclass
@@ -61,13 +63,15 @@ class SharedConfigState:
     elapsed: float = None  # 백그라운드 읽기에 걸린 초
 
 
-def list_works_not_opening(work_paths, to_native):
+def list_works_not_opening(work_paths, to_native, timeout=None):
     """(Windows) 이 PC에서 열리지 않는 작품 목록 ['작품: 이유']. to_native: 저장된 Mac 경로 → 이 PC 경로.
 
-    작품 경로의 공유 루트(\\\\서버\\공유)를 공유마다 한 번만 열어 보고, 열리지 않으면(서버가 꺼짐 등) 그 공유의
-    작품 폴더는 열어 보지 않습니다 — 작품마다 SMB 시간 초과를 기다리지 않도록.
+    작품 경로의 공유 루트(\\\\서버\\공유)를 공유마다 한 번만, timeout초까지만 기다리며 열어 보고, 열리지 않거나
+    응답이 없으면(서버가 꺼짐·주소가 바뀜 등) 그 공유의 작품 폴더는 열어 보지 않습니다 — 작품마다 SMB 시간 초과를
+    기다리지 않도록. 응답한 루트 아래의 작품 폴더는 바로 엽니다.
     """
     is_dir = path_map_setup._default_is_dir
+    timeout = path_map_setup.SHARE_PROBE_TIMEOUT_S if timeout is None else timeout
     root_opens = {}  # 접은 (서버, 공유) → 열리는지
     broken = []
     timing_log.log("작품 확인", f"작품 {len(work_paths)}개가 이 PC에서 열리는지 확인 중…")
@@ -84,10 +88,14 @@ def list_works_not_opening(work_paths, to_native):
         if key not in root_opens:
             timing_log.log("작품 확인", f"{root} 여는 중…")
             root_started = time.perf_counter()
-            root_opens[key] = is_dir(root)
-            timing_log.log("작품 확인", f"{root} {timing_log.since(root_started)} — "
-                                       f"{'열림' if root_opens[key] else '열리지 않음'}")
-        if not root_opens[key]:
+            root_opens[key] = path_map_setup.probe(is_dir, root, timeout)
+            result = {True: "열림", False: "열리지 않음", None: f"응답 없음 ({timeout:g}초) — 건너뜀"}[root_opens[key]]
+            timing_log.log("작품 확인", f"{root} {timing_log.since(root_started)} — {result}")
+        if root_opens[key] is None:
+            broken.append(
+                f"{work_name}: 열 수 없음 ({native}) — 공유 폴더 {root}가 {timeout:g}초 안에 응답 없음 (서버가 꺼졌거나 느림)"
+            )
+        elif not root_opens[key]:
             broken.append(f"{work_name}: 열 수 없음 ({native}) — 공유 폴더 {root}가 열리지 않음 (서버가 꺼졌거나 연결이 끊김)")
         elif not is_dir(native):
             broken.append(f"{work_name}: 열 수 없음 ({native})")
@@ -96,13 +104,15 @@ def list_works_not_opening(work_paths, to_native):
 
 
 def _config_dir_usable(config_dir):
-    """공유 설정 폴더로 쓸 수 있는지 (NAS를 열어 봄 — 서버가 꺼져 있으면 오래 걸릴 수 있어 앞뒤로 기록)."""
+    """공유 설정 폴더로 쓸 수 있는지 → True | False | None(시간 안에 응답 없음). NAS를 열어 보므로 앞뒤로 기록하고
+    SHARE_PROBE_TIMEOUT_S초까지만 기다림 (서버가 꺼졌거나 주소가 바뀌면 끝없이 걸릴 수 있음)."""
     if config_dir is None:
         return False
     timing_log.log("공유 설정", f"설정 폴더 확인 중: {config_dir}")
     started = time.perf_counter()
-    usable = shared_config.is_valid_config_dir(config_dir)
-    timing_log.log("공유 설정", f"설정 폴더 확인 ({timing_log.since(started)}) — {'쓸 수 있음' if usable else '쓸 수 없음'}")
+    usable = path_map_setup.probe(shared_config.is_valid_config_dir, config_dir)
+    result = {True: "쓸 수 있음", False: "쓸 수 없음", None: "응답 없음"}[usable]
+    timing_log.log("공유 설정", f"설정 폴더 확인 ({timing_log.since(started)}) — {result}")
     return usable
 
 
@@ -120,8 +130,10 @@ def _auto_find_config_dir(state, shares, share_problems):
     found = []
     seen = set()
     local, local_problem = path_map_setup.find_local_config_dir()
-    state.config_dir_search_problems = list(share_problems) + ([local_problem] if local_problem else [])
-    for folder in ([local] if local else []) + path_map_setup.find_config_dirs(shares):
+    search_problems = list(share_problems) + ([local_problem] if local_problem else [])
+    on_shares = path_map_setup.find_config_dirs(shares, problems=search_problems)  # 응답 없는 공유는 problems로
+    state.config_dir_search_problems = search_problems
+    for folder in ([local] if local else []) + on_shares:
         key = path_map_setup.config_dir_key(folder)
         if key not in seen:
             seen.add(key)
@@ -165,8 +177,18 @@ def gather_shared_config(find_works_not_opening=False):
     except shared_config.SharedConfigError as exc:
         state.shared_config_problem = f"{exc}\n\n{traceback.format_exc()}"
         return state
-    if (paths.IS_WINDOWS and not os.environ.get(shared_config.CONFIG_DIR_ENV)
-            and not _config_dir_usable(config_dir)):
+    usable = True
+    if paths.IS_WINDOWS and not os.environ.get(shared_config.CONFIG_DIR_ENV):
+        usable = _config_dir_usable(config_dir)
+    if usable is None:
+        # 설정 폴더 자체가 응답하지 않음 — config_dir은 비워 둠 (GUI 스레드의 resolve가 그 폴더를 다시 열어 보지 않고
+        # 다른 폴더를 고르게 함)
+        state.shared_config_problem = (
+            f"공유 설정 폴더가 {path_map_setup.SHARE_PROBE_TIMEOUT_S:g}초 안에 응답하지 않습니다: {config_dir} "
+            "(서버가 꺼졌거나 느림)"
+        )
+        return state
+    if not usable:
         found = _auto_find_config_dir(state, *available_shares())
         if state.shared_config_problem:
             return state
@@ -1036,6 +1058,10 @@ class PlayerSidebarMixin:
         self._apply_shared_config(SharedConfigState())  # 먼저 빈 상태로 (예상 못 한 예외가 나도 이전 값이 남지 않게)
         self._apply_shared_config(gather_shared_config())
 
+    def _first_work_item(self):
+        """작품 목록의 첫 항목: 불러오는 동안은 "공유 설정 불러오는 중…", 그 뒤는 "작품선택" (골라도 아무 일 없음)."""
+        return LOADING_WORK_ITEM if getattr(self, "shared_config_loading", False) else WORK_PLACEHOLDER
+
     def set_shared_config_loading_state(self):
         """공유 설정을 아직 읽지 않은 빈 '불러오는 중' 상태 (파일·NAS 접근 없음). start_shared_config_load가 채움."""
         self._apply_shared_config(SharedConfigState())
@@ -1299,10 +1325,15 @@ class PlayerSidebarMixin:
             QApplication.processEvents()
             return not progress.wasCanceled()
 
+        def on_wait():
+            # 공유 루트가 응답하기를 기다리는 동안(최대 SHARE_PROBE_TIMEOUT_S초): 진행 창을 그리고 취소를 받음
+            QApplication.processEvents()
+            return not progress.wasCanceled()
+
         timing_log.log("변환표 자동 설정", f"작품 {len(self.work_paths)}개의 폴더를 공유 {len(shares)}개에서 찾는 중…")
         started = time.perf_counter()
         try:
-            proposal = path_map_setup.propose_mapping(self.work_paths, shares, progress=on_progress)
+            proposal = path_map_setup.propose_mapping(self.work_paths, shares, progress=on_progress, on_wait=on_wait)
             timing_log.log("변환표 자동 설정", f"찾기 끝 ({timing_log.since(started)}): 짝 {len(proposal.pairs)}개")
         except path_map_setup.SetupCancelled:
             timing_log.log("변환표 자동 설정", f"찾기 취소됨 ({timing_log.since(started)})")
@@ -1371,7 +1402,7 @@ class PlayerSidebarMixin:
         """작품 콤보박스를 self.work_paths로 다시 채웁니다."""
         self.workComboBox.blockSignals(True)
         self.workComboBox.clear()
-        self.workComboBox.addItem("작품선택")
+        self.workComboBox.addItem(self._first_work_item())
         for work_name in sorted(self.work_paths.keys()):
             self.workComboBox.addItem(work_name)
         self.workComboBox.blockSignals(False)

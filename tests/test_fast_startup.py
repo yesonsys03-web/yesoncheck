@@ -20,6 +20,7 @@ from tests.test_path_map_auto_ui import NAS, WORK, path_map_criticals, win  # no
 from tests.test_work_paths_ui import combo_items, make_config, new_player  # noqa: F401 (new_player: fixture)
 
 LOADING_NOTICE = "공유 설정을 불러오는 중입니다. 잠시 뒤 다시 시도하세요."
+LOADING_ITEM = "공유 설정 불러오는 중…"  # 불러오는 동안 작품 목록의 첫 항목 ("작품선택" 대신)
 
 
 def wait_until(condition, timeout=10.0):
@@ -101,7 +102,7 @@ def test_loading_player_reads_nothing_and_creates_no_media_player(win, dialogs, 
     assert player.shared_config_problem is None and player.path_map_problem is None
     assert player.work_paths_config_dir is None and player.work_paths_file is None
     assert player.config_dir_candidates == [] and player.config_dir_search_failed is False
-    assert combo_items(player.workComboBox) == ["작품선택"]
+    assert combo_items(player.workComboBox) == [LOADING_ITEM]
     assert player.windowTitle() == "Yeson Checker — 공유 설정 불러오는 중…"
     assert player.findChildren(QMediaPlayer) == []
 
@@ -226,6 +227,9 @@ def test_start_returns_while_gather_is_blocked(win, dialogs, tmp_path, monkeypat
         wait_until(lambda: len(ticks) >= 5)  # GUI 이벤트는 계속 처리됨
         timer.stop()
         assert player.shared_config_loading and player.work_paths == {}
+        assert combo_items(player.workComboBox) == [LOADING_ITEM]  # 빈 목록 대신 불러오는 중임을 보임
+        player.workComboBox.setCurrentIndex(0)  # 골라도 아무 일 없음
+        assert combo_items(player.seasonComboBox) == ["시즌선택"] and dialogs.messages == []
 
         # 불러오는 동안: 작품 경로 관리·공유 설정 폴더 변경은 안내만 (입력 창이 열리면 win의 getText가 실패시킴)
         player.manage_work_paths()

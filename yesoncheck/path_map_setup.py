@@ -12,16 +12,83 @@ import ntpath
 import os
 import shutil
 import string
+import subprocess
 import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
 
-from yesoncheck import paths, shared_config, timing_log
+from yesoncheck import external_tools, paths, shared_config, timing_log
+
+# 공유 하나를 열어 볼 때 기다리는 최대 시간. 서버가 꺼진(주소가 바뀐) 기억된 드라이브는 SMB(445)·NetBIOS(139)·
+# WebDAV를 차례로 시도하느라 수십 초~무한히 걸릴 수 있음 → 이 시간이 지나면 '응답 없음'으로 건너뛰고 알림
+SHARE_PROBE_TIMEOUT_S = 10
+SHORTCUT_TIMEOUT_S = 10  # 바로 가기(.lnk) 대상 읽기 (PowerShell 한 번)
+_WAIT_STEP_S = 0.1  # 기다리는 동안 on_wait를 부르는 간격
 
 
 class SetupCancelled(Exception):
     """진행 표시에서 사용자가 취소함."""
+
+
+class ShortcutError(Exception):
+    """바로 가기(.lnk)의 대상을 읽지 못함 (PowerShell 없음·시간 초과·오류)."""
+
+
+def _timeout(timeout):
+    """기다릴 시간 (None이면 SHARE_PROBE_TIMEOUT_S — 부를 때 읽어 시험에서 바꿀 수 있게)."""
+    return SHARE_PROBE_TIMEOUT_S if timeout is None else timeout
+
+
+def call_with_timeout(func, arg, timeout=None, on_wait=None):
+    """func(arg)를 daemon 스레드에서 실행하고 timeout초까지만 기다림 → (끝났는지, 결과).
+
+    on_wait: 기다리는 동안 약 0.1초마다 부름 (GUI 스레드에서 이벤트 처리·진행 창 등). False를 돌려주면 기다리기를
+    멈추고 SetupCancelled. func의 예외는 시간 안에 오면 그대로 올림. 시간이 지나 버린 스레드는 나중에 끝나도
+    이 호출 안의 상자에만 쓰고(호출한 쪽의 상태는 건드리지 않음), 늦게 난 예외는 로그에만 남김.
+    """
+    timeout = _timeout(timeout)
+    done = threading.Event()
+    abandoned = threading.Event()
+    box = {}
+
+    def run():
+        # 순서: 결과를 쓰고 done → 그다음 abandoned 확인. 호출한 쪽은 abandoned → 그다음 done 확인.
+        # → 늦은 예외는 호출한 쪽이 올리거나 여기서 로그에 남김 (둘 중 하나는 반드시)
+        try:
+            value = func(arg)
+        except BaseException as exc:
+            box["error"] = exc
+            done.set()
+            if abandoned.is_set():
+                timing_log.log("확인", f"{arg} — 응답 없음으로 건너뛴 뒤 늦게 난 오류: {exc!r}")
+        else:
+            box["value"] = value
+            done.set()
+
+    threading.Thread(target=run, name=f"probe {arg}", daemon=True).start()
+    deadline = time.monotonic() + timeout
+    while not done.is_set():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        if done.wait(min(_WAIT_STEP_S, remaining)):
+            break
+        if on_wait is not None and on_wait() is False:
+            abandoned.set()
+            raise SetupCancelled()
+    abandoned.set()
+    if not done.is_set():
+        return False, None
+    if "error" in box:
+        raise box["error"]
+    return True, box["value"]
+
+
+def probe(func, path, timeout=None, on_wait=None):
+    """func(path)(열리는지·있는지 확인)를 timeout초까지만 기다림 → True | False | None(시간 안에 응답 없음)."""
+    finished, value = call_with_timeout(func, path, timeout, on_wait)
+    return bool(value) if finished else None
 
 
 def _default_is_dir(path):
@@ -38,6 +105,73 @@ def _default_realpath(path):
 
 def _default_scandir(path):
     return os.scandir(path)
+
+
+def _powershell():
+    """Windows PowerShell 실행 파일 (없으면 PATH의 powershell)."""
+    exe = os.path.join(os.environ.get("SystemRoot") or "C:\\Windows", "System32", "WindowsPowerShell", "v1.0",
+                       "powershell.exe")
+    return exe if os.path.isfile(exe) else "powershell"
+
+
+def resolve_shortcuts(lnk_paths):
+    """(Windows) 바로 가기(.lnk)들의 대상 경로를 PowerShell 한 번으로 읽음 → {lnk: 대상 경로 또는 ShortcutError}.
+
+    WScript.Shell의 CreateShortcut(...).TargetPath (콘솔 창 없이, 출력은 UTF-8). 대상 공유는 열지 않음.
+    PowerShell을 실행하지 못함·시간 초과·오류 종료는 ShortcutError로 올림. 바로 가기 하나를 읽지 못하면 그 값만
+    ShortcutError.
+    """
+    lnk_paths = list(lnk_paths)
+    if not lnk_paths:
+        return {}
+    items = ",".join("'" + path.replace("'", "''") + "'" for path in lnk_paths)
+    script = (
+        "[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
+        "$shell=New-Object -ComObject WScript.Shell; "
+        "foreach($p in @(" + items + ")){ "
+        "try { [Console]::Out.WriteLine('OK' + [char]9 + $shell.CreateShortcut($p).TargetPath) } "
+        "catch { [Console]::Out.WriteLine('ERR' + [char]9 + $_.Exception.Message) } }"
+    )
+    command = [_powershell(), "-NoProfile", "-NonInteractive", "-Command", script]
+    try:
+        completed = subprocess.run(command, capture_output=True, timeout=SHORTCUT_TIMEOUT_S,
+                                   **external_tools.subprocess_kwargs())
+    except FileNotFoundError as exc:
+        raise ShortcutError(f"PowerShell을 실행하지 못했습니다: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ShortcutError(f"바로 가기 대상 확인이 {SHORTCUT_TIMEOUT_S:g}초 안에 끝나지 않았습니다") from exc
+    out = external_tools.decode_output(completed.stdout).lstrip("\ufeff")
+    if completed.returncode != 0:
+        raise ShortcutError(
+            f"PowerShell 오류 (종료 코드 {completed.returncode}): {external_tools.decode_output(completed.stderr).strip()}"
+        )
+    lines = out.splitlines()
+    if len(lines) != len(lnk_paths):
+        raise ShortcutError(
+            f"PowerShell 출력 줄 수가 바로 가기 수와 다릅니다 ({len(lines)}줄 / {len(lnk_paths)}개): {out!r}"
+            f" {external_tools.decode_output(completed.stderr).strip()}"
+        )
+    result = {}
+    for path, line in zip(lnk_paths, lines):
+        status, _tab, value = line.partition("\t")
+        result[path] = value if status == "OK" else ShortcutError(value or line)
+    return result
+
+
+def _shortcut_unc(target):
+    """바로 가기 대상 → UNC (연결된 네트워크 드라이브 위면 drive_to_unc로 바꿈). 로컬·빈 대상은 None.
+
+    드라이브 연결 정보를 읽지 못한 오류 등은 PathMapError로 올림 (호출하는 쪽이 문제 줄로)."""
+    if not target:
+        return None
+    unc = _real_unc(target)
+    if unc is not None:
+        return unc
+    try:
+        converted = paths.drive_to_unc(target)
+    except paths.NotNetworkDriveError:
+        return None
+    return converted if converted.startswith("\\\\") else None
 
 
 def _join_unc(unc, rest_parts):
@@ -169,29 +303,46 @@ def _is_dir_link(entry):
     return bool(attributes & FILE_ATTRIBUTE_DIRECTORY)
 
 
-def local_link_shares(root=None, scandir=None, realpath=None):
-    """(Windows) 시스템 드라이브 바로 아래의 디렉터리 링크 중 실제 위치가 UNC인 것 → (shares, problems).
+def local_link_shares(root=None, scandir=None, realpath=None, resolve_shortcuts=None, timeout=None):
+    """(Windows) 시스템 드라이브 바로 아래의 디렉터리 링크·바로 가기(.lnk) 중 대상이 UNC인 것 → (shares, problems).
 
-    Toon Boom Harmony용으로 C:\\USA_DB → \\\\서버\\USA_DB 같은 링크를 만들어 둔 PC는 그 공유를 드라이브 문자 없이
-    씀 → 연결된 공유처럼 다룸: Share(unc=<실제 UNC>, drives=["C:\\USA_DB"]). 링크가 아닌 폴더는 실제 위치를 묻지
-    않음. 실제 위치를 알 수 없는 링크(서버가 꺼짐 등)나 목록을 읽지 못한 경우는 problems에 남기고 나머지는 씀.
+    Toon Boom Harmony용으로 C:\\USA_DB → \\\\Mainnas\\USA_DB 같은 링크나 바로 가기(C:\\USA_DB.lnk — 탐색기에는
+    확장자 없이 'USA_DB'로 보임)를 만들어 둔 PC는 그 공유를 드라이브 문자 없이 씀 → 연결된 공유처럼 다룸:
+    Share(unc=<대상 UNC>, drives=["C:\\USA_DB"] 또는 ["C:\\USA_DB.lnk"]). 링크가 아닌 폴더는 실제 위치를 묻지 않음.
+    링크의 실제 위치는 timeout초까지만 기다림. 바로 가기는 모두 PowerShell 한 번으로 읽음. 알 수 없는 링크·바로 가기,
+    목록을 읽지 못한 경우는 problems에 남기고 나머지는 씀.
     """
     root = root or system_drive() + "\\"
     scandir = scandir or _default_scandir
     realpath = realpath or _default_realpath
-    timing_log.log("링크", f"{root} 아래 디렉터리 링크 확인 중…")
+    resolve_shortcuts = resolve_shortcuts or globals()["resolve_shortcuts"]
+    timeout = _timeout(timeout)
+    timing_log.log("링크", f"{root} 아래 디렉터리 링크·바로 가기 확인 중…")
     started = time.perf_counter()
     try:
         with scandir(root) as entries:
+            entries = list(entries)
             links = [entry for entry in entries if _is_dir_link(entry)]
+            shortcuts = [entry for entry in entries
+                         if entry.name.casefold().endswith(".lnk") and not entry.is_symlink() and entry not in links]
     except OSError as exc:
         timing_log.log("링크", f"{root} 목록을 읽지 못함 ({timing_log.since(started)}): {exc}")
         return [], [f"{root} — 목록을 읽지 못함: {exc}"]
     shares, problems = [], []
+
+    def add(label, target, unc, elapsed_from):
+        timing_log.log("링크", f"{label} → {target} ({timing_log.since(elapsed_from)})" + ("" if unc else " — 공유가 아님"))
+        if unc is not None:
+            shares[:] = merge_shares(shares, [Share(unc, [label])])
+
     for entry in links:
         link_started = time.perf_counter()
         try:
-            real = realpath(entry.path)
+            finished, real = call_with_timeout(realpath, entry.path, timeout)
+            if not finished:
+                problems.append(f"{entry.path} — 실제 위치가 {timeout:g}초 안에 응답 없음 (대상 서버가 꺼졌거나 느림)")
+                timing_log.log("링크", f"{entry.path} → 응답 없음 ({timeout:g}초) — 건너뜀")
+                continue
             unc = _real_unc(real)
             if unc is not None:
                 paths.unc_key(unc)  # 서버·공유 이름까지 있는 UNC인지 확인 (아니면 PathMapError)
@@ -199,11 +350,33 @@ def local_link_shares(root=None, scandir=None, realpath=None):
             problems.append(f"{entry.path} — 실제 위치를 알 수 없음: {exc}")
             timing_log.log("링크", f"{entry.path} → 알 수 없음 ({timing_log.since(link_started)}): {exc}")
             continue
-        timing_log.log("링크", f"{entry.path} → {real} ({timing_log.since(link_started)})"
-                       + ("" if unc else " — 공유가 아님"))
-        if unc is not None:
-            shares = merge_shares(shares, [Share(unc, [entry.path])])
-    timing_log.log("링크", f"{root} 링크 확인 끝 ({timing_log.since(started)}): UNC 링크 {len(shares)}개")
+        add(entry.path, real, unc, link_started)
+
+    if shortcuts:
+        lnk_started = time.perf_counter()
+        lnk_paths = [entry.path for entry in shortcuts]
+        try:
+            targets = resolve_shortcuts(lnk_paths)
+        except ShortcutError as exc:
+            problems.append(f"{', '.join(lnk_paths)} — 바로 가기 대상을 알 수 없음: {exc}")
+            timing_log.log("링크", f"바로 가기 {len(lnk_paths)}개의 대상을 알 수 없음 ({timing_log.since(lnk_started)}): {exc}")
+            targets = {}
+        for path in lnk_paths:
+            if path not in targets:
+                continue
+            target = targets[path]
+            try:
+                if isinstance(target, ShortcutError):
+                    raise target
+                unc = _shortcut_unc(target)
+                if unc is not None:
+                    paths.unc_key(unc)
+            except (ShortcutError, paths.PathMapError) as exc:
+                problems.append(f"{path} — 바로 가기 대상을 알 수 없음: {exc}")
+                timing_log.log("링크", f"{path} → 알 수 없음: {exc}")
+                continue
+            add(path, target, unc, lnk_started)
+    timing_log.log("링크", f"{root} 링크·바로 가기 확인 끝 ({timing_log.since(started)}): UNC {len(shares)}개")
     return shares, problems
 
 
@@ -224,35 +397,75 @@ def available_shares():
     return merged, problems + link_problems
 
 
-def find_local_config_dir(drive=None, mac_config_dir=None, is_file=None, realpath=None):
-    """(Windows) 시스템 드라이브 아래의 Harmony식 공유 설정 폴더(Mac 경로를 그대로 옮긴 C:\\USA_DB\\test_jn\\.yesoncheck)
-    → (폴더 또는 None, 문제 줄 또는 None).
+def find_local_config_dir(drive=None, mac_config_dir=None, is_file=None, realpath=None, is_dir=None,
+                          resolve_shortcuts=None, timeout=None):
+    """(Windows) 시스템 드라이브 아래의 Harmony식 공유 설정 폴더 → (폴더 또는 None, 문제 줄 또는 None).
 
-    work_paths.json이 있고 실제 위치(realpath)가 UNC(NAS를 가리키는 링크)일 때만 그 UNC를 씀. 링크가 아닌 진짜
-    로컬 폴더는 쓰지 않음(로그에 남김 — 다른 PC와 공유되지 않는 사본). 실제 위치를 알 수 없으면(OSError) 문제 줄로
-    돌려주고 None — 호출하는 쪽은 드라이브 후보로 계속 찾음.
+    Mac 경로를 그대로 옮긴 C:\\USA_DB\\test_jn\\.yesoncheck에 work_paths.json이 있고 실제 위치(realpath)가 UNC(NAS를
+    가리키는 링크)일 때만 그 UNC를 씀. C:\\USA_DB가 폴더가 아니고 바로 가기 C:\\USA_DB.lnk(탐색기에는 'USA_DB')가
+    있으면 그 대상(UNC, 또는 연결된 네트워크 드라이브 위의 경로)을 PowerShell로 읽어 <대상>\\test_jn\\.yesoncheck를 봄.
+    링크·바로 가기가 아닌 진짜 로컬 폴더·로컬 대상은 쓰지 않음(로그). 공유는 timeout초까지만 기다림. 알 수 없거나
+    응답이 없으면 문제 줄로 돌려주고 None — 호출하는 쪽은 드라이브 후보로 계속 찾음.
     """
     is_file = is_file or _default_is_file
     realpath = realpath or _default_realpath
+    is_dir = is_dir or _default_is_dir
+    resolve_shortcuts = resolve_shortcuts or globals()["resolve_shortcuts"]
+    timeout = _timeout(timeout)
     parts = paths._mac_parts(mac_config_dir or shared_config.MAC_CONFIG_DIR)
-    folder = (drive or system_drive()).rstrip("\\/") + "\\" + "\\".join(parts)
+    base = (drive or system_drive()).rstrip("\\/") + "\\"
+    folder = base + "\\".join(parts)
     timing_log.log("공유 설정", f"{folder} 확인 중…")
     started = time.perf_counter()
-    if not is_file(folder + "\\" + shared_config.WORK_PATHS_FILENAME):
-        timing_log.log("공유 설정", f"{folder} 확인 {timing_log.since(started)} — 없음")
+    answer = probe(is_file, folder + "\\" + shared_config.WORK_PATHS_FILENAME, timeout)  # C:\USA_DB가 링크면 NAS를 엶
+    if answer is None:
+        problem = f"{folder} — {timeout:g}초 안에 응답 없음 (링크 대상 서버가 꺼졌거나 느림)"
+        timing_log.log("공유 설정", f"{folder} 응답 없음 ({timeout:g}초) — 건너뜀")
+        return None, problem
+    if answer:
+        try:
+            real = realpath(folder)
+        except OSError as exc:
+            problem = f"{folder} — 실제 위치(링크 대상)를 알 수 없음: {exc}"
+            timing_log.log("공유 설정", f"{problem} ({timing_log.since(started)})")
+            return None, problem
+        unc = _real_unc(real)
+        if unc is None:
+            timing_log.log("공유 설정", f"{folder} 는 링크가 아니라 로컬 폴더 — 쓰지 않음 ({timing_log.since(started)})")
+            return None, None
+        timing_log.log("공유 설정", f"{folder} 확인 {timing_log.since(started)} — 찾음: {unc}")
+        return unc, None
+    timing_log.log("공유 설정", f"{folder} 확인 {timing_log.since(started)} — 없음")
+
+    # 바로 가기: C:\USA_DB 폴더(링크 포함)가 없고 C:\USA_DB.lnk가 있을 때
+    top = base + parts[0]
+    lnk = top + ".lnk"
+    if is_dir(top) or not is_file(lnk):
         return None, None
     try:
-        real = realpath(folder)
-    except OSError as exc:
-        problem = f"{folder} — 실제 위치(링크 대상)를 알 수 없음: {exc}"
+        target = resolve_shortcuts([lnk])[lnk]
+        if isinstance(target, ShortcutError):
+            raise target
+        unc = _shortcut_unc(target)
+    except (ShortcutError, paths.PathMapError) as exc:
+        problem = f"{lnk} — 바로 가기 대상을 알 수 없음: {exc}"
         timing_log.log("공유 설정", f"{problem} ({timing_log.since(started)})")
         return None, problem
-    unc = _real_unc(real)
     if unc is None:
-        timing_log.log("공유 설정", f"{folder} 는 링크가 아니라 로컬 폴더 — 쓰지 않음 ({timing_log.since(started)})")
+        timing_log.log("공유 설정", f"{lnk} → {target or '(대상 없음)'} — NAS(UNC)가 아니라 쓰지 않음")
         return None, None
-    timing_log.log("공유 설정", f"{folder} 확인 {timing_log.since(started)} — 찾음: {unc}")
-    return unc, None
+    timing_log.log("공유 설정", f"{lnk} → {unc}")
+    candidate = unc.rstrip("\\") + "\\" + "\\".join(parts[1:])
+    answer = probe(is_file, candidate + "\\" + shared_config.WORK_PATHS_FILENAME, timeout)
+    if answer is None:
+        problem = f"{lnk} → {candidate} — {timeout:g}초 안에 응답 없음 (서버가 꺼졌거나 느림)"
+        timing_log.log("공유 설정", f"{candidate} 응답 없음 ({timeout:g}초) — 건너뜀")
+        return None, problem
+    if not answer:
+        timing_log.log("공유 설정", f"{candidate} 확인 {timing_log.since(started)} — 없음")
+        return None, None
+    timing_log.log("공유 설정", f"{candidate} 확인 {timing_log.since(started)} — 찾음 (바로 가기 {lnk})")
+    return candidate, None
 
 
 def config_dir_key(folder):
@@ -262,55 +475,76 @@ def config_dir_key(folder):
     return ("local", ntpath.normpath(folder.replace("/", "\\")).casefold())
 
 
-def find_config_dirs(shares, mac_config_dir=None, is_file=None):
+def find_config_dirs(shares, mac_config_dir=None, is_file=None, problems=None, timeout=None):
     """연결된 공유에서 공유 설정 폴더(work_paths.json이 있는 폴더)를 찾습니다 → UNC 목록.
 
     Mac 공유 설정 경로(/USA_DB/test_jn/.yesoncheck)의 뒷부분 조각을 길게부터 공유 아래에 붙여 봅니다
     (USA_DB\\test_jn\\.yesoncheck → test_jn\\.yesoncheck, 뒷부분은 두 조각 이상).
 
-    공유마다 동시에 확인합니다(서버가 꺼진 기억된 드라이브는 첫 확인에 20초쯤 걸림 → 전체 시간은 가장 느린 공유 정도).
+    공유마다 동시에 확인하고 전체로 timeout초까지만 기다립니다: 그때까지 답이 없는 공유(서버가 꺼졌거나 주소가 바뀐
+    기억된 드라이브 — 수십 초~무한히 걸릴 수 있음)는 '못 찾음'으로 치고 problems(목록)에 남깁니다.
     결과 순서는 공유 순서, 한 공유 안에서는 긴 뒷부분 먼저(차례로 확인할 때와 같음). 확인 중 오류는 그대로 올립니다.
     """
     is_file = is_file or _default_is_file
+    timeout = _timeout(timeout)
     parts = paths._mac_parts(mac_config_dir or shared_config.MAC_CONFIG_DIR)
+    gave_up = threading.Event()  # 시간이 지나 건너뜀 → 늦게 끝난 확인은 로그에 '늦게 응답'으로만 남김
 
     def probe(share):
         """이 공유에서 처음 찾은 폴더 (없으면 None)."""
         timing_log.log("공유 설정", f"{share.unc} ({', '.join(share.drives)}) 확인 중…")
         started = time.perf_counter()
+        late = lambda: " (늦게 응답 — 이미 건너뜀)" if gave_up.is_set() else ""  # noqa: E731
         for k in range(0, len(parts) - 1):
             folder = _join_unc(share.unc, parts[k:])
             if is_file(folder + "\\" + shared_config.WORK_PATHS_FILENAME):
-                timing_log.log("공유 설정", f"{share.unc} 확인 {timing_log.since(started)} — 찾음: {folder}")
+                timing_log.log("공유 설정", f"{share.unc} 확인 {timing_log.since(started)} — 찾음: {folder}{late()}")
                 return folder
-        timing_log.log("공유 설정", f"{share.unc} 확인 {timing_log.since(started)} — 없음")
+        timing_log.log("공유 설정", f"{share.unc} 확인 {timing_log.since(started)} — 없음{late()}")
         return None
 
     # daemon 스레드: 서버가 꺼진 공유를 확인하는 중에 앱을 닫아도 프로세스가 그 확인(20초쯤)을 기다리지 않음
     # (ThreadPoolExecutor의 작업 스레드는 인터프리터가 끝날 때 기다림)
     results = [None] * len(shares)
     errors = [None] * len(shares)
+    done = [threading.Event() for _share in shares]
 
     def run(index, share):
+        # 순서는 call_with_timeout과 같음: 결과를 쓰고 done → gave_up 확인 (늦은 예외는 올리거나 로그에, 반드시 하나)
         try:
             results[index] = probe(share)
-        except BaseException as exc:  # 호출한 쪽에서 그대로 다시 올림 (삼키지 않음)
+        except BaseException as exc:  # 시간 안이면 호출한 쪽에서 그대로 다시 올림 (삼키지 않음)
             errors[index] = exc
+            done[index].set()
+            if gave_up.is_set():
+                timing_log.log("공유 설정", f"{share.unc} — 응답 없음으로 건너뛴 뒤 늦게 난 오류: {exc!r}")
+        else:
+            done[index].set()
 
     threads = [
         threading.Thread(target=run, args=(index, share), name=f"find_config_dirs-{share.unc}", daemon=True)
         for index, share in enumerate(shares)
     ]
+    deadline = time.monotonic() + timeout
     for thread in threads:
         thread.start()
     for thread in threads:
-        thread.join()
-    for error in errors:
-        if error is not None:
+        thread.join(max(0.0, deadline - time.monotonic()))
+    gave_up.set()
+    answered = [event.is_set() for event in done]  # 이 판단 뒤에 끝난 공유는 '응답 없음' (결과는 읽지 않음)
+    for index, error in enumerate(errors):
+        if answered[index] and error is not None:
             raise error  # 스택 트레이스는 확인 스레드 안의 것 그대로
     found = []
     seen = set()
-    for folder in results:
+    for index, share in enumerate(shares):
+        if not answered[index]:
+            timing_log.log("공유 설정", f"{share.unc} 응답 없음 ({timeout:g}초) — 건너뜀")
+            line = f"{', '.join(share.drives)} ({share.unc}) — {timeout:g}초 안에 응답 없음 (서버가 꺼졌거나 느림)"
+            if problems is not None:
+                problems.append(line)
+            continue
+        folder = results[index]
         if folder is None:
             continue
         key = paths.unc_key(folder)
@@ -320,7 +554,7 @@ def find_config_dirs(shares, mac_config_dir=None, is_file=None):
     return found
 
 
-def propose_mapping(work_paths, shares, is_dir=None, progress=None):
+def propose_mapping(work_paths, shares, is_dir=None, progress=None, timeout=None, on_wait=None):
     """작품 경로({작품: Mac 경로})와 연결된 공유로 변환표 짝을 찾습니다 → Proposal.
 
     작품마다, 공유마다 Mac 경로의 앞부분 k조각을 떼고 나머지를 공유 아래에 붙인 폴더가 열리는지 봅니다
@@ -328,9 +562,12 @@ def propose_mapping(work_paths, shares, is_dir=None, progress=None):
     맞으면 후보 여러 개가 됩니다. progress(done, total)가 False를 돌려주면 SetupCancelled.
 
     먼저 공유마다 루트(share.unc)를 한 번 열어 보고, 열리지 않는 공유(서버가 꺼진 기억된 드라이브 등)는
-    건너뛰고 share_problems에 남깁니다 — 작품마다 SMB 시간 초과를 기다리지 않도록.
+    건너뛰고 share_problems에 남깁니다 — 작품마다 SMB 시간 초과를 기다리지 않도록. 루트는 timeout초까지만 기다리고
+    (on_wait: 기다리는 동안 약 0.1초마다 — GUI 스레드에서 진행 창 처리·취소, False면 SetupCancelled), 응답이 없는
+    공유도 건너뛰고 알립니다. 응답한 루트 아래의 작품 폴더는 is_dir로 바로 엽니다.
     """
     is_dir = is_dir or _default_is_dir
+    timeout = _timeout(timeout)
     cache = {}
 
     def opens(share, rest):
@@ -353,11 +590,16 @@ def propose_mapping(work_paths, shares, is_dir=None, progress=None):
     for share in shares:
         timing_log.log("변환표 자동 설정", f"{share.unc} ({', '.join(share.drives)}) 여는 중…")
         started = time.perf_counter()
-        root_opens = opens(share, ())
-        timing_log.log("변환표 자동 설정",
-                       f"{share.unc} {timing_log.since(started)} — {'열림' if root_opens else '열리지 않음'}")
+        root_opens = probe(is_dir, share.unc, timeout, on_wait)
+        cache[(paths.unc_key(share.unc), ())] = bool(root_opens)
+        result = {True: "열림", False: "열리지 않음", None: f"응답 없음 ({timeout:g}초) — 건너뜀"}[root_opens]
+        timing_log.log("변환표 자동 설정", f"{share.unc} {timing_log.since(started)} — {result}")
         if root_opens:
             reachable.append(share)
+        elif root_opens is None:
+            share_problems.append(
+                f"{', '.join(share.drives)} ({share.unc}) — 공유 폴더가 {timeout:g}초 안에 응답 없음 (서버가 꺼졌거나 느림)"
+            )
         else:
             share_problems.append(
                 f"{', '.join(share.drives)} ({share.unc}) — 공유 폴더가 열리지 않음 (서버가 꺼졌거나 연결이 끊김)"

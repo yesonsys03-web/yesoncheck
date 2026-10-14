@@ -109,3 +109,50 @@ def test_local_link_to_share_is_found(share, tmp_path):
     shares, problems = path_map_setup.local_link_shares(root=str(links))
     assert problems == []
     assert [(paths.unc_key(s.unc), s.drives) for s in shares] == [(paths.unc_key(target), [str(link)])]
+
+
+def make_shortcut(lnk, target):
+    """WScript.Shell로 바로 가기(.lnk)를 만듦 (탐색기의 '바로 가기 만들기'와 같은 파일)."""
+    import subprocess
+
+    def quoted(text):
+        return "'" + text.replace("'", "''") + "'"
+
+    script = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut({quoted(lnk)}); "
+              f"$s.TargetPath={quoted(target)}; $s.Save()")
+    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], check=True, timeout=60,
+                   capture_output=True)
+    assert os.path.isfile(lnk), f"바로 가기를 만들지 못했습니다: {lnk}"
+
+
+def test_shortcut_to_share_is_resolved(share, tmp_path):
+    """Harmony용 바로 가기(C:\\USA_DB.lnk → \\\\Mainnas\\USA_DB)처럼 UNC를 가리키는 .lnk의 대상을 PowerShell로 읽음."""
+    import uuid
+
+    from yesoncheck import path_map_setup
+
+    _drive, unc, root = share
+    sub = "lnk_target_" + uuid.uuid4().hex[:6]
+    os.makedirs(os.path.join(root, sub, "test_jn", ".yesoncheck"))
+    with open(os.path.join(root, sub, "test_jn", ".yesoncheck", "work_paths.json"), "w", encoding="utf-8") as fh:
+        fh.write("{}")
+    target = f"{unc}\\{sub}"
+    links = tmp_path / "root"
+    links.mkdir()
+    lnk = str(links / "USA_DB.lnk")
+    local_lnk = str(links / "Local.lnk")
+    make_shortcut(lnk, target)
+    make_shortcut(local_lnk, str(tmp_path))
+
+    resolved = path_map_setup.resolve_shortcuts([lnk, local_lnk])
+    assert paths.unc_key(resolved[lnk]) == paths.unc_key(target)
+    assert os.path.normcase(resolved[local_lnk]) == os.path.normcase(str(tmp_path))
+
+    shares, problems = path_map_setup.local_link_shares(root=str(links))
+    assert problems == []
+    assert [(paths.unc_key(s.unc), s.drives) for s in shares] == [(paths.unc_key(target), [lnk])]
+
+    # C:\USA_DB 폴더는 없고 C:\USA_DB.lnk만 있는 PC → 바로 가기를 따라 공유 설정 폴더를 찾음
+    folder, problem = path_map_setup.find_local_config_dir(drive=str(links), mac_config_dir="/USA_DB/test_jn/.yesoncheck")
+    assert problem is None
+    assert paths.unc_key(folder) == paths.unc_key(f"{target}\\test_jn\\.yesoncheck")

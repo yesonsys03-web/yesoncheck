@@ -430,7 +430,7 @@ QMessageBox {
         workLabel = QLabel("Yeson 작품")
         workLabel.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.workComboBox = QComboBox()
-        self.workComboBox.addItem("작품선택")
+        self.workComboBox.addItem(self._first_work_item())  # 불러오는 동안은 "공유 설정 불러오는 중…"
         # JSON에서 작품 목록 로드
         for work_name in sorted(self.work_paths.keys()):
             self.workComboBox.addItem(work_name)

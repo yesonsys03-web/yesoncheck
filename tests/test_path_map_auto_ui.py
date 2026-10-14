@@ -549,3 +549,145 @@ def test_auto_setup_finds_pair_through_link_share(win, dialogs, tmp_path):
     (_check, combo, _pair), = win.shown[0]._rows
     assert "C:\\yc" in combo.itemText(0)  # 링크 이름이 드라이브 자리에 보임
     assert read_map(config)["shares"] == [{"mac": "/Volumes/yc", "windows": [NAS]}]
+
+
+# --- 응답하지 않는 공유 (서버 주소가 바뀌어 남은 \\BGSERVER\bgfinal 같은): 정해진 시간까지만 기다리고 알림 ---
+
+DEAD = "\\\\localhost\\yc_fake_dead"
+
+
+@pytest.fixture
+def short_timeout(monkeypatch):
+    monkeypatch.setattr(path_map_setup, "SHARE_PROBE_TIMEOUT_S", 0.3)
+    return 0.3
+
+
+@pytest.fixture
+def dead_share_hangs(win, monkeypatch):
+    """DEAD 아래를 열어 보면 release까지 막힘 (시험이 끝나면 풀림)."""
+    import threading
+
+    release = threading.Event()
+    is_dir, is_file = path_map_setup._default_is_dir, path_map_setup._default_is_file
+
+    def hang_or(func):
+        def probe(path):
+            if path.casefold().startswith(DEAD.casefold()):
+                release.wait(30)
+                return False
+            return func(path)
+        return probe
+
+    monkeypatch.setattr(path_map_setup, "_default_is_dir", hang_or(is_dir))
+    monkeypatch.setattr(path_map_setup, "_default_is_file", hang_or(is_file))
+    yield release
+    release.set()
+
+
+def label_texts(dialog):
+    return "\n".join(label.text() for label in dialog.findChildren(QLabel))
+
+
+def test_config_search_skips_share_that_never_answers(win, dialogs, short_timeout, dead_share_hangs):
+    import time
+
+    win.shares = [Share(DEAD, ["W:"])]
+    started = time.monotonic()
+    player = win.player()
+    assert time.monotonic() - started < 3
+    line = f"W: ({DEAD}) — 0.3초 안에 응답 없음 (서버가 꺼졌거나 느림)"
+    assert player.config_dir_search_problems == [line] and player.config_dir_search_failed
+    player.resolve_shared_config_problem()  # 폴더 선택 안내에 보임 (dialogs.folders 비어 있음 → 취소)
+    infos = [text for kind, title, text in dialogs.messages if kind == "information" and title == "공유 설정 폴더 선택"]
+    assert len(infos) == 1 and line in infos[0]
+
+
+def test_configured_config_dir_that_never_answers(win, dialogs, short_timeout, tmp_path, monkeypatch):
+    import threading
+    import time
+
+    slow = f"{DEAD}\\.yesoncheck"
+    settings = tmp_path / "appdata" / "YesonCheck" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({"config_dir": slow}), encoding="utf-8")
+    release = threading.Event()
+    real_valid = shared_config.is_valid_config_dir
+
+    def valid(path):
+        if path == slow:
+            release.wait(30)
+            return False
+        return real_valid(path)
+
+    monkeypatch.setattr(shared_config, "is_valid_config_dir", valid)
+    monkeypatch.setattr(path_map_setup, "find_config_dirs", lambda *a, **k: pytest.fail("자동 찾기를 했습니다"))
+    try:
+        started = time.monotonic()
+        player = win.player()
+        assert time.monotonic() - started < 3
+    finally:
+        release.set()
+    expected = f"공유 설정 폴더가 0.3초 안에 응답하지 않습니다: {slow} (서버가 꺼졌거나 느림)"
+    assert player.shared_config_problem == expected
+    assert player.work_paths_config_dir is None  # GUI 스레드의 resolve가 그 폴더를 다시 열어 보지 않게
+    player.resolve_shared_config_problem()
+    infos = [text for kind, title, text in dialogs.messages if kind == "information" and title == "공유 설정 폴더 선택"]
+    assert len(infos) == 1 and expected in infos[0]
+
+
+def test_works_check_skips_root_that_never_answers(win, dialogs, short_timeout, dead_share_hangs, monkeypatch):
+    import time
+
+    from yesoncheck import player_sidebar
+
+    works = {"A": "/Volumes/dead/A", "B": "/Volumes/dead/B", "W": "/Volumes/yc/작품"}
+    path_map = paths.PathMap.from_dict({"version": 1, "shares": [
+        {"mac": "/Volumes/dead", "windows": [DEAD]}, {"mac": "/Volumes/yc", "windows": [NAS]},
+    ]}, "시험")
+    calls = []
+    hanging = path_map_setup._default_is_dir
+
+    def is_dir(path):
+        calls.append(path.casefold())
+        return hanging(path)
+
+    monkeypatch.setattr(path_map_setup, "_default_is_dir", is_dir)
+    started = time.monotonic()
+    broken = player_sidebar.list_works_not_opening(works, path_map.mac_to_windows)
+    assert time.monotonic() - started < 3
+    assert [c for c in calls if c.startswith(DEAD.casefold())] == [DEAD.casefold()]  # 루트만 한 번
+    assert len(broken) == 2
+    assert broken[0].startswith("A: ") and f"공유 폴더 {DEAD}가 0.3초 안에 응답 없음" in broken[0]
+    assert broken[1].startswith("B: ") and "응답 없음" in broken[1]
+
+
+def test_auto_setup_skips_root_that_never_answers(win, dialogs, short_timeout, dead_share_hangs, tmp_path):
+    import time
+
+    win.shares = [Share(DEAD, ["W:"]), Share(NAS, ["Y:"])]
+    config = make_config(str(tmp_path), WORK)
+    win.accept = False
+    player = win.player(config)
+    started = time.monotonic()
+    player.resolve_shared_config_problem()
+    assert time.monotonic() - started < 3
+    assert len(win.shown) == 1
+    text = label_texts(win.shown[0])
+    assert f"W: ({DEAD}) — 공유 폴더가 0.3초 안에 응답 없음 (서버가 꺼졌거나 느림)" in text
+    assert win.shown[0].chosen() == [("/Volumes/yc", NAS)]  # 응답한 공유의 짝은 그대로
+
+
+def test_auto_setup_cancel_while_waiting_for_root(win, dialogs, dead_share_hangs, tmp_path, monkeypatch):
+    """GUI 스레드에서 루트를 기다리는 동안에도 진행 창을 처리하고 취소를 받음 (시간 제한보다 먼저 끝남)."""
+    import time
+
+    monkeypatch.setattr(path_map_setup, "SHARE_PROBE_TIMEOUT_S", 30)
+    monkeypatch.setattr(QProgressDialog, "wasCanceled", lambda self: True)
+    win.shares = [Share(DEAD, ["W:"])]
+    config = make_config(str(tmp_path), WORK)
+    player = win.player(config)
+    started = time.monotonic()
+    assert player.auto_setup_path_map(ask_password=False, startup=True) is False
+    assert time.monotonic() - started < 3
+    assert win.shown == []
+    assert len(path_map_criticals(dialogs)) == 1  # 시작할 때의 변환표 문제는 한 번 알림 (취소한 경우도)

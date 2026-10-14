@@ -466,3 +466,322 @@ def test_find_local_config_dir_reports_realpath_error(capsys):
     assert folder is None
     assert problem.startswith("C:\\USA_DB\\test_jn\\.yesoncheck — ") and "가짜 재현" in problem
     assert "가짜 재현" in capsys.readouterr().out
+
+
+# --- 응답하지 않는 공유: 정해진 시간까지만 기다림 (S1–S3) ---
+
+def hanging(answer=False, raises=None):
+    """release될 때까지 막히는 가짜 확인 → (함수, entered, release, finished). 시험은 반드시 release.set()."""
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+
+    def func(path):
+        try:
+            entered.set()
+            release.wait(30)
+            if raises is not None:
+                raise raises
+            return answer
+        finally:
+            finished.set()
+
+    return func, entered, release, finished
+
+
+def test_probe_answers_true_false_and_raises():
+    assert pms.probe(lambda p: True, "\\\\s\\x", timeout=5) is True
+    assert pms.probe(lambda p: False, "\\\\s\\x", timeout=5) is False
+
+    def broken(path):
+        raise OSError("확인 실패 (가짜 재현)")
+
+    with pytest.raises(OSError, match="가짜 재현"):
+        pms.probe(broken, "\\\\s\\x", timeout=5)
+
+
+def test_probe_times_out_and_abandoned_thread_is_harmless(monkeypatch, capsys):
+    late_errors = []
+    monkeypatch.setattr(threading, "excepthook", lambda args: late_errors.append(args))
+    func, entered, release, finished = hanging(raises=OSError("늦은 오류 (가짜 재현)"))
+    try:
+        started = time.monotonic()
+        assert pms.probe(func, "\\\\dead\\x", timeout=0.2) is None
+        assert time.monotonic() - started < 2
+        assert entered.is_set() and not finished.is_set()
+    finally:
+        release.set()
+    assert finished.wait(5)
+    deadline = time.monotonic() + 5
+    log = ""
+    while "늦은 오류 (가짜 재현)" not in log and time.monotonic() < deadline:
+        time.sleep(0.01)
+        log += capsys.readouterr().out
+    # 버려진 확인이 나중에 실패하면 로그에만 남김 (호출한 쪽은 이미 '응답 없음' — 예외로 올리지 않음)
+    assert "\\\\dead\\x" in log and "늦은 오류 (가짜 재현)" in log
+    assert late_errors == []
+
+
+def test_probe_on_wait_is_called_and_can_cancel():
+    func, entered, release, finished = hanging()
+    calls = []
+    try:
+        assert pms.probe(func, "\\\\dead\\x", timeout=0.45, on_wait=lambda: calls.append(1)) is None
+        assert len(calls) >= 3  # 약 0.1초마다
+        started = time.monotonic()
+        with pytest.raises(pms.SetupCancelled):
+            pms.probe(func, "\\\\dead\\x", timeout=30, on_wait=lambda: False)
+        assert time.monotonic() - started < 2
+    finally:
+        release.set()
+
+
+def test_find_config_dirs_bounded_when_a_share_never_answers(capsys):
+    a, dead, c = Share("\\\\srv\\a", ["A:"]), Share("\\\\srv\\dead", ["W:"]), Share("\\\\srv\\c", ["C:"])
+    found_file = "\\\\srv\\a\\test_jn\\.yesoncheck\\work_paths.json"
+    release = threading.Event()
+
+    def is_file(path):
+        if path.startswith(dead.unc):
+            release.wait(30)
+        return path.casefold() == found_file.casefold()
+
+    problems = []
+    try:
+        started = time.monotonic()
+        found = pms.find_config_dirs([a, dead, c], is_file=is_file, problems=problems, timeout=0.3)
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+    assert found == ["\\\\srv\\a\\test_jn\\.yesoncheck"]
+    assert elapsed < 2
+    assert problems == ["W: (\\\\srv\\dead) — 0.3초 안에 응답 없음 (서버가 꺼졌거나 느림)"]
+    assert "\\\\srv\\dead 응답 없음 (0.3초) — 건너뜀" in capsys.readouterr().out
+
+
+def test_propose_mapping_skips_root_that_never_answers():
+    dead = Share("\\\\localhost\\yc_dead", ["W:"])
+    alive = dirs("\\\\203.0.113.3\\usadata2\\KOTH")
+    release = threading.Event()
+
+    def is_dir(path):
+        if path.casefold().startswith(dead.unc.casefold()):
+            release.wait(30)
+            return False
+        return alive(path)
+
+    try:
+        started = time.monotonic()
+        proposal = pms.propose_mapping({"KOTH": "/usadata2/KOTH"}, [dead, S_USA2], is_dir, timeout=0.3)
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+    assert elapsed < 2
+    assert [(p.mac_prefix, [c.unc for c in p.candidates]) for p in proposal.pairs] == [("/usadata2", [S_USA2.unc])]
+    assert proposal.share_problems == [
+        "W: (\\\\localhost\\yc_dead) — 공유 폴더가 0.3초 안에 응답 없음 (서버가 꺼졌거나 느림)"
+    ]
+
+
+def test_propose_mapping_wait_can_be_cancelled():
+    func, entered, release, finished = hanging()
+    try:
+        with pytest.raises(pms.SetupCancelled):
+            pms.propose_mapping({"A": "/usadata2/A"}, [S_USA2], func, timeout=30, on_wait=lambda: False)
+    finally:
+        release.set()
+
+
+# --- Harmony 바로 가기 (C:\USA_DB.lnk → \\Mainnas\USA_DB; 탐색기에는 확장자 없이 'USA_DB'로 보임) (S7) ---
+
+def shortcut_resolver(targets, calls=None):
+    """가짜 resolve_shortcuts: {lnk: 대상 또는 예외}. calls에 호출마다 받은 목록을 남김."""
+    def resolve(lnk_paths):
+        if calls is not None:
+            calls.append(list(lnk_paths))
+        result = {}
+        for path in lnk_paths:
+            target = targets[path]
+            if isinstance(target, BaseException) and not isinstance(target, pms.ShortcutError):
+                raise target
+            result[path] = target
+        return result
+
+    return resolve
+
+
+def test_find_local_config_dir_follows_harmony_shortcut(capsys):
+    lnk = "C:\\USA_DB.lnk"
+    files = {lnk.casefold(), "\\\\mainnas\\usa_db\\test_jn\\.yesoncheck\\work_paths.json"}
+    is_file = lambda p: p.casefold() in files  # noqa: E731 (C:\USA_DB는 폴더가 아님 — 바로 가기만 있음)
+    found = pms.find_local_config_dir(
+        "C:", is_file=is_file, is_dir=lambda p: False,
+        resolve_shortcuts=shortcut_resolver({lnk: "\\\\Mainnas\\USA_DB"}), timeout=5,
+    )
+    assert found == ("\\\\Mainnas\\USA_DB\\test_jn\\.yesoncheck", None)
+    assert f"{lnk} → \\\\Mainnas\\USA_DB" in capsys.readouterr().out
+
+
+def test_find_local_config_dir_shortcut_to_mapped_drive_and_local(monkeypatch, capsys):
+    lnk = "C:\\USA_DB.lnk"
+    files = {lnk.casefold(), "\\\\mainnas\\usa_db\\test_jn\\.yesoncheck\\work_paths.json"}
+    is_file = lambda p: p.casefold() in files  # noqa: E731
+    monkeypatch.setattr(paths, "_remote_name_of_drive", lambda drive: {"U:": "\\\\Mainnas\\USA_DB"}.get(drive))
+    # 연결된 네트워크 드라이브 위의 대상 → UNC로 바꿔서 확인
+    assert pms.find_local_config_dir("C:", is_file=is_file, is_dir=lambda p: False,
+                                     resolve_shortcuts=shortcut_resolver({lnk: "U:\\"}), timeout=5) == \
+        ("\\\\Mainnas\\USA_DB\\test_jn\\.yesoncheck", None)
+    # 로컬 디스크의 대상 → 쓰지 않음 (로그)
+    capsys.readouterr()
+    assert pms.find_local_config_dir("C:", is_file=is_file, is_dir=lambda p: False,
+                                     resolve_shortcuts=shortcut_resolver({lnk: "D:\\USA_DB"}), timeout=5) == (None, None)
+    log = capsys.readouterr().out
+    assert f"{lnk} → D:\\USA_DB" in log and "쓰지 않음" in log
+
+
+def test_find_local_config_dir_shortcut_problems():
+    lnk = "C:\\USA_DB.lnk"
+    is_file = lambda p: p.casefold() == lnk.casefold()  # noqa: E731
+    # 바로 가기 대상을 알 수 없음 (PowerShell 없음·시간 초과 등) → 문제 줄
+    folder, problem = pms.find_local_config_dir(
+        "C:", is_file=is_file, is_dir=lambda p: False,
+        resolve_shortcuts=shortcut_resolver({lnk: pms.ShortcutError("PowerShell을 실행하지 못했습니다 (가짜 재현)")}),
+        timeout=5,
+    )
+    assert folder is None and problem.startswith(lnk + " — ") and "가짜 재현" in problem
+    # 대상 공유가 응답하지 않음 → 문제 줄
+    release = threading.Event()
+
+    def slow_is_file(path):
+        if path.startswith("\\\\"):
+            release.wait(30)
+            return False
+        return is_file(path)
+
+    try:
+        folder, problem = pms.find_local_config_dir(
+            "C:", is_file=slow_is_file, is_dir=lambda p: False,
+            resolve_shortcuts=shortcut_resolver({lnk: "\\\\Mainnas\\USA_DB"}), timeout=0.3,
+        )
+    finally:
+        release.set()
+    assert folder is None and "\\\\Mainnas\\USA_DB\\test_jn\\.yesoncheck" in problem and "응답 없음" in problem
+    # C:\USA_DB가 폴더면(링크 포함) 바로 가기는 보지 않음
+    assert pms.find_local_config_dir("C:", is_file=lambda p: False, is_dir=lambda p: True,
+                                     resolve_shortcuts=lambda paths_: pytest.fail("바로 가기를 봤습니다"),
+                                     timeout=5) == (None, None)
+
+
+def test_local_link_shares_accepts_shortcuts_to_unc(monkeypatch):
+    def shortcut_entry(name):
+        return fake_entry(name, is_dir=False)  # .lnk는 보통 파일 (링크 아님)
+
+    entries = [
+        fake_entry("USA_DB_link", "symlink"),
+        shortcut_entry("USA_DB.lnk"), shortcut_entry("usadata2.lnk"), shortcut_entry("usadata3.lnk"),
+        shortcut_entry("Local.lnk"), shortcut_entry("Broken.lnk"), shortcut_entry("readme.txt"),
+    ]
+    calls = []
+    resolver = shortcut_resolver({
+        "C:\\USA_DB.lnk": "\\\\Mainnas\\USA_DB", "C:\\usadata2.lnk": "\\\\Mainnas\\usadata2",
+        "C:\\usadata3.lnk": "\\\\mainnas\\usadata3", "C:\\Local.lnk": "C:\\Users\\Public",
+        "C:\\Broken.lnk": pms.ShortcutError("바로 가기를 읽지 못함 (가짜 재현)"),
+    }, calls)
+    monkeypatch.setattr(paths, "_remote_name_of_drive", lambda drive: None)
+    shares, problems = pms.local_link_shares(
+        root="C:\\", scandir=lambda root: contextlib.nullcontext(entries),
+        realpath=lambda p: {"C:\\USA_DB_link": "\\\\Mainnas\\USA_DB"}[p], resolve_shortcuts=resolver,
+    )
+    assert calls == [["C:\\USA_DB.lnk", "C:\\usadata2.lnk", "C:\\usadata3.lnk", "C:\\Local.lnk", "C:\\Broken.lnk"]]
+    assert [(s.unc, s.drives) for s in shares] == [
+        ("\\\\Mainnas\\USA_DB", ["C:\\USA_DB_link", "C:\\USA_DB.lnk"]),
+        ("\\\\Mainnas\\usadata2", ["C:\\usadata2.lnk"]),
+        ("\\\\mainnas\\usadata3", ["C:\\usadata3.lnk"]),
+    ]
+    assert len(problems) == 1 and problems[0].startswith("C:\\Broken.lnk — ") and "가짜 재현" in problems[0]
+
+
+def test_local_link_shares_reports_resolver_failure_and_keeps_links():
+    entries = [fake_entry("USA_DB_link", "symlink"), fake_entry("USA_DB.lnk", is_dir=False)]
+
+    def failing(lnk_paths):
+        raise pms.ShortcutError("바로 가기 대상 확인이 10초 안에 끝나지 않았습니다 (가짜 재현)")
+
+    shares, problems = pms.local_link_shares(
+        root="C:\\", scandir=lambda root: contextlib.nullcontext(entries),
+        realpath=lambda p: "\\\\Mainnas\\USA_DB", resolve_shortcuts=failing,
+    )
+    assert [(s.unc, s.drives) for s in shares] == [("\\\\Mainnas\\USA_DB", ["C:\\USA_DB_link"])]
+    assert len(problems) == 1 and "C:\\USA_DB.lnk" in problems[0] and "가짜 재현" in problems[0]
+
+
+def test_local_link_shares_bounds_link_realpath():
+    entries = [fake_entry("dead_link", "symlink"), fake_entry("USA_DB", "symlink")]
+    release = threading.Event()
+
+    def realpath(path):
+        if path.endswith("dead_link"):
+            release.wait(30)
+            return "\\\\dead\\x"
+        return "\\\\Mainnas\\USA_DB"
+
+    try:
+        started = time.monotonic()
+        shares, problems = pms.local_link_shares(root="C:\\", scandir=lambda root: contextlib.nullcontext(entries),
+                                                 realpath=realpath, resolve_shortcuts=lambda p: {}, timeout=0.3)
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+    assert elapsed < 2
+    assert [(s.unc, s.drives) for s in shares] == [("\\\\Mainnas\\USA_DB", ["C:\\USA_DB"])]
+    assert len(problems) == 1 and "C:\\dead_link" in problems[0] and "응답 없음" in problems[0]
+
+
+def completed(stdout=b"", stderr=b"", returncode=0):
+    return SimpleNamespace(stdout=stdout, stderr=stderr, returncode=returncode)
+
+
+def test_resolve_shortcuts_runs_one_hidden_powershell(monkeypatch):
+    runs = []
+
+    def fake_run(cmd, **kwargs):
+        runs.append((cmd, kwargs))
+        out = "\ufeffOK\t\\\\Mainnas\\USA_DB\r\nERR\t손상된 바로 가기 (가짜 재현)\r\nOK\t\r\n"
+        return completed(stdout=out.encode("utf-8"))
+
+    monkeypatch.setattr(pms.subprocess, "run", fake_run)
+    result = pms.resolve_shortcuts(["C:\\USA_DB.lnk", "C:\\it's.lnk", "C:\\empty.lnk"])
+    assert len(runs) == 1
+    cmd, kwargs = runs[0]
+    assert cmd[1:4] == ["-NoProfile", "-NonInteractive", "-Command"]
+    script = cmd[4]
+    assert "[Console]::OutputEncoding=[Text.Encoding]::UTF8" in script and "WScript.Shell" in script
+    assert "'C:\\it''s.lnk'" in script  # 작은따옴표는 두 번
+    assert kwargs["timeout"] == pms.SHORTCUT_TIMEOUT_S and kwargs["capture_output"] is True
+    assert result["C:\\USA_DB.lnk"] == "\\\\Mainnas\\USA_DB"
+    assert isinstance(result["C:\\it's.lnk"], pms.ShortcutError) and "가짜 재현" in str(result["C:\\it's.lnk"])
+    assert result["C:\\empty.lnk"] == ""
+
+
+def test_resolve_shortcuts_errors(monkeypatch):
+    def missing(cmd, **kwargs):
+        raise FileNotFoundError(2, "지정된 파일을 찾을 수 없습니다 (가짜 재현)")
+
+    monkeypatch.setattr(pms.subprocess, "run", missing)
+    with pytest.raises(pms.ShortcutError, match="PowerShell을 실행하지 못했습니다"):
+        pms.resolve_shortcuts(["C:\\USA_DB.lnk"])
+
+    def slow(cmd, **kwargs):
+        raise pms.subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr(pms.subprocess, "run", slow)
+    with pytest.raises(pms.ShortcutError, match="초 안에 끝나지 않았습니다"):
+        pms.resolve_shortcuts(["C:\\USA_DB.lnk"])
+
+    monkeypatch.setattr(pms.subprocess, "run", lambda cmd, **kw: completed(stderr="오류 (가짜 재현)".encode(), returncode=1))
+    with pytest.raises(pms.ShortcutError, match="가짜 재현"):
+        pms.resolve_shortcuts(["C:\\USA_DB.lnk"])
+
+    monkeypatch.setattr(pms.subprocess, "run", lambda cmd, **kw: completed(stdout=b"OK\t\\\\a\\b\r\n"))
+    with pytest.raises(pms.ShortcutError, match="줄"):
+        pms.resolve_shortcuts(["C:\\a.lnk", "C:\\b.lnk"])  # 출력 줄 수가 맞지 않음
+
+    assert pms.resolve_shortcuts([]) == {}
