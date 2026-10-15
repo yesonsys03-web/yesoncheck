@@ -761,3 +761,25 @@ def test_generate_thumbnail_reports_unreadable_video(new_player, dialogs, tmp_pa
     warnings = thumbnail_warnings(dialogs)
     assert [title for title, _text in warnings] == [VIDEO_PROBLEM]
     assert video in warnings[0][1] and "timed out" in warnings[0][1]
+
+
+def test_thumbnail_mode_checks_each_video_once(new_player, dialogs, tmp_path, monkeypatch):
+    """썸네일 모드를 켜면 영상마다 NAS의 썸네일을 한 번만 확인 (예전에는 switch_to_thumbnail_mode가 같은 확인을 먼저 한 번 더)."""
+    video = write_test_video(str(tmp_path / "job" / "a.mov"))
+    player = new_player(make_config(str(tmp_path), {}))
+    player.add_files_to_sidebar([video])
+    folder = thumbnails.ensure_folder(str(tmp_path / "job"))
+    player.current_thumbnail_folder = folder
+    assert red_pixmap().save(thumbnails.thumbnail_path(folder, video), "JPG")  # 영상보다 새 썸네일
+    real_is_fresh = thumbnails.is_fresh
+    checked = []
+
+    def counting_is_fresh(thumb_path, video_path):
+        checked.append(video_path)
+        return real_is_fresh(thumb_path, video_path)
+
+    monkeypatch.setattr(thumbnails, "is_fresh", counting_is_fresh)
+    player.switch_to_thumbnail_mode()
+    assert checked == [video]
+    assert not player.sidebar.item(0).icon().isNull()
+    assert player.thumbnail_workers == []

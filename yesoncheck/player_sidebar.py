@@ -1923,11 +1923,8 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         # 썸네일을 쓰기 시작할 때 미뤄 둔 썸네일 폴더 문제를 창으로 (폴더마다 한 번)
         self._report_pending_thumbnail_problem()
 
-        # 캐시된 썸네일을 즉시 적용
-        to_generate = self._apply_disk_thumbnails()
-        print(f"캐시된 썸네일 즉시 적용 완료 (새로 만들 것 {len(to_generate)}개)")
-        
-        # 즉시 사이드바 업데이트 (지연 없이)
+        # 즉시 사이드바 업데이트 (지연 없이): generate_thumbnails_for_all_items가 캐시된 썸네일을 바로 적용하고
+        # (캐시 사용·새 생성 개수 로그) 나머지를 만듦 — 여기서 같은 확인을 먼저 하지 않음 (영상마다 NAS를 한 번만)
         self.update_sidebar_display()
 
     def cleanup_all_thumbnail_workers(self):
