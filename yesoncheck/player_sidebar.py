@@ -46,6 +46,18 @@ WORK_PLACEHOLDER = "작품선택"
 THUMBNAIL_SAVE_FAILED = "썸네일 저장 실패"  # 썸네일 파일을 쓰지 못함 (창 제목)
 THUMBNAIL_FOLDER_PROBLEM = "썸네일 폴더 문제"  # 썸네일 폴더를 만들지 못함 등 (창 제목)
 THUMBNAIL_VIDEO_PROBLEM = "영상 확인 실패"  # 썸네일을 만들 영상을 확인하지 못함 (창 제목)
+THUMBNAIL_CONTEXT_ROLE = Qt.UserRole + 1  # 사이드바 항목 데이터: 그 영상의 썸네일 자리 (ThumbnailContext)
+
+
+@dataclass(frozen=True)
+class ThumbnailContext:
+    """사이드바 영상의 썸네일을 어디에 둘지. 항목을 넣을 때의 상태로 정하고, 나중에 다른 폴더를 끌어다 놓아 덧붙이거나
+    job·북마크를 바꿔도 그 항목은 바뀌지 않음 (재검토 L1). 모두 None이면 화면에만 (job을 고르지 않은 목록).
+    """
+
+    folder: str = None  # 썸네일 폴더: 여기서 읽고 여기에 저장
+    problem: tuple = None  # (폴더, 창 제목, 내용): 썸네일 폴더를 만들지 못함 → 화면에만, 창은 썸네일을 쓸 때
+    pending_base: str = None  # 아직 정하지 않음: 처음 쓸 때 이 폴더 아래에 썸네일 폴더를 만듦 (예: 처음 끌어다 놓은 파일)
 
 
 @dataclass
@@ -395,17 +407,13 @@ class PlayerSidebarMixin:
             filename = os.path.basename(file_path)
             return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', filename)]
         file_paths = sorted(file_paths, key=natural_sort_key)
-        for file_path in file_paths:
-            if os.path.exists(file_path):
-                filename = os.path.basename(file_path)
-                item = QListWidgetItem(filename)
-                item.setData(Qt.UserRole, file_path)
-                item.setToolTip(file_path)  # toolTip도 설정하여 기존 코드와 호환
-                self.sidebar.addItem(item)
-                
-                # 썸네일 모드인 경우 썸네일 생성
-                if self.is_thumbnail_mode:
-                    self.generate_thumbnail(file_path)
+        # 항목마다 지금의 썸네일 자리를 기억 (이미 목록에 있는 영상이면 그 항목의 자리)
+        items = self._add_sidebar_videos(
+            [(os.path.basename(file_path), file_path) for file_path in file_paths if os.path.exists(file_path)])
+        # 썸네일 모드인 경우 썸네일 생성
+        if self.is_thumbnail_mode:
+            for item in items:
+                self.generate_thumbnail(item.data(Qt.UserRole), item)
         
         if file_paths:
             QMessageBox.information(self, "완료", f"{len(file_paths)}개의 파일이 사이드바에 추가되었습니다.")
@@ -522,10 +530,10 @@ class PlayerSidebarMixin:
                     progress_dialog.setLabelText(f"재생성 중: {os.path.basename(file_path)}")
                     progress_dialog.setValue(i)
                     
-                    # 기존 썸네일 삭제
-                    self.delete_thumbnail_file(file_path)
+                    # 기존 썸네일 삭제 (이 항목의 썸네일 폴더에서)
+                    self.delete_thumbnail_file(file_path, item)
                     # 썸네일 재생성
-                    self.generate_thumbnail(file_path)
+                    self.generate_thumbnail(file_path, item)
                     print(f"썸네일 재생성 완료: {os.path.basename(file_path)}")
 
                 # UI 업데이트
@@ -538,27 +546,28 @@ class PlayerSidebarMixin:
             print(f"썸네일 재생성 중 오류: {e}")
             QMessageBox.critical(self, "오류", f"썸네일 재생성 중 오류가 발생했습니다:\n{str(e)}")
 
-    def delete_thumbnail_file(self, file_path):
-        """특정 파일의 썸네일을 디스크에서 삭제합니다."""
+    def delete_thumbnail_file(self, file_path, item=None):
+        """특정 파일의 썸네일을 그 항목의 썸네일 폴더에서 삭제합니다 (item: 사이드바 항목, 없으면 경로로 찾음)."""
         try:
-            if not self.current_thumbnail_folder:
-                return
+            if item is None:
+                item = self._sidebar_item_for(file_path)
+            context = self._item_thumbnail_context(item, file_path)
+            if context.pending_base is not None:
+                context = self._resolve_pending_thumbnail_context(context)
+            if not context.folder:
+                return  # 저장한 썸네일 없음 (화면에만)
 
-            thumbnail_path = thumbnails.thumbnail_path(self.current_thumbnail_folder, file_path)
+            thumbnail_path = thumbnails.thumbnail_path(context.folder, file_path)
 
             if os.path.exists(thumbnail_path):
                 os.remove(thumbnail_path)
                 print(f"썸네일 파일 삭제: {thumbnail_path}")
 
             # UI에서도 썸네일 제거
-            for i in range(self.sidebar.count()):
-                item = self.sidebar.item(i)
-                if item and paths.same_path(item.data(Qt.UserRole), file_path):
-                    item.setIcon(QIcon())
-                    # 파일명만 표시
-                    filename = os.path.basename(file_path)
-                    item.setText(filename)
-                    break
+            if item is not None:
+                item.setIcon(QIcon())
+                # 파일명만 표시
+                item.setText(os.path.basename(file_path))
 
         except Exception as e:
             print(f"썸네일 파일 삭제 중 오류: {e}")
@@ -787,24 +796,21 @@ class PlayerSidebarMixin:
             return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', filename)]
         video_files = sorted(video_files, key=natural_sort_key)
         
+        if video_files:
+            # 폴더 드래그앤드롭 시에는 기존 썸네일 폴더를 초기화하고 새로 설정 — 항목을 넣기 전에 (항목마다 이 자리를 기억)
+            self.current_thumbnail_folder = None  # 기존 썸네일 폴더 초기화
+            self._thumbnail_folder_problem = None  # 전에 연 job의 썸네일 폴더 문제는 이제 상관없음
+            self._thumbnail_memory_only = False
+            self.setup_thumbnail_folder()
+        
         # 사이드바에 파일들 추가
-        for file_path in video_files:
-            filename = os.path.basename(file_path)
-            self.playlist.append(file_path)
-            item = QListWidgetItem(filename)
-            item.setData(Qt.UserRole, file_path)  # 파일 경로를 UserRole에 저장
-            item.setToolTip(file_path)
-            self.sidebar.addItem(item)
+        self.playlist.extend(video_files)
+        self._add_sidebar_videos([(os.path.basename(file_path), file_path) for file_path in video_files])
         
         if self.playlist:
             self.current_playlist_index = 0
             self.open_file('A', self.playlist[0])
             self.sidebar.selectAll()
-            # 폴더 드래그앤드롭 시에는 기존 썸네일 폴더를 초기화하고 새로 설정
-            self.current_thumbnail_folder = None  # 기존 썸네일 폴더 초기화
-            self._thumbnail_folder_problem = None  # 전에 연 job의 썸네일 폴더 문제는 이제 상관없음
-            self._thumbnail_memory_only = False
-            self.setup_thumbnail_folder()
             self.schedule_background_thumbnail_loading()
             QMessageBox.information(self, "폴더 로드 완료", f"{len(video_files)}개의 비디오 파일이 사이드바에 추가되었습니다.\n첫 번째 파일이 Video A에 로드되었습니다.")
         else:
@@ -1912,11 +1918,9 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         self._resize_sidebar_column(new_width)
         print(f"사이드바 폭을 2배로 조정: {self.default_sidebar_width} -> {new_width}")
         
-        # 썸네일을 쓰기 시작할 때 미뤄 둔 썸네일 폴더 문제를 창으로 (폴더마다 한 번)
-        self._report_pending_thumbnail_problem()
-
         # 즉시 사이드바 업데이트 (지연 없이): generate_thumbnails_for_all_items가 캐시된 썸네일을 바로 적용하고
-        # (캐시 사용·새 생성 개수 로그) 나머지를 만듦 — 여기서 같은 확인을 먼저 하지 않음 (영상마다 NAS를 한 번만)
+        # (캐시 사용·새 생성 개수 로그) 나머지를 만듦 — 여기서 같은 확인을 먼저 하지 않음 (영상마다 NAS를 한 번만).
+        # 항목 자리의 미뤄 둔 썸네일 폴더 문제도 거기서 창으로 ((폴더, 제목)마다 한 번)
         self.update_sidebar_display()
 
     def cleanup_all_thumbnail_workers(self):
@@ -1969,8 +1973,8 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             for batch_start in range(0, new_generation_count, batch_size):
                 batch = to_generate[batch_start:batch_start + batch_size]
                 print(f"배치 처리: {batch_start+1}-{batch_start + len(batch)}/{new_generation_count}")
-                for file_path in batch:
-                    self.generate_thumbnail(file_path)
+                for file_path, item in batch:
+                    self.generate_thumbnail(file_path, item)
                     generated_count += 1
                     self.thumbnailProgressBar.setValue(generated_count)
                     QApplication.processEvents()
@@ -2061,10 +2065,91 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         except Exception as e:
             print(f"백그라운드 스레드 정리 중 오류: {e}")
 
-    def _apply_disk_thumbnails(self):
-        """사이드바 영상마다 디스크의 썸네일(영상보다 새것)을 바로 적용하고, 새로 만들어야 할 영상 목록을 돌려줌.
+    def _new_item_thumbnail_context(self, file_path):
+        """지금 사이드바에 넣는 영상의 썸네일 자리: 지금의 썸네일 폴더·폴더 문제·'화면에만' 상태.
 
-        새로 만들 것: 썸네일이 없거나, 영상보다 오래됐거나, 영상보다 새것이지만 읽을 수 없는(깨진) 썸네일.
+        아무것도 정하지 않았으면(예: 처음 끌어다 놓은 파일) 예전처럼 불러온 폴더 또는 영상 폴더 아래에 — 처음 쓸 때 만듦.
+        """
+        if self.current_thumbnail_folder:
+            return ThumbnailContext(folder=self.current_thumbnail_folder)
+        if self._thumbnail_folder_problem is not None:
+            return ThumbnailContext(problem=self._thumbnail_folder_problem)
+        if self._thumbnail_memory_only:
+            return ThumbnailContext()
+        return ThumbnailContext(pending_base=getattr(self, "selected_folder_path", None) or os.path.dirname(file_path))
+
+    def _add_sidebar_videos(self, entries):
+        """영상들을 사이드바에 넣음 — entries: [(표시 이름, 경로)] → 넣은 항목 목록.
+
+        항목마다 썸네일 자리(ThumbnailContext)를 지금 상태로 기억. 이미 목록에 있는 영상이면 그 항목의 자리를 그대로 씀.
+        """
+        known = {}
+        for i in range(self.sidebar.count()):
+            item = self.sidebar.item(i)
+            if item is not None and item.data(Qt.UserRole):
+                known.setdefault(paths.path_key(item.data(Qt.UserRole)), item.data(THUMBNAIL_CONTEXT_ROLE))
+        added = []
+        for label, file_path in entries:
+            key = paths.path_key(file_path)
+            context = known.get(key)
+            if context is None:
+                context = known[key] = self._new_item_thumbnail_context(file_path)
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, file_path)  # 파일 경로를 UserRole에 저장
+            item.setData(THUMBNAIL_CONTEXT_ROLE, context)
+            item.setToolTip(file_path)  # toolTip도 설정하여 기존 코드와 호환
+            self.sidebar.addItem(item)
+            added.append(item)
+        return added
+
+    def _sidebar_item_for(self, file_path):
+        """사이드바에서 그 영상의 (첫) 항목. 없으면 None."""
+        for i in range(self.sidebar.count()):
+            item = self.sidebar.item(i)
+            if item is not None and paths.same_path(item.data(Qt.UserRole), file_path):
+                return item
+        return None
+
+    def _item_thumbnail_context(self, item, file_path):
+        """항목의 썸네일 자리. 사이드바에 없는 영상(item=None)이면 지금 상태의 자리."""
+        context = item.data(THUMBNAIL_CONTEXT_ROLE) if item is not None else None
+        if context is None:
+            context = self._new_item_thumbnail_context(file_path)
+            if item is not None:
+                print(f"썸네일 자리가 없는 사이드바 항목 — 지금 상태로 정함: {file_path}")
+                item.setData(THUMBNAIL_CONTEXT_ROLE, context)
+        return context
+
+    def _resolve_pending_thumbnail_context(self, context):
+        """아직 정하지 않은 썸네일 자리를 정함: pending_base 아래 썸네일 폴더를 만들고, 같은 자리를 기다리던 항목 모두에 기억.
+
+        만들지 못하면 폴더 문제(화면에만, 창은 썸네일을 쓸 때). 예전처럼, 아무 상태도 정하지 않은 때면 새로 넣을 항목의
+        자리로도 씀 (예: 처음 끌어다 놓은 파일들의 썸네일 폴더를 그다음에 끌어다 놓은 파일도 씀).
+        """
+        base = context.pending_base
+        try:
+            folder = thumbnails.ensure_folder(base)
+        except OSError as e:
+            resolved = ThumbnailContext(
+                problem=self._thumbnail_folder_problem_for(os.path.join(base, thumbnails.FOLDER_NAME), e))
+        else:
+            resolved = ThumbnailContext(folder=folder)
+            print(f"generate_thumbnail에서 썸네일 폴더 설정: {folder}")
+        for i in range(self.sidebar.count()):
+            item = self.sidebar.item(i)
+            if item is not None and item.data(THUMBNAIL_CONTEXT_ROLE) == context:
+                item.setData(THUMBNAIL_CONTEXT_ROLE, resolved)
+        if (not self.current_thumbnail_folder and self._thumbnail_folder_problem is None
+                and not self._thumbnail_memory_only):
+            self.current_thumbnail_folder = resolved.folder
+            self._thumbnail_folder_problem = resolved.problem
+        return resolved
+
+    def _apply_disk_thumbnails(self):
+        """사이드바 영상마다 그 항목의 썸네일 폴더에 있는 썸네일(영상보다 새것)을 바로 적용하고, 새로 만들어야 할
+        [(영상, 항목)]을 돌려줌. 항목 자리의 미뤄 둔 썸네일 폴더 문제는 여기서 창으로 ((폴더, 제목)마다 한 번).
+
+        새로 만들 것: 썸네일이 없거나, 영상보다 오래됐거나, 영상보다 새것이지만 읽을 수 없는(깨진) 썸네일, 화면에만인 항목.
         """
         to_generate = []
         for i in range(self.sidebar.count()):
@@ -2072,13 +2157,19 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             if item is None:
                 continue  # None인 경우 건너뛰기
             file_path = item.data(Qt.UserRole)
-            if not file_path or not self._video_is_available(file_path):
+            if not file_path:
                 continue
-            fresh = self._has_disk_thumbnail(file_path)
+            context = self._item_thumbnail_context(item, file_path)
+            if not self._video_is_available(file_path, context):
+                continue
+            if context.pending_base is not None:
+                context = self._resolve_pending_thumbnail_context(context)
+            self._report_context_problem(context)
+            fresh = self._has_disk_thumbnail(file_path, context)
             if fresh is None:
                 continue  # 영상을 확인하지 못함 (없어졌거나 읽을 수 없음)
             if fresh:
-                pixmap = QPixmap(thumbnails.thumbnail_path(self.current_thumbnail_folder, file_path))
+                pixmap = QPixmap(thumbnails.thumbnail_path(context.folder, file_path))
                 if not pixmap.isNull():
                     print(f"캐시된 썸네일 즉시 적용: {file_path}")
                     self.update_sidebar_item_thumbnail(file_path, pixmap)
@@ -2086,10 +2177,10 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 print(f"디스크 썸네일을 읽을 수 없어 새로 만듦: {file_path}")
             else:
                 print(f"새 썸네일 생성 예정: {file_path}")
-            to_generate.append(file_path)
+            to_generate.append((file_path, item))
         return to_generate
 
-    def _video_is_available(self, file_path):
+    def _video_is_available(self, file_path, context):
         """썸네일을 만들 영상 파일이 있는지 os.stat으로 확인 (os.path.isfile은 오류를 숨기고 False를 돌려줌).
 
         확인하지 못하면 False: 없어졌으면 로그만, 다른 오류는 창으로 알림 (_report_video_problem).
@@ -2097,19 +2188,20 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         try:
             info = os.stat(file_path)
         except OSError as e:
-            self._report_video_problem(file_path, e)
+            self._report_video_problem(file_path, e, context)
             return False
         return stat.S_ISREG(info.st_mode)
 
-    def _report_video_problem(self, file_path, error):
+    def _report_video_problem(self, file_path, error, context):
         """영상을 확인하지 못함 → 그 영상의 썸네일은 건너뜀. 없어진 것만 로그로 끝내고, 다른 오류(권한·시간 초과·
         끊긴 공유 등)는 "영상 확인 실패" 창으로 — 조용히 건너뛰지 않음.
 
         없어진 것: FileNotFoundError이고 영상의 폴더는 확인됨. Windows는 끊긴 SMB 공유(ERROR_BAD_NETPATH·BAD_NET_NAME)도
         FileNotFoundError로 올리고 Mac autofs도 그럴 수 있어, 폴더까지 확인하지 못하면 두 오류를 함께 알림.
-        창은 목록 단위로 한 번: 썸네일 폴더, 없으면 불러온 폴더(폴더 선택·끌어다 놓기·북마크) 또는 job 경로
-        (job을 고르지 않았으면 작품·시즌 폴더). selected_folder_path가 먼저: current_job_path는 폴더를 불러와도 지우지 않아
-        그때는 예전 job이고, selected_folder_path는 update_playlist가 지움. 영상 폴더마다 창이 뜨지 않게.
+        창은 목록 단위로 한 번: 그 항목 자리의 썸네일 폴더(또는 만들지 못한 폴더·정할 폴더), 없으면(화면에만) 불러온 폴더
+        (폴더 선택·끌어다 놓기·북마크) 또는 job 경로(job을 고르지 않았으면 작품·시즌 폴더). selected_folder_path가 먼저:
+        current_job_path는 폴더를 불러와도 지우지 않아 그때는 예전 job이고, selected_folder_path는 update_playlist가 지움.
+        영상 폴더마다 창이 뜨지 않게.
         """
         reason = f"이유: {type(error).__name__}: {error}"
         if isinstance(error, FileNotFoundError):
@@ -2122,7 +2214,9 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 print(f"영상이 없어져 썸네일을 건너뜀: {file_path} ({type(error).__name__}: {error})")
                 return
         self._report_thumbnail_problem(
-            self.current_thumbnail_folder
+            context.folder
+            or (context.problem[0] if context.problem else None)
+            or context.pending_base
             or getattr(self, "selected_folder_path", None)
             or getattr(self, "current_job_path", None)
             or os.path.dirname(file_path),
@@ -2131,70 +2225,56 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             f"영상: {file_path}\n{reason}",
         )
 
-    def _has_disk_thumbnail(self, file_path):
-        """디스크에 영상보다 새 썸네일이 있는지 확인합니다 (영상이 바뀌었으면 False → 새로 만듦).
+    def _has_disk_thumbnail(self, file_path, context):
+        """그 항목의 썸네일 폴더에 영상보다 새 썸네일이 있는지 확인합니다 (영상이 바뀌었으면 False → 새로 만듦).
 
-        영상을 확인하지 못하면 None (건너뜀): 없어졌으면 로그만, 다른 오류는 창으로 (_report_video_problem).
-        썸네일 파일을 확인하지 못하면(권한 등) 창으로 알리고((폴더, 제목)마다 한 번) False → 새로 만듦.
+        썸네일 폴더가 없는 자리(화면에만·폴더 문제)면 False. 영상을 확인하지 못하면 None (건너뜀): 없어졌으면 로그만,
+        다른 오류는 창으로 (_report_video_problem). 썸네일 파일을 확인하지 못하면(권한 등) 창으로 알리고
+        ((폴더, 제목)마다 한 번) False → 새로 만듦.
         """
-        if not self.current_thumbnail_folder:
+        if not context.folder:
             return False
-        thumbnail_path = thumbnails.thumbnail_path(self.current_thumbnail_folder, file_path)
+        thumbnail_path = thumbnails.thumbnail_path(context.folder, file_path)
         try:
             return thumbnails.is_fresh(thumbnail_path, file_path)
         except OSError as e:
             if e.filename == file_path:  # 영상 쪽 오류 (썸네일이 없는 것은 is_fresh가 False로 돌려줌)
-                self._report_video_problem(file_path, e)
+                self._report_video_problem(file_path, e, context)
                 return None
             self._report_thumbnail_problem(
-                self.current_thumbnail_folder,
+                context.folder,
                 THUMBNAIL_FOLDER_PROBLEM,
                 "썸네일 파일을 확인하지 못해 새로 만듭니다.\n"
                 f"썸네일 파일: {thumbnail_path}\n이유: {type(e).__name__}: {e}",
             )
             return False
 
-    def generate_thumbnail(self, file_path):
+    def generate_thumbnail(self, file_path, item=None):
+        """영상 하나의 썸네일: 그 항목의 썸네일 자리(ThumbnailContext)에서 읽거나 만들어 저장 (폴더가 없는 자리면 화면에만).
+
+        item: 사이드바 항목 (없으면 경로로 찾고, 사이드바에 없는 영상이면 지금 상태의 자리).
+        """
         import time
         print(f"썸네일 생성 시작: {file_path}")
         
-        # 썸네일 폴더가 설정되지 않은 경우 드래그한 폴더에 생성.
-        # 이 작업의 썸네일 폴더를 만들지 못했거나(_thumbnail_folder_problem) job을 고르지 않은 목록이면
-        # (_thumbnail_memory_only) 다른 폴더로 대신하지 않고 화면에만
-        if (not self.current_thumbnail_folder and self._thumbnail_folder_problem is None
-                and not self._thumbnail_memory_only):
-            if hasattr(self, 'selected_folder_path') and self.selected_folder_path:
-                # 드래그한 폴더가 있는 경우
-                try:
-                    thumbnail_folder = thumbnails.ensure_folder(self.selected_folder_path)
-                except OSError as e:
-                    self._remember_thumbnail_folder_problem(
-                        os.path.join(self.selected_folder_path, thumbnails.FOLDER_NAME), e)
-                else:
-                    self.current_thumbnail_folder = thumbnail_folder
-                    print(f"generate_thumbnail에서 썸네일 폴더 설정: {thumbnail_folder}")
-            else:
-                # 개별 파일들을 드래그한 경우, 첫 번째 파일의 디렉토리에 썸네일 폴더 생성
-                if os.path.exists(file_path):
-                    file_dir = os.path.dirname(file_path)
-                    try:
-                        thumbnail_folder = thumbnails.ensure_folder(file_dir)
-                    except OSError as e:
-                        self._remember_thumbnail_folder_problem(os.path.join(file_dir, thumbnails.FOLDER_NAME), e)
-                    else:
-                        self.current_thumbnail_folder = thumbnail_folder
-                        print(f"generate_thumbnail에서 파일 디렉토리에 썸네일 폴더 설정: {thumbnail_folder}")
-                else:
-                    print("썸네일 폴더를 설정할 수 없음")
-                    return False
-        # 미뤄 둔 썸네일 폴더 문제(폴더를 만들지 못함·권한을 바꾸지 못함)를 창으로 (폴더마다 한 번)
-        self._report_pending_thumbnail_problem()
+        if item is None:
+            item = self._sidebar_item_for(file_path)
+        context = self._item_thumbnail_context(item, file_path)
+        if context.pending_base is not None:
+            # 썸네일 폴더를 아직 정하지 않음 (예: 처음 끌어다 놓은 파일 — 예전의 드래그한 폴더·영상 폴더): 영상이 있을 때만 만듦
+            if not self._video_is_available(file_path, context):
+                return False
+            context = self._resolve_pending_thumbnail_context(context)
+        # 이 항목 자리의 미뤄 둔 썸네일 폴더 문제(폴더를 만들지 못함·권한을 바꾸지 못함)를 창으로 ((폴더, 제목)마다 한 번)
+        self._report_context_problem(context)
+        # 폴더가 없으면(job을 고르지 않은 목록·썸네일 폴더 문제) 다른 폴더로 대신하지 않고 화면에만
+        thumbnail_folder = context.folder
         
         # 동시 실행 제한 (1개로 더 줄임)
         # 디스크에 저장된 썸네일 확인 (영상보다 오래된 썸네일은 워커가 새로 만들어 바꿈)
-        if self.current_thumbnail_folder:
-            thumbnail_path = thumbnails.thumbnail_path(self.current_thumbnail_folder, file_path)
-            fresh = self._has_disk_thumbnail(file_path)
+        if thumbnail_folder:
+            thumbnail_path = thumbnails.thumbnail_path(thumbnail_folder, file_path)
+            fresh = self._has_disk_thumbnail(file_path, context)
             if fresh is None:
                 return False  # 영상을 확인하지 못함 (없어졌거나 읽을 수 없음)
             
@@ -2219,7 +2299,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             self.cleanup_thumbnail_workers()
 
         # 워커 생성 (썸네일 폴더가 없으면 저장하지 않고 화면에만)
-        worker = ThumbnailWorker(file_path, self.thumbnail_size, self.current_thumbnail_folder)
+        worker = ThumbnailWorker(file_path, self.thumbnail_size, thumbnail_folder)
         worker.thumbnail_ready.connect(self.on_thumbnail_ready)
         worker.save_failed.connect(self._on_thumbnail_save_failed)
         
@@ -2264,32 +2344,36 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             return
         print(f"드래그앤드롭으로 썸네일 폴더 설정: {self.current_thumbnail_folder}")
 
-    def _remember_thumbnail_folder_problem(self, folder, error):
-        """썸네일 폴더를 만들지 못함 → 이 작업의 썸네일은 저장하지 않고 화면에만 (다른 폴더로 대신하지 않음).
-
-        로그에는 바로 남기고, 창은 썸네일을 쓸 때(썸네일 모드·썸네일 생성) _report_pending_thumbnail_problem이 띄움.
-        """
+    def _thumbnail_folder_problem_for(self, folder, error):
+        """썸네일 폴더를 만들지 못한 문제 (폴더, 창 제목, 내용) → 그 자리의 썸네일은 저장하지 않고 화면에만. 로그는 바로."""
         text = ("썸네일 폴더를 만들지 못해 이 작업의 썸네일은 저장하지 않습니다.\n"
                 "이번에는 화면에만 보이고, 다음에 썸네일 모드를 켜면 다시 만듭니다.\n"
                 f"이유: {type(error).__name__}: {error}")
         print(f"{THUMBNAIL_FOLDER_PROBLEM}: {folder}\n{text}")
-        self._thumbnail_folder_problem = (folder, THUMBNAIL_FOLDER_PROBLEM, text)
+        return (folder, THUMBNAIL_FOLDER_PROBLEM, text)
 
-    def _report_pending_thumbnail_problem(self):
-        """썸네일을 쓸 때(썸네일 모드·썸네일 생성) 미뤄 둔 썸네일 폴더 문제를 창으로 알림 (폴더마다 한 번).
+    def _remember_thumbnail_folder_problem(self, folder, error):
+        """썸네일 폴더를 만들지 못함 → 새로 넣는 항목의 썸네일은 저장하지 않고 화면에만 (다른 폴더로 대신하지 않음).
 
-        폴더를 만들지 못함(_thumbnail_folder_problem) 또는 폴더는 쓰지만 권한을 바꾸지 못함(thumbnails.share_problem).
+        로그에는 바로 남기고, 창은 썸네일을 쓸 때(썸네일 모드·썸네일 생성) _report_context_problem이 띄움.
+        """
+        self._thumbnail_folder_problem = self._thumbnail_folder_problem_for(folder, error)
+
+    def _report_context_problem(self, context):
+        """썸네일을 쓸 때(썸네일 모드·썸네일 생성) 그 항목 자리의 미뤄 둔 썸네일 폴더 문제를 창으로 ((폴더, 제목)마다 한 번).
+
+        폴더를 만들지 못함(context.problem) 또는 폴더는 쓰지만 권한을 바꾸지 못함(thumbnails.share_problem).
         이미 알린 (폴더, 제목)이면 아무것도 하지 않음 (영상마다 불리므로 로그도 다시 남기지 않음).
         """
-        if self._thumbnail_folder_problem is not None:
-            problem = self._thumbnail_folder_problem
-        elif self.current_thumbnail_folder and thumbnails.share_problem(self.current_thumbnail_folder):
+        if context.problem is not None:
+            problem = context.problem
+        elif context.folder and thumbnails.share_problem(context.folder):
             problem = (
-                self.current_thumbnail_folder,
+                context.folder,
                 THUMBNAIL_FOLDER_PROBLEM,
                 "썸네일 폴더의 권한을 바꾸지 못했습니다. 이 PC에서는 썸네일을 저장하지만, 다른 NAS 계정을 쓰는 PC"
                 "(Windows 등)는 이 폴더에 저장하지 못해 매번 다시 만들 수 있습니다.\n"
-                f"이유: {thumbnails.share_problem(self.current_thumbnail_folder)}",
+                f"이유: {thumbnails.share_problem(context.folder)}",
             )
         else:
             return
@@ -2451,24 +2535,23 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     def start_background_thumbnail_loading(self):
         """백그라운드에서 썸네일 로딩을 시작합니다."""
         try:
-            if not self.current_thumbnail_folder:
-                print("썸네일 폴더가 설정되지 않음")
-                return
-            
-            # 현재 사이드바의 파일 목록 수집
-            current_files = []
+            # 현재 사이드바의 영상마다 그 항목의 썸네일 폴더에 있는 썸네일 (썸네일 폴더가 정해진 항목만 —
+            # 화면에만·폴더 문제·아직 정하지 않은 항목은 읽을 썸네일이 없음)
+            thumbnail_files = []
             for i in range(self.sidebar.count()):
                 item = self.sidebar.item(i)
                 if item:
                     file_path = item.data(Qt.UserRole)
                     if file_path and os.path.isfile(file_path):
-                        current_files.append(file_path)
+                        folder = self._item_thumbnail_context(item, file_path).folder
+                        if folder:
+                            thumbnail_files.append((file_path, thumbnails.thumbnail_path(folder, file_path)))
             
-            if not current_files:
-                print("로딩할 파일이 없음")
+            if not thumbnail_files:
+                print("로딩할 썸네일이 없음 (썸네일 폴더가 정해진 영상 없음)")
                 return
             
-            print(f"백그라운드 썸네일 로딩 시작: {len(current_files)}개 파일")
+            print(f"백그라운드 썸네일 로딩 시작: {len(thumbnail_files)}개 파일")
             
             # 기존 로더 워커가 있다면 중지
             if self.thumbnail_loader_worker and self.thumbnail_loader_worker.isRunning():
@@ -2481,7 +2564,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 self.thumbnail_loader_worker = None
             
             # 새로운 로더 워커 생성
-            self.thumbnail_loader_worker = ThumbnailLoaderWorker(self.current_thumbnail_folder, current_files)
+            self.thumbnail_loader_worker = ThumbnailLoaderWorker(thumbnail_files)
             self.thumbnail_loader_worker.thumbnail_loaded.connect(self.on_background_thumbnail_loaded)
             self.thumbnail_loader_worker.loading_finished.connect(self.on_background_loading_finished)
             self.thumbnail_loader_worker.start()

@@ -15,7 +15,6 @@ from PyQt5.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFileDialog,
-    QListWidgetItem,
     QMessageBox,
     QProgressDialog,
     QTextBrowser,
@@ -318,11 +317,8 @@ class PlayerPlaybackMixin:
 
                     # 사이드바 업데이트 최적화
                     self.sidebar.setUpdatesEnabled(False)  # UI 업데이트 일시 중지
-                    for mov_file, full_path in all_mov_files:
-                        item = QListWidgetItem(mov_file)  # Display filename only
-                        item.setData(Qt.UserRole, full_path)  # 파일 경로를 UserRole에 저장
-                        item.setToolTip(full_path)  # Full path as tooltip
-                        self.sidebar.addItem(item)
+                    # 파일 이름만 표시, 경로는 UserRole·툴팁. 항목마다 이 job의 썸네일 자리(폴더·화면에만·폴더 문제)를 기억
+                    self._add_sidebar_videos(all_mov_files)
                     self.sidebar.setUpdatesEnabled(True)  # UI 업데이트 재개
 
                     # Close previous video files

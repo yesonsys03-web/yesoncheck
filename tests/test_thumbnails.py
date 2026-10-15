@@ -367,7 +367,7 @@ def test_loader_emits_only_fresh_thumbnails(qapp, tmp_path):
         os.utime(video, (base, base))
         os.utime(thumb, (thumb_time, thumb_time))
     loaded = []
-    loader = ThumbnailLoaderWorker(folder, [fresh, stale])
+    loader = ThumbnailLoaderWorker([(video, thumbnails.thumbnail_path(folder, video)) for video in (fresh, stale)])
     loader.thumbnail_loaded.connect(lambda path, pixmap: loaded.append(path))
     loader.run()
     assert loaded == [fresh]
@@ -901,9 +901,12 @@ def test_dropped_folder_thumbnails_saved_in_that_folder(new_player, dialogs, wor
     wait_until(lambda: not player.thumbnail_workers)
     QApplication.processEvents()
 
-    assert os.path.isfile(thumbnails.thumbnail_path(player.current_thumbnail_folder, listed_path(player, "c.mov")))
+    dropped_video = listed_path(player, "c.mov")
+    assert os.path.isfile(thumbnails.thumbnail_path(player.current_thumbnail_folder, dropped_video))
     if job_thumbs:
-        assert os.listdir(job_thumbs) == job_before
+        assert not os.path.exists(thumbnails.thumbnail_path(job_thumbs, dropped_video))
+        if target == "video":  # 영상 영역은 목록을 바꿈 → job 폴더는 그대로 (사이드바는 덧붙여 job 영상은 job 폴더에)
+            assert os.listdir(job_thumbs) == job_before
     else:
         for root, dirs, _files in os.walk(os.path.join(work_area.local, "S1")):
             assert thumbnails.FOLDER_NAME not in dirs, root
@@ -938,6 +941,155 @@ def test_dropped_folder_thumbnail_folder_failure(new_player, dialogs, work_area,
     assert [title for title, _text in warnings] == [FOLDER_PROBLEM]
     text = warnings[0][1]
     assert os.path.join("X_dropped", thumbnails.FOLDER_NAME) in text and "Permission denied" in text and "화면에만" in text
-    assert os.listdir(job_thumbs) == job_before
+    assert not os.path.exists(thumbnails.thumbnail_path(job_thumbs, listed_path(player, "c.mov")))
+    if target == "video":  # 영상 영역은 목록을 바꿈 → job 폴더는 그대로 (사이드바는 덧붙여 job 영상은 job 폴더에)
+        assert os.listdir(job_thumbs) == job_before
     assert not (dropped / thumbnails.FOLDER_NAME).exists()
     assert all(not player.sidebar.item(i).icon().isNull() for i in range(player.sidebar.count()))
+
+
+def open_tjs_work(new_player, work_area, monkeypatch, job=None):
+    """TJS_Animatic(시즌 없음, job TJS_921에 a.mov)을 고르고 job이면 그 job까지 → (창, 작품 폴더의 로컬 경로)."""
+    works = os.path.join(work_area.local, "works")
+    write_test_video(os.path.join(works, "TJS_921", "a.mov"))
+    player = new_player(make_config(work_area.local, {"TJS_Animatic": work_area.stored + "/works"}, work_area.path_map))
+    monkeypatch.setattr(player, "save_bookmarks", lambda: None)  # 끌어다 놓은 폴더를 사용자의 북마크 파일에 쓰지 않게
+    player.workComboBox.setCurrentText("TJS_Animatic")
+    if job:
+        player.jobComboBox.setCurrentText(job)
+    return player, works
+
+
+def append_dropped_folder(player, tmp_path, name="other"):
+    """c.mov가 든 폴더를 사이드바에 끌어다 놓아 목록에 덧붙임 → (그 폴더의 썸네일 폴더(앱 경로), c.mov(앱 경로))."""
+    dropped = tmp_path / name
+    write_test_video(str(dropped / "c.mov"))
+    drop_folder(player, "sidebar", dropped)
+    return player.current_thumbnail_folder, listed_path(player, "c.mov")
+
+
+def thumbnail_width(path):
+    from PyQt5.QtGui import QPixmap
+
+    return QPixmap(path).width()
+
+
+def turn_on_thumbnail_mode(player):
+    player.switch_to_thumbnail_mode()
+    wait_until(lambda: not player.thumbnail_workers)
+    QApplication.processEvents()
+
+
+def test_appended_folder_keeps_each_video_thumbnail_folder(new_player, dialogs, work_area, tmp_path, monkeypatch):
+    """재검토 L1: job TJS_921을 고른 뒤 other/를 사이드바에 끌어다 놓으면(덧붙임) 영상마다 들어온 곳의 썸네일 폴더를 씀.
+
+    예전에는 둘 다 other/.yesoncheck_thumb에 저장해 TJS_921의 (Mac과 함께 쓰는) 썸네일을 쓰지 않고 엉뚱한 곳에 중복을 만들었음.
+    """
+    player, _works = open_tjs_work(new_player, work_area, monkeypatch, job="TJS_921")
+    job_thumbs = player.current_thumbnail_folder
+    a = listed_path(player, "a.mov")
+    assert red_pixmap(7, 5).save(thumbnails.thumbnail_path(job_thumbs, a), "JPG")  # 영상보다 새 썸네일 (예: Mac이 만든 것)
+    other_thumbs, c = append_dropped_folder(player, tmp_path)
+    assert not os.path.samefile(other_thumbs, job_thumbs)
+
+    turn_on_thumbnail_mode(player)
+    assert thumbnail_width(thumbnails.thumbnail_path(job_thumbs, a)) == 7  # 다시 만들지 않고 그대로 씀
+    assert thumbnail_width(thumbnails.thumbnail_path(other_thumbs, c)) == 120
+    assert not os.path.exists(thumbnails.thumbnail_path(other_thumbs, a))
+    assert not os.path.exists(thumbnails.thumbnail_path(job_thumbs, c))
+    assert all(not player.sidebar.item(i).icon().isNull() for i in range(player.sidebar.count()))
+    assert thumbnail_warnings(dialogs) == []
+
+
+def test_memory_only_videos_stay_in_memory_after_folder_append(new_player, dialogs, work_area, tmp_path, monkeypatch):
+    """job을 고르지 않은 목록(화면에만) + 사이드바에 폴더를 덧붙임 → 원래 영상은 어디에도 쓰지 않고 새 영상은 그 폴더에."""
+    player, works = open_tjs_work(new_player, work_area, monkeypatch)
+    assert player._thumbnail_memory_only
+    a = listed_path(player, "a.mov")
+    other_thumbs, c = append_dropped_folder(player, tmp_path)
+
+    turn_on_thumbnail_mode(player)
+    assert os.path.isfile(thumbnails.thumbnail_path(other_thumbs, c))
+    assert not os.path.exists(thumbnails.thumbnail_path(other_thumbs, a))
+    for root, dirs, _files in os.walk(works):
+        assert thumbnails.FOLDER_NAME not in dirs, root
+    assert all(not player.sidebar.item(i).icon().isNull() for i in range(player.sidebar.count()))
+    assert thumbnail_warnings(dialogs) == []
+
+
+def test_job_folder_problem_kept_after_folder_append(new_player, dialogs, work_area, tmp_path, monkeypatch):
+    """썸네일 폴더를 만들지 못한 job + 사이드바에 폴더를 덧붙임 → job 폴더 문제 창 한 번, 덧붙인 영상은 그 폴더에 저장."""
+    real_ensure_folder = thumbnails.ensure_folder
+
+    def job_fails(parent_dir):
+        if os.path.basename(os.path.normpath(parent_dir)) == "TJS_921":
+            raise PermissionError(errno.EACCES, "Permission denied", os.path.join(parent_dir, thumbnails.FOLDER_NAME))
+        return real_ensure_folder(parent_dir)
+
+    monkeypatch.setattr(thumbnails, "ensure_folder", job_fails)
+    player, works = open_tjs_work(new_player, work_area, monkeypatch, job="TJS_921")
+    assert player.current_thumbnail_folder is None and player._thumbnail_folder_problem is not None
+    a = listed_path(player, "a.mov")
+    other_thumbs, c = append_dropped_folder(player, tmp_path)
+
+    turn_on_thumbnail_mode(player)
+    warnings = thumbnail_warnings(dialogs)
+    assert [title for title, _text in warnings] == [FOLDER_PROBLEM]
+    assert os.path.join("TJS_921", thumbnails.FOLDER_NAME) in warnings[0][1]
+    assert os.path.isfile(thumbnails.thumbnail_path(other_thumbs, c))
+    assert not os.path.exists(thumbnails.thumbnail_path(other_thumbs, a))
+    for root, dirs, _files in os.walk(works):
+        assert thumbnails.FOLDER_NAME not in dirs, root
+    assert all(not player.sidebar.item(i).icon().isNull() for i in range(player.sidebar.count()))
+
+
+def test_regenerate_uses_each_video_thumbnail_folder(new_player, dialogs, work_area, tmp_path, monkeypatch):
+    """"썸네일 재생성"은 영상마다 자기 썸네일 폴더에서 지우고 다시 만듦 (덧붙인 영상도, 원래 영상도)."""
+    player, _works = open_tjs_work(new_player, work_area, monkeypatch, job="TJS_921")
+    job_thumbs = player.current_thumbnail_folder
+    a = listed_path(player, "a.mov")
+    other_thumbs, c = append_dropped_folder(player, tmp_path)
+    assert red_pixmap(7, 5).save(thumbnails.thumbnail_path(job_thumbs, a), "JPG")
+    assert red_pixmap(7, 5).save(thumbnails.thumbnail_path(other_thumbs, c), "JPG")
+
+    player.sidebar.selectAll()
+    player.regenerate_selected_thumbnails()
+    wait_until(lambda: not player.thumbnail_workers)
+    QApplication.processEvents()
+    assert thumbnail_width(thumbnails.thumbnail_path(job_thumbs, a)) == 120
+    assert thumbnail_width(thumbnails.thumbnail_path(other_thumbs, c)) == 120
+    assert not os.path.exists(thumbnails.thumbnail_path(other_thumbs, a))
+    assert not os.path.exists(thumbnails.thumbnail_path(job_thumbs, c))
+
+
+def test_background_loader_reads_each_video_thumbnail_folder(new_player, dialogs, work_area, tmp_path, monkeypatch):
+    """백그라운드 썸네일 불러오기도 영상마다 자기 썸네일 폴더에서 읽음."""
+    player, _works = open_tjs_work(new_player, work_area, monkeypatch, job="TJS_921")
+    job_thumbs = player.current_thumbnail_folder
+    a = listed_path(player, "a.mov")
+    other_thumbs, c = append_dropped_folder(player, tmp_path)
+    player.thumbnail_loading_timer.stop()
+    for folder, video, width in ((job_thumbs, a, 7), (other_thumbs, c, 9),  # 자기 폴더의 썸네일
+                                 (other_thumbs, a, 13), (job_thumbs, c, 11)):  # 남의 폴더에 있는 같은 영상의 썸네일 (읽으면 안 됨)
+        assert red_pixmap(width, 5).save(thumbnails.thumbnail_path(folder, video), "JPG")
+    loaded = []
+    monkeypatch.setattr(player, "on_background_thumbnail_loaded",
+                        lambda path, pixmap: loaded.append((os.path.basename(path), pixmap.width())))
+    player.start_background_thumbnail_loading()
+    wait_until(lambda: player.thumbnail_loader_worker is None)
+    assert sorted(loaded) == [("a.mov", 7), ("c.mov", 9)]
+
+
+def test_duplicate_video_keeps_its_thumbnail_context(new_player, dialogs, work_area, tmp_path, monkeypatch):
+    """이미 목록에 있는 영상을 다시 넣으면(그 job 폴더를 끌어다 놓음) 원래 항목의 자리(여기서는 화면에만)를 그대로 씀."""
+    player, _works = open_tjs_work(new_player, work_area, monkeypatch)
+    a = listed_path(player, "a.mov")
+    job_folder = os.path.dirname(a)  # 앱이 쓰는 경로
+    drop_folder(player, "sidebar", job_folder)
+    assert player.sidebar.count() == 2
+    dropped_thumbs = player.current_thumbnail_folder
+    assert os.path.samefile(dropped_thumbs, os.path.join(job_folder, thumbnails.FOLDER_NAME))
+
+    turn_on_thumbnail_mode(player)
+    assert os.listdir(dropped_thumbs) == []
+    assert thumbnail_warnings(dialogs) == []

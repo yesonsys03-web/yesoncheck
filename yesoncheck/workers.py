@@ -248,10 +248,10 @@ class ThumbnailLoaderWorker(QThread):
     loading_finished = pyqtSignal()
     thumbnail_loaded = pyqtSignal(str, QPixmap)
 
-    def __init__(self, thumbnail_folder, current_files):
+    def __init__(self, thumbnail_files):
+        """thumbnail_files: [(영상 경로, 그 영상의 썸네일 경로)] — 영상마다 자기 썸네일 폴더 (사이드바 항목의 자리)."""
         super().__init__()
-        self.thumbnail_folder = thumbnail_folder
-        self.current_files = current_files
+        self.thumbnail_files = thumbnail_files
         self._is_running = True
 
     def stop(self):
@@ -263,21 +263,15 @@ class ThumbnailLoaderWorker(QThread):
 
     def run(self):
         try:
-            if not os.path.exists(self.thumbnail_folder):
-                print(f"썸네일 폴더가 존재하지 않음: {self.thumbnail_folder}")
-                return
-
             loaded_count = 0
-            total_files = len(self.current_files)
+            total_files = len(self.thumbnail_files)
 
-            for file_path in self.current_files:
+            for file_path, thumbnail_path in self.thumbnail_files:
                 if not self._is_running:
                     break
 
                 try:
                     # 영상보다 새 썸네일만 보냄 (바뀐 영상은 썸네일 모드에서 새로 만듦)
-                    thumbnail_path = thumbnails.thumbnail_path(self.thumbnail_folder, file_path)
-
                     if thumbnails.is_fresh(thumbnail_path, file_path):
                         pixmap = QPixmap(thumbnail_path)
                         if not pixmap.isNull():
