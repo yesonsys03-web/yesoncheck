@@ -2110,16 +2110,28 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         return stat.S_ISREG(info.st_mode)
 
     def _report_video_problem(self, file_path, error):
-        """영상을 확인하지 못함 → 그 영상의 썸네일은 건너뜀. 없어진 것(FileNotFoundError)만 로그로 끝내고, 다른 오류
-        (권한·시간 초과·끊긴 공유 등)는 "영상 확인 실패" 창으로 ((폴더, 제목)마다 한 번) — 조용히 건너뛰지 않음."""
+        """영상을 확인하지 못함 → 그 영상의 썸네일은 건너뜀. 없어진 것만 로그로 끝내고, 다른 오류(권한·시간 초과·
+        끊긴 공유 등)는 "영상 확인 실패" 창으로 — 조용히 건너뛰지 않음.
+
+        없어진 것: FileNotFoundError이고 영상의 폴더는 확인됨. Windows는 끊긴 SMB 공유(ERROR_BAD_NETPATH·BAD_NET_NAME)도
+        FileNotFoundError로 올리고 Mac autofs도 그럴 수 있어, 폴더까지 확인하지 못하면 두 오류를 함께 알림
+        ((폴더, 제목)마다 한 번).
+        """
+        reason = f"이유: {type(error).__name__}: {error}"
         if isinstance(error, FileNotFoundError):
-            print(f"영상이 없어져 썸네일을 건너뜀: {file_path} ({type(error).__name__}: {error})")
-            return
+            folder = os.path.dirname(file_path)
+            try:
+                os.stat(folder)
+            except OSError as folder_error:
+                reason += f"\n영상 폴더도 확인하지 못함: {type(folder_error).__name__}: {folder_error}"
+            else:
+                print(f"영상이 없어져 썸네일을 건너뜀: {file_path} ({type(error).__name__}: {error})")
+                return
         self._report_thumbnail_problem(
             self.current_thumbnail_folder or os.path.dirname(file_path),
             THUMBNAIL_VIDEO_PROBLEM,
             "썸네일을 만들 영상을 확인하지 못해 이 영상의 썸네일은 건너뜁니다 (권한·연결 끊김 등).\n"
-            f"영상: {file_path}\n이유: {type(error).__name__}: {error}",
+            f"영상: {file_path}\n{reason}",
         )
 
     def _has_disk_thumbnail(self, file_path):

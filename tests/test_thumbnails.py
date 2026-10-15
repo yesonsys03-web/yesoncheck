@@ -783,3 +783,45 @@ def test_thumbnail_mode_checks_each_video_once(new_player, dialogs, tmp_path, mo
     assert checked == [video]
     assert not player.sidebar.item(0).icon().isNull()
     assert player.thumbnail_workers == []
+
+
+def stat_fails_under(monkeypatch, root, error):
+    """root 아래 경로만 os.stat이 error(errno, 설명)를 냄 (끊긴 공유처럼)."""
+    real_stat = os.stat
+    error_type, code, text = error
+    prefix = os.path.join(str(root), "")
+
+    def stat_(path, *args, **kwargs):
+        name = os.fspath(path)
+        if name.startswith(prefix):
+            raise error_type(code, text, name)
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", stat_)
+
+
+def test_unreachable_share_is_not_a_vanished_video(new_player, dialogs, tmp_path, monkeypatch, capsys):
+    """Windows는 끊긴 SMB 공유(ERROR_BAD_NETPATH·BAD_NET_NAME)를 FileNotFoundError로 올림 (Mac autofs도 그럴 수 있음).
+
+    영상의 폴더도 확인하지 못하면 "없어진 영상"이 아니라 "영상 확인 실패"로 알림 (두 오류 모두)."""
+    share = tmp_path / "share"
+    video = write_test_video(str(share / "job" / "a.mov"))
+    player = new_player(make_config(str(tmp_path), {}))
+    player.add_files_to_sidebar([video])
+    stat_fails_under(monkeypatch, share, (FileNotFoundError, errno.ENOENT, "The network path was not found"))
+    player.generate_thumbnails_for_all_items()
+    warnings = thumbnail_warnings(dialogs)
+    assert [title for title, _text in warnings] == [VIDEO_PROBLEM]
+    text = warnings[0][1]
+    assert video in text and os.path.dirname(video) in text and text.count("The network path was not found") == 2
+
+
+def test_video_removed_from_reachable_folder_only_logs(new_player, dialogs, tmp_path, monkeypatch, capsys):
+    video = write_test_video(str(tmp_path / "job" / "a.mov"))
+    player = new_player(make_config(str(tmp_path), {}))
+    player.add_files_to_sidebar([video])
+    os.remove(video)  # 폴더는 그대로, 영상만 없어짐
+    player.generate_thumbnails_for_all_items()
+    assert thumbnail_warnings(dialogs) == []
+    assert "영상이 없어져 썸네일을 건너뜀" in capsys.readouterr().out
+
