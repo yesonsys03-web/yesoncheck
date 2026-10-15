@@ -356,6 +356,7 @@ class PlayerSidebarMixin:
                     
                     # 드래그앤드롭 시 직접 썸네일 폴더 생성 (전에 연 job의 썸네일 폴더 문제는 이제 상관없음)
                     parent._thumbnail_folder_problem = None
+                    parent._thumbnail_memory_only = False
                     thumbnail_folder = thumbnails.ensure_folder(folder_paths[0])
                     parent.current_thumbnail_folder = thumbnail_folder
                     print(f"메인 윈도우 드래그앤드롭으로 썸네일 폴더 설정: {thumbnail_folder}")
@@ -808,6 +809,7 @@ class PlayerSidebarMixin:
             # 폴더 드래그앤드롭 시에는 기존 썸네일 폴더를 초기화하고 새로 설정
             self.current_thumbnail_folder = None  # 기존 썸네일 폴더 초기화
             self._thumbnail_folder_problem = None  # 전에 연 job의 썸네일 폴더 문제는 이제 상관없음
+            self._thumbnail_memory_only = False
             self.setup_thumbnail_folder()
             self.schedule_background_thumbnail_loading()
             QMessageBox.information(self, "폴더 로드 완료", f"{len(video_files)}개의 비디오 파일이 사이드바에 추가되었습니다.\n첫 번째 파일이 Video A에 로드되었습니다.")
@@ -1019,6 +1021,7 @@ class PlayerSidebarMixin:
     def setup_thumbnail_folder_for_bookmark(self, folder_path):
         """북마크 폴더용 썸네일 폴더를 설정합니다."""
         self._thumbnail_folder_problem = None  # 전에 연 job의 썸네일 폴더 문제는 이제 상관없음
+        self._thumbnail_memory_only = False
         try:
             thumbnail_folder = thumbnails.ensure_folder(folder_path)
             self.current_thumbnail_folder = thumbnail_folder
@@ -2123,8 +2126,10 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         print(f"썸네일 생성 시작: {file_path}")
         
         # 썸네일 폴더가 설정되지 않은 경우 드래그한 폴더에 생성.
-        # 이 작업의 썸네일 폴더를 만들지 못했으면(_thumbnail_folder_problem) 다른 폴더로 대신하지 않고 화면에만
-        if not self.current_thumbnail_folder and self._thumbnail_folder_problem is None:
+        # 이 작업의 썸네일 폴더를 만들지 못했거나(_thumbnail_folder_problem) job을 고르지 않은 목록이면
+        # (_thumbnail_memory_only) 다른 폴더로 대신하지 않고 화면에만
+        if (not self.current_thumbnail_folder and self._thumbnail_folder_problem is None
+                and not self._thumbnail_memory_only):
             if hasattr(self, 'selected_folder_path') and self.selected_folder_path:
                 # 드래그한 폴더가 있는 경우
                 try:

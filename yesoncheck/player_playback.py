@@ -150,11 +150,17 @@ class PlayerPlaybackMixin:
                     self.current_job_path = base_path
                     
                     # UI job 선택 시 직접 썸네일 폴더 설정 (지연 최소화).
-                    # 작품·시즌을 바꾸면 job 목록을 비우면서 빈 job으로 불림 → base_path가 작품·시즌 폴더이므로 만들지 않음
+                    # 전에 연 폴더(폴더 선택·끌어다 놓기·북마크)는 이제 상관없음 → 그곳에 썸네일을 저장하지 않게 지움
+                    self.selected_folder_path = None
+                    # 작품·시즌을 바꾸면 job 목록을 비우면서 빈 job으로 불림 → base_path가 작품·시즌 폴더이므로 만들지 않고,
+                    # 이때 보이는 영상(TJS_Animatic은 모든 job의 영상)의 썸네일은 화면에만 (영상 폴더에도 만들지 않음)
                     if not selected_job:
                         self.current_thumbnail_folder = None
                         self._thumbnail_folder_problem = None
+                        self._thumbnail_memory_only = True
+                        print("job을 고르지 않음: 썸네일은 저장하지 않고 화면에만")
                     else:
+                        self._thumbnail_memory_only = False
                         try:
                             self.current_thumbnail_folder = thumbnails.ensure_folder(base_path)
                             self._thumbnail_folder_problem = None

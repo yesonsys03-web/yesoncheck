@@ -605,3 +605,65 @@ def test_video_removed_during_check_is_skipped(new_player, dialogs, tmp_path, mo
     assert QPixmap(thumbnails.thumbnail_path(folder, gone)).width() == 7  # a는 건드리지 않음
     assert player.generate_thumbnail(gone) is False
     assert player.thumbnail_workers == []
+
+
+def test_no_job_thumbnails_stay_in_memory(new_player, dialogs, work_area, tmp_path):
+    """job을 고르지 않은 동안(작품만 바꿈) 목록의 썸네일은 화면에만 — 전에 연 폴더나 영상 폴더에 저장하지 않음.
+
+    TJS_Animatic은 시즌이 없어 작품을 고르면 빈 job으로 모든 job의 영상을 보여 줌. 리뷰어 재현: TJS_921/a.mov의 썸네일이
+    전에 연 Desktop_clips/.yesoncheck_thumb에, TJS_922의 것이 TJS_921/.yesoncheck_thumb에 저장됐음.
+    """
+    clips = tmp_path / "Desktop_clips"
+    write_test_video(str(clips / "c.mov"))
+    works = os.path.join(work_area.local, "works")
+    for job, name in (("TJS_921", "a"), ("TJS_922", "b")):
+        write_test_video(os.path.join(works, job, f"{name}.mov"))
+    player = new_player(make_config(work_area.local, {"TJS_Animatic": work_area.stored + "/works"}, work_area.path_map))
+    player.load_videos_from_folder(str(clips))  # 이번 실행에서 먼저 연 폴더
+    clips_thumbs = clips / thumbnails.FOLDER_NAME
+    assert os.listdir(clips_thumbs) == []
+
+    player.workComboBox.setCurrentText("TJS_Animatic")
+    assert player.sidebar.count() == 2  # 빈 job: 모든 job의 영상
+    player.switch_to_thumbnail_mode()
+    wait_until(lambda: not player.thumbnail_workers)
+    QApplication.processEvents()
+    assert os.listdir(clips_thumbs) == []
+    for root, dirs, _files in os.walk(works):
+        assert thumbnails.FOLDER_NAME not in dirs, root
+    assert thumbnail_warnings(dialogs) == []
+    assert all(not player.sidebar.item(i).icon().isNull() for i in range(player.sidebar.count()))  # 화면에는 보임
+
+
+def test_folder_loads_clear_job_thumbnail_state(new_player, dialogs, tmp_path, monkeypatch):
+    """폴더 선택·북마크·사이드바에 끌어다 놓기는 자기 썸네일 폴더를 정하므로 job의 미뤄 둔 문제·'화면에만' 상태를 지움."""
+    from PyQt5.QtCore import QMimeData, QPointF, Qt, QUrl
+    from PyQt5.QtGui import QDropEvent
+
+    player = new_player(make_config(str(tmp_path), {}))
+    monkeypatch.setattr(player, "save_bookmarks", lambda: None)  # 끌어다 놓은 폴더를 사용자의 북마크 파일에 쓰지 않게
+    folder = tmp_path / "clips"
+    write_test_video(str(folder / "c.mov"))
+
+    def leave_job_state():
+        player._thumbnail_folder_problem = ("job/.yesoncheck_thumb", FOLDER_PROBLEM, "이유")
+        player._thumbnail_memory_only = True
+
+    def job_state():
+        return player._thumbnail_folder_problem, player._thumbnail_memory_only
+
+    leave_job_state()
+    player.load_videos_from_folder(str(folder))  # 폴더 선택
+    assert job_state() == (None, False)
+
+    leave_job_state()
+    player.setup_thumbnail_folder_for_bookmark(str(folder))  # 북마크
+    assert job_state() == (None, False)
+
+    leave_job_state()
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(str(folder))])
+    drop = QDropEvent(QPointF(5, 5), Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier)
+    assert player.eventFilter(player.sidebar, drop) is True  # 사이드바에 끌어다 놓기
+    assert job_state() == (None, False)
+    assert player.current_thumbnail_folder == str(folder / thumbnails.FOLDER_NAME)

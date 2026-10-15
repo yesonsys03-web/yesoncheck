@@ -435,6 +435,7 @@ QMessageBox {
         self._thumbnail_problem_folders = set()  # 이번 실행에서 썸네일 문제 창을 띄운 폴더 (폴더마다 한 번)
         # 썸네일 폴더를 만들지 못한 문제 (폴더, 창 제목, 내용): 그동안 썸네일은 화면에만, 창은 썸네일을 쓸 때
         self._thumbnail_folder_problem = None
+        self._thumbnail_memory_only = False  # job을 고르지 않은 목록: 썸네일 폴더 없이 화면에만 (다른 폴더로 대신하지 않음)
         self.thumbnail_loader_worker = None  # 백그라운드 로더 워커
         self.thumbnail_loading_timer = QTimer()
         self.thumbnail_loading_timer.setSingleShot(True)
@@ -1494,6 +1495,7 @@ QSlider::add-page:horizontal {
                         
                         # 드래그앤드롭 시 직접 썸네일 폴더 생성 (전에 연 job의 썸네일 폴더 문제는 이제 상관없음)
                         self._thumbnail_folder_problem = None
+                        self._thumbnail_memory_only = False
                         thumbnail_folder = thumbnails.ensure_folder(folder_paths[0])
                         self.current_thumbnail_folder = thumbnail_folder
                         print(f"드래그앤드롭으로 썸네일 폴더 설정: {thumbnail_folder}")
