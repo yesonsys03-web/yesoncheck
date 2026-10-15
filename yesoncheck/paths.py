@@ -320,17 +320,22 @@ def from_storage(stored_path):
     return to_native(stored_path)
 
 
-def path_key(path):
-    """경로 비교·캐시 키. Windows: 드라이브 문자를 UNC로 바꾸고 구분자·대소문자·한글 정규화 차이를 없앰. Mac: 그대로."""
-    if not IS_WINDOWS or not path:
-        return path
+def _drive_as_unc(path):
+    """(Windows) 구분자를 정리하고 네트워크 드라이브 문자를 UNC로 바꾼 경로 (캐시된 원격 이름 사용). 대소문자는 그대로."""
     text = ntpath.normpath(path.replace("/", "\\"))
     drive, rest = ntpath.splitdrive(text)
     if len(drive) == 2 and drive[1] == ":":
         remote = _cached_remote_name(drive.upper())
         if remote:
             text = remote.rstrip("\\") + rest
-    return _nfc(text).casefold()
+    return text
+
+
+def path_key(path):
+    """경로 비교·캐시 키. Windows: 드라이브 문자를 UNC로 바꾸고 구분자·대소문자·한글 정규화 차이를 없앰. Mac: 그대로."""
+    if not IS_WINDOWS or not path:
+        return path
+    return _nfc(_drive_as_unc(path)).casefold()
 
 
 def same_path(a, b):
@@ -345,7 +350,24 @@ def contains_path(paths_list, path):
 
 
 def thumbnail_key(path):
-    """썸네일 파일 이름(md5). Mac은 기존과 같은 값, Windows는 드라이브 문자와 무관한 값."""
+    """썸네일 파일 이름(md5). NAS의 썸네일 폴더는 모든 Mac·Windows PC가 함께 쓰므로 같은 영상은 같은 이름이어야 한다.
+
+    Mac: 경로 그대로의 md5 (기존 값 — NAS에 이미 있는 Mac 썸네일을 계속 씀).
+    Windows: 드라이브 문자를 UNC로 바꾼 뒤(대소문자는 그대로) 변환표로 Mac 경로를 얻어 그 md5 → Mac이 만든
+    썸네일을 그대로 찾고, Windows가 만든 썸네일도 Mac이 찾는다. 로컬 디스크, 변환표에 없는 공유, 변환표가
+    로드되지 않았을 때는 예전처럼 path_key의 md5 (드라이브 문자와 무관).
+    알려진 한계: 작품 폴더 아래의 한글 이름은 Mac(SMB 목록)에서 NFD일 수 있는데 windows_to_mac은 NFC를
+    돌려주므로, 그런 영상의 썸네일은 Mac과 Windows가 나눠 쓰지 못할 수 있다 (각자 만든 것은 각자 계속 씀).
+    """
+    if IS_WINDOWS and path and _active_map is not None:
+        native = _drive_as_unc(path)
+        if native.startswith("\\\\"):
+            try:
+                mac_path = _active_map.windows_to_mac(native)
+            except PathMapError:
+                mac_path = None  # 변환표에 없는 공유 → NAS 공유 썸네일이 아님 (아래 예전 이름)
+            if mac_path is not None:
+                return hashlib.md5(mac_path.encode("utf-8")).hexdigest()
     return hashlib.md5(path_key(path).encode("utf-8")).hexdigest()
 
 
