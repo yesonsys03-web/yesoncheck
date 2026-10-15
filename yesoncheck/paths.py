@@ -356,8 +356,11 @@ def thumbnail_key(path):
     Windows: 드라이브 문자를 UNC로 바꾼 뒤(대소문자는 그대로) 변환표로 Mac 경로를 얻어 그 md5 → Mac이 만든
     썸네일을 그대로 찾고, Windows가 만든 썸네일도 Mac이 찾는다. 로컬 디스크, 변환표에 없는 공유, 변환표가
     로드되지 않았을 때는 예전처럼 path_key의 md5 (드라이브 문자와 무관).
-    알려진 한계: 작품 폴더 아래의 한글 이름은 Mac(SMB 목록)에서 NFD일 수 있는데 windows_to_mac은 NFC를
-    돌려주므로, 그런 영상의 썸네일은 Mac과 Windows가 나눠 쓰지 못할 수 있다 (각자 만든 것은 각자 계속 씀).
+    Mac과 나눠 쓰려면 Mac이 여는 영상 경로가 windows_to_mac 결과와 글자까지 같아야 한다: 공유 설정(work_paths.json)의
+    작품 경로가 정규 형태(NFC, /System/Volumes/Data 접두 없음, // 없음)여야 함 — 지금의 work_paths.json은 그러함.
+    알려진 한계: 경로 어디든 Mac이 NFD로 목록을 받는 한글 이름이 있으면(예: Mac이 SMB로 마운트한 colordata)
+    windows_to_mac의 NFC 경로와 달라 나눠 쓰지 못한다 (각자 만든 것은 각자 계속 씀). /usadata2·/usadata3은 SMB가
+    아니라 NFS 마운트다.
     """
     if IS_WINDOWS and path and _active_map is not None:
         native = _drive_as_unc(path)
