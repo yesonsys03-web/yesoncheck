@@ -2114,8 +2114,10 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         끊긴 공유 등)는 "영상 확인 실패" 창으로 — 조용히 건너뛰지 않음.
 
         없어진 것: FileNotFoundError이고 영상의 폴더는 확인됨. Windows는 끊긴 SMB 공유(ERROR_BAD_NETPATH·BAD_NET_NAME)도
-        FileNotFoundError로 올리고 Mac autofs도 그럴 수 있어, 폴더까지 확인하지 못하면 두 오류를 함께 알림
-        ((폴더, 제목)마다 한 번).
+        FileNotFoundError로 올리고 Mac autofs도 그럴 수 있어, 폴더까지 확인하지 못하면 두 오류를 함께 알림.
+        창은 목록 단위로 한 번: 썸네일 폴더, 없으면 불러온 폴더(폴더 선택·끌어다 놓기·북마크) 또는 job 경로
+        (job을 고르지 않았으면 작품·시즌 폴더). selected_folder_path가 먼저: current_job_path는 폴더를 불러와도 지우지 않아
+        그때는 예전 job이고, selected_folder_path는 update_playlist가 지움. 영상 폴더마다 창이 뜨지 않게.
         """
         reason = f"이유: {type(error).__name__}: {error}"
         if isinstance(error, FileNotFoundError):
@@ -2128,7 +2130,10 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 print(f"영상이 없어져 썸네일을 건너뜀: {file_path} ({type(error).__name__}: {error})")
                 return
         self._report_thumbnail_problem(
-            self.current_thumbnail_folder or os.path.dirname(file_path),
+            self.current_thumbnail_folder
+            or getattr(self, "selected_folder_path", None)
+            or getattr(self, "current_job_path", None)
+            or os.path.dirname(file_path),
             THUMBNAIL_VIDEO_PROBLEM,
             "썸네일을 만들 영상을 확인하지 못해 이 영상의 썸네일은 건너뜁니다 (권한·연결 끊김 등).\n"
             f"영상: {file_path}\n{reason}",

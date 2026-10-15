@@ -825,3 +825,17 @@ def test_video_removed_from_reachable_folder_only_logs(new_player, dialogs, tmp_
     assert thumbnail_warnings(dialogs) == []
     assert "영상이 없어져 썸네일을 건너뜀" in capsys.readouterr().out
 
+
+def test_unreadable_videos_without_thumbnail_folder_one_dialog(new_player, dialogs, work_area, monkeypatch):
+    """job을 고르지 않은 목록(여러 job의 영상, 썸네일 폴더 없음)에서 영상들을 확인하지 못해도 창은 한 번 (영상 폴더마다가 아니라)."""
+    works = os.path.join(work_area.local, "works")
+    for job in ("TJS_921", "TJS_922", "TJS_923"):
+        write_test_video(os.path.join(works, job, "a.mov"))
+    player = new_player(make_config(work_area.local, {"TJS_Animatic": work_area.stored + "/works"}, work_area.path_map))
+    player.workComboBox.setCurrentText("TJS_Animatic")
+    assert player.sidebar.count() == 3 and player.current_thumbnail_folder is None
+    stat_fails_under(monkeypatch, works, (TimeoutError, errno.ETIMEDOUT, "Operation timed out"))
+    player.switch_to_thumbnail_mode()
+    warnings = thumbnail_warnings(dialogs)
+    assert [title for title, _text in warnings] == [VIDEO_PROBLEM]
+    assert "Operation timed out" in warnings[0][1] and "TJS_921" in warnings[0][1]
