@@ -358,7 +358,10 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 ### 설정 파일
 - 북마크: `~/.yeson_bookmarks.json`
 - 작업 경로: `/USA_DB/test_jn/.yesoncheck/work_paths.json`
-- 썸네일: 각 비디오 디렉토리의 `.yesoncheck_thumb/` (MD5 해시 파일명)
+- 썸네일: job 폴더의 `.yesoncheck_thumb/<md5>.jpg` — 모든 Mac·Windows PC가 함께 씀 (`yesoncheck/thumbnails.py`).
+  이름은 Mac 경로의 md5 (Windows도 변환표로 Mac 경로를 구해 같은 이름 → 서로 만든 썸네일을 씀, `paths.thumbnail_key`).
+  영상이 썸네일보다 새것이면 다시 만듦. 저장은 임시 파일 + `os.replace`. Mac은 만든 폴더를 0o777로(다른 NAS 계정의
+  Windows도 쓰게). 저장·폴더 문제는 썸네일을 쓸 때 (폴더, 제목)마다 한 번 창으로. job을 고르지 않은 목록은 화면에만.
 
 ### 빌드 파일
 - `YesonCheck_Autocut.spec`: PyInstaller 설정 (TransNetV2 및 PySceneDetect 포함)
