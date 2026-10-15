@@ -7,6 +7,7 @@ NAS의 썸네일 폴더는 모든 Mac·Windows PC가 함께 쓴다 (PC마다 NAS
 
 import os
 import stat
+import threading
 
 from PyQt5.QtCore import QBuffer, QByteArray, QIODevice
 
@@ -53,22 +54,29 @@ def is_fresh(thumb_path, video_path):
     return thumb_mtime >= os.path.getmtime(video_path)
 
 
-def save(pixmap, thumb_path):
-    """pixmap을 JPEG(품질 85)로 thumb_path에 저장. 실패하면 예외 (bool을 돌려주지 않음).
+def save(image, thumb_path):
+    """image(QImage 또는 QPixmap)를 JPEG(품질 85)로 thumb_path에 저장. 실패하면 예외 (bool을 돌려주지 않음).
 
-    있던 파일은 먼저 지운 뒤 새로 쓴다: 다른 계정이 만든 파일(이 계정은 쓸 수 없음)도 폴더에 쓸 수 있으면 바꿀 수 있다.
+    같은 폴더의 임시 파일에 다 쓴 뒤 os.replace로 바꾼다: 다른 PC가 반쯤 쓴 JPEG를 읽지 않고, 실패하면 있던
+    썸네일이 그대로 남는다. 다른 계정이 만든 파일(이 계정은 쓸 수 없음)도 폴더에 쓸 수 있으면 바꿀 수 있다.
     썸네일 폴더는 만들지 않는다 (ensure_folder가 함). 파일 오류는 OSError(errno·경로 포함)로 올라간다.
     """
     data = QByteArray()
     buffer = QBuffer(data)
     buffer.open(QIODevice.WriteOnly)
-    encoded = pixmap.save(buffer, "JPG", 85)
+    encoded = image.save(buffer, "JPG", 85)
     buffer.close()
     if not encoded:
         raise RuntimeError(f"썸네일을 JPEG로 바꾸지 못했습니다 (Qt 이미지 플러그인 확인): {thumb_path}")
+    # .jpg로 끝나지 않는 이름: 썸네일로 읽히지 않음. 프로세스·스레드마다 달라 여러 PC·워커가 겹쳐도 됨
+    tmp_path = f"{thumb_path}.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
-        os.remove(thumb_path)
-    except FileNotFoundError:
-        pass  # 처음 만드는 썸네일
-    with open(thumb_path, "wb") as fh:
-        fh.write(bytes(data))
+        with open(tmp_path, "wb") as fh:
+            fh.write(bytes(data))
+        os.replace(tmp_path, thumb_path)
+    except BaseException:
+        try:
+            os.remove(tmp_path)
+        except FileNotFoundError:
+            pass  # 임시 파일을 만들기 전에 실패했거나 이미 바뀜
+        raise

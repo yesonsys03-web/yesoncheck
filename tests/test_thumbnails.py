@@ -148,7 +148,48 @@ def test_save_raises_when_folder_missing(qapp, tmp_path):
     target = str(tmp_path / "missing" / "a.jpg")
     with pytest.raises(OSError) as info:
         thumbnails.save(red_pixmap(), target)
-    assert info.value.filename == target
+    assert info.value.filename.startswith(target)  # 같은 폴더의 임시 파일 (썸네일 경로 + .pid.thread.tmp)
+
+
+def test_save_write_failure_leaves_nothing(qapp, tmp_path, monkeypatch):
+    """임시 파일을 연 뒤 쓰다 실패(디스크 가득 등) → 썸네일도 임시 파일도 남지 않음 (반쯤 쓴 JPEG를 다른 PC가 읽지 않게)."""
+    real_open = open
+
+    class FullDisk:
+        def __init__(self, path, mode):
+            self.path = path
+            self.fh = real_open(path, mode)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self.fh.close()
+
+        def write(self, data):
+            self.fh.write(data[:10])
+            raise OSError(errno.ENOSPC, "No space left on device", self.path)
+
+    monkeypatch.setattr(thumbnails, "open", FullDisk, raising=False)
+    thumb = str(tmp_path / "a.jpg")
+    with pytest.raises(OSError) as info:
+        thumbnails.save(red_pixmap(), thumb)
+    assert info.value.errno == errno.ENOSPC
+    assert os.listdir(tmp_path) == []
+
+
+def test_save_keeps_old_thumbnail_when_replace_fails(qapp, tmp_path, monkeypatch):
+    thumb = tmp_path / "a.jpg"
+    thumb.write_bytes(b"old")
+
+    def cannot_replace(src, dst):
+        raise PermissionError(errno.EACCES, "Permission denied", dst)
+
+    monkeypatch.setattr(thumbnails.os, "replace", cannot_replace)
+    with pytest.raises(PermissionError):
+        thumbnails.save(red_pixmap(), str(thumb))
+    assert thumb.read_bytes() == b"old"
+    assert os.listdir(tmp_path) == ["a.jpg"]
 
 
 def denied(pixmap, thumb_path):
