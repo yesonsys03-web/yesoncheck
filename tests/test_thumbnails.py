@@ -371,3 +371,27 @@ def test_no_thumbnail_folder_until_job_selected(new_player, dialogs, work_area):
     assert os.path.isdir(os.path.join(work_area.local, "S1", "job_01", thumbnails.FOLDER_NAME))
     assert player.sidebar.count() == 1
     assert dialogs.errors() == []
+
+
+def test_unreadable_fresh_thumbnail_is_regenerated(new_player, dialogs, tmp_path):
+    """영상보다 새것이지만 읽을 수 없는(깨진) 썸네일도 썸네일 모드에서 다시 만듦 (예전에는 건너뛰어 계속 빈 아이콘)."""
+    from PyQt5.QtGui import QPixmap
+
+    video = write_test_video(str(tmp_path / "job" / "a.mov"))
+    player = new_player(make_config(str(tmp_path), {}))
+    player.add_files_to_sidebar([video])
+    folder = thumbnails.ensure_folder(str(tmp_path / "job"))
+    player.current_thumbnail_folder = folder
+    thumb = thumbnails.thumbnail_path(folder, video)
+    with open(thumb, "wb") as fh:
+        fh.write(b"not a jpeg")
+    newer = os.path.getmtime(video) + 10
+    os.utime(thumb, (newer, newer))
+    assert thumbnails.is_fresh(thumb, video)
+
+    player.generate_thumbnails_for_all_items()
+    wait_until(lambda: not player.thumbnail_workers)
+    QApplication.processEvents()
+    assert QPixmap(thumb).width() == 120
+    assert not player.sidebar.item(0).icon().isNull()
+    assert dialogs.errors() == []

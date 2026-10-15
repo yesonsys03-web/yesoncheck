@@ -1911,29 +1911,8 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         print(f"사이드바 폭을 2배로 조정: {self.default_sidebar_width} -> {new_width}")
         
         # 캐시된 썸네일을 즉시 적용
-        cached_count = 0
-        new_generation_count = 0
-        for i in range(self.sidebar.count()):
-            item = self.sidebar.item(i)
-            if item is None:
-                continue  # None인 경우 건너뛰기
-            file_path = item.data(Qt.UserRole)
-            if file_path and os.path.isfile(file_path):
-                if self._has_disk_thumbnail(file_path):
-                    print(f"캐시된 썸네일 즉시 적용: {file_path}")
-                    thumbnail_path = thumbnails.thumbnail_path(self.current_thumbnail_folder, file_path)
-                    pixmap = QPixmap(thumbnail_path)
-                    if not pixmap.isNull():
-                        self.update_sidebar_item_thumbnail(file_path, pixmap)
-                        cached_count += 1
-                    else:
-                        print(f"새 썸네일 생성 예정: {file_path}")
-                        new_generation_count += 1
-                else:
-                    print(f"새 썸네일 생성 예정: {file_path}")
-                    new_generation_count += 1
-        
-        print(f"캐시된 썸네일 {cached_count}개 즉시 적용 완료")
+        to_generate = self._apply_disk_thumbnails()
+        print(f"캐시된 썸네일 즉시 적용 완료 (새로 만들 것 {len(to_generate)}개)")
         
         # 즉시 사이드바 업데이트 (지연 없이)
         self.update_sidebar_display()
@@ -1967,28 +1946,10 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         """모든 사이드바 아이템에 대해 썸네일을 생성합니다."""
         print(f"모든 아이템 썸네일 생성 시작: {self.sidebar.count()}개 아이템")
         self.cleanup_thumbnail_workers()
-        cached_count = 0
-        new_generation_count = 0
-        for i in range(self.sidebar.count()):
-            item = self.sidebar.item(i)
-            if item is None:
-                continue  # None인 경우 건너뛰기
-            file_path = item.data(Qt.UserRole)
-            if file_path and os.path.isfile(file_path):
-                if self._has_disk_thumbnail(file_path):
-                    print(f"캐시된 썸네일 즉시 적용: {file_path}")
-                    thumbnail_path = thumbnails.thumbnail_path(self.current_thumbnail_folder, file_path)
-                    pixmap = QPixmap(thumbnail_path)
-                    if not pixmap.isNull():
-                        self.update_sidebar_item_thumbnail(file_path, pixmap)
-                        cached_count += 1
-                    else:
-                        print(f"새 썸네일 생성 예정: {file_path}")
-                        new_generation_count += 1
-                else:
-                    print(f"새 썸네일 생성 예정: {file_path}")
-                    new_generation_count += 1
-        print(f"썸네일 처리 완료: 캐시 사용 {cached_count}개, 새 생성 {new_generation_count}개")
+        # 첫 번째 단계에서 새로 만들 영상을 정해 두고 두 번째 단계는 그 목록만 (NAS에서 다시 확인하지 않음)
+        to_generate = self._apply_disk_thumbnails()
+        new_generation_count = len(to_generate)
+        print(f"썸네일 처리 완료: 캐시 사용 {self.sidebar.count() - new_generation_count}개, 새 생성 {new_generation_count}개")
         # 진행바 설정
         if new_generation_count > 0:
             self.thumbnailProgressBar.setMaximum(new_generation_count)
@@ -2002,22 +1963,15 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             self.thumbnailProgressBar.setVisible(True)
         if new_generation_count > 0:
             batch_size = 3
-            total_items = self.sidebar.count()
             generated_count = 0
-            for batch_start in range(0, total_items, batch_size):
-                batch_end = min(batch_start + batch_size, total_items)
-                print(f"배치 처리: {batch_start+1}-{batch_end}/{total_items}")
-                for i in range(batch_start, batch_end):
-                    item = self.sidebar.item(i)
-                    if item is None:
-                        continue  # None인 경우 건너뛰기
-                    file_path = item.data(Qt.UserRole)
-                    if file_path and os.path.isfile(file_path):
-                        if not self._has_disk_thumbnail(file_path):
-                            self.generate_thumbnail(file_path)
-                            generated_count += 1
-                            self.thumbnailProgressBar.setValue(generated_count)
-                            QApplication.processEvents()
+            for batch_start in range(0, new_generation_count, batch_size):
+                batch = to_generate[batch_start:batch_start + batch_size]
+                print(f"배치 처리: {batch_start+1}-{batch_start + len(batch)}/{new_generation_count}")
+                for file_path in batch:
+                    self.generate_thumbnail(file_path)
+                    generated_count += 1
+                    self.thumbnailProgressBar.setValue(generated_count)
+                    QApplication.processEvents()
                 QApplication.processEvents()
                 import time
                 time.sleep(0.2)
@@ -2104,6 +2058,31 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             
         except Exception as e:
             print(f"백그라운드 스레드 정리 중 오류: {e}")
+
+    def _apply_disk_thumbnails(self):
+        """사이드바 영상마다 디스크의 썸네일(영상보다 새것)을 바로 적용하고, 새로 만들어야 할 영상 목록을 돌려줌.
+
+        새로 만들 것: 썸네일이 없거나, 영상보다 오래됐거나, 영상보다 새것이지만 읽을 수 없는(깨진) 썸네일.
+        """
+        to_generate = []
+        for i in range(self.sidebar.count()):
+            item = self.sidebar.item(i)
+            if item is None:
+                continue  # None인 경우 건너뛰기
+            file_path = item.data(Qt.UserRole)
+            if not file_path or not os.path.isfile(file_path):
+                continue
+            if self._has_disk_thumbnail(file_path):
+                pixmap = QPixmap(thumbnails.thumbnail_path(self.current_thumbnail_folder, file_path))
+                if not pixmap.isNull():
+                    print(f"캐시된 썸네일 즉시 적용: {file_path}")
+                    self.update_sidebar_item_thumbnail(file_path, pixmap)
+                    continue
+                print(f"디스크 썸네일을 읽을 수 없어 새로 만듦: {file_path}")
+            else:
+                print(f"새 썸네일 생성 예정: {file_path}")
+            to_generate.append(file_path)
+        return to_generate
 
     def _has_disk_thumbnail(self, file_path):
         """디스크에 영상보다 새 썸네일이 있는지 확인합니다 (영상이 바뀌었으면 False → 새로 만듦)."""
