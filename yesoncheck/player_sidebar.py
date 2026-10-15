@@ -2227,7 +2227,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         """썸네일을 쓸 때(썸네일 모드·썸네일 생성) 미뤄 둔 썸네일 폴더 문제를 창으로 알림 (폴더마다 한 번).
 
         폴더를 만들지 못함(_thumbnail_folder_problem) 또는 폴더는 쓰지만 권한을 바꾸지 못함(thumbnails.share_problem).
-        이미 알린 폴더면 아무것도 하지 않음 (영상마다 불리므로 로그도 다시 남기지 않음).
+        이미 알린 (폴더, 제목)이면 아무것도 하지 않음 (영상마다 불리므로 로그도 다시 남기지 않음).
         """
         if self._thumbnail_folder_problem is not None:
             problem = self._thumbnail_folder_problem
@@ -2241,7 +2241,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             )
         else:
             return
-        if problem[0] not in self._thumbnail_problem_folders:
+        if (problem[0], problem[1]) not in self._thumbnail_problems_shown:
             self._report_thumbnail_problem(*problem)
 
     def _on_thumbnail_save_failed(self, folder, detail):
@@ -2254,16 +2254,17 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         )
 
     def _report_thumbnail_problem(self, folder, title, text):
-        """썸네일 문제를 알림: 로그에는 매번, 창은 이번 실행에서 폴더마다 한 번.
+        """썸네일 문제를 알림: 로그에는 매번, 창은 이번 실행에서 (폴더, 제목)마다 한 번
+        ("썸네일 폴더 문제"를 알린 폴더라도 나중의 "썸네일 저장 실패"는 따로 알림).
 
         title: THUMBNAIL_SAVE_FAILED 또는 THUMBNAIL_FOLDER_PROBLEM. text: 무슨 일이 있었고 썸네일이 어떻게 되는지와 이유.
         창에는 NAS 권한 확인 안내와 폴더 경로를 덧붙임.
         """
         print(f"{title}: {folder}\n{text}")
-        if folder in self._thumbnail_problem_folders:
+        if (folder, title) in self._thumbnail_problems_shown:
             return
         # 창을 띄우기 전에 넣음: 창이 떠 있는 동안 다음 저장 실패 시그널이 들어와도 창을 또 띄우지 않게
-        self._thumbnail_problem_folders.add(folder)
+        self._thumbnail_problems_shown.add((folder, title))
         QMessageBox.warning(
             self,
             title,

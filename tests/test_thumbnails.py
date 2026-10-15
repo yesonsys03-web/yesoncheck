@@ -341,17 +341,21 @@ def thumbnail_warnings(dialogs, title=None):
     return [(t, text) for kind, t, text in dialogs.messages if kind == "warning" and t in titles]
 
 
-def test_problem_dialog_once_per_folder(new_player, dialogs, tmp_path, monkeypatch):
+def test_problem_dialog_once_per_folder_and_title(new_player, dialogs, tmp_path, monkeypatch):
+    """창은 (폴더, 제목)마다 한 번: "썸네일 폴더 문제"를 알린 폴더라도 나중의 "썸네일 저장 실패"는 따로 알림."""
     player = new_player(make_config(str(tmp_path), {}))
     folder_a = str(tmp_path / "A" / thumbnails.FOLDER_NAME)
     folder_b = str(tmp_path / "B" / thumbnails.FOLDER_NAME)
-    player._report_thumbnail_problem(folder_a, SAVE_FAILED, "이유 1")
-    player._report_thumbnail_problem(folder_a, FOLDER_PROBLEM, "이유 2")
-    player._report_thumbnail_problem(folder_b, FOLDER_PROBLEM, "이유 3")
+    player._report_thumbnail_problem(folder_a, FOLDER_PROBLEM, "이유 1")
+    player._report_thumbnail_problem(folder_a, FOLDER_PROBLEM, "이유 2")  # 같은 폴더·제목 → 창 없음
+    player._report_thumbnail_problem(folder_a, SAVE_FAILED, "이유 3")
+    player._report_thumbnail_problem(folder_a, SAVE_FAILED, "이유 4")
+    player._report_thumbnail_problem(folder_b, FOLDER_PROBLEM, "이유 5")
     warnings = thumbnail_warnings(dialogs)
-    assert [title for title, _text in warnings] == [SAVE_FAILED, FOLDER_PROBLEM]
+    assert [title for title, _text in warnings] == [FOLDER_PROBLEM, SAVE_FAILED, FOLDER_PROBLEM]
     assert folder_a in warnings[0][1] and "이유 1" in warnings[0][1]
-    assert folder_b in warnings[1][1] and "이유 3" in warnings[1][1]
+    assert folder_a in warnings[1][1] and "이유 3" in warnings[1][1]
+    assert folder_b in warnings[2][1] and "이유 5" in warnings[2][1]
     assert "권한" in warnings[0][1]
 
 
