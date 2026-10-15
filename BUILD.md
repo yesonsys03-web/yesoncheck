@@ -108,6 +108,7 @@ git 저장소가 아닌 폴더(직접 복사한 폴더)에서 빌드하면 경�
 - Windows lock은 `--override requirements-build-windows.overrides.txt`(protobuf 3.20.3)와 함께 설치해야 합니다:
   paddle 2.6.2 Windows 휠은 protobuf <=3.20.2를, TensorFlow 2.15는 >=3.20.3을 요구해 덮어쓰지 않으면 uv가 설치를 거부합니다.
 - TensorFlow는 import할 때 msvcp140.dll·msvcp140_1.dll을 찾습니다. spec이 두 DLL을 `_internal` 맨 위에 넣고(의존성 분석에 없으면 빌드 PC의 System32에서), 워크플로가 있는지 확인합니다.
-- 결과: 실행 기록 페이지 아래 **Artifacts**의 `YesonCheck_Autocut_Windows_<커밋 7자리>` (zip, 크기는 실행 기록 페이지에 표시). 14일 보관. **GitHub Release에는 올리지 않습니다.**
+- 결과: 실행 기록 페이지 아래 **Artifacts**의 `YesonCheck_Setup_Windows_<커밋 7자리>` 하나 (설치 파일 `YesonCheck_Setup_<커밋>.exe`를 담은 zip). 14일 보관. **GitHub Release에는 올리지 않습니다.**
+  폴더째 받은 앱(`YesonCheck_Autocut_Windows_<커밋>`)은 2026-10-15부터 올리지 않습니다(사용자 요청 — 설치 파일만 씀).
 - Windows PC에서 직접 빌드하려면: Python 3.10 + uv 설치 → `uv venv .venv --python 3.10 --managed-python` → `uv pip install --python .venv\Scripts\python.exe -r requirements-build-windows.lock --override requirements-build-windows.overrides.txt` → opencv contrib 재설치(워크플로 참고) → `./fetch_ffmpeg_windows.ps1` → `.venv\Scripts\python.exe -m PyInstaller --clean -y YesonCheck_Autocut.spec`.
 - 배포·첫 설정은 `docs/windows-deploy.md`.

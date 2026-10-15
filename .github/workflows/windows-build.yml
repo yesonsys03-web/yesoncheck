@@ -92,19 +92,6 @@ jobs:
       - name: 실행 시험 (빌드된 exe)
         run: ./ci/run_smoke_test.ps1
 
-      - name: artifact 이름
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $true
-          $short = "${{ github.sha }}".Substring(0, 7)
-          "ARTIFACT_NAME=YesonCheck_Autocut_Windows_$short" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.ARTIFACT_NAME }}
-          path: dist/YesonCheck_Autocut
-          retention-days: 14
-          if-no-files-found: error
-
       - name: 설치 파일 버전 정보
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
