@@ -149,16 +149,20 @@ class PlayerPlaybackMixin:
                     # 선택된 job 경로를 current_job_path로 설정 (UI job 선택용)
                     self.current_job_path = base_path
                     
-                    # UI job 선택 시 직접 썸네일 폴더 설정 (지연 최소화)
-                    try:
-                        self.current_thumbnail_folder = thumbnails.ensure_folder(base_path)
-                    except OSError as e:
-                        # 썸네일 폴더 생성 실패해도 파일 표시는 계속 진행 (썸네일은 저장하지 않음 → 창으로 알림)
+                    # UI job 선택 시 직접 썸네일 폴더 설정 (지연 최소화).
+                    # 작품·시즌을 바꾸면 job 목록을 비우면서 빈 job으로 불림 → base_path가 작품·시즌 폴더이므로 만들지 않음
+                    if not selected_job:
                         self.current_thumbnail_folder = None
-                        self._report_thumbnail_problem(
-                            os.path.join(base_path, thumbnails.FOLDER_NAME),
-                            f"썸네일 폴더를 만들거나 권한을 바꾸지 못했습니다.\n이유: {type(e).__name__}: {e}",
-                        )
+                    else:
+                        try:
+                            self.current_thumbnail_folder = thumbnails.ensure_folder(base_path)
+                        except OSError as e:
+                            # 썸네일 폴더 생성 실패해도 파일 표시는 계속 진행 (썸네일은 저장하지 않음 → 창으로 알림)
+                            self.current_thumbnail_folder = None
+                            self._report_thumbnail_problem(
+                                os.path.join(base_path, thumbnails.FOLDER_NAME),
+                                f"썸네일 폴더를 만들거나 권한을 바꾸지 못했습니다.\n이유: {type(e).__name__}: {e}",
+                            )
                     
                     # 메인 스레드에서 직접 처리 (스레드 제거로 지연 해결)
                     all_mov_files = []

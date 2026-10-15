@@ -291,3 +291,21 @@ def test_job_thumbnail_folder_failure_is_reported(new_player, dialogs, work_area
     warnings = [text for kind, _title, text in dialogs.messages if kind == "warning"]
     assert len(warnings) == 1
     assert os.path.join("job_01", thumbnails.FOLDER_NAME) in warnings[0] and "Permission denied" in warnings[0]
+
+
+def test_no_thumbnail_folder_until_job_selected(new_player, dialogs, work_area):
+    """작품·시즌을 고를 때 job 목록을 비우면 update_playlist가 빈 job으로 불림 → 작품·시즌 폴더에 썸네일 폴더를
+    만들지 않음 (NAS에 /usadata2/Titmouse/FLORIDA/.yesoncheck_thumb 같은 폴더가 생겼었음)."""
+    write_test_video(os.path.join(work_area.local, "S1", "job_01", "scene-001", "frames", "a.mov"))
+    player = new_player(make_config(work_area.local, {"SMOKE": work_area.stored}, work_area.path_map))
+    player.workComboBox.setCurrentText("SMOKE")
+    player.seasonComboBox.setCurrentText("S1")
+    assert not os.path.exists(os.path.join(work_area.local, thumbnails.FOLDER_NAME))
+    assert not os.path.exists(os.path.join(work_area.local, "S1", thumbnails.FOLDER_NAME))
+    assert player.current_thumbnail_folder is None
+    assert not [m for m in dialogs.messages if m[1] == "썸네일 저장 실패"]
+
+    player.jobComboBox.setCurrentText("job_01")
+    assert os.path.isdir(os.path.join(work_area.local, "S1", "job_01", thumbnails.FOLDER_NAME))
+    assert player.sidebar.count() == 1
+    assert dialogs.errors() == []
