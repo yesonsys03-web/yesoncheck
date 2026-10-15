@@ -977,6 +977,10 @@ QSlider::add-page:horizontal {
         self.sidebar = QListWidget(); self.sidebar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.sidebar.setSelectionMode(QListWidget.ExtendedSelection)
         self.sidebar.itemClicked.connect(self.on_sidebar_item_clicked)
+        # 목록을 비울 때(job 바꿈·폴더 불러오기·끌어다 놓기 — clear()는 모델을 초기화함)마다 1씩: 이벤트를 처리하며 썸네일을
+        # 만드는 반복은 이 값이 바뀌면 멈춤 (지워진 항목을 쓰지 않고, 예전 목록의 영상을 계속 만들지 않게)
+        self._sidebar_generation = 0
+        self.sidebar.model().modelAboutToBeReset.connect(self._bump_sidebar_generation)
         self.sidebar.installEventFilter(self)
         self.sidebar.setContextMenuPolicy(Qt.CustomContextMenu)
         self.sidebar.customContextMenuRequested.connect(self.show_sidebar_context_menu)

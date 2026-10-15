@@ -410,10 +410,15 @@ class PlayerSidebarMixin:
         # 항목마다 지금의 썸네일 자리를 기억 (이미 목록에 있는 영상이면 그 항목의 자리)
         items = self._add_sidebar_videos(
             [(os.path.basename(file_path), file_path) for file_path in file_paths if os.path.exists(file_path)])
-        # 썸네일 모드인 경우 썸네일 생성
+        # 썸네일 모드인 경우 썸네일 생성. 영상·자리를 미리 꺼내 둠: 만드는 동안 이벤트를 처리하므로 목록이 바뀌면
+        # (job·폴더를 바꿈) 항목이 지워짐 → 그때는 멈춤
         if self.is_thumbnail_mode:
-            for item in items:
-                self.generate_thumbnail(item.data(Qt.UserRole), item)
+            generation = self._sidebar_generation
+            for file_path, context in [(item.data(Qt.UserRole), item.data(THUMBNAIL_CONTEXT_ROLE)) for item in items]:
+                if self._sidebar_generation != generation:
+                    print("사이드바 목록이 바뀌어(job·폴더를 바꿈) 넣은 영상의 썸네일 만들기를 멈춤")
+                    break
+                self.generate_thumbnail(file_path, context=context)
         
         if file_paths:
             QMessageBox.information(self, "완료", f"{len(file_paths)}개의 파일이 사이드바에 추가되었습니다.")
@@ -519,16 +524,23 @@ class PlayerSidebarMixin:
 
             print(f"선택된 {len(selected_items)}개 파일의 썸네일 재생성을 시작합니다.")
 
-            for i, item in enumerate(selected_items):
+            # 이벤트를 처리하는 동안 목록이 바뀌면(job·폴더를 바꿈) 항목이 지워지므로 경로를 미리 꺼내 두고, 항목은 목록이
+            # 그대로인지 확인한 뒤에만 씀
+            generation = self._sidebar_generation
+            stopped = False
+            for i, (file_path, item) in enumerate([(item.toolTip(), item) for item in selected_items]):
                 if progress_dialog.wasCanceled():
                     print("썸네일 재생성이 취소되었습니다.")
                     break
 
-                file_path = item.toolTip()
                 if file_path and os.path.isfile(file_path):
-                    # 진행 상황 업데이트
+                    # 진행 상황 업데이트 (모달 진행 창의 setValue는 이벤트를 처리함)
                     progress_dialog.setLabelText(f"재생성 중: {os.path.basename(file_path)}")
                     progress_dialog.setValue(i)
+                    if self._sidebar_generation != generation:
+                        print("사이드바 목록이 바뀌어(job·폴더를 바꿈) 썸네일 재생성을 멈춤")
+                        stopped = True
+                        break
                     
                     # 기존 썸네일 삭제 (이 항목의 썸네일 폴더에서)
                     self.delete_thumbnail_file(file_path, item)
@@ -540,6 +552,8 @@ class PlayerSidebarMixin:
                 QApplication.processEvents()
 
             progress_dialog.setValue(len(selected_items))
+            if stopped:
+                return
             QMessageBox.information(self, "완료", f"{len(selected_items)}개 파일의 썸네일 재생성이 완료되었습니다.")
 
         except Exception as e:
@@ -1952,7 +1966,10 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         """모든 사이드바 아이템에 대해 썸네일을 생성합니다."""
         print(f"모든 아이템 썸네일 생성 시작: {self.sidebar.count()}개 아이템")
         self.cleanup_thumbnail_workers()
-        # 첫 번째 단계에서 새로 만들 영상을 정해 두고 두 번째 단계는 그 목록만 (NAS에서 다시 확인하지 않음)
+        # 이벤트를 처리하며 만드는 동안 목록이 바뀌면(job·폴더를 바꿈) 예전 목록의 나머지는 만들지 않고 멈춤
+        generation = self._sidebar_generation
+        # 첫 번째 단계에서 새로 만들 영상(과 그 자리)을 정해 두고 두 번째 단계는 그 목록만 (NAS에서 다시 확인하지 않고,
+        # 지워졌을 수 있는 항목도 쓰지 않음)
         to_generate = self._apply_disk_thumbnails()
         new_generation_count = len(to_generate)
         print(f"썸네일 처리 완료: 캐시 사용 {self.sidebar.count() - new_generation_count}개, 새 생성 {new_generation_count}개")
@@ -1973,11 +1990,18 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             for batch_start in range(0, new_generation_count, batch_size):
                 batch = to_generate[batch_start:batch_start + batch_size]
                 print(f"배치 처리: {batch_start+1}-{batch_start + len(batch)}/{new_generation_count}")
-                for file_path, item in batch:
-                    self.generate_thumbnail(file_path, item)
+                for file_path, context in batch:
+                    if self._sidebar_generation != generation:
+                        break
+                    self.generate_thumbnail(file_path, context=context)
                     generated_count += 1
                     self.thumbnailProgressBar.setValue(generated_count)
                     QApplication.processEvents()
+                if self._sidebar_generation != generation:
+                    print(f"사이드바 목록이 바뀌어(job·폴더를 바꿈) 예전 목록의 썸네일 만들기를 멈춤 "
+                          f"({generated_count}/{new_generation_count}개에서)")
+                    self.thumbnailProgressBar.setFormat('썸네일 생성 멈춤 (목록이 바뀜)')
+                    return
                 QApplication.processEvents()
                 import time
                 time.sleep(0.2)
@@ -2065,6 +2089,10 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         except Exception as e:
             print(f"백그라운드 스레드 정리 중 오류: {e}")
 
+    def _bump_sidebar_generation(self):
+        """사이드바 목록을 비움(clear → 모델 초기화): 썸네일을 만드는 반복이 지워진 항목을 쓰지 않고 멈추게 세대를 올림."""
+        self._sidebar_generation += 1
+
     def _new_item_thumbnail_context(self, file_path):
         """지금 사이드바에 넣는 영상의 썸네일 자리: 지금의 썸네일 폴더·폴더 문제·'화면에만' 상태.
 
@@ -2147,12 +2175,17 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
 
     def _apply_disk_thumbnails(self):
         """사이드바 영상마다 그 항목의 썸네일 폴더에 있는 썸네일(영상보다 새것)을 바로 적용하고, 새로 만들어야 할
-        [(영상, 항목)]을 돌려줌. 항목 자리의 미뤄 둔 썸네일 폴더 문제는 여기서 창으로 ((폴더, 제목)마다 한 번).
+        [(영상, 그 항목의 자리)]를 돌려줌. 항목 자리의 미뤄 둔 썸네일 폴더 문제는 여기서 창으로 ((폴더, 제목)마다 한 번).
 
         새로 만들 것: 썸네일이 없거나, 영상보다 오래됐거나, 영상보다 새것이지만 읽을 수 없는(깨진) 썸네일, 화면에만인 항목.
+        캐시 적용이 이벤트를 처리하는 동안 목록이 바뀌면(job·폴더를 바꿈) 거기서 멈춤.
         """
+        generation = self._sidebar_generation
         to_generate = []
         for i in range(self.sidebar.count()):
+            if self._sidebar_generation != generation:
+                print("사이드바 목록이 바뀌어(job·폴더를 바꿈) 썸네일 확인을 멈춤")
+                break
             item = self.sidebar.item(i)
             if item is None:
                 continue  # None인 경우 건너뛰기
@@ -2177,7 +2210,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 print(f"디스크 썸네일을 읽을 수 없어 새로 만듦: {file_path}")
             else:
                 print(f"새 썸네일 생성 예정: {file_path}")
-            to_generate.append((file_path, item))
+            to_generate.append((file_path, context))
         return to_generate
 
     def _video_is_available(self, file_path, context):
@@ -2249,17 +2282,21 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             )
             return False
 
-    def generate_thumbnail(self, file_path, item=None):
+    def generate_thumbnail(self, file_path, item=None, context=None):
         """영상 하나의 썸네일: 그 항목의 썸네일 자리(ThumbnailContext)에서 읽거나 만들어 저장 (폴더가 없는 자리면 화면에만).
 
-        item: 사이드바 항목 (없으면 경로로 찾고, 사이드바에 없는 영상이면 지금 상태의 자리).
+        context: 미리 꺼내 둔 그 항목의 자리 (반복에서 — 이벤트를 처리하는 동안 항목이 지워질 수 있음). 없으면 item의 자리,
+        item도 없으면 경로로 찾고, 사이드바에 없는 영상이면 지금 상태의 자리. 아이콘은 경로로 찾아 붙임.
+        다른 썸네일을 기다리는 동안 목록이 바뀌면(job·폴더를 바꿈) 만들지 않음.
         """
         import time
         print(f"썸네일 생성 시작: {file_path}")
+        generation = self._sidebar_generation
         
-        if item is None:
-            item = self._sidebar_item_for(file_path)
-        context = self._item_thumbnail_context(item, file_path)
+        if context is None:
+            if item is None:
+                item = self._sidebar_item_for(file_path)
+            context = self._item_thumbnail_context(item, file_path)
         if context.pending_base is not None:
             # 썸네일 폴더를 아직 정하지 않음 (예: 처음 끌어다 놓은 파일 — 예전의 드래그한 폴더·영상 폴더): 영상이 있을 때만 만듦
             if not self._video_is_available(file_path, context):
@@ -2297,6 +2334,9 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             time.sleep(0.2)  # 대기 시간을 늘려서 메모리 부하 감소
             # 완료된 워커들 정리
             self.cleanup_thumbnail_workers()
+        if self._sidebar_generation != generation:
+            print(f"사이드바 목록이 바뀌어(job·폴더를 바꿈) 이 영상의 썸네일은 만들지 않음: {file_path}")
+            return False
 
         # 워커 생성 (썸네일 폴더가 없으면 저장하지 않고 화면에만)
         worker = ThumbnailWorker(file_path, self.thumbnail_size, thumbnail_folder)

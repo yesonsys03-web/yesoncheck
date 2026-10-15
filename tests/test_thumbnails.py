@@ -1093,3 +1093,65 @@ def test_duplicate_video_keeps_its_thumbnail_context(new_player, dialogs, work_a
     turn_on_thumbnail_mode(player)
     assert os.listdir(dropped_thumbs) == []
     assert thumbnail_warnings(dialogs) == []
+
+
+@pytest.mark.parametrize("how", ["thumbnail_mode", "add_files", "regenerate"])
+def test_switching_job_during_thumbnail_loop_stops_cleanly(new_player, dialogs, work_area, tmp_path, monkeypatch, how):
+    """썸네일을 만드는 동안(이벤트 처리 중) 다른 job을 고르면 예전 목록의 항목이 지워짐 → 예외·오류 창 없이 멈추고,
+    예전 목록의 나머지는 만들지 않으며 새 job 폴더에 쓰지 않음 (리뷰어 재현 F1: RuntimeError … QListWidgetItem has been deleted)."""
+    from PyQt5.QtCore import QTimer
+
+    for name in ("a", "b", "c"):
+        write_test_video(os.path.join(work_area.local, "S1", "job_01", "scene-001", "frames", f"{name}.mov"))
+    write_test_video(os.path.join(work_area.local, "S1", "job_02", "scene-001", "frames", "d.mov"))
+    player = new_player(make_config(work_area.local, {"SMOKE": work_area.stored}, work_area.path_map))
+    player.workComboBox.setCurrentText("SMOKE")
+    player.seasonComboBox.setCurrentText("S1")
+    player.jobComboBox.setCurrentText("job_01")
+    old_thumbs = player.current_thumbnail_folder
+    if how != "thumbnail_mode":
+        turn_on_thumbnail_mode(player)  # job_01의 썸네일을 먼저 다 만들어 둠
+    if how == "add_files":
+        extra = [write_test_video(str(tmp_path / "extra" / f"{name}.mov")) for name in ("e", "f", "g")]
+    old_videos = [player.sidebar.item(i).data(Qt.UserRole) for i in range(player.sidebar.count())]
+    if how == "add_files":
+        old_videos += extra
+    errors = []
+    monkeypatch.setattr(sys, "excepthook", lambda *exc: errors.append(exc))  # 슬롯 안에서 난 예외도 기록
+    real_generate = player.generate_thumbnail
+    calls = []
+
+    def generate_then_switch_job(*args, **kwargs):
+        if not calls:  # 첫 썸네일을 만드는 중에 사용자가 다른 job을 고름
+            QTimer.singleShot(0, lambda: player.jobComboBox.setCurrentText("job_02"))
+        calls.append(args[0])
+        return real_generate(*args, **kwargs)
+
+    monkeypatch.setattr(player, "generate_thumbnail", generate_then_switch_job)
+    import yesoncheck.player_sidebar as sidebar_module
+
+    real_worker = sidebar_module.ThumbnailWorker
+    started = []
+
+    def counting_worker(file_path, *args):
+        started.append(file_path)
+        return real_worker(file_path, *args)
+
+    monkeypatch.setattr(sidebar_module, "ThumbnailWorker", counting_worker)
+    if how == "thumbnail_mode":
+        player.switch_to_thumbnail_mode()
+    elif how == "add_files":
+        player.add_files_to_sidebar(extra)
+    else:
+        player.sidebar.selectAll()
+        player.regenerate_selected_thumbnails()
+    wait_until(lambda: not player.thumbnail_workers)
+    QApplication.processEvents()
+
+    assert errors == []
+    assert dialogs.errors() == []
+    assert [os.path.basename(player.sidebar.item(i).data(Qt.UserRole)) for i in range(player.sidebar.count())] == ["d.mov"]
+    new_thumbs = player.current_thumbnail_folder
+    assert not os.path.samefile(new_thumbs, old_thumbs)
+    assert not any(os.path.exists(thumbnails.thumbnail_path(new_thumbs, video)) for video in old_videos)
+    assert len(started) == 1  # 예전 목록은 처음 것만: 바뀐 뒤로는 워커를 띄우지 않음 (기다리던 것도 만들지 않음)
