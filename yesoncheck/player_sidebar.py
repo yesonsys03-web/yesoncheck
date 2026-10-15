@@ -2114,23 +2114,35 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         """영상들을 사이드바에 넣음 — entries: [(표시 이름, 경로)] → 넣은 항목 목록.
 
         항목마다 썸네일 자리(ThumbnailContext)를 지금 상태로 기억. 이미 목록에 있는 영상이면 그 항목의 자리를 그대로 씀.
+        다만 그 자리에 썸네일 폴더가 없고(화면에만·폴더 문제·아직 정하지 않음) 지금 자리에는 폴더가 있으면(예: 그 영상의
+        폴더를 끌어다 놓음) 지금 자리를 쓰고 원래 항목도 그 자리로 올림. 폴더가 정해진 자리는 다른 폴더로 바꾸지 않음.
         """
-        known = {}
+        known = {}  # path_key → [자리, 그 영상의 항목들]
         for i in range(self.sidebar.count()):
             item = self.sidebar.item(i)
             if item is not None and item.data(Qt.UserRole):
-                known.setdefault(paths.path_key(item.data(Qt.UserRole)), item.data(THUMBNAIL_CONTEXT_ROLE))
+                entry = known.setdefault(paths.path_key(item.data(Qt.UserRole)), [item.data(THUMBNAIL_CONTEXT_ROLE), []])
+                entry[1].append(item)
         added = []
         for label, file_path in entries:
             key = paths.path_key(file_path)
-            context = known.get(key)
-            if context is None:
-                context = known[key] = self._new_item_thumbnail_context(file_path)
+            context = self._new_item_thumbnail_context(file_path)
+            entry = known.get(key)
+            if entry is None:
+                entry = known[key] = [context, []]
+            elif entry[0] is not None and (entry[0].folder or not context.folder):
+                context = entry[0]  # 이미 있는 영상: 그 항목의 자리
+            else:
+                print(f"이미 목록에 있는 영상의 썸네일을 이제 이 폴더에: {context.folder} ({file_path})")
+                for existing in entry[1]:
+                    existing.setData(THUMBNAIL_CONTEXT_ROLE, context)
+                entry[0] = context
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, file_path)  # 파일 경로를 UserRole에 저장
             item.setData(THUMBNAIL_CONTEXT_ROLE, context)
             item.setToolTip(file_path)  # toolTip도 설정하여 기존 코드와 호환
             self.sidebar.addItem(item)
+            entry[1].append(item)
             added.append(item)
         return added
 

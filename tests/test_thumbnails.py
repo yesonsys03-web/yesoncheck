@@ -1080,8 +1080,9 @@ def test_background_loader_reads_each_video_thumbnail_folder(new_player, dialogs
     assert sorted(loaded) == [("a.mov", 7), ("c.mov", 9)]
 
 
-def test_duplicate_video_keeps_its_thumbnail_context(new_player, dialogs, work_area, tmp_path, monkeypatch):
-    """이미 목록에 있는 영상을 다시 넣으면(그 job 폴더를 끌어다 놓음) 원래 항목의 자리(여기서는 화면에만)를 그대로 씀."""
+def test_dropped_folder_upgrades_duplicate_without_folder(new_player, dialogs, work_area, tmp_path, monkeypatch):
+    """화면에만인 목록(job을 고르지 않음)의 영상이 든 폴더(TJS_921)를 끌어다 놓으면 그 영상은 이제 그 폴더에 저장 —
+    새 항목도 원래 항목도 (재검토 F3). 한 번만 만들고 두 항목 모두 아이콘, 창 없음."""
     player, _works = open_tjs_work(new_player, work_area, monkeypatch)
     a = listed_path(player, "a.mov")
     job_folder = os.path.dirname(a)  # 앱이 쓰는 경로
@@ -1090,9 +1091,27 @@ def test_duplicate_video_keeps_its_thumbnail_context(new_player, dialogs, work_a
     dropped_thumbs = player.current_thumbnail_folder
     assert os.path.samefile(dropped_thumbs, os.path.join(job_folder, thumbnails.FOLDER_NAME))
 
+    started = record_worker_starts(monkeypatch)
     turn_on_thumbnail_mode(player)
-    assert os.listdir(dropped_thumbs) == []
+    assert started == [a]
+    assert os.path.isfile(thumbnails.thumbnail_path(dropped_thumbs, a))
+    assert all(not player.sidebar.item(i).icon().isNull() for i in range(2))
     assert thumbnail_warnings(dialogs) == []
+
+
+def test_folder_context_not_replaced_by_later_drop(new_player, dialogs, work_area, tmp_path, monkeypatch):
+    """썸네일 폴더가 정해진 영상은 나중에 다른 폴더(작품 폴더 works)를 끌어다 놓아 또 들어와도 먼저 정한 job 폴더를 씀."""
+    player, _works = open_tjs_work(new_player, work_area, monkeypatch, job="TJS_921")
+    job_thumbs = player.current_thumbnail_folder
+    a = listed_path(player, "a.mov")
+    drop_folder(player, "sidebar", os.path.dirname(os.path.dirname(a)))  # 앱이 쓰는 작품 폴더 경로
+    assert player.sidebar.count() == 2
+    works_thumbs = player.current_thumbnail_folder
+    assert not os.path.samefile(works_thumbs, job_thumbs)
+
+    turn_on_thumbnail_mode(player)
+    assert os.path.isfile(thumbnails.thumbnail_path(job_thumbs, a))
+    assert not os.path.exists(thumbnails.thumbnail_path(works_thumbs, a))
 
 
 def record_worker_starts(monkeypatch):
