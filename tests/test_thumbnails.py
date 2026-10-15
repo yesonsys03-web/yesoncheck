@@ -12,6 +12,7 @@ import sys
 import time
 
 import pytest
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication
 
 from yesoncheck import paths, thumbnails
@@ -834,7 +835,9 @@ def test_unreadable_videos_without_thumbnail_folder_one_dialog(new_player, dialo
     player = new_player(make_config(work_area.local, {"TJS_Animatic": work_area.stored + "/works"}, work_area.path_map))
     player.workComboBox.setCurrentText("TJS_Animatic")
     assert player.sidebar.count() == 3 and player.current_thumbnail_folder is None
-    stat_fails_under(monkeypatch, works, (TimeoutError, errno.ETIMEDOUT, "Operation timed out"))
+    # 앱이 보는 경로로 끊김을 흉내 냄 (Windows CI: 파일은 로컬 경로로 만들었지만 앱은 변환표의 UNC로 목록을 만듦)
+    listed_works = os.path.dirname(os.path.dirname(player.sidebar.item(0).data(Qt.UserRole)))
+    stat_fails_under(monkeypatch, listed_works, (TimeoutError, errno.ETIMEDOUT, "Operation timed out"))
     player.switch_to_thumbnail_mode()
     warnings = thumbnail_warnings(dialogs)
     assert [title for title, _text in warnings] == [VIDEO_PROBLEM]
