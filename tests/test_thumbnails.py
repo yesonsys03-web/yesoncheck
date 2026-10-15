@@ -551,3 +551,57 @@ def test_job_chmod_failure_keeps_folder_and_reports_on_use(new_player, dialogs, 
     warnings = thumbnail_warnings(dialogs)
     assert [title for title, _text in warnings] == [FOLDER_PROBLEM]
     assert "권한을 바꾸지 못했" in warnings[0][1] and "Operation not permitted" in warnings[0][1]
+
+
+def test_unreadable_thumbnail_folder_does_not_break_thumbnail_mode(new_player, dialogs, tmp_path, monkeypatch):
+    """썸네일 파일을 확인하지 못하면(권한 등) 썸네일 모드가 멈추지 않음 → "썸네일 폴더 문제" 창 한 번, 새로 만듦."""
+    videos = [write_test_video(str(tmp_path / "job" / f"{name}.mov")) for name in ("a", "b")]
+    player = new_player(make_config(str(tmp_path), {}))
+    player.add_files_to_sidebar(videos)
+    folder = thumbnails.ensure_folder(str(tmp_path / "job"))
+    player.current_thumbnail_folder = folder
+    real_getmtime = os.path.getmtime
+
+    def thumbnails_unreadable(path):
+        if str(path).endswith(".jpg"):
+            raise PermissionError(errno.EACCES, "Permission denied", path)
+        return real_getmtime(path)
+
+    monkeypatch.setattr(thumbnails.os.path, "getmtime", thumbnails_unreadable)
+    player.generate_thumbnails_for_all_items()
+    wait_until(lambda: not player.thumbnail_workers)
+    QApplication.processEvents()
+    warnings = thumbnail_warnings(dialogs)
+    assert [title for title, _text in warnings] == [FOLDER_PROBLEM]
+    assert "확인하지 못해" in warnings[0][1] and "Permission denied" in warnings[0][1]
+    assert all(not player.sidebar.item(i).icon().isNull() for i in range(player.sidebar.count()))
+    assert all(os.path.isfile(thumbnails.thumbnail_path(folder, video)) for video in videos)
+
+
+def test_video_removed_during_check_is_skipped(new_player, dialogs, tmp_path, monkeypatch):
+    """목록을 만든 뒤 영상이 없어지면(isfile 다음) 그 영상만 건너뜀 (예외도 창도 없음)."""
+    gone = write_test_video(str(tmp_path / "job" / "a.mov"))
+    kept = write_test_video(str(tmp_path / "job" / "b.mov"))
+    player = new_player(make_config(str(tmp_path), {}))
+    player.add_files_to_sidebar([gone, kept])
+    folder = thumbnails.ensure_folder(str(tmp_path / "job"))
+    player.current_thumbnail_folder = folder
+    assert red_pixmap().save(thumbnails.thumbnail_path(folder, gone), "JPG")  # 영상의 수정 시각까지 확인하게
+    real_getmtime = os.path.getmtime
+
+    def removed_while_checking(path):
+        if path == gone and os.path.exists(gone):
+            os.remove(gone)
+        return real_getmtime(path)
+
+    monkeypatch.setattr(thumbnails.os.path, "getmtime", removed_while_checking)
+    player.generate_thumbnails_for_all_items()
+    wait_until(lambda: not player.thumbnail_workers)
+    QApplication.processEvents()
+    assert thumbnail_warnings(dialogs) == []
+    assert not player.sidebar.item(1).icon().isNull()  # b는 만듦
+    from PyQt5.QtGui import QPixmap
+
+    assert QPixmap(thumbnails.thumbnail_path(folder, gone)).width() == 7  # a는 건드리지 않음
+    assert player.generate_thumbnail(gone) is False
+    assert player.thumbnail_workers == []

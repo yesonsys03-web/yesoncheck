@@ -118,8 +118,14 @@ class ThumbnailWorker(QThread):
             if self.thumbnail_folder:
                 thumbnail_path = thumbnails.thumbnail_path(self.thumbnail_folder, self.file_path)
 
-                # 영상보다 새 썸네일이 있으면 그대로 씀 (영상이 바뀌었으면 새로 만들어 바꿈)
-                if thumbnails.is_fresh(thumbnail_path, self.file_path):
+                # 영상보다 새 썸네일이 있으면 그대로 씀 (영상이 바뀌었으면 새로 만들어 바꿈).
+                # 확인하지 못하면(썸네일 권한 등 — 사이드바가 창으로 알림) 새로 만듦. 영상이 없으면 아래에서 열지 못함
+                try:
+                    fresh = thumbnails.is_fresh(thumbnail_path, self.file_path)
+                except OSError as exc:
+                    print(f"썸네일을 확인하지 못해 새로 만듦: {thumbnail_path}\n{type(exc).__name__}: {exc}")
+                    fresh = False
+                if fresh:
                     print(f"기존 썸네일 발견: {thumbnail_path}")
                     pixmap = QPixmap(thumbnail_path)
                     if not pixmap.isNull():

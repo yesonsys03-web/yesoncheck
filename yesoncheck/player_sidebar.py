@@ -2080,7 +2080,10 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             file_path = item.data(Qt.UserRole)
             if not file_path or not os.path.isfile(file_path):
                 continue
-            if self._has_disk_thumbnail(file_path):
+            fresh = self._has_disk_thumbnail(file_path)
+            if fresh is None:
+                continue  # 그사이 영상이 없어짐
+            if fresh:
                 pixmap = QPixmap(thumbnails.thumbnail_path(self.current_thumbnail_folder, file_path))
                 if not pixmap.isNull():
                     print(f"캐시된 썸네일 즉시 적용: {file_path}")
@@ -2093,10 +2096,27 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         return to_generate
 
     def _has_disk_thumbnail(self, file_path):
-        """디스크에 영상보다 새 썸네일이 있는지 확인합니다 (영상이 바뀌었으면 False → 새로 만듦)."""
+        """디스크에 영상보다 새 썸네일이 있는지 확인합니다 (영상이 바뀌었으면 False → 새로 만듦).
+
+        그사이 영상이 없어졌으면 None (건너뜀). 썸네일 파일을 확인하지 못하면(권한 등) 창으로 알리고(폴더마다 한 번)
+        False → 새로 만듦.
+        """
         if not self.current_thumbnail_folder:
             return False
-        return thumbnails.is_fresh(thumbnails.thumbnail_path(self.current_thumbnail_folder, file_path), file_path)
+        thumbnail_path = thumbnails.thumbnail_path(self.current_thumbnail_folder, file_path)
+        try:
+            return thumbnails.is_fresh(thumbnail_path, file_path)
+        except OSError as e:
+            if not os.path.isfile(file_path):
+                print(f"영상이 없어져 썸네일을 건너뜀: {file_path} ({type(e).__name__}: {e})")
+                return None
+            self._report_thumbnail_problem(
+                self.current_thumbnail_folder,
+                THUMBNAIL_FOLDER_PROBLEM,
+                "썸네일 파일을 확인하지 못해 새로 만듭니다.\n"
+                f"썸네일 파일: {thumbnail_path}\n이유: {type(e).__name__}: {e}",
+            )
+            return False
 
     def generate_thumbnail(self, file_path):
         import time
@@ -2136,8 +2156,11 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         # 디스크에 저장된 썸네일 확인 (영상보다 오래된 썸네일은 워커가 새로 만들어 바꿈)
         if self.current_thumbnail_folder:
             thumbnail_path = thumbnails.thumbnail_path(self.current_thumbnail_folder, file_path)
+            fresh = self._has_disk_thumbnail(file_path)
+            if fresh is None:
+                return False  # 그사이 영상이 없어짐
             
-            if thumbnails.is_fresh(thumbnail_path, file_path):
+            if fresh:
                 print(f"디스크에서 썸네일 로드: {thumbnail_path}")
                 pixmap = QPixmap(thumbnail_path)
                 if not pixmap.isNull():
