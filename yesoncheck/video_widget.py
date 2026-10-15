@@ -334,11 +334,15 @@ class CustomVideoWidget(QGraphicsView):
             if has_folder:
                 # 폴더가 포함된 경우: 기존 사이드바 초기화 후 모든 파일을 사이드바에 추가하고 첫 번째 파일을 Video A에 로드
                 if video_files:
+                    # 첫 폴더의 썸네일 폴더를 씀 (전에 고른 job·폴더가 아니라)
+                    parent._use_dropped_folder_for_thumbnails(folder_paths[0])
                     # 기존 사이드바 리스트 초기화
                     parent.sidebar.clear()
                     parent.add_files_to_sidebar(video_files)
                     # 첫 번째 파일을 Video A에 로드
                     parent.open_file('A', video_files[0])
+                    # 백그라운드 로딩 스케줄링
+                    parent.schedule_background_thumbnail_loading()
                     QMessageBox.information(parent, "폴더 로드 완료", f"{len(video_files)}개의 비디오 파일이 사이드바에 추가되었습니다.\n첫 번째 파일이 Video A에 로드되었습니다.")
                 else:
                     QMessageBox.warning(parent, "경고", "폴더에 지원되는 비디오 파일이 없습니다.")

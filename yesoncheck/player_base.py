@@ -65,7 +65,7 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck.video_widget import CustomVideoWidget
-from yesoncheck import external_tools, image_io, paths, shared_config, thumbnails, timing_log
+from yesoncheck import external_tools, image_io, paths, shared_config, timing_log
 from yesoncheck.slider_style import jump_to_click
 from yesoncheck.window_layout import ElidedLabel, InfoRowLayout, VerticalScrollArea, startup_geometry
 # 무거운 모듈들은 lazy import로 변경 (실제 사용 시점에만 로드)
@@ -1489,16 +1489,8 @@ QSlider::add-page:horizontal {
                 if video_files:
                     # 폴더가 포함된 경우 썸네일 폴더 설정
                     if folder_paths:
-                        # 첫 번째 폴더를 기준으로 썸네일 폴더 설정
-                        self.selected_folder_path = folder_paths[0]
-                        print(f"드래그앤드롭으로 썸네일 폴더 설정: {self.selected_folder_path}")
-                        
-                        # 드래그앤드롭 시 직접 썸네일 폴더 생성 (전에 연 job의 썸네일 폴더 문제는 이제 상관없음)
-                        self._thumbnail_folder_problem = None
-                        self._thumbnail_memory_only = False
-                        thumbnail_folder = thumbnails.ensure_folder(folder_paths[0])
-                        self.current_thumbnail_folder = thumbnail_folder
-                        print(f"드래그앤드롭으로 썸네일 폴더 설정: {thumbnail_folder}")
+                        # 첫 번째 폴더를 기준으로 썸네일 폴더 설정 (전에 고른 job·폴더가 아니라)
+                        self._use_dropped_folder_for_thumbnails(folder_paths[0])
                     
                     self.add_files_to_sidebar(video_files)
                     

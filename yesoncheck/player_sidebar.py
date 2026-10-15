@@ -352,16 +352,8 @@ class PlayerSidebarMixin:
             if has_folder:
                 # 폴더가 포함된 경우: 기존 사이드바 초기화 후 모든 파일을 사이드바에 추가하고 첫 번째 파일을 Video A에 로드
                 if video_files:
-                    # 폴더 경로를 selected_folder_path로 설정 (썸네일 폴더 생성용)
-                    parent.selected_folder_path = folder_paths[0]
-                    print(f"메인 윈도우 드래그앤드롭으로 썸네일 폴더 설정: {parent.selected_folder_path}")
-                    
-                    # 드래그앤드롭 시 직접 썸네일 폴더 생성 (전에 연 job의 썸네일 폴더 문제는 이제 상관없음)
-                    parent._thumbnail_folder_problem = None
-                    parent._thumbnail_memory_only = False
-                    thumbnail_folder = thumbnails.ensure_folder(folder_paths[0])
-                    parent.current_thumbnail_folder = thumbnail_folder
-                    print(f"메인 윈도우 드래그앤드롭으로 썸네일 폴더 설정: {thumbnail_folder}")
+                    # 첫 폴더의 썸네일 폴더를 씀 (전에 고른 job·폴더가 아니라)
+                    parent._use_dropped_folder_for_thumbnails(folder_paths[0])
                     
                     # 기존 사이드바 리스트 초기화
                     parent.sidebar.clear()
@@ -2252,6 +2244,25 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         self.thumbnail_workers.append(worker)
         worker.start()
         print(f"썸네일 워커 시작: {file_path}, 현재 워커 수: {len(self.thumbnail_workers)}")
+
+    def _use_dropped_folder_for_thumbnails(self, folder_path):
+        """끌어다 놓은 폴더(여러 개면 첫 폴더)의 썸네일은 그 폴더의 썸네일 폴더에 (전에 고른 job·폴더가 아니라).
+
+        영상 영역·사이드바·창 어디에 끌어다 놓아도 같음. 전에 연 job의 썸네일 폴더 문제·'화면에만' 상태는 이제 상관없음.
+        썸네일 폴더를 만들지 못하면 job 폴더처럼 기억만 하고(화면에만, 창은 썸네일을 쓸 때) 예외는 올리지 않음.
+        """
+        # 폴더 경로를 selected_folder_path로 설정 (썸네일 폴더 생성용)
+        self.selected_folder_path = folder_path
+        print(f"드래그앤드롭으로 썸네일 폴더 설정: {folder_path}")
+        self._thumbnail_folder_problem = None
+        self._thumbnail_memory_only = False
+        try:
+            self.current_thumbnail_folder = thumbnails.ensure_folder(folder_path)
+        except OSError as e:
+            self.current_thumbnail_folder = None
+            self._remember_thumbnail_folder_problem(os.path.join(folder_path, thumbnails.FOLDER_NAME), e)
+            return
+        print(f"드래그앤드롭으로 썸네일 폴더 설정: {self.current_thumbnail_folder}")
 
     def _remember_thumbnail_folder_problem(self, folder, error):
         """썸네일 폴더를 만들지 못함 → 이 작업의 썸네일은 저장하지 않고 화면에만 (다른 폴더로 대신하지 않음).

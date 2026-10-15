@@ -842,3 +842,102 @@ def test_unreadable_videos_without_thumbnail_folder_one_dialog(new_player, dialo
     warnings = thumbnail_warnings(dialogs)
     assert [title for title, _text in warnings] == [VIDEO_PROBLEM]
     assert "Operation timed out" in warnings[0][1] and "TJS_921" in warnings[0][1]
+
+
+def drop_folder(player, target, folder):
+    """폴더를 실제 QDropEvent로 끌어다 놓음. target: "video"(영상 영역 CustomVideoWidget) 또는 "sidebar"(사이드바 eventFilter)."""
+    from PyQt5.QtCore import QMimeData, QPointF, QUrl
+    from PyQt5.QtGui import QDropEvent
+
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(str(folder))])
+    event = QDropEvent(QPointF(5, 5), Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier)
+    if target == "video":
+        player.videoWidget.dropEvent(event)
+    else:
+        assert player.eventFilter(player.sidebar, event) is True
+
+
+def open_smoke_work(new_player, work_area, monkeypatch, select_job):
+    """작품 SMOKE·시즌 S1을 고르고 select_job이면 job_01까지 (북마크 파일은 쓰지 않게 가짜로)."""
+    write_test_video(os.path.join(work_area.local, "S1", "job_01", "scene-001", "frames", "a.mov"))
+    player = new_player(make_config(work_area.local, {"SMOKE": work_area.stored}, work_area.path_map))
+    monkeypatch.setattr(player, "save_bookmarks", lambda: None)
+    player.workComboBox.setCurrentText("SMOKE")
+    player.seasonComboBox.setCurrentText("S1")
+    if select_job:
+        player.jobComboBox.setCurrentText("job_01")
+        assert player.current_thumbnail_folder
+    else:
+        assert player._thumbnail_memory_only
+    return player
+
+
+def listed_path(player, name):
+    """사이드바 항목이 가진(앱이 쓰는) 영상 경로."""
+    found = [player.sidebar.item(i).data(Qt.UserRole) for i in range(player.sidebar.count())
+             if os.path.basename(player.sidebar.item(i).data(Qt.UserRole)) == name]
+    assert len(found) == 1, found
+    return found[0]
+
+
+@pytest.mark.parametrize("select_job", [True, False], ids=["after_job", "no_job"])
+@pytest.mark.parametrize("target", ["video", "sidebar"])
+def test_dropped_folder_thumbnails_saved_in_that_folder(new_player, dialogs, work_area, tmp_path, monkeypatch,
+                                                        target, select_job):
+    """끌어다 놓은 폴더의 썸네일은 그 폴더의 .yesoncheck_thumb에 (전에 고른 job 폴더나 '화면에만'이 아니라).
+
+    사용자 보고 N3: 영상 영역에 폴더를 끌어다 놓으면 썸네일 폴더를 정하지 않아 전에 고른 job 폴더에 저장됐음.
+    """
+    player = open_smoke_work(new_player, work_area, monkeypatch, select_job)
+    job_thumbs = player.current_thumbnail_folder  # 앱이 쓰는 경로 (job을 고르지 않았으면 None)
+    job_before = os.listdir(job_thumbs) if job_thumbs else None
+    dropped = tmp_path / "X_dropped"
+    write_test_video(str(dropped / "c.mov"))
+
+    drop_folder(player, target, dropped)
+    assert os.path.samefile(player.current_thumbnail_folder, dropped / thumbnails.FOLDER_NAME)
+    player.switch_to_thumbnail_mode()
+    wait_until(lambda: not player.thumbnail_workers)
+    QApplication.processEvents()
+
+    assert os.path.isfile(thumbnails.thumbnail_path(player.current_thumbnail_folder, listed_path(player, "c.mov")))
+    if job_thumbs:
+        assert os.listdir(job_thumbs) == job_before
+    else:
+        for root, dirs, _files in os.walk(os.path.join(work_area.local, "S1")):
+            assert thumbnails.FOLDER_NAME not in dirs, root
+    assert thumbnail_warnings(dialogs) == []
+
+
+@pytest.mark.parametrize("target", ["video", "sidebar"])
+def test_dropped_folder_thumbnail_folder_failure(new_player, dialogs, work_area, tmp_path, monkeypatch, target):
+    """끌어다 놓은 폴더의 썸네일 폴더를 만들지 못해도 예외·창 없이 받아들이고, 썸네일 모드에서 "썸네일 폴더 문제" 한 번.
+    썸네일은 화면에만 (전에 고른 job 폴더에 저장하지 않음)."""
+    player = open_smoke_work(new_player, work_area, monkeypatch, select_job=True)
+    job_thumbs = player.current_thumbnail_folder
+    job_before = os.listdir(job_thumbs)
+    dropped = tmp_path / "X_dropped"
+    write_test_video(str(dropped / "c.mov"))
+    real_ensure_folder = thumbnails.ensure_folder
+
+    def dropped_folder_fails(parent_dir):
+        if os.path.basename(os.path.normpath(parent_dir)) == "X_dropped":  # 앱이 넘기는 경로 그대로 판단
+            raise PermissionError(errno.EACCES, "Permission denied", os.path.join(parent_dir, thumbnails.FOLDER_NAME))
+        return real_ensure_folder(parent_dir)
+
+    monkeypatch.setattr(thumbnails, "ensure_folder", dropped_folder_fails)
+    drop_folder(player, target, dropped)  # 예외 없음
+    assert player.current_thumbnail_folder is None
+    assert thumbnail_warnings(dialogs) == []  # 끌어다 놓을 때는 창 없음
+
+    player.switch_to_thumbnail_mode()
+    wait_until(lambda: not player.thumbnail_workers)
+    QApplication.processEvents()
+    warnings = thumbnail_warnings(dialogs)
+    assert [title for title, _text in warnings] == [FOLDER_PROBLEM]
+    text = warnings[0][1]
+    assert os.path.join("X_dropped", thumbnails.FOLDER_NAME) in text and "Permission denied" in text and "화면에만" in text
+    assert os.listdir(job_thumbs) == job_before
+    assert not (dropped / thumbnails.FOLDER_NAME).exists()
+    assert all(not player.sidebar.item(i).icon().isNull() for i in range(player.sidebar.count()))
