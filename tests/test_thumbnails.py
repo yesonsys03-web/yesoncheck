@@ -273,6 +273,26 @@ def test_worker_reports_save_failure_and_still_shows_thumbnail(qapp, tmp_path, m
     assert "Permission denied" in message
 
 
+def test_worker_save_failure_keeps_original_error(qapp, tmp_path, monkeypatch, capsys):
+    """바꾸기가 실패한 뒤 임시 파일 지우기도 실패하면 올라오는 것은 지우기 오류 → 먼저 난 원래 오류도 창·로그에."""
+    video = write_test_video(str(tmp_path / "job" / "a.mov"))
+    folder = thumbnails.ensure_folder(str(tmp_path / "job"))
+
+    def cannot_replace(src, dst):
+        raise PermissionError(errno.EACCES, "replace denied", dst)
+
+    def cannot_remove(path):
+        raise PermissionError(errno.EPERM, "cleanup denied", path)
+
+    monkeypatch.setattr(thumbnails.os, "replace", cannot_replace)
+    monkeypatch.setattr(thumbnails.os, "remove", cannot_remove)
+    ready, failed = run_worker(video, folder)
+    assert ready == [(video, 120)]
+    message = failed[0][1]
+    assert "cleanup denied" in message and "replace denied" in message
+    assert "replace denied" in capsys.readouterr().out
+
+
 def test_worker_saves_qimage(qapp, tmp_path, monkeypatch):
     """워커 스레드에서는 QPixmap이 아니라 QImage를 저장 (QPixmap은 GUI 스레드 전용)."""
     from PyQt5.QtGui import QImage

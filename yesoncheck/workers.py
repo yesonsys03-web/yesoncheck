@@ -204,6 +204,10 @@ class ThumbnailWorker(QThread):
                         print(f"썸네일 디스크 저장 완료: {thumbnail_path}")
                     except (OSError, RuntimeError) as exc:
                         message = f"썸네일 파일: {thumbnail_path}\n이유: {type(exc).__name__}: {exc}"
+                        if exc.__context__ is not None:
+                            # 저장이 실패한 뒤 임시 파일 지우기도 실패함 → 먼저 난 원래 오류도 알림
+                            original = exc.__context__
+                            message += f"\n먼저 난 오류: {type(original).__name__}: {original}"
                         print(f"썸네일 디스크 저장 실패: {message}")
                         if self._is_running:
                             self.save_failed.emit(self.thumbnail_folder, message)
