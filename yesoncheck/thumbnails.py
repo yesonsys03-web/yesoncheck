@@ -15,6 +15,8 @@ from yesoncheck import paths
 
 FOLDER_NAME = ".yesoncheck_thumb"
 
+_shared_folders = set()  # 이번 실행에서 share_folder가 확인한 썸네일 폴더 (폴더마다 chmod는 한 번만)
+
 
 def ensure_folder(parent_dir):
     """parent_dir 아래 썸네일 폴더를 (없으면) 만들고 다른 계정도 쓸 수 있게 한 뒤 그 경로를 돌려준다."""
@@ -25,16 +27,19 @@ def ensure_folder(parent_dir):
 
 
 def share_folder(path):
-    """(Mac) 내가 만든 썸네일 폴더를 0o777로: 다른 NAS 계정을 쓰는 Windows PC도 썸네일을 저장할 수 있게.
+    """(Mac) 내가 만든 썸네일 폴더에 0o777을 더함: 다른 NAS 계정을 쓰는 Windows PC도 썸네일을 저장할 수 있게.
 
-    makedirs는 umask(보통 022) 때문에 0o755로 만든다. Mac의 SMB 마운트에서는 chmod가 성공해도 보이는 권한은
-    그대로(0o700으로 합성)라서 매번 다시 부르게 되지만 비용이 작아 그대로 둔다 (chmod 뒤 권한은 확인하지 않음).
+    makedirs는 umask(보통 022) 때문에 0o755로 만든다. setgid·sticky 같은 다른 비트는 그대로 둔다.
+    이번 실행에서 폴더마다 한 번만 한다: Mac의 SMB 마운트에서는 chmod가 성공해도 보이는 권한이 그대로(0o700으로
+    합성)라서, 그러지 않으면 작업을 열 때마다 다시 chmod함 (chmod 뒤 권한은 확인하지 않음).
     """
-    if paths.IS_WINDOWS:
+    if paths.IS_WINDOWS or path in _shared_folders:
         return
     info = os.stat(path)
-    if info.st_uid == os.getuid() and (stat.S_IMODE(info.st_mode) & 0o777) != 0o777:
-        os.chmod(path, 0o777)
+    mode = stat.S_IMODE(info.st_mode)
+    if info.st_uid == os.getuid() and (mode & 0o777) != 0o777:
+        os.chmod(path, mode | 0o777)
+    _shared_folders.add(path)
 
 
 def thumbnail_path(folder, video_path):

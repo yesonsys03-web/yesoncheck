@@ -123,6 +123,31 @@ def test_ensure_folder_opens_permissions(tmp_path):
         os.umask(old_umask)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX 권한 비트")
+def test_share_folder_keeps_setgid_and_sticky_bits(tmp_path):
+    existing = tmp_path / "job" / thumbnails.FOLDER_NAME
+    existing.mkdir(parents=True)
+    os.chmod(existing, 0o3755)  # setgid + sticky
+    assert stat.S_IMODE(os.stat(existing).st_mode) == 0o3755
+    thumbnails.ensure_folder(str(tmp_path / "job"))
+    assert stat.S_IMODE(os.stat(existing).st_mode) == 0o3777
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX 권한 비트")
+def test_share_folder_chmods_once_per_folder(tmp_path, monkeypatch):
+    """Mac의 SMB 마운트는 chmod 뒤에도 0o700으로 보여, 작업을 열 때마다 chmod하지 않게 이번 실행에서 폴더마다 한 번만."""
+    calls = []
+    monkeypatch.setattr(thumbnails.os, "chmod", lambda path, mode: calls.append((path, mode)))  # 권한이 바뀌지 않는 마운트
+    old_umask = os.umask(0o022)
+    try:
+        first = thumbnails.ensure_folder(str(tmp_path / "job"))
+        second = thumbnails.ensure_folder(str(tmp_path / "job"))
+    finally:
+        os.umask(old_umask)
+    assert first == second
+    assert calls == [(first, 0o777)]
+
+
 def red_pixmap(width=7, height=5):
     from PyQt5.QtGui import QColor, QPixmap
 
