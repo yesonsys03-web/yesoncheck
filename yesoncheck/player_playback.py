@@ -25,7 +25,7 @@ from PyQt5.QtWidgets import (
 
 from yesoncheck.frame_utils import FrameCalculator
 from yesoncheck.workers import FFmpegWorker
-from yesoncheck import external_tools, file_names, paths
+from yesoncheck import external_tools, file_names, paths, thumbnails
 
 class PlayerPlaybackMixin:
 
@@ -150,16 +150,15 @@ class PlayerPlaybackMixin:
                     self.current_job_path = base_path
                     
                     # UI job 선택 시 직접 썸네일 폴더 설정 (지연 최소화)
-                    thumbnail_folder = os.path.join(base_path, ".yesoncheck_thumb")
                     try:
-                        if not os.path.exists(thumbnail_folder):
-                            os.makedirs(thumbnail_folder)
-                        self.current_thumbnail_folder = thumbnail_folder
-                    except (PermissionError, OSError) as e:
-                        # 썸네일 폴더 생성 실패해도 파일 표시는 계속 진행
-                        print(f"Warning: Could not create thumbnail folder: {thumbnail_folder}, Error: {e}")
-                        # 임시 디렉토리나 None으로 설정
+                        self.current_thumbnail_folder = thumbnails.ensure_folder(base_path)
+                    except OSError as e:
+                        # 썸네일 폴더 생성 실패해도 파일 표시는 계속 진행 (썸네일은 저장하지 않음 → 창으로 알림)
                         self.current_thumbnail_folder = None
+                        self._report_thumbnail_problem(
+                            os.path.join(base_path, thumbnails.FOLDER_NAME),
+                            f"썸네일 폴더를 만들거나 권한을 바꾸지 못했습니다.\n이유: {type(e).__name__}: {e}",
+                        )
                     
                     # 메인 스레드에서 직접 처리 (스레드 제거로 지연 해결)
                     all_mov_files = []

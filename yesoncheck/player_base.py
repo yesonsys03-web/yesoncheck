@@ -65,7 +65,7 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck.video_widget import CustomVideoWidget
-from yesoncheck import external_tools, image_io, paths, shared_config, timing_log
+from yesoncheck import external_tools, image_io, paths, shared_config, thumbnails, timing_log
 from yesoncheck.slider_style import jump_to_click
 from yesoncheck.window_layout import ElidedLabel, InfoRowLayout, VerticalScrollArea, startup_geometry
 # 무거운 모듈들은 lazy import로 변경 (실제 사용 시점에만 로드)
@@ -432,6 +432,7 @@ QMessageBox {
         
         # 디스크 기반 썸네일 시스템
         self.current_thumbnail_folder = None  # 현재 job의 썸네일 폴더
+        self._thumbnail_problem_folders = set()  # 이번 실행에서 썸네일 저장 실패 창을 띄운 폴더 (폴더마다 한 번)
         self.thumbnail_loader_worker = None  # 백그라운드 로더 워커
         self.thumbnail_loading_timer = QTimer()
         self.thumbnail_loading_timer.setSingleShot(True)
@@ -1490,10 +1491,7 @@ QSlider::add-page:horizontal {
                         print(f"드래그앤드롭으로 썸네일 폴더 설정: {self.selected_folder_path}")
                         
                         # 드래그앤드롭 시 직접 썸네일 폴더 생성
-                        thumbnail_folder = os.path.join(folder_paths[0], ".yesoncheck_thumb")
-                        if not os.path.exists(thumbnail_folder):
-                            os.makedirs(thumbnail_folder)
-                            print(f"드래그앤드롭으로 썸네일 폴더 생성: {thumbnail_folder}")
+                        thumbnail_folder = thumbnails.ensure_folder(folder_paths[0])
                         self.current_thumbnail_folder = thumbnail_folder
                         print(f"드래그앤드롭으로 썸네일 폴더 설정: {thumbnail_folder}")
                     

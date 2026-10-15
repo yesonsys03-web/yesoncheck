@@ -15,7 +15,7 @@ import numpy as np
 from PyQt5.QtCore import QThread, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap
 
-from yesoncheck import external_tools, file_names, paths
+from yesoncheck import external_tools, file_names, thumbnails
 
 # Auto trim module import
 try:
@@ -88,6 +88,7 @@ class FFmpegWorker(QThread):
 
 class ThumbnailWorker(QThread):
     thumbnail_ready = pyqtSignal(str, QPixmap)
+    save_failed = pyqtSignal(str, str)  # 썸네일 폴더, 내용 (썸네일 파일 경로·오류)
     finished = pyqtSignal()
 
     def __init__(self, file_path, thumbnail_size=120, thumbnail_folder=None):
@@ -115,11 +116,10 @@ class ThumbnailWorker(QThread):
 
             # 썸네일 파일 경로 생성
             if self.thumbnail_folder:
-                file_hash = paths.thumbnail_key(self.file_path)
-                thumbnail_path = os.path.join(self.thumbnail_folder, f"{file_hash}.jpg")
+                thumbnail_path = thumbnails.thumbnail_path(self.thumbnail_folder, self.file_path)
 
-                # 이미 썸네일이 존재하는지 확인
-                if os.path.exists(thumbnail_path):
+                # 영상보다 새 썸네일이 있으면 그대로 씀 (영상이 바뀌었으면 새로 만들어 바꿈)
+                if thumbnails.is_fresh(thumbnail_path, self.file_path):
                     print(f"기존 썸네일 발견: {thumbnail_path}")
                     pixmap = QPixmap(thumbnail_path)
                     if not pixmap.isNull():
@@ -190,33 +190,16 @@ class ThumbnailWorker(QThread):
                     f"QPixmap 생성 완료: {self.file_path}, pixmap isNull: {pixmap.isNull()}, size: {pixmap.size()}"
                 )
 
-                # 디스크에 썸네일 저장
+                # 디스크에 썸네일 저장. 실패하면 창으로 알리고(save_failed), 이번 실행에서는 아이콘으로만 보여 줌
                 if self.thumbnail_folder and thumbnail_path:
-                    # 폴더가 없으면 생성
-                    if not os.path.exists(self.thumbnail_folder):
-                        os.makedirs(self.thumbnail_folder, exist_ok=True)
-                    success = pixmap.save(thumbnail_path, "JPG", 85)  # JPG 품질 85
-                    if success:
+                    try:
+                        thumbnails.save(pixmap, thumbnail_path)
                         print(f"썸네일 디스크 저장 완료: {thumbnail_path}")
-                    else:
-                        print(f"썸네일 디스크 저장 실패: {thumbnail_path}")
-
-                # QPixmap 유효성 검사
-                if pixmap.isNull():
-                    print(f"QPixmap 생성 실패: {self.file_path}")
-                    return
-
-                print(
-                    f"QPixmap 생성 완료: {self.file_path}, pixmap isNull: {pixmap.isNull()}, size: {pixmap.size()}"
-                )
-
-                # 디스크에 썸네일 저장
-                if self.thumbnail_folder and thumbnail_path:
-                    success = pixmap.save(thumbnail_path, "JPG", 85)  # JPG 품질 85
-                    if success:
-                        print(f"썸네일 디스크 저장 완료: {thumbnail_path}")
-                    else:
-                        print(f"썸네일 디스크 저장 실패: {thumbnail_path}")
+                    except (OSError, RuntimeError) as exc:
+                        message = f"썸네일 파일: {thumbnail_path}\n이유: {type(exc).__name__}: {exc}"
+                        print(f"썸네일 디스크 저장 실패: {message}")
+                        if self._is_running:
+                            self.save_failed.emit(self.thumbnail_folder, message)
 
                 # 메모리 정리
                 del frame_rgb, resized_frame, q_image
@@ -281,11 +264,10 @@ class ThumbnailLoaderWorker(QThread):
                     break
 
                 try:
-                    # 파일 해시로 썸네일 경로 생성
-                    file_hash = paths.thumbnail_key(file_path)
-                    thumbnail_path = os.path.join(self.thumbnail_folder, f"{file_hash}.jpg")
+                    # 영상보다 새 썸네일만 보냄 (바뀐 영상은 썸네일 모드에서 새로 만듦)
+                    thumbnail_path = thumbnails.thumbnail_path(self.thumbnail_folder, file_path)
 
-                    if os.path.exists(thumbnail_path):
+                    if thumbnails.is_fresh(thumbnail_path, file_path):
                         pixmap = QPixmap(thumbnail_path)
                         if not pixmap.isNull():
                             self.thumbnail_loaded.emit(file_path, pixmap)

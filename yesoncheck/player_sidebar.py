@@ -35,7 +35,7 @@ from PyQt5.QtWidgets import (
 from yesoncheck.workers import ThumbnailLoaderWorker, ThumbnailWorker
 import traceback
 
-from yesoncheck import path_map_setup, paths, shared_config, timing_log
+from yesoncheck import path_map_setup, paths, shared_config, thumbnails, timing_log
 from yesoncheck.path_map_setup_dialog import PathMapSetupDialog
 
 LOADING_TITLE = "Yeson Checker — 공유 설정 불러오는 중…"
@@ -353,10 +353,7 @@ class PlayerSidebarMixin:
                     print(f"메인 윈도우 드래그앤드롭으로 썸네일 폴더 설정: {parent.selected_folder_path}")
                     
                     # 드래그앤드롭 시 직접 썸네일 폴더 생성
-                    thumbnail_folder = os.path.join(folder_paths[0], ".yesoncheck_thumb")
-                    if not os.path.exists(thumbnail_folder):
-                        os.makedirs(thumbnail_folder)
-                        print(f"메인 윈도우 드래그앤드롭으로 썸네일 폴더 생성: {thumbnail_folder}")
+                    thumbnail_folder = thumbnails.ensure_folder(folder_paths[0])
                     parent.current_thumbnail_folder = thumbnail_folder
                     print(f"메인 윈도우 드래그앤드롭으로 썸네일 폴더 설정: {thumbnail_folder}")
                     
@@ -549,8 +546,7 @@ class PlayerSidebarMixin:
             if not self.current_thumbnail_folder:
                 return
 
-            file_hash = paths.thumbnail_key(file_path)
-            thumbnail_path = os.path.join(self.current_thumbnail_folder, f"{file_hash}.jpg")
+            thumbnail_path = thumbnails.thumbnail_path(self.current_thumbnail_folder, file_path)
 
             if os.path.exists(thumbnail_path):
                 os.remove(thumbnail_path)
@@ -1019,10 +1015,7 @@ class PlayerSidebarMixin:
     def setup_thumbnail_folder_for_bookmark(self, folder_path):
         """북마크 폴더용 썸네일 폴더를 설정합니다."""
         try:
-            thumbnail_folder = os.path.join(folder_path, ".yesoncheck_thumb")
-            if not os.path.exists(thumbnail_folder):
-                os.makedirs(thumbnail_folder)
-                print(f"북마크 썸네일 폴더 생성: {thumbnail_folder}")
+            thumbnail_folder = thumbnails.ensure_folder(folder_path)
             self.current_thumbnail_folder = thumbnail_folder
             print(f"북마크 썸네일 폴더 설정: {thumbnail_folder}")
             return True
@@ -1928,8 +1921,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             if file_path and os.path.isfile(file_path):
                 if self._has_disk_thumbnail(file_path):
                     print(f"캐시된 썸네일 즉시 적용: {file_path}")
-                    file_hash = paths.thumbnail_key(file_path)
-                    thumbnail_path = os.path.join(self.current_thumbnail_folder, f"{file_hash}.jpg")
+                    thumbnail_path = thumbnails.thumbnail_path(self.current_thumbnail_folder, file_path)
                     pixmap = QPixmap(thumbnail_path)
                     if not pixmap.isNull():
                         self.update_sidebar_item_thumbnail(file_path, pixmap)
@@ -1985,8 +1977,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             if file_path and os.path.isfile(file_path):
                 if self._has_disk_thumbnail(file_path):
                     print(f"캐시된 썸네일 즉시 적용: {file_path}")
-                    file_hash = paths.thumbnail_key(file_path)
-                    thumbnail_path = os.path.join(self.current_thumbnail_folder, f"{file_hash}.jpg")
+                    thumbnail_path = thumbnails.thumbnail_path(self.current_thumbnail_folder, file_path)
                     pixmap = QPixmap(thumbnail_path)
                     if not pixmap.isNull():
                         self.update_sidebar_item_thumbnail(file_path, pixmap)
@@ -2115,12 +2106,10 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             print(f"백그라운드 스레드 정리 중 오류: {e}")
 
     def _has_disk_thumbnail(self, file_path):
-        """디스크에 썸네일이 있는지 확인합니다."""
+        """디스크에 영상보다 새 썸네일이 있는지 확인합니다 (영상이 바뀌었으면 False → 새로 만듦)."""
         if not self.current_thumbnail_folder:
             return False
-        file_hash = paths.thumbnail_key(file_path)
-        thumbnail_path = os.path.join(self.current_thumbnail_folder, f"{file_hash}.jpg")
-        return os.path.exists(thumbnail_path)
+        return thumbnails.is_fresh(thumbnails.thumbnail_path(self.current_thumbnail_folder, file_path), file_path)
 
     def generate_thumbnail(self, file_path):
         import time
@@ -2130,20 +2119,14 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         if not self.current_thumbnail_folder:
             if hasattr(self, 'selected_folder_path') and self.selected_folder_path:
                 # 드래그한 폴더가 있는 경우
-                thumbnail_folder = os.path.join(self.selected_folder_path, ".yesoncheck_thumb")
-                if not os.path.exists(thumbnail_folder):
-                    os.makedirs(thumbnail_folder)
-                    print(f"generate_thumbnail에서 썸네일 폴더 생성: {thumbnail_folder}")
+                thumbnail_folder = thumbnails.ensure_folder(self.selected_folder_path)
                 self.current_thumbnail_folder = thumbnail_folder
                 print(f"generate_thumbnail에서 썸네일 폴더 설정: {thumbnail_folder}")
             else:
                 # 개별 파일들을 드래그한 경우, 첫 번째 파일의 디렉토리에 썸네일 폴더 생성
                 if os.path.exists(file_path):
                     file_dir = os.path.dirname(file_path)
-                    thumbnail_folder = os.path.join(file_dir, ".yesoncheck_thumb")
-                    if not os.path.exists(thumbnail_folder):
-                        os.makedirs(thumbnail_folder)
-                        print(f"generate_thumbnail에서 파일 디렉토리에 썸네일 폴더 생성: {thumbnail_folder}")
+                    thumbnail_folder = thumbnails.ensure_folder(file_dir)
                     self.current_thumbnail_folder = thumbnail_folder
                     print(f"generate_thumbnail에서 파일 디렉토리에 썸네일 폴더 설정: {thumbnail_folder}")
                 else:
@@ -2151,12 +2134,11 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                     return False
         
         # 동시 실행 제한 (1개로 더 줄임)
-        # 디스크에 저장된 썸네일 확인
+        # 디스크에 저장된 썸네일 확인 (영상보다 오래된 썸네일은 워커가 새로 만들어 바꿈)
         if self.current_thumbnail_folder:
-            file_hash = paths.thumbnail_key(file_path)
-            thumbnail_path = os.path.join(self.current_thumbnail_folder, f"{file_hash}.jpg")
+            thumbnail_path = thumbnails.thumbnail_path(self.current_thumbnail_folder, file_path)
             
-            if os.path.exists(thumbnail_path):
+            if thumbnails.is_fresh(thumbnail_path, file_path):
                 print(f"디스크에서 썸네일 로드: {thumbnail_path}")
                 pixmap = QPixmap(thumbnail_path)
                 if not pixmap.isNull():
@@ -2179,6 +2161,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         # 워커 생성
         worker = ThumbnailWorker(file_path, self.thumbnail_size, self.current_thumbnail_folder)
         worker.thumbnail_ready.connect(self.on_thumbnail_ready)
+        worker.save_failed.connect(self._report_thumbnail_problem)
         
         # 안전한 워커 제거 함수
         def safe_remove_worker():
@@ -2201,6 +2184,22 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         self.thumbnail_workers.append(worker)
         worker.start()
         print(f"썸네일 워커 시작: {file_path}, 현재 워커 수: {len(self.thumbnail_workers)}")
+
+    def _report_thumbnail_problem(self, folder, message):
+        """썸네일 폴더 문제(저장 실패·폴더를 만들지 못함)를 알림: 로그에는 매번, 창은 이번 실행에서 폴더마다 한 번."""
+        print(f"썸네일 저장 실패: {folder}\n{message}")
+        if folder in self._thumbnail_problem_folders:
+            return
+        # 창을 띄우기 전에 넣음: 창이 떠 있는 동안 다음 저장 실패 시그널이 들어와도 창을 또 띄우지 않게
+        self._thumbnail_problem_folders.add(folder)
+        QMessageBox.warning(
+            self,
+            "썸네일 저장 실패",
+            "이 작업의 썸네일을 썸네일 폴더에 저장하지 못했습니다.\n"
+            "이번에는 화면에만 보이고, 다음에 썸네일 모드를 켜면 다시 만듭니다.\n\n"
+            "NAS에서 이 폴더의 권한(이 PC가 쓰는 NAS 계정의 쓰기 권한)을 확인하세요.\n\n"
+            f"폴더: {folder}\n{message}",
+        )
 
     def on_thumbnail_ready(self, file_path, pixmap):
         """썸네일 생성이 완료되었을 때 호출됩니다."""
@@ -2310,12 +2309,8 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             # job 경로를 찾아서 썸네일 폴더 설정
             job_path = self.get_current_job_path()
             if job_path:
-                thumbnail_folder = os.path.join(job_path, ".yesoncheck_thumb")
-                
                 # 폴더가 없으면 생성
-                if not os.path.exists(thumbnail_folder):
-                    os.makedirs(thumbnail_folder)
-                    print(f"썸네일 폴더 생성: {thumbnail_folder}")
+                thumbnail_folder = thumbnails.ensure_folder(job_path)
                 
                 self.current_thumbnail_folder = thumbnail_folder
                 print(f"썸네일 폴더 설정: {thumbnail_folder}")

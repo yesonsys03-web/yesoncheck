@@ -4,15 +4,20 @@ Windows 사용자 보고 (2026-10-15): 썸네일을 만든 작업으로 돌아�
 (Windows는 Mac이 만든 썸네일 이름을 몰랐고, Mac이 만든 폴더에 쓰지 못한 저장 실패는 로그에만 남았음).
 """
 
+import errno
 import hashlib
 import os
 import stat
 import sys
+import time
 
 import pytest
+from PyQt5.QtWidgets import QApplication
 
 from yesoncheck import paths, thumbnails
 from yesoncheck.paths import PathMap
+from tests.conftest import write_test_video
+from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 
 # 실제 NAS의 영상: Mac에서 만든 썸네일 파일이 <job>/.yesoncheck_thumb/5588e0d6ba56606ffae36e54b8d5283f.jpg로 있음
 MAC_VIDEO = "/usadata2/Titmouse/FLORIDA/FL_Season01/FL_902/scene-A001/frames/FL_902_A001_TK1.mov"
@@ -145,3 +150,144 @@ def test_save_raises_when_folder_missing(qapp, tmp_path):
         thumbnails.save(red_pixmap(), target)
     assert info.value.filename == target
 
+
+def denied(pixmap, thumb_path):
+    raise PermissionError(errno.EACCES, "Permission denied", thumb_path)
+
+
+def run_worker(video, folder):
+    """ThumbnailWorker를 이 스레드에서 실행 → (보낸 썸네일 [(영상, 폭)], 저장 실패 [(폴더, 내용)])."""
+    from yesoncheck.workers import ThumbnailWorker
+
+    ready, failed = [], []
+    worker = ThumbnailWorker(video, 120, folder)
+    worker.thumbnail_ready.connect(lambda path, pixmap: ready.append((path, pixmap.width())))
+    worker.save_failed.connect(lambda where, message: failed.append((where, message)))
+    worker.run()
+    return ready, failed
+
+
+def test_worker_reports_save_failure_and_still_shows_thumbnail(qapp, tmp_path, monkeypatch):
+    video = write_test_video(str(tmp_path / "job" / "a.mov"))
+    folder = thumbnails.ensure_folder(str(tmp_path / "job"))
+    monkeypatch.setattr(thumbnails, "save", denied)
+    ready, failed = run_worker(video, folder)
+    assert ready == [(video, 120)]  # 이번 실행에서는 아이콘으로 보여 줌
+    assert len(failed) == 1
+    where, message = failed[0]
+    assert where == folder
+    assert thumbnails.thumbnail_path(folder, video) in message
+    assert "Permission denied" in message
+
+
+def test_worker_reuses_fresh_thumbnail_and_remakes_stale_one(qapp, tmp_path):
+    video = write_test_video(str(tmp_path / "job" / "a.mov"))
+    folder = thumbnails.ensure_folder(str(tmp_path / "job"))
+    thumb = thumbnails.thumbnail_path(folder, video)
+    assert red_pixmap(7, 5).save(thumb, "JPG")
+    base = time.time() - 1000
+    os.utime(video, (base, base))
+    os.utime(thumb, (base + 10, base + 10))
+    assert run_worker(video, folder) == ([(video, 7)], [])  # 영상보다 새 썸네일 → 그대로 씀
+
+    os.utime(video, (base + 20, base + 20))  # 같은 이름으로 다시 렌더링한 영상
+    assert run_worker(video, folder) == ([(video, 120)], [])
+    from PyQt5.QtGui import QPixmap
+
+    assert QPixmap(thumb).width() == 120
+    assert thumbnails.is_fresh(thumb, video)
+
+
+def test_loader_emits_only_fresh_thumbnails(qapp, tmp_path):
+    from yesoncheck.workers import ThumbnailLoaderWorker
+
+    fresh = write_test_video(str(tmp_path / "job" / "fresh.mov"))
+    stale = write_test_video(str(tmp_path / "job" / "stale.mov"))
+    folder = thumbnails.ensure_folder(str(tmp_path / "job"))
+    base = time.time() - 1000
+    for video, thumb_time in ((fresh, base + 10), (stale, base - 10)):
+        thumb = thumbnails.thumbnail_path(folder, video)
+        assert red_pixmap().save(thumb, "JPG")
+        os.utime(video, (base, base))
+        os.utime(thumb, (thumb_time, thumb_time))
+    loaded = []
+    loader = ThumbnailLoaderWorker(folder, [fresh, stale])
+    loader.thumbnail_loaded.connect(lambda path, pixmap: loaded.append(path))
+    loader.run()
+    assert loaded == [fresh]
+
+
+def test_problem_dialog_once_per_folder(new_player, dialogs, tmp_path, monkeypatch):
+    player = new_player(make_config(str(tmp_path), {}))
+    folder_a = str(tmp_path / "A" / thumbnails.FOLDER_NAME)
+    folder_b = str(tmp_path / "B" / thumbnails.FOLDER_NAME)
+    player._report_thumbnail_problem(folder_a, "이유 1")
+    player._report_thumbnail_problem(folder_a, "이유 2")
+    player._report_thumbnail_problem(folder_b, "이유 3")
+    warnings = [(title, text) for kind, title, text in dialogs.messages if kind == "warning"]
+    assert [title for title, _text in warnings] == ["썸네일 저장 실패", "썸네일 저장 실패"]
+    assert folder_a in warnings[0][1] and "이유 1" in warnings[0][1]
+    assert folder_b in warnings[1][1] and "이유 3" in warnings[1][1]
+    assert "권한" in warnings[0][1]
+
+
+def test_problem_dialog_not_repeated_while_open(new_player, dialogs, tmp_path, monkeypatch):
+    """창이 떠 있는 동안 다시 들어온 저장 실패 시그널은 창을 또 띄우지 않음."""
+    from PyQt5.QtWidgets import QMessageBox
+
+    player = new_player(make_config(str(tmp_path), {}))
+    shown = []
+
+    def warning(parent, title, text, *args, **kwargs):
+        shown.append(text)
+        if len(shown) == 1:
+            player._report_thumbnail_problem("folder", "창이 떠 있는 동안 온 실패")
+        return QMessageBox.Ok
+
+    monkeypatch.setattr(QMessageBox, "warning", warning)
+    player._report_thumbnail_problem("folder", "첫 실패")
+    assert len(shown) == 1
+
+
+def wait_until(condition, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    while not condition():
+        assert time.monotonic() < deadline, f"{timeout}초 안에 조건이 이루어지지 않았습니다"
+        QApplication.processEvents()
+        time.sleep(0.01)
+
+
+def test_sidebar_reports_save_failure_once(new_player, dialogs, tmp_path, monkeypatch):
+    """썸네일 워커의 저장 실패 → 창(작업 폴더마다 한 번), 아이콘은 이번 실행에서 보임."""
+    videos = [write_test_video(str(tmp_path / "job" / f"{name}.mov")) for name in ("a", "b")]
+    player = new_player(make_config(str(tmp_path), {}))
+    player.add_files_to_sidebar(videos)
+    folder = thumbnails.ensure_folder(str(tmp_path / "job"))
+    player.current_thumbnail_folder = folder
+    monkeypatch.setattr(thumbnails, "save", denied)
+    for video in videos:
+        player.generate_thumbnail(video)
+    wait_until(lambda: not player.thumbnail_workers)
+    QApplication.processEvents()
+    warnings = [text for kind, _title, text in dialogs.messages if kind == "warning"]
+    assert len(warnings) == 1
+    assert folder in warnings[0] and "Permission denied" in warnings[0]
+    assert all(not player.sidebar.item(i).icon().isNull() for i in range(player.sidebar.count()))
+
+
+def test_job_thumbnail_folder_failure_is_reported(new_player, dialogs, work_area, monkeypatch):
+    write_test_video(os.path.join(work_area.local, "S1", "job_01", "scene-001", "frames", "a.mov"))
+    player = new_player(make_config(work_area.local, {"SMOKE": work_area.stored}, work_area.path_map))
+
+    def cannot_create(parent_dir):
+        raise PermissionError(errno.EACCES, "Permission denied", os.path.join(parent_dir, thumbnails.FOLDER_NAME))
+
+    player.workComboBox.setCurrentText("SMOKE")
+    player.seasonComboBox.setCurrentText("S1")
+    monkeypatch.setattr(thumbnails, "ensure_folder", cannot_create)
+    player.jobComboBox.setCurrentText("job_01")
+    assert player.sidebar.count() == 1  # 썸네일 폴더가 없어도 목록은 보임
+    assert player.current_thumbnail_folder is None
+    warnings = [text for kind, _title, text in dialogs.messages if kind == "warning"]
+    assert len(warnings) == 1
+    assert os.path.join("job_01", thumbnails.FOLDER_NAME) in warnings[0] and "Permission denied" in warnings[0]
