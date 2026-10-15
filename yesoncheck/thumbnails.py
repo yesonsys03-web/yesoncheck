@@ -2,7 +2,8 @@
 
 NAS의 썸네일 폴더는 모든 Mac·Windows PC가 함께 쓴다 (PC마다 NAS 계정이 다를 수 있음).
 썸네일 폴더를 만들고, 썸네일 경로를 정하고, 영상보다 새 썸네일인지 보고, 저장하는 일은 모두 여기서 한다.
-오류(OSError)는 삼키지 않고 그대로 올린다 — 부른 쪽이 창·로그로 알린다.
+오류(OSError)는 삼키지 않고 그대로 올린다 — 부른 쪽이 창·로그로 알린다. 다만 폴더 권한을 바꾸지 못한 것은 폴더를
+쓰는 데 지장이 없으므로 로그에 남기고 share_problem(folder)로 알려 준다 (부른 쪽이 썸네일을 쓸 때 창으로 알림).
 """
 
 import os
@@ -15,11 +16,15 @@ from yesoncheck import paths
 
 FOLDER_NAME = ".yesoncheck_thumb"
 
-_shared_folders = set()  # 이번 실행에서 share_folder가 확인한 썸네일 폴더 (폴더마다 chmod는 한 번만)
+# 이번 실행에서 share_folder가 확인한 썸네일 폴더 → None(됨) 또는 권한을 바꾸지 못한 이유 (폴더마다 chmod는 한 번만)
+_shared_folders = {}
 
 
 def ensure_folder(parent_dir):
-    """parent_dir 아래 썸네일 폴더를 (없으면) 만들고 다른 계정도 쓸 수 있게 한 뒤 그 경로를 돌려준다."""
+    """parent_dir 아래 썸네일 폴더를 (없으면) 만들고 다른 계정도 쓸 수 있게 한 뒤 그 경로를 돌려준다.
+
+    폴더를 만들지 못하면 OSError (썸네일을 저장할 곳이 없음). 권한을 바꾸지 못한 것은 share_problem(폴더)로.
+    """
     folder = os.path.join(parent_dir, FOLDER_NAME)
     os.makedirs(folder, exist_ok=True)
     share_folder(folder)
@@ -32,14 +37,26 @@ def share_folder(path):
     makedirs는 umask(보통 022) 때문에 0o755로 만든다. setgid·sticky 같은 다른 비트는 그대로 둔다.
     이번 실행에서 폴더마다 한 번만 한다: Mac의 SMB 마운트에서는 chmod가 성공해도 보이는 권한이 그대로(0o700으로
     합성)라서, 그러지 않으면 작업을 열 때마다 다시 chmod함 (chmod 뒤 권한은 확인하지 않음).
+    권한을 바꾸지 못하면(OSError) 이 PC는 그대로 폴더를 쓰므로 예외를 올리지 않고, 로그에 남기고 share_problem으로 알려 줌.
     """
     if paths.IS_WINDOWS or path in _shared_folders:
         return
-    info = os.stat(path)
-    mode = stat.S_IMODE(info.st_mode)
-    if info.st_uid == os.getuid() and (mode & 0o777) != 0o777:
-        os.chmod(path, mode | 0o777)
-    _shared_folders.add(path)
+    try:
+        info = os.stat(path)
+        mode = stat.S_IMODE(info.st_mode)
+        if info.st_uid == os.getuid() and (mode & 0o777) != 0o777:
+            os.chmod(path, mode | 0o777)
+    except OSError as exc:
+        problem = f"{type(exc).__name__}: {exc}"
+        print(f"썸네일 폴더의 권한을 바꾸지 못했습니다 (폴더는 그대로 씀): {path}\n{problem}")
+        _shared_folders[path] = problem
+        return
+    _shared_folders[path] = None
+
+
+def share_problem(folder):
+    """이번 실행에서 share_folder가 folder의 권한을 바꾸지 못했으면 그 이유, 아니면 None."""
+    return _shared_folders.get(folder)
 
 
 def thumbnail_path(folder, video_path):

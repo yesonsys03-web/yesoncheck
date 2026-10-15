@@ -148,6 +148,33 @@ def test_share_folder_chmods_once_per_folder(tmp_path, monkeypatch):
     assert calls == [(first, 0o777)]
 
 
+def cannot_chmod(path, mode):
+    raise PermissionError(errno.EPERM, "Operation not permitted", path)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX 권한 (Mac에서만 chmod)")
+def test_ensure_folder_chmod_failure_is_not_fatal(qapp, tmp_path, monkeypatch):
+    """권한을 바꾸지 못해도 폴더는 쓸 수 있음 → 폴더를 돌려주고 이유는 share_problem으로 (한 번만 시도)."""
+    calls = []
+
+    def failing_chmod(path, mode):
+        calls.append(path)
+        cannot_chmod(path, mode)
+
+    monkeypatch.setattr(thumbnails.os, "chmod", failing_chmod)
+    old_umask = os.umask(0o022)
+    try:
+        folder = thumbnails.ensure_folder(str(tmp_path / "job"))
+        assert thumbnails.ensure_folder(str(tmp_path / "job")) == folder
+    finally:
+        os.umask(old_umask)
+    assert os.path.isdir(folder) and len(calls) == 1
+    assert "Operation not permitted" in thumbnails.share_problem(folder)
+    assert thumbnails.share_problem(str(tmp_path / "other")) is None
+    thumbnails.save(red_pixmap(), os.path.join(folder, "a.jpg"))
+    assert os.path.isfile(os.path.join(folder, "a.jpg"))
+
+
 def red_pixmap(width=7, height=5):
     from PyQt5.QtGui import QColor, QPixmap
 
@@ -498,3 +525,29 @@ def test_unreadable_fresh_thumbnail_is_regenerated(new_player, dialogs, tmp_path
     assert QPixmap(thumb).width() == 120
     assert not player.sidebar.item(0).icon().isNull()
     assert dialogs.errors() == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX 권한 (Mac에서만 chmod)")
+def test_job_chmod_failure_keeps_folder_and_reports_on_use(new_player, dialogs, work_area, monkeypatch):
+    """job 썸네일 폴더의 권한을 바꾸지 못해도 그 폴더를 쓰고 저장함. 창은 썸네일을 쓸 때 "썸네일 폴더 문제" 한 번."""
+    video = write_test_video(os.path.join(work_area.local, "S1", "job_01", "scene-001", "frames", "a.mov"))
+    player = new_player(make_config(work_area.local, {"SMOKE": work_area.stored}, work_area.path_map))
+    monkeypatch.setattr(thumbnails.os, "chmod", cannot_chmod)
+    old_umask = os.umask(0o022)
+    try:
+        player.workComboBox.setCurrentText("SMOKE")
+        player.seasonComboBox.setCurrentText("S1")
+        player.jobComboBox.setCurrentText("job_01")
+    finally:
+        os.umask(old_umask)
+    folder = os.path.join(work_area.local, "S1", "job_01", thumbnails.FOLDER_NAME)
+    assert player.current_thumbnail_folder == folder
+    assert thumbnail_warnings(dialogs) == []  # 작업을 열 때는 창 없음
+
+    player.generate_thumbnail(video)
+    wait_until(lambda: not player.thumbnail_workers)
+    QApplication.processEvents()
+    assert os.path.isfile(thumbnails.thumbnail_path(folder, video))  # 이 PC에서는 저장됨
+    warnings = thumbnail_warnings(dialogs)
+    assert [title for title, _text in warnings] == [FOLDER_PROBLEM]
+    assert "권한을 바꾸지 못했" in warnings[0][1] and "Operation not permitted" in warnings[0][1]
