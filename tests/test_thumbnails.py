@@ -1095,6 +1095,21 @@ def test_duplicate_video_keeps_its_thumbnail_context(new_player, dialogs, work_a
     assert thumbnail_warnings(dialogs) == []
 
 
+def record_worker_starts(monkeypatch):
+    """사이드바가 띄우는 썸네일 워커의 영상 경로를 차례로 기록하는 목록."""
+    import yesoncheck.player_sidebar as sidebar_module
+
+    real_worker = sidebar_module.ThumbnailWorker
+    started = []
+
+    def counting_worker(file_path, *args):
+        started.append(file_path)
+        return real_worker(file_path, *args)
+
+    monkeypatch.setattr(sidebar_module, "ThumbnailWorker", counting_worker)
+    return started
+
+
 @pytest.mark.parametrize("how", ["thumbnail_mode", "add_files", "regenerate"])
 def test_switching_job_during_thumbnail_loop_stops_cleanly(new_player, dialogs, work_area, tmp_path, monkeypatch, how):
     """썸네일을 만드는 동안(이벤트 처리 중) 다른 job을 고르면 예전 목록의 항목이 지워짐 → 예외·오류 창 없이 멈추고,
@@ -1128,16 +1143,7 @@ def test_switching_job_during_thumbnail_loop_stops_cleanly(new_player, dialogs, 
         return real_generate(*args, **kwargs)
 
     monkeypatch.setattr(player, "generate_thumbnail", generate_then_switch_job)
-    import yesoncheck.player_sidebar as sidebar_module
-
-    real_worker = sidebar_module.ThumbnailWorker
-    started = []
-
-    def counting_worker(file_path, *args):
-        started.append(file_path)
-        return real_worker(file_path, *args)
-
-    monkeypatch.setattr(sidebar_module, "ThumbnailWorker", counting_worker)
+    started = record_worker_starts(monkeypatch)
     if how == "thumbnail_mode":
         player.switch_to_thumbnail_mode()
     elif how == "add_files":
@@ -1155,3 +1161,16 @@ def test_switching_job_during_thumbnail_loop_stops_cleanly(new_player, dialogs, 
     assert not os.path.samefile(new_thumbs, old_thumbs)
     assert not any(os.path.exists(thumbnails.thumbnail_path(new_thumbs, video)) for video in old_videos)
     assert len(started) == 1  # 예전 목록은 처음 것만: 바뀐 뒤로는 워커를 띄우지 않음 (기다리던 것도 만들지 않음)
+
+
+def test_duplicate_video_generated_once_with_both_icons(new_player, dialogs, tmp_path, monkeypatch):
+    """같은 영상이 목록에 두 번 있으면 썸네일은 한 번만 만들고 두 항목 모두에 아이콘 (재검토 F2)."""
+    video = write_test_video(str(tmp_path / "job" / "a.mov"))
+    player = new_player(make_config(str(tmp_path), {}))
+    player.add_files_to_sidebar([video])
+    player.add_files_to_sidebar([video])
+    assert player.sidebar.count() == 2
+    started = record_worker_starts(monkeypatch)
+    turn_on_thumbnail_mode(player)
+    assert started == [video]
+    assert all(not player.sidebar.item(i).icon().isNull() for i in range(2))

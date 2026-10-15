@@ -414,7 +414,11 @@ class PlayerSidebarMixin:
         # (job·폴더를 바꿈) 항목이 지워짐 → 그때는 멈춤
         if self.is_thumbnail_mode:
             generation = self._sidebar_generation
-            for file_path, context in [(item.data(Qt.UserRole), item.data(THUMBNAIL_CONTEXT_ROLE)) for item in items]:
+            jobs = {}  # 같은 영상을 한 번에 여러 번 넣었으면 한 번만 (아이콘은 경로가 같은 모든 항목에)
+            for item in items:
+                jobs.setdefault(paths.path_key(item.data(Qt.UserRole)),
+                                (item.data(Qt.UserRole), item.data(THUMBNAIL_CONTEXT_ROLE)))
+            for file_path, context in jobs.values():
                 if self._sidebar_generation != generation:
                     print("사이드바 목록이 바뀌어(job·폴더를 바꿈) 넣은 영상의 썸네일 만들기를 멈춤")
                     break
@@ -2178,10 +2182,12 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         [(영상, 그 항목의 자리)]를 돌려줌. 항목 자리의 미뤄 둔 썸네일 폴더 문제는 여기서 창으로 ((폴더, 제목)마다 한 번).
 
         새로 만들 것: 썸네일이 없거나, 영상보다 오래됐거나, 영상보다 새것이지만 읽을 수 없는(깨진) 썸네일, 화면에만인 항목.
-        캐시 적용이 이벤트를 처리하는 동안 목록이 바뀌면(job·폴더를 바꿈) 거기서 멈춤.
+        캐시 적용이 이벤트를 처리하는 동안 목록이 바뀌면(job·폴더를 바꿈) 거기서 멈춤. 같은 영상이 여러 번 있으면 한 번만
+        (아이콘은 경로가 같은 모든 항목에 붙음).
         """
         generation = self._sidebar_generation
         to_generate = []
+        seen = set()
         for i in range(self.sidebar.count()):
             if self._sidebar_generation != generation:
                 print("사이드바 목록이 바뀌어(job·폴더를 바꿈) 썸네일 확인을 멈춤")
@@ -2192,6 +2198,10 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             file_path = item.data(Qt.UserRole)
             if not file_path:
                 continue
+            key = paths.path_key(file_path)
+            if key in seen:
+                continue  # 같은 영상의 다른 항목 (같은 자리 — 이미 처리함)
+            seen.add(key)
             context = self._item_thumbnail_context(item, file_path)
             if not self._video_is_available(file_path, context):
                 continue
@@ -2479,14 +2489,13 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 print(f"유효하지 않은 pixmap으로 업데이트 시도: {file_path}")
                 return
             
-            # 사이드바에서 해당 파일을 찾아 썸네일 설정
+            # 사이드바에서 해당 파일을 찾아 썸네일 설정 (같은 영상이 여러 번 있으면 모든 항목에)
             for i in range(self.sidebar.count()):
                 item = self.sidebar.item(i)
                 if item and paths.same_path(item.data(Qt.UserRole), file_path):
                     # 아이콘 설정
                     item.setIcon(QIcon(pixmap))
                     print(f"썸네일 아이템 업데이트 완료: {file_path}")
-                    break
                     
         except Exception as e:
             print(f"썸네일 아이템 업데이트 중 오류: {file_path}, 오류: {e}")
