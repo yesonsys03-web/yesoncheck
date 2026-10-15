@@ -221,6 +221,27 @@ def test_worker_reports_save_failure_and_still_shows_thumbnail(qapp, tmp_path, m
     assert "Permission denied" in message
 
 
+def test_worker_saves_qimage(qapp, tmp_path, monkeypatch):
+    """워커 스레드에서는 QPixmap이 아니라 QImage를 저장 (QPixmap은 GUI 스레드 전용)."""
+    from PyQt5.QtGui import QImage
+
+    video = write_test_video(str(tmp_path / "job" / "a.mov"))
+    folder = thumbnails.ensure_folder(str(tmp_path / "job"))
+    real_save = thumbnails.save
+    saved = []
+
+    def recording_save(image, thumb_path):
+        saved.append(type(image))
+        real_save(image, thumb_path)
+
+    monkeypatch.setattr(thumbnails, "save", recording_save)
+    assert run_worker(video, folder) == ([(video, 120)], [])
+    assert saved == [QImage]
+    from PyQt5.QtGui import QPixmap
+
+    assert QPixmap(thumbnails.thumbnail_path(folder, video)).width() == 120
+
+
 def test_worker_reuses_fresh_thumbnail_and_remakes_stale_one(qapp, tmp_path):
     video = write_test_video(str(tmp_path / "job" / "a.mov"))
     folder = thumbnails.ensure_folder(str(tmp_path / "job"))

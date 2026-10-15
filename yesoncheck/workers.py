@@ -190,10 +190,11 @@ class ThumbnailWorker(QThread):
                     f"QPixmap 생성 완료: {self.file_path}, pixmap isNull: {pixmap.isNull()}, size: {pixmap.size()}"
                 )
 
-                # 디스크에 썸네일 저장. 실패하면 창으로 알리고(save_failed), 이번 실행에서는 아이콘으로만 보여 줌
+                # 디스크에 썸네일 저장. 실패하면 창으로 알리고(save_failed), 이번 실행에서는 아이콘으로만 보여 줌.
+                # 이 스레드에서는 QImage를 저장 (QPixmap은 GUI 스레드 전용). q_image가 가리키는 resized_frame을 지우기 전에
                 if self.thumbnail_folder and thumbnail_path:
                     try:
-                        thumbnails.save(pixmap, thumbnail_path)
+                        thumbnails.save(q_image, thumbnail_path)
                         print(f"썸네일 디스크 저장 완료: {thumbnail_path}")
                     except (OSError, RuntimeError) as exc:
                         message = f"썸네일 파일: {thumbnail_path}\n이유: {type(exc).__name__}: {exc}"
