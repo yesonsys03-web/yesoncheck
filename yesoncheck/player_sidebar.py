@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import sys
 import tempfile
 import time
@@ -44,6 +45,7 @@ LOADING_WORK_ITEM = "공유 설정 불러오는 중…"  # 불러오는 동안 �
 WORK_PLACEHOLDER = "작품선택"
 THUMBNAIL_SAVE_FAILED = "썸네일 저장 실패"  # 썸네일 파일을 쓰지 못함 (창 제목)
 THUMBNAIL_FOLDER_PROBLEM = "썸네일 폴더 문제"  # 썸네일 폴더를 만들지 못함 등 (창 제목)
+THUMBNAIL_VIDEO_PROBLEM = "영상 확인 실패"  # 썸네일을 만들 영상을 확인하지 못함 (창 제목)
 
 
 @dataclass
@@ -2081,11 +2083,11 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             if item is None:
                 continue  # None인 경우 건너뛰기
             file_path = item.data(Qt.UserRole)
-            if not file_path or not os.path.isfile(file_path):
+            if not file_path or not self._video_is_available(file_path):
                 continue
             fresh = self._has_disk_thumbnail(file_path)
             if fresh is None:
-                continue  # 그사이 영상이 없어짐
+                continue  # 영상을 확인하지 못함 (없어졌거나 읽을 수 없음)
             if fresh:
                 pixmap = QPixmap(thumbnails.thumbnail_path(self.current_thumbnail_folder, file_path))
                 if not pixmap.isNull():
@@ -2098,11 +2100,36 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             to_generate.append(file_path)
         return to_generate
 
+    def _video_is_available(self, file_path):
+        """썸네일을 만들 영상 파일이 있는지 os.stat으로 확인 (os.path.isfile은 오류를 숨기고 False를 돌려줌).
+
+        확인하지 못하면 False: 없어졌으면 로그만, 다른 오류는 창으로 알림 (_report_video_problem).
+        """
+        try:
+            info = os.stat(file_path)
+        except OSError as e:
+            self._report_video_problem(file_path, e)
+            return False
+        return stat.S_ISREG(info.st_mode)
+
+    def _report_video_problem(self, file_path, error):
+        """영상을 확인하지 못함 → 그 영상의 썸네일은 건너뜀. 없어진 것(FileNotFoundError)만 로그로 끝내고, 다른 오류
+        (권한·시간 초과·끊긴 공유 등)는 "영상 확인 실패" 창으로 ((폴더, 제목)마다 한 번) — 조용히 건너뛰지 않음."""
+        if isinstance(error, FileNotFoundError):
+            print(f"영상이 없어져 썸네일을 건너뜀: {file_path} ({type(error).__name__}: {error})")
+            return
+        self._report_thumbnail_problem(
+            self.current_thumbnail_folder or os.path.dirname(file_path),
+            THUMBNAIL_VIDEO_PROBLEM,
+            "썸네일을 만들 영상을 확인하지 못해 이 영상의 썸네일은 건너뜁니다 (권한·연결 끊김 등).\n"
+            f"영상: {file_path}\n이유: {type(error).__name__}: {error}",
+        )
+
     def _has_disk_thumbnail(self, file_path):
         """디스크에 영상보다 새 썸네일이 있는지 확인합니다 (영상이 바뀌었으면 False → 새로 만듦).
 
-        그사이 영상이 없어졌으면 None (건너뜀). 썸네일 파일을 확인하지 못하면(권한 등) 창으로 알리고(폴더마다 한 번)
-        False → 새로 만듦.
+        영상을 확인하지 못하면 None (건너뜀): 없어졌으면 로그만, 다른 오류는 창으로 (_report_video_problem).
+        썸네일 파일을 확인하지 못하면(권한 등) 창으로 알리고((폴더, 제목)마다 한 번) False → 새로 만듦.
         """
         if not self.current_thumbnail_folder:
             return False
@@ -2110,8 +2137,8 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         try:
             return thumbnails.is_fresh(thumbnail_path, file_path)
         except OSError as e:
-            if not os.path.isfile(file_path):
-                print(f"영상이 없어져 썸네일을 건너뜀: {file_path} ({type(e).__name__}: {e})")
+            if e.filename == file_path:  # 영상 쪽 오류 (썸네일이 없는 것은 is_fresh가 False로 돌려줌)
+                self._report_video_problem(file_path, e)
                 return None
             self._report_thumbnail_problem(
                 self.current_thumbnail_folder,
@@ -2163,7 +2190,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             thumbnail_path = thumbnails.thumbnail_path(self.current_thumbnail_folder, file_path)
             fresh = self._has_disk_thumbnail(file_path)
             if fresh is None:
-                return False  # 그사이 영상이 없어짐
+                return False  # 영상을 확인하지 못함 (없어졌거나 읽을 수 없음)
             
             if fresh:
                 print(f"디스크에서 썸네일 로드: {thumbnail_path}")

@@ -374,11 +374,12 @@ def test_loader_emits_only_fresh_thumbnails(qapp, tmp_path):
 
 SAVE_FAILED = "썸네일 저장 실패"
 FOLDER_PROBLEM = "썸네일 폴더 문제"
+VIDEO_PROBLEM = "영상 확인 실패"
 
 
 def thumbnail_warnings(dialogs, title=None):
     """썸네일 문제 창 [(제목, 내용)] (title을 주면 그 제목만)."""
-    titles = (title,) if title else (SAVE_FAILED, FOLDER_PROBLEM)
+    titles = (title,) if title else (SAVE_FAILED, FOLDER_PROBLEM, VIDEO_PROBLEM)
     return [(t, text) for kind, t, text in dialogs.messages if kind == "warning" and t in titles]
 
 
@@ -712,3 +713,51 @@ def test_folder_loads_clear_job_thumbnail_state(new_player, dialogs, tmp_path, m
     assert player.eventFilter(player.sidebar, drop) is True  # 사이드바에 끌어다 놓기
     assert job_state() == (None, False)
     assert player.current_thumbnail_folder == str(folder / thumbnails.FOLDER_NAME)
+
+
+def video_stat_times_out(monkeypatch, video):
+    """video만 os.stat이 시간 초과 (끊긴 공유처럼). os.path.isfile은 이 오류를 숨기고 False를 돌려줌."""
+    real_stat = os.stat
+
+    def stat_(path, *args, **kwargs):
+        if os.fspath(path) == video:
+            raise TimeoutError(errno.ETIMEDOUT, "Operation timed out", video)
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", stat_)
+
+
+def test_unreadable_video_is_reported_in_thumbnail_mode(new_player, dialogs, tmp_path, monkeypatch):
+    """영상을 확인하지 못하면(없어진 것 말고: 권한·시간 초과·끊긴 공유) 조용히 건너뛰지 않고 "영상 확인 실패" 창 한 번."""
+    bad = write_test_video(str(tmp_path / "job" / "a.mov"))
+    good = write_test_video(str(tmp_path / "job" / "b.mov"))
+    player = new_player(make_config(str(tmp_path), {}))
+    player.add_files_to_sidebar([bad, good])
+    folder = thumbnails.ensure_folder(str(tmp_path / "job"))
+    player.current_thumbnail_folder = folder
+    video_stat_times_out(monkeypatch, bad)
+    player.generate_thumbnails_for_all_items()
+    wait_until(lambda: not player.thumbnail_workers)
+    QApplication.processEvents()
+    warnings = thumbnail_warnings(dialogs)
+    assert [title for title, _text in warnings] == [VIDEO_PROBLEM]
+    assert bad in warnings[0][1] and "timed out" in warnings[0][1]
+    assert not player.sidebar.item(1).icon().isNull()  # 다른 영상은 만듦
+    monkeypatch.undo()
+    assert not os.path.exists(thumbnails.thumbnail_path(folder, bad))
+
+
+def test_generate_thumbnail_reports_unreadable_video(new_player, dialogs, tmp_path, monkeypatch):
+    """썸네일이 있는 영상의 수정 시각을 읽지 못함 → 없어진 것으로 보지 않고 알림, 워커는 띄우지 않음."""
+    video = write_test_video(str(tmp_path / "job" / "a.mov"))
+    player = new_player(make_config(str(tmp_path), {}))
+    player.add_files_to_sidebar([video])
+    folder = thumbnails.ensure_folder(str(tmp_path / "job"))
+    player.current_thumbnail_folder = folder
+    assert red_pixmap().save(thumbnails.thumbnail_path(folder, video), "JPG")
+    video_stat_times_out(monkeypatch, video)
+    assert player.generate_thumbnail(video) is False
+    assert player.thumbnail_workers == []
+    warnings = thumbnail_warnings(dialogs)
+    assert [title for title, _text in warnings] == [VIDEO_PROBLEM]
+    assert video in warnings[0][1] and "timed out" in warnings[0][1]
