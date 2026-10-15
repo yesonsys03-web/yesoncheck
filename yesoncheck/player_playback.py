@@ -153,16 +153,16 @@ class PlayerPlaybackMixin:
                     # 작품·시즌을 바꾸면 job 목록을 비우면서 빈 job으로 불림 → base_path가 작품·시즌 폴더이므로 만들지 않음
                     if not selected_job:
                         self.current_thumbnail_folder = None
+                        self._thumbnail_folder_problem = None
                     else:
                         try:
                             self.current_thumbnail_folder = thumbnails.ensure_folder(base_path)
+                            self._thumbnail_folder_problem = None
                         except OSError as e:
-                            # 썸네일 폴더 생성 실패해도 파일 표시는 계속 진행 (썸네일은 저장하지 않음 → 창으로 알림)
+                            # 썸네일 폴더 생성 실패해도 파일 표시는 계속 진행: 이 작업의 썸네일은 화면에만.
+                            # 지금은 로그만 남기고 창은 썸네일을 쓸 때 (작업을 열 때마다 창이 뜨지 않게)
                             self.current_thumbnail_folder = None
-                            self._report_thumbnail_problem(
-                                os.path.join(base_path, thumbnails.FOLDER_NAME),
-                                f"썸네일 폴더를 만들거나 권한을 바꾸지 못했습니다.\n이유: {type(e).__name__}: {e}",
-                            )
+                            self._remember_thumbnail_folder_problem(os.path.join(base_path, thumbnails.FOLDER_NAME), e)
                     
                     # 메인 스레드에서 직접 처리 (스레드 제거로 지연 해결)
                     all_mov_files = []

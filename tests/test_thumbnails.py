@@ -304,15 +304,25 @@ def test_loader_emits_only_fresh_thumbnails(qapp, tmp_path):
     assert loaded == [fresh]
 
 
+SAVE_FAILED = "썸네일 저장 실패"
+FOLDER_PROBLEM = "썸네일 폴더 문제"
+
+
+def thumbnail_warnings(dialogs, title=None):
+    """썸네일 문제 창 [(제목, 내용)] (title을 주면 그 제목만)."""
+    titles = (title,) if title else (SAVE_FAILED, FOLDER_PROBLEM)
+    return [(t, text) for kind, t, text in dialogs.messages if kind == "warning" and t in titles]
+
+
 def test_problem_dialog_once_per_folder(new_player, dialogs, tmp_path, monkeypatch):
     player = new_player(make_config(str(tmp_path), {}))
     folder_a = str(tmp_path / "A" / thumbnails.FOLDER_NAME)
     folder_b = str(tmp_path / "B" / thumbnails.FOLDER_NAME)
-    player._report_thumbnail_problem(folder_a, "이유 1")
-    player._report_thumbnail_problem(folder_a, "이유 2")
-    player._report_thumbnail_problem(folder_b, "이유 3")
-    warnings = [(title, text) for kind, title, text in dialogs.messages if kind == "warning"]
-    assert [title for title, _text in warnings] == ["썸네일 저장 실패", "썸네일 저장 실패"]
+    player._report_thumbnail_problem(folder_a, SAVE_FAILED, "이유 1")
+    player._report_thumbnail_problem(folder_a, FOLDER_PROBLEM, "이유 2")
+    player._report_thumbnail_problem(folder_b, FOLDER_PROBLEM, "이유 3")
+    warnings = thumbnail_warnings(dialogs)
+    assert [title for title, _text in warnings] == [SAVE_FAILED, FOLDER_PROBLEM]
     assert folder_a in warnings[0][1] and "이유 1" in warnings[0][1]
     assert folder_b in warnings[1][1] and "이유 3" in warnings[1][1]
     assert "권한" in warnings[0][1]
@@ -328,11 +338,11 @@ def test_problem_dialog_not_repeated_while_open(new_player, dialogs, tmp_path, m
     def warning(parent, title, text, *args, **kwargs):
         shown.append(text)
         if len(shown) == 1:
-            player._report_thumbnail_problem("folder", "창이 떠 있는 동안 온 실패")
+            player._report_thumbnail_problem("folder", SAVE_FAILED, "창이 떠 있는 동안 온 실패")
         return QMessageBox.Ok
 
     monkeypatch.setattr(QMessageBox, "warning", warning)
-    player._report_thumbnail_problem("folder", "첫 실패")
+    player._report_thumbnail_problem("folder", SAVE_FAILED, "첫 실패")
     assert len(shown) == 1
 
 
@@ -356,28 +366,96 @@ def test_sidebar_reports_save_failure_once(new_player, dialogs, tmp_path, monkey
         player.generate_thumbnail(video)
     wait_until(lambda: not player.thumbnail_workers)
     QApplication.processEvents()
-    warnings = [text for kind, _title, text in dialogs.messages if kind == "warning"]
+    warnings = thumbnail_warnings(dialogs)
     assert len(warnings) == 1
-    assert folder in warnings[0] and "Permission denied" in warnings[0]
+    title, text = warnings[0]
+    assert title == SAVE_FAILED
+    assert folder in text and "Permission denied" in text and "화면에만" in text
     assert all(not player.sidebar.item(i).icon().isNull() for i in range(player.sidebar.count()))
 
 
-def test_job_thumbnail_folder_failure_is_reported(new_player, dialogs, work_area, monkeypatch):
-    write_test_video(os.path.join(work_area.local, "S1", "job_01", "scene-001", "frames", "a.mov"))
+def open_job_with_folder_failure(new_player, work_area, monkeypatch):
+    """job_01의 썸네일 폴더만 만들지 못하는 작품(job_01·job_02)을 열고 job_01을 고름 → (창, job_01 영상)."""
+    video = write_test_video(os.path.join(work_area.local, "S1", "job_01", "scene-001", "frames", "a.mov"))
+    write_test_video(os.path.join(work_area.local, "S1", "job_02", "scene-001", "frames", "b.mov"))
     player = new_player(make_config(work_area.local, {"SMOKE": work_area.stored}, work_area.path_map))
+    real_ensure_folder = thumbnails.ensure_folder
+
+    def job_01_fails(parent_dir):
+        if os.path.basename(os.path.normpath(parent_dir)) == "job_01":
+            raise PermissionError(errno.EACCES, "Permission denied", os.path.join(parent_dir, thumbnails.FOLDER_NAME))
+        return real_ensure_folder(parent_dir)
+
+    monkeypatch.setattr(thumbnails, "ensure_folder", job_01_fails)
+    player.workComboBox.setCurrentText("SMOKE")
+    player.seasonComboBox.setCurrentText("S1")
+    player.jobComboBox.setCurrentText("job_01")
+    return player, video
+
+
+def test_job_folder_failure_reported_when_thumbnails_used(new_player, dialogs, work_area, monkeypatch, tmp_path):
+    """job을 열 때 썸네일 폴더를 만들지 못하면 로그만 → 썸네일 모드를 켤 때 창 한 번. 썸네일은 화면에만 (다른 폴더로 대신하지 않음)."""
+    player, video = open_job_with_folder_failure(new_player, work_area, monkeypatch)
+    assert player.sidebar.count() == 1  # 썸네일 폴더가 없어도 목록은 보임
+    assert player.current_thumbnail_folder is None
+    assert thumbnail_warnings(dialogs) == []  # 작업을 열 때는 창 없음
+
+    earlier_drop = tmp_path / "earlier_drop"  # 전에 끌어다 놓은 폴더 (그곳에 대신 저장하면 안 됨)
+    earlier_drop.mkdir()
+    player.selected_folder_path = str(earlier_drop)
+    player.switch_to_thumbnail_mode()
+    wait_until(lambda: not player.thumbnail_workers)
+    QApplication.processEvents()
+
+    warnings = thumbnail_warnings(dialogs)
+    assert len(warnings) == 1
+    title, text = warnings[0]
+    assert title == FOLDER_PROBLEM
+    assert os.path.join("job_01", thumbnails.FOLDER_NAME) in text and "Permission denied" in text and "화면에만" in text
+    assert not player.sidebar.item(0).icon().isNull()  # 화면에는 보임
+    assert not os.path.exists(earlier_drop / thumbnails.FOLDER_NAME)
+    assert not os.path.exists(os.path.join(os.path.dirname(video), thumbnails.FOLDER_NAME))
+    player.switch_to_thumbnail_mode()  # 다시 켜도 창은 폴더마다 한 번
+    wait_until(lambda: not player.thumbnail_workers)
+    assert len(thumbnail_warnings(dialogs)) == 1
+
+
+def test_job_folder_problem_cleared_by_next_folder(new_player, dialogs, work_area, monkeypatch, tmp_path):
+    """다른 job을 열거나 폴더를 불러오면 미뤄 둔 썸네일 폴더 문제는 지움 (그 폴더에 저장)."""
+    player, _video = open_job_with_folder_failure(new_player, work_area, monkeypatch)
+    assert player._thumbnail_folder_problem is not None
+    player.jobComboBox.setCurrentText("job_02")
+    assert player._thumbnail_folder_problem is None
+    assert player.current_thumbnail_folder.endswith(os.path.join("job_02", thumbnails.FOLDER_NAME))
+
+    player.jobComboBox.setCurrentText("job_01")
+    assert player._thumbnail_folder_problem is not None
+    other = tmp_path / "other"
+    write_test_video(str(other / "c.mov"))
+    player.load_videos_from_folder(str(other))  # 폴더 선택·북마크
+    assert player._thumbnail_folder_problem is None
+    assert player.current_thumbnail_folder == str(other / thumbnails.FOLDER_NAME)
+
+
+def test_fallback_folder_failure_does_not_escape(new_player, dialogs, tmp_path, monkeypatch):
+    """job이 아닌 영상(끌어다 놓은 폴더)의 썸네일 폴더를 만들지 못해도 예외가 썸네일 모드로 새지 않음 → 창 한 번, 화면에만."""
+    video = write_test_video(str(tmp_path / "dropped" / "a.mov"))
+    player = new_player(make_config(str(tmp_path), {}))
+    player.add_files_to_sidebar([video])
+    player.selected_folder_path = str(tmp_path / "dropped")
 
     def cannot_create(parent_dir):
         raise PermissionError(errno.EACCES, "Permission denied", os.path.join(parent_dir, thumbnails.FOLDER_NAME))
 
-    player.workComboBox.setCurrentText("SMOKE")
-    player.seasonComboBox.setCurrentText("S1")
     monkeypatch.setattr(thumbnails, "ensure_folder", cannot_create)
-    player.jobComboBox.setCurrentText("job_01")
-    assert player.sidebar.count() == 1  # 썸네일 폴더가 없어도 목록은 보임
+    player.switch_to_thumbnail_mode()
+    wait_until(lambda: not player.thumbnail_workers)
+    QApplication.processEvents()
+    warnings = thumbnail_warnings(dialogs)
+    assert [title for title, _text in warnings] == [FOLDER_PROBLEM]
+    assert "Permission denied" in warnings[0][1]
     assert player.current_thumbnail_folder is None
-    warnings = [text for kind, _title, text in dialogs.messages if kind == "warning"]
-    assert len(warnings) == 1
-    assert os.path.join("job_01", thumbnails.FOLDER_NAME) in warnings[0] and "Permission denied" in warnings[0]
+    assert not player.sidebar.item(0).icon().isNull()
 
 
 def test_no_thumbnail_folder_until_job_selected(new_player, dialogs, work_area):
@@ -390,7 +468,7 @@ def test_no_thumbnail_folder_until_job_selected(new_player, dialogs, work_area):
     assert not os.path.exists(os.path.join(work_area.local, thumbnails.FOLDER_NAME))
     assert not os.path.exists(os.path.join(work_area.local, "S1", thumbnails.FOLDER_NAME))
     assert player.current_thumbnail_folder is None
-    assert not [m for m in dialogs.messages if m[1] == "썸네일 저장 실패"]
+    assert thumbnail_warnings(dialogs) == []
 
     player.jobComboBox.setCurrentText("job_01")
     assert os.path.isdir(os.path.join(work_area.local, "S1", "job_01", thumbnails.FOLDER_NAME))

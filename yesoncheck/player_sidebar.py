@@ -42,6 +42,8 @@ LOADING_TITLE = "Yeson Checker — 공유 설정 불러오는 중…"
 LOADING_NOTICE = "공유 설정을 불러오는 중입니다. 잠시 뒤 다시 시도하세요."
 LOADING_WORK_ITEM = "공유 설정 불러오는 중…"  # 불러오는 동안 작품 목록의 첫 항목 ("작품선택" 대신)
 WORK_PLACEHOLDER = "작품선택"
+THUMBNAIL_SAVE_FAILED = "썸네일 저장 실패"  # 썸네일 파일을 쓰지 못함 (창 제목)
+THUMBNAIL_FOLDER_PROBLEM = "썸네일 폴더 문제"  # 썸네일 폴더를 만들지 못함 등 (창 제목)
 
 
 @dataclass
@@ -352,7 +354,8 @@ class PlayerSidebarMixin:
                     parent.selected_folder_path = folder_paths[0]
                     print(f"메인 윈도우 드래그앤드롭으로 썸네일 폴더 설정: {parent.selected_folder_path}")
                     
-                    # 드래그앤드롭 시 직접 썸네일 폴더 생성
+                    # 드래그앤드롭 시 직접 썸네일 폴더 생성 (전에 연 job의 썸네일 폴더 문제는 이제 상관없음)
+                    parent._thumbnail_folder_problem = None
                     thumbnail_folder = thumbnails.ensure_folder(folder_paths[0])
                     parent.current_thumbnail_folder = thumbnail_folder
                     print(f"메인 윈도우 드래그앤드롭으로 썸네일 폴더 설정: {thumbnail_folder}")
@@ -804,6 +807,7 @@ class PlayerSidebarMixin:
             self.sidebar.selectAll()
             # 폴더 드래그앤드롭 시에는 기존 썸네일 폴더를 초기화하고 새로 설정
             self.current_thumbnail_folder = None  # 기존 썸네일 폴더 초기화
+            self._thumbnail_folder_problem = None  # 전에 연 job의 썸네일 폴더 문제는 이제 상관없음
             self.setup_thumbnail_folder()
             self.schedule_background_thumbnail_loading()
             QMessageBox.information(self, "폴더 로드 완료", f"{len(video_files)}개의 비디오 파일이 사이드바에 추가되었습니다.\n첫 번째 파일이 Video A에 로드되었습니다.")
@@ -1014,6 +1018,7 @@ class PlayerSidebarMixin:
 
     def setup_thumbnail_folder_for_bookmark(self, folder_path):
         """북마크 폴더용 썸네일 폴더를 설정합니다."""
+        self._thumbnail_folder_problem = None  # 전에 연 job의 썸네일 폴더 문제는 이제 상관없음
         try:
             thumbnail_folder = thumbnails.ensure_folder(folder_path)
             self.current_thumbnail_folder = thumbnail_folder
@@ -1910,6 +1915,9 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         self._resize_sidebar_column(new_width)
         print(f"사이드바 폭을 2배로 조정: {self.default_sidebar_width} -> {new_width}")
         
+        # 썸네일을 쓰기 시작할 때 미뤄 둔 썸네일 폴더 문제를 창으로 (폴더마다 한 번)
+        self._report_pending_thumbnail_problem()
+
         # 캐시된 썸네일을 즉시 적용
         to_generate = self._apply_disk_thumbnails()
         print(f"캐시된 썸네일 즉시 적용 완료 (새로 만들 것 {len(to_generate)}개)")
@@ -2096,18 +2104,32 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         
         # 썸네일 폴더가 설정되지 않은 경우 드래그한 폴더에 생성
         if not self.current_thumbnail_folder:
-            if hasattr(self, 'selected_folder_path') and self.selected_folder_path:
+            if self._thumbnail_folder_problem is not None:
+                # 이 작업의 썸네일 폴더를 만들지 못함 → 다른 폴더로 대신하지 않고 화면에만 (창은 폴더마다 한 번)
+                self._report_pending_thumbnail_problem()
+            elif hasattr(self, 'selected_folder_path') and self.selected_folder_path:
                 # 드래그한 폴더가 있는 경우
-                thumbnail_folder = thumbnails.ensure_folder(self.selected_folder_path)
-                self.current_thumbnail_folder = thumbnail_folder
-                print(f"generate_thumbnail에서 썸네일 폴더 설정: {thumbnail_folder}")
+                try:
+                    thumbnail_folder = thumbnails.ensure_folder(self.selected_folder_path)
+                except OSError as e:
+                    self._remember_thumbnail_folder_problem(
+                        os.path.join(self.selected_folder_path, thumbnails.FOLDER_NAME), e)
+                    self._report_pending_thumbnail_problem()
+                else:
+                    self.current_thumbnail_folder = thumbnail_folder
+                    print(f"generate_thumbnail에서 썸네일 폴더 설정: {thumbnail_folder}")
             else:
                 # 개별 파일들을 드래그한 경우, 첫 번째 파일의 디렉토리에 썸네일 폴더 생성
                 if os.path.exists(file_path):
                     file_dir = os.path.dirname(file_path)
-                    thumbnail_folder = thumbnails.ensure_folder(file_dir)
-                    self.current_thumbnail_folder = thumbnail_folder
-                    print(f"generate_thumbnail에서 파일 디렉토리에 썸네일 폴더 설정: {thumbnail_folder}")
+                    try:
+                        thumbnail_folder = thumbnails.ensure_folder(file_dir)
+                    except OSError as e:
+                        self._remember_thumbnail_folder_problem(os.path.join(file_dir, thumbnails.FOLDER_NAME), e)
+                        self._report_pending_thumbnail_problem()
+                    else:
+                        self.current_thumbnail_folder = thumbnail_folder
+                        print(f"generate_thumbnail에서 파일 디렉토리에 썸네일 폴더 설정: {thumbnail_folder}")
                 else:
                     print("썸네일 폴더를 설정할 수 없음")
                     return False
@@ -2137,10 +2159,10 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             # 완료된 워커들 정리
             self.cleanup_thumbnail_workers()
 
-        # 워커 생성
+        # 워커 생성 (썸네일 폴더가 없으면 저장하지 않고 화면에만)
         worker = ThumbnailWorker(file_path, self.thumbnail_size, self.current_thumbnail_folder)
         worker.thumbnail_ready.connect(self.on_thumbnail_ready)
-        worker.save_failed.connect(self._report_thumbnail_problem)
+        worker.save_failed.connect(self._on_thumbnail_save_failed)
         
         # 안전한 워커 제거 함수
         def safe_remove_worker():
@@ -2164,20 +2186,48 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         worker.start()
         print(f"썸네일 워커 시작: {file_path}, 현재 워커 수: {len(self.thumbnail_workers)}")
 
-    def _report_thumbnail_problem(self, folder, message):
-        """썸네일 폴더 문제(저장 실패·폴더를 만들지 못함)를 알림: 로그에는 매번, 창은 이번 실행에서 폴더마다 한 번."""
-        print(f"썸네일 저장 실패: {folder}\n{message}")
+    def _remember_thumbnail_folder_problem(self, folder, error):
+        """썸네일 폴더를 만들지 못함 → 이 작업의 썸네일은 저장하지 않고 화면에만 (다른 폴더로 대신하지 않음).
+
+        로그에는 바로 남기고, 창은 썸네일을 쓸 때(썸네일 모드·썸네일 생성) _report_pending_thumbnail_problem이 띄움.
+        """
+        text = ("썸네일 폴더를 만들지 못해 이 작업의 썸네일은 저장하지 않습니다.\n"
+                "이번에는 화면에만 보이고, 다음에 썸네일 모드를 켜면 다시 만듭니다.\n"
+                f"이유: {type(error).__name__}: {error}")
+        print(f"{THUMBNAIL_FOLDER_PROBLEM}: {folder}\n{text}")
+        self._thumbnail_folder_problem = (folder, THUMBNAIL_FOLDER_PROBLEM, text)
+
+    def _report_pending_thumbnail_problem(self):
+        """썸네일을 쓸 때(썸네일 모드·썸네일 생성) 미뤄 둔 썸네일 폴더 문제를 창으로 알림 (폴더마다 한 번)."""
+        if self._thumbnail_folder_problem is not None:
+            self._report_thumbnail_problem(*self._thumbnail_folder_problem)
+
+    def _on_thumbnail_save_failed(self, folder, detail):
+        """ThumbnailWorker.save_failed: 저장하지 못한 썸네일도 이번 실행에서는 아이콘으로 보임."""
+        self._report_thumbnail_problem(
+            folder,
+            THUMBNAIL_SAVE_FAILED,
+            "썸네일 파일을 저장하지 못했습니다.\n"
+            f"이번에는 화면에만 보이고, 다음에 썸네일 모드를 켜면 다시 만듭니다.\n{detail}",
+        )
+
+    def _report_thumbnail_problem(self, folder, title, text):
+        """썸네일 문제를 알림: 로그에는 매번, 창은 이번 실행에서 폴더마다 한 번.
+
+        title: THUMBNAIL_SAVE_FAILED 또는 THUMBNAIL_FOLDER_PROBLEM. text: 무슨 일이 있었고 썸네일이 어떻게 되는지와 이유.
+        창에는 NAS 권한 확인 안내와 폴더 경로를 덧붙임.
+        """
+        print(f"{title}: {folder}\n{text}")
         if folder in self._thumbnail_problem_folders:
             return
         # 창을 띄우기 전에 넣음: 창이 떠 있는 동안 다음 저장 실패 시그널이 들어와도 창을 또 띄우지 않게
         self._thumbnail_problem_folders.add(folder)
         QMessageBox.warning(
             self,
-            "썸네일 저장 실패",
-            "이 작업의 썸네일을 썸네일 폴더에 저장하지 못했습니다.\n"
-            "이번에는 화면에만 보이고, 다음에 썸네일 모드를 켜면 다시 만듭니다.\n\n"
-            "NAS에서 이 폴더의 권한(이 PC가 쓰는 NAS 계정의 쓰기 권한)을 확인하세요.\n\n"
-            f"폴더: {folder}\n{message}",
+            title,
+            f"{text}\n\n"
+            "NAS에서 이 폴더의 권한(이 PC가 쓰는 NAS 계정의 읽기·쓰기 권한)을 확인하세요.\n\n"
+            f"폴더: {folder}",
         )
 
     def on_thumbnail_ready(self, file_path, pixmap):
