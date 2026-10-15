@@ -200,7 +200,28 @@ def test_save_raises_when_folder_missing(qapp, tmp_path):
     target = str(tmp_path / "missing" / "a.jpg")
     with pytest.raises(OSError) as info:
         thumbnails.save(red_pixmap(), target)
-    assert info.value.filename.startswith(target)  # 같은 폴더의 임시 파일 (썸네일 경로 + .pid.thread.tmp)
+    assert info.value.filename.startswith(target)  # 같은 폴더의 임시 파일 (썸네일 경로 + .<uuid>.tmp)
+
+
+def test_save_temp_name_is_unique(qapp, tmp_path, monkeypatch):
+    """임시 파일 이름은 저장마다 다름 (uuid): pid·스레드 번호는 NAS 폴더를 함께 쓰는 다른 PC와 겹칠 수 있음."""
+    import re
+
+    real_replace = os.replace
+    sources = []
+
+    def recording_replace(src, dst):
+        sources.append(src)
+        real_replace(src, dst)
+
+    monkeypatch.setattr(thumbnails.os, "replace", recording_replace)
+    thumb = str(tmp_path / "a.jpg")
+    thumbnails.save(red_pixmap(), thumb)
+    thumbnails.save(red_pixmap(), thumb)
+    assert len(sources) == 2 and sources[0] != sources[1]
+    for src in sources:
+        assert re.fullmatch(re.escape(thumb) + r"\.[0-9a-f]{32}\.tmp", src), src
+    assert os.listdir(tmp_path) == ["a.jpg"]
 
 
 def test_save_write_failure_leaves_nothing(qapp, tmp_path, monkeypatch):

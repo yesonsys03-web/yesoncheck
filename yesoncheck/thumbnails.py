@@ -8,7 +8,7 @@ NAS의 썸네일 폴더는 모든 Mac·Windows PC가 함께 쓴다 (PC마다 NAS
 
 import os
 import stat
-import threading
+import uuid
 
 from PyQt5.QtCore import QBuffer, QByteArray, QIODevice
 
@@ -90,8 +90,9 @@ def save(image, thumb_path):
     buffer.close()
     if not encoded:
         raise RuntimeError(f"썸네일을 JPEG로 바꾸지 못했습니다 (Qt 이미지 플러그인 확인): {thumb_path}")
-    # .jpg로 끝나지 않는 이름: 썸네일로 읽히지 않음. 프로세스·스레드마다 달라 여러 PC·워커가 겹쳐도 됨
-    tmp_path = f"{thumb_path}.{os.getpid()}.{threading.get_ident()}.tmp"
+    # .jpg로 끝나지 않는 이름: 썸네일로 읽히지 않음. 저장마다 uuid라 NAS 폴더를 함께 쓰는 여러 PC·워커가 겹치지 않음
+    # (pid·스레드 번호는 다른 PC와 겹칠 수 있음)
+    tmp_path = f"{thumb_path}.{uuid.uuid4().hex}.tmp"
     try:
         with open(tmp_path, "wb") as fh:
             fh.write(bytes(data))
