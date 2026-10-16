@@ -16,6 +16,7 @@ import time
 import pytest
 from PyQt5.QtCore import QEvent, QPoint, Qt
 from PyQt5.QtGui import QColor
+from PyQt5.QtMultimedia import QMediaContent
 from PyQt5.QtWidgets import QAbstractItemView, QApplication, QDialog, QMessageBox, QShortcut
 
 from yesoncheck import paths, thumbnails, video_list
@@ -119,6 +120,19 @@ def open_job(new_player, work_area, monkeypatch, scenes=("001", "002", "003")):
 
 def add_scene(job, scene):
     return write_test_video(os.path.join(job, f"scene-{scene}", "frames", f"FL_{scene}.mov"))
+
+
+def close_open_video(player):
+    """앱이 연 영상(목록을 불러오면 여는 첫 영상)을 닫음 — Windows는 열려 있는 파일을 지우지 못하므로 그 영상이 든 폴더를
+    지우는 시험은 먼저 닫음 (다른 PC에서 지우는 경우를 흉내. Mac은 열려 있어도 지워짐)."""
+    player.stop_video()
+    for name in ("cap_a", "cap_b"):
+        cap = getattr(player, name)
+        if cap is not None:
+            cap.release()
+            setattr(player, name, None)
+    if player._media_player is not None:
+        player._media_player.setMedia(QMediaContent())
 
 
 def count_scans(monkeypatch):
@@ -261,6 +275,7 @@ def test_unreadable_scene_folder_keeps_its_items(new_player, dialogs, work_area,
 def test_deleted_job_folder_removes_its_items_and_reports_once(new_player, dialogs, work_area, monkeypatch):
     """job 폴더가 지워짐(위 폴더는 읽힘) → 영상이 디스크에 없으므로 목록에서 빼고 창으로 한 번 알림."""
     player, job = open_job(new_player, work_area, monkeypatch)
+    close_open_video(player)
     shutil.rmtree(job)
 
     refresh(player)
@@ -364,7 +379,7 @@ def test_unreadable_job_on_selection_one_box_one_scan(new_player, pumping_dialog
     """리뷰 M2: 고른 job 폴더를 읽지 못하면 창 한 번·읽기 한 번 (예전에는 update_playlist의 창이 이벤트를 처리하는 동안
     '방금 읽음' 표시가 지워져 activated가 또 읽고, 문구가 달라 같은 문제가 두 번 뜸)."""
     player, _job = open_job(new_player, work_area, monkeypatch)
-    job2 = os.path.join(work_area.local, "S1", "job_02")
+    job2 = os.path.normpath(os.path.join(player.current_job_path, os.pardir, "job_02"))  # 앱이 쓰는 경로 (Windows는 UNC)
     scans = count_scans(monkeypatch)
     fail_scandir_of(monkeypatch, job2, PermissionError(errno.EACCES, "Permission denied", job2))
 
@@ -651,6 +666,7 @@ def test_refresh_appended_folder_and_job_each_with_own_rules(new_player, dialogs
     dropped_thumbs = player.current_thumbnail_folder
     assert listed(player) == ["FL_001.mov", "FL_002.mov", "FL_003.mov", "c1.mov", "c2.mov"]
 
+    close_open_video(player)
     shutil.rmtree(os.path.join(job, "scene-001"))
     add_scene(job, "004")
     os.remove(dropped / "c1.mov")
@@ -728,6 +744,7 @@ def test_folder_source_whose_parent_was_deleted_is_removed(new_player, dialogs, 
     player.load_videos_from_folder(str(folder))
     assert listed(player) == ["a.mov"]
 
+    close_open_video(player)
     shutil.rmtree(tmp_path / "work" / "S1")
     refresh(player)
     refresh(player)
@@ -1044,6 +1061,7 @@ def test_unverifiable_source_box_says_why(new_player, dialogs, work_area, monkey
     """2차 검토 L4: 없어진 것으로 보지 않은 까닭(확인한 위 폴더와 그 상태)을 창에. 예: 시즌의 job을 모두 지워 시즌 폴더가 빔
     → 떼고 남은 마운트 폴더와 구별할 수 없어 목록은 그대로 두고 그 까닭을 알림."""
     player, job = open_job(new_player, work_area, monkeypatch)
+    close_open_video(player)
     shutil.rmtree(job)
     shutil.rmtree(os.path.join(work_area.local, "S1", "job_02"))
     refresh(player)
