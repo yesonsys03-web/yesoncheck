@@ -26,7 +26,7 @@ from PyQt5.QtCore import (
     pyqtSlot,
     QItemSelectionModel,
 )
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QKeySequence
 from PyQt5.QtMultimedia import QMediaPlayer
 from PyQt5.QtWidgets import (
     QAbstractItemView,
@@ -65,7 +65,7 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck.video_widget import CustomVideoWidget
-from yesoncheck import external_tools, image_io, paths, shared_config, timing_log
+from yesoncheck import external_tools, image_io, paths, shared_config, timing_log, video_list
 from yesoncheck.slider_style import jump_to_click
 from yesoncheck.window_layout import ElidedLabel, InfoRowLayout, VerticalScrollArea, startup_geometry
 # 무거운 모듈들은 lazy import로 변경 (실제 사용 시점에만 로드)
@@ -179,6 +179,8 @@ class VideoPlayerBase(QMainWindow):
         self.media_player_create_seconds = None  # 재생기를 만드는 데 걸린 초 (만든 뒤에 채움)
         self._shared_config_load = None  # 실행 중인 공유 설정 불러오기 (SharedConfigLoad)
         self._shared_config_closed = False  # 창이 닫힘 → 늦게 온 공유 설정 결과는 버림
+        # job 목록 정렬의 locale (이름 순서): 시작할 때 GUI 스레드에서 한 번 — 목록 다시 읽기 스레드의 정렬은 locale을 바꾸지 않음
+        video_list.set_sort_locale()
         self.setWindowTitle("Yeson Checker")
         self.setGeometry(100, 100, 1080, 720)
 
@@ -390,12 +392,18 @@ QMessageBox {
         self.playlist = []
         self.current_playlist_index = -1
         self.is_playlist_playing = False
+        self._playlist_played_any = False  # 이번 선택 재생에서 연 영상이 있음 (없으면 끝날 때 보던 영상을 멈추지 않음)
+        self._playlist_resolving = False  # 선택 재생이 다음 영상을 정하는 중 (그동안 영상이 끝나도 또 진행하지 않음)
         self.current_item = None
         self.use_gpu = False
         self.gpu_backend = None
         self.workComboBox.currentIndexChanged.connect(self.update_season_list)
         self.seasonComboBox.currentIndexChanged.connect(self.update_job_list)
         self.jobComboBox.currentIndexChanged.connect(self.update_playlist)
+        # 같은 job을 다시 골라도 목록을 다시 읽음 (activated는 골랐을 때마다, currentIndexChanged는 job이 바뀔 때만).
+        # 다른 job을 고르면 update_playlist가 읽은 (작품, 시즌, job)을 기억해 activated는 다시 읽지 않음 (한 번만 읽음)
+        self._job_list_loaded_for = None
+        self.jobComboBox.activated.connect(self._on_job_activated)
 
         self.installEventFilter(self)
 
@@ -981,6 +989,27 @@ QSlider::add-page:horizontal {
         # 만드는 반복은 이 값이 바뀌면 멈춤 (지워진 항목을 쓰지 않고, 예전 목록의 영상을 계속 만들지 않게)
         self._sidebar_generation = 0
         self.sidebar.model().modelAboutToBeReset.connect(self._bump_sidebar_generation)
+        # 목록에 영상을 넣은 곳(job 폴더·폴더, video_list.ListSource) → 그곳에서 새로 생긴 영상의 썸네일 자리. 목록 다시
+        # 읽기(새로고침·F5·창이 다시 활성)가 이곳들을 처음과 같은 규칙으로 다시 읽음. 목록을 비우면 함께 잊음
+        self._sidebar_sources = {}
+        self.sidebar.model().modelAboutToBeReset.connect(self._forget_sidebar_sources)
+        # 이번 실행에서 목록 문제 창을 띄운 (제목, 폴더 키, 오류) — 같은 문제는 한 번, 그 폴더를 다시 읽으면 기록을 지움
+        self._list_problems_shown = set()
+        self._sidebar_refresh_holds = 0  # 목록을 쓰는 중(썸네일 반복·job 목록 만들기·메뉴) — 그동안 다시 읽기는 미룸
+        self._sidebar_refresh_deferred = False  # 목록을 다 쓰면 다시 읽음
+        self._sidebar_scan = None  # 실행 중인 목록 다시 읽기 (SidebarScan — 디스크 읽기는 GUI 밖 스레드)
+        self._sidebar_rescan_queued = False  # 읽는 동안 다시 읽어 달라는 요청이 옴 → 끝나면 한 번 더
+        self._sidebar_scan_closed = False  # 창이 닫힘 → 늦게 온 다시 읽기 결과는 버림
+        self._sidebar_refreshed_at = None  # 마지막으로 목록을 디스크에서 읽은 때 (처음 불러오기·다시 읽기, time.monotonic)
+        self._sidebar_scan_seconds = 0.0  # 마지막으로 목록을 읽는 데 걸린 초 (앱이 다시 활성될 때 다시 읽기 간격)
+        # 앱이 다시 활성되면(다른 앱에서 돌아옴) 조금 뒤 목록 다시 읽기 (활성화가 잇달아 와도 한 번). 이 앱의 창 사이를
+        # 오가거나 메시지 창을 닫을 때는 읽지 않음 — 창 활성(ActivationChange)이 아니라 앱 상태로
+        self._sidebar_refresh_timer = QTimer(self)
+        self._sidebar_refresh_timer.setSingleShot(True)
+        self._sidebar_refresh_timer.setInterval(300)
+        self._sidebar_refresh_timer.timeout.connect(self._refresh_sidebar_on_activation)
+        QApplication.instance().applicationStateChanged.connect(self._on_application_state_changed)
+        self._app_state_connected = True
         self.sidebar.installEventFilter(self)
         self.sidebar.setContextMenuPolicy(Qt.CustomContextMenu)
         self.sidebar.customContextMenuRequested.connect(self.show_sidebar_context_menu)
@@ -1114,8 +1143,35 @@ QPushButton:checked {
 }
 """)
         
+        # 목록 다시 읽기: 다른 PC·Finder에서 NAS의 영상을 지우거나 넣었을 때 (창이 다시 활성될 때도 저절로 읽음)
+        self.refreshListButton = QPushButton('새로고침')
+        self.refreshListButton.setToolTip('목록 다시 읽기 (F5)')
+        self.refreshListButton.clicked.connect(self.refresh_sidebar)
+        self.refreshListButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.refreshListButton.setStyleSheet("""
+QPushButton {
+    background: #17a2b8;
+    border: 1px solid #17a2b8;
+    border-radius: 6px;
+    color: white;
+    font-weight: 500;
+    padding: 8px 6px;
+}
+QPushButton:hover {
+    background: #138496;
+    border: 1px solid #117a8b;
+}
+QPushButton:pressed {
+    background: #117a8b;
+    border: 1px solid #10707f;
+}
+""")
+        refresh_shortcut = QShortcut(QKeySequence(Qt.Key_F5), self)
+        refresh_shortcut.activated.connect(self.refresh_sidebar)
+
         viewModeLayout.addWidget(self.listModeButton)
         viewModeLayout.addWidget(self.thumbnailModeButton)
+        viewModeLayout.addWidget(self.refreshListButton)
         
         # 썸네일 진행바 추가
         self.thumbnailProgressBar = QProgressBar()
@@ -1162,7 +1218,7 @@ QPushButton:checked {
         self.control_widgets = [
             sidebarContainer, self.middleScrollArea, workLabel, stopButton, self.frameRateLabel, volumeLabel, self.workComboBox, self.seasonComboBox, self.jobComboBox,
             self.loopCheckBox, self.playPauseButton, self.playSelectedButton,
-            self.volumeSlider, self.frameRateComboBox, self.wipeCheckBox, self.sidebar, self.wipeXButton, self.wipeYButton, openButtonA, openButtonB, self.volumeSlider, selectFolderButton, bookmarkButton, bookmarkListButton, workPathButton, self.listModeButton, self.thumbnailModeButton, self.thumbnailProgressBar
+            self.volumeSlider, self.frameRateComboBox, self.wipeCheckBox, self.sidebar, self.wipeXButton, self.wipeYButton, openButtonA, openButtonB, self.volumeSlider, selectFolderButton, bookmarkButton, bookmarkListButton, workPathButton, self.listModeButton, self.thumbnailModeButton, self.refreshListButton, self.thumbnailProgressBar
         ]
         # 시간: 줄이면 뒤쪽(전체 시간)부터 …로 ('00:00:00.000 / …'까지). 너비는 예전처럼 이 모양의 글자 너비로 고정
         self.timeLabel = ElidedLabel(Qt.ElideRight, keep_text="00:00:00.000 / 00:00:00.000",
@@ -1473,6 +1529,10 @@ QSlider::add-page:horizontal {
                         # 폴더인 경우 - 재귀적으로 비디오 파일 찾기
                         folder_paths.append(file_path)  # 폴더 경로 저장
                         folder_files = self.get_video_files_from_folder(file_path)
+                        if folder_files is None:
+                            # 폴더를 읽지 못함 (창으로 알림) — 기억해 두면 연결이 돌아온 뒤 새로고침(F5)으로 들어옴
+                            self._register_unread_folder(file_path)
+                            continue
                         folder_files.sort()  # 이름 순서대로 정렬
                         video_files.extend(folder_files)
                 
@@ -1496,7 +1556,7 @@ QSlider::add-page:horizontal {
                         # 첫 번째 폴더를 기준으로 썸네일 폴더 설정 (전에 고른 job·폴더가 아니라)
                         self._use_dropped_folder_for_thumbnails(folder_paths[0])
                     
-                    self.add_files_to_sidebar(video_files)
+                    self.add_files_to_sidebar(video_files, folder_paths)
                     
                     # 백그라운드 로딩 스케줄링
                     if folder_paths:
@@ -1517,7 +1577,7 @@ QSlider::add-page:horizontal {
                     QTimer.singleShot(150, self.reposition_overlay_to_bottom_center)
                     
         elif event.type() == QEvent.ActivationChange:
-            # 앱이 활성화될 때 포커스 설정
+            # 앱이 활성화될 때 포커스 설정 (사이드바 목록 다시 읽기는 앱이 다시 활성될 때 — _on_application_state_changed)
             if self.isActiveWindow():
                 QTimer.singleShot(100, self.force_focus)
         super().changeEvent(event)
@@ -1676,8 +1736,7 @@ QSlider::add-page:horizontal {
     
     def on_sidebar_item_clicked(self, item):
         if self.is_playlist_playing: return
-        # 사이드바에서 영상 클릭 시 캐시 초기화 (이전 영상 프레임 방지)
-        self.clear_cache()
+        # 캐시 초기화(이전 영상 프레임 방지)는 open_file이 영상을 연 뒤에 함 — 열지 못하면 보던 영상의 캐시는 그대로
         self.open_file('A', item.toolTip())
 
 
@@ -4061,6 +4120,7 @@ QMessageBox {
 <li><b>←/→</b>: 이전/다음 프레임</li>
 <li><b>F11</b>: 전체화면</li>
 <li><b>F1</b>: 도움말</li>
+<li><b>F5</b>: 사이드바 목록 다시 읽기 (새로고침 — 창으로 돌아올 때도 저절로)</li>
 <li><b>D (ㅇ)</b>: 선택 구간 병합 (OCR 결과 검토 창)</li>
 <li><b>R (ㄱ)</b>: 전체 내보내기 (OCR 결과 검토 창)</li>
 </ul>
@@ -4247,6 +4307,19 @@ QMessageBox {
         """앱 종료 시 리소스를 빠르게 정리합니다."""
         try:
             print("앱 종료 중 - 빠른 리소스 정리 시작")
+
+            # 실행 중인 목록 다시 읽기: 기다리지 않고 끝날 때까지 붙잡아 둠 (응답 없는 NAS를 읽는 중일 수 있음 — 앱이
+            # 끝나기 전에 wait_for_released_workers가 정해진 시간까지 기다림). 결과는 버림 (신호를 막음).
+            # 맨 먼저: 뒤의 정리에서 오류가 나도 실행 중인 스레드를 놓지 않은 채 남기지 않게
+            self._sidebar_scan_closed = True
+            if getattr(self, '_app_state_connected', False):
+                QApplication.instance().applicationStateChanged.disconnect(self._on_application_state_changed)
+                self._app_state_connected = False
+            if hasattr(self, '_sidebar_refresh_timer'):
+                self._sidebar_refresh_timer.stop()
+            scan, self._sidebar_scan = getattr(self, '_sidebar_scan', None), None
+            if scan is not None:
+                release_worker(scan, "사이드바 목록 다시 읽기")
 
             # 실행 중인 내보내기·병합 중지 (ffmpeg 종료)
             self.stop_running_jobs()

@@ -1,5 +1,6 @@
 """Media library and sidebar helpers for VideoPlayer."""
 
+import contextlib
 import functools
 import hashlib
 import json
@@ -13,9 +14,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import cv2
-from PyQt5.QtCore import QDateTime, QDir, Qt, QSize, QThread, pyqtSignal
+from PyQt5.QtCore import QDateTime, QDir, Qt, QSize, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QPixmap
 from PyQt5.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QDialog,
     QFileDialog,
@@ -36,7 +38,7 @@ from PyQt5.QtWidgets import (
 from yesoncheck.workers import ThumbnailLoaderWorker, ThumbnailWorker
 import traceback
 
-from yesoncheck import path_map_setup, paths, shared_config, thumbnails, timing_log
+from yesoncheck import path_map_setup, paths, shared_config, thumbnails, timing_log, video_list
 from yesoncheck.path_map_setup_dialog import PathMapSetupDialog
 
 LOADING_TITLE = "Yeson Checker — 공유 설정 불러오는 중…"
@@ -47,6 +49,11 @@ THUMBNAIL_SAVE_FAILED = "썸네일 저장 실패"  # 썸네일 파일을 쓰지 
 THUMBNAIL_FOLDER_PROBLEM = "썸네일 폴더 문제"  # 썸네일 폴더를 만들지 못함 등 (창 제목)
 THUMBNAIL_VIDEO_PROBLEM = "영상 확인 실패"  # 썸네일을 만들 영상을 확인하지 못함 (창 제목)
 THUMBNAIL_CONTEXT_ROLE = Qt.UserRole + 1  # 사이드바 항목 데이터: 그 영상의 썸네일 자리 (ThumbnailContext)
+SIDEBAR_SOURCE_ROLE = Qt.UserRole + 2  # 사이드바 항목 데이터: 그 영상이 들어온 곳 (video_list.ListSource, 따로 넣은 파일은 None)
+LIST_READ_FAILED = "목록 폴더를 읽지 못함"  # 영상 목록을 만들거나 다시 읽을 폴더를 읽지 못함 (창 제목)
+LIST_FOLDER_GONE = "목록 폴더 없음"  # 목록에 영상을 넣은 폴더가 지워짐 (창 제목)
+ACTIVATION_REFRESH_GAP_S = 2.0  # 앱이 다시 활성될 때 이 시간 안에 이미 목록을 읽었으면 또 읽지 않음
+ACTIVATION_REFRESH_GAP_FACTOR = 10  # … 마지막 읽기가 오래 걸렸으면(Windows SMB의 큰 job) 그 시간의 이만큼 배 동안
 
 
 @dataclass(frozen=True)
@@ -310,6 +317,38 @@ class SharedConfigLoad(QThread):
         SharedConfigLoad._running.discard(self)
 
 
+class SidebarScan(QThread):
+    """사이드바 목록 다시 읽기의 디스크 읽기(video_list.read_sources — Qt 없음)를 GUI 밖에서. 목록은 건드리지 않고 결과만
+    scanned 신호로 GUI 스레드에 (창의 _on_sidebar_scanned가 목록을 맞춤).
+
+    부모 없이 만들고 창이 붙잡음 (_sidebar_scan, 결과를 받을 때까지). 창을 닫을 때 실행 중이면 release_worker로 넘김:
+    끝날 때까지 붙잡아 두고(실행 중인 QThread가 파괴되면 앱이 죽음) 앱이 끝나기 전에 wait_for_released_workers가 정해진
+    시간까지 기다림 (응답 없는 NAS를 읽는 중일 수 있음).
+    """
+
+    scanned = pyqtSignal(object)  # 이 SidebarScan (read·elapsed·unexpected를 채움)
+
+    def __init__(self, sources, files, generation):
+        super().__init__()
+        self.sources = sources  # 읽을 곳 (video_list.ListSource)
+        self.files = files  # 있는지 확인할 따로 넣은 파일
+        self.generation = generation  # 읽기 시작할 때의 사이드바 세대 번호 (결과를 넣을 때 목록이 그대로인지)
+        self.read = None  # video_list.SourcesRead
+        self.elapsed = None
+        self.unexpected = None  # 예상 못 한 오류의 스택 트레이스 (GUI 스레드가 창으로)
+
+    def run(self):
+        started = time.perf_counter()
+        try:
+            self.read = video_list.read_sources(self.sources, self.files)
+        except Exception:
+            # 예상 못 한 오류도 삼키지 않음: 로그에 스택 트레이스째 남기고 GUI 스레드가 창으로 알림
+            self.unexpected = traceback.format_exc()
+            print(f"[목록] 다시 읽다 예상치 못한 오류:\n{self.unexpected}", file=sys.stderr, flush=True)
+        self.elapsed = time.perf_counter() - started
+        self.scanned.emit(self)
+
+
 class PlayerSidebarMixin:
 
     def dragEnterEvent(self, event):
@@ -329,6 +368,7 @@ class PlayerSidebarMixin:
         if parent and hasattr(parent, 'open_file'):
             video_files = []
             has_folder = False
+            read_failed = False  # 읽지 못한 폴더가 있음 (창으로 알림 — '지원되는 비디오 파일이 없습니다'는 띄우지 않음)
             folder_paths = []  # 폴더 경로들을 저장할 리스트
             
             # URL들을 파일/폴더로 분류
@@ -343,6 +383,10 @@ class PlayerSidebarMixin:
                     has_folder = True
                     folder_paths.append(local_path)  # 폴더 경로 저장
                     folder_files = parent.get_video_files_from_folder(local_path)
+                    if folder_files is None:
+                        read_failed = True
+                        parent._register_unread_folder(local_path)  # 연결이 돌아오면 새로고침(F5)으로 들어옴
+                        continue
                     folder_files.sort()  # 이름 순서대로 정렬
                     video_files.extend(folder_files)
             
@@ -369,13 +413,13 @@ class PlayerSidebarMixin:
                     
                     # 기존 사이드바 리스트 초기화
                     parent.sidebar.clear()
-                    parent.add_files_to_sidebar(video_files)
+                    parent.add_files_to_sidebar(video_files, folder_paths)
                     # 첫 번째 파일을 Video A에 로드
                     parent.open_file('A', video_files[0])
                     # 백그라운드 로딩 스케줄링
                     parent.schedule_background_thumbnail_loading()
                     QMessageBox.information(parent, "폴더 로드 완료", f"{len(video_files)}개의 비디오 파일이 사이드바에 추가되었습니다.\n첫 번째 파일이 Video A에 로드되었습니다.")
-                else:
+                elif not read_failed:
                     QMessageBox.warning(parent, "경고", "폴더에 지원되는 비디오 파일이 없습니다.")
             else:
                 # 개별 파일들만 있는 경우
@@ -397,59 +441,65 @@ class PlayerSidebarMixin:
 
     def is_video_file(self, file_path):
         """파일이 지원되는 비디오 형식인지 확인"""
-        video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm', '.m4v', '.3gp', '.ts', '.mts', '.m2ts'}
-        return os.path.splitext(file_path.lower())[1] in video_extensions
+        return os.path.splitext(file_path.lower())[1] in video_list.VIDEO_EXTENSIONS
 
-    def add_files_to_sidebar(self, file_paths):
-        """사이드바에 파일들을 추가 (항상 번호순 정렬)"""
-        import re
-        def natural_sort_key(file_path):
-            filename = os.path.basename(file_path)
-            return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', filename)]
-        file_paths = sorted(file_paths, key=natural_sort_key)
+    def add_files_to_sidebar(self, file_paths, folders=()):
+        """사이드바에 파일들을 추가 (항상 번호순 정렬).
+
+        folders: 끌어다 놓은 폴더 — 그 아래 파일은 그 폴더에서 들어온 것으로 기억 (목록 다시 읽기가 그 폴더를 같은 규칙으로
+        다시 읽음). 나머지는 따로 넣은 파일 (다시 읽을 때 파일이 있는 동안만 목록에).
+        폴더 A와 그 안의 A/sub를 함께 끌어다 놓으면 A/sub의 영상은 폴더마다 한 번씩 두 번 들어오므로 하나는 A, 하나는 A/sub에서
+        들어온 것으로 (같은 영상의 n번째는 그 영상을 담은 n번째 폴더) — 다시 읽어도 출처마다 한 번씩이라 늘지 않음.
+        """
+        file_paths = sorted(file_paths, key=video_list.natural_key)
+        sources = [self._register_sidebar_source(video_list.ListSource("folder", folder)) for folder in folders]
+        unclaimed = {}  # path_key → 그 영상을 담은 폴더 중 아직 항목을 정하지 않은 것
+
+        def source_of(file_path):
+            key = paths.path_key(file_path)
+            if key not in unclaimed:
+                unclaimed[key] = [source for source in sources if video_list.is_under(file_path, source.folder)]
+            return unclaimed[key].pop(0) if unclaimed[key] else None
+
         # 항목마다 지금의 썸네일 자리를 기억 (이미 목록에 있는 영상이면 그 항목의 자리)
         items = self._add_sidebar_videos(
-            [(os.path.basename(file_path), file_path) for file_path in file_paths if os.path.exists(file_path)])
+            [(os.path.basename(file_path), file_path, source_of(file_path))
+             for file_path in file_paths if os.path.exists(file_path)])
         # 썸네일 모드인 경우 썸네일 생성. 영상·자리를 미리 꺼내 둠: 만드는 동안 이벤트를 처리하므로 목록이 바뀌면
-        # (job·폴더를 바꿈) 항목이 지워짐 → 그때는 멈춤
+        # (job·폴더를 바꿈) 항목이 지워짐 → 그때는 멈춤. 그동안 목록 다시 읽기는 끝난 뒤로 미룸
         if self.is_thumbnail_mode:
-            generation = self._sidebar_generation
-            jobs = {}  # 같은 영상을 한 번에 여러 번 넣었으면 한 번만 (아이콘은 경로가 같은 모든 항목에)
-            for item in items:
-                jobs.setdefault(paths.path_key(item.data(Qt.UserRole)),
-                                (item.data(Qt.UserRole), item.data(THUMBNAIL_CONTEXT_ROLE)))
-            for file_path, context in jobs.values():
-                if self._sidebar_generation != generation:
-                    print("사이드바 목록이 바뀌어(job·폴더를 바꿈) 넣은 영상의 썸네일 만들기를 멈춤")
-                    break
-                self.generate_thumbnail(file_path, context=context)
+            with self._hold_sidebar_refresh():
+                generation = self._sidebar_generation
+                jobs = {}  # 같은 영상을 한 번에 여러 번 넣었으면 한 번만 (아이콘은 경로가 같은 모든 항목에)
+                for item in items:
+                    jobs.setdefault(paths.path_key(item.data(Qt.UserRole)),
+                                    (item.data(Qt.UserRole), item.data(THUMBNAIL_CONTEXT_ROLE)))
+                for file_path, context in jobs.values():
+                    if self._sidebar_generation != generation:
+                        print("사이드바 목록이 바뀌어(job·폴더를 바꿈) 넣은 영상의 썸네일 만들기를 멈춤")
+                        break
+                    self.generate_thumbnail(file_path, context=context)
+        self._sidebar_read_done(None)  # 끌어다 놓은 폴더·파일을 방금 읽음 (앱이 다시 활성돼도 곧바로 또 읽지 않게)
         
         if file_paths:
             QMessageBox.information(self, "완료", f"{len(file_paths)}개의 파일이 사이드바에 추가되었습니다.")
 
     def get_video_files_from_folder(self, folder_path):
-        """폴더에서 재귀적으로 비디오 파일들을 찾아서 반환 (.으로 시작하는 파일 제외)"""
-        video_files = []
-        video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm', '.m4v', '.3gp', '.ts', '.mts', '.m2ts'}
-        
+        """폴더에서 재귀적으로 비디오 파일들을 찾아서 반환 (.으로 시작하는 파일 제외, 번호 순서).
+
+        규칙은 video_list.scan_folder (목록 다시 읽기도 같은 규칙). 폴더를 읽지 못하면 창으로 알리고 None — 부른 쪽은
+        '지원되는 비디오 파일이 없습니다'를 띄우지 않음 (예전에는 로그에만 남기고 빈 목록이 되어 그 창이 떴음). 그 안의 폴더를
+        읽지 못하면 읽은 영상을 돌려주고 창으로 알림. 창은 다시 읽기와 같은 문구·기록 ((제목, 폴더, 오류)마다 한 번).
+        """
+        started = time.perf_counter()
         try:
-            for root, dirs, files in os.walk(folder_path):
-                for file in files:
-                    if file.startswith('.'):
-                        continue  # .으로 시작하는 숨김 파일 제외
-                    file_path = os.path.join(root, file)
-                    if os.path.splitext(file.lower())[1] in video_extensions:
-                        video_files.append(file_path)
-            
-            # 번호 순서대로 정렬 (숫자가 포함된 파일명을 올바르게 정렬)
-            def natural_sort_key(file_path):
-                filename = os.path.basename(file_path)
-                import re
-                return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', filename)]
-            video_files.sort(key=natural_sort_key)
-        except Exception as e:
-            print(f"폴더 스캔 중 오류 발생: {e}")
-        return video_files
+            result = video_list.scan_folder(folder_path)
+        except OSError as e:
+            self._report_list_source_problem(folder_path, e)
+            return None
+        self._sidebar_scan_seconds = time.perf_counter() - started
+        self._report_list_read(folder_path, result)
+        return [file_path for _name, file_path in result.videos]
 
     def show_sidebar_context_menu(self, pos):
         index = self.sidebar.indexAt(pos)
@@ -485,7 +535,9 @@ class PlayerSidebarMixin:
             video_info_action = menu.addAction("미디어 정보")
             video_info_action.triggered.connect(lambda: self.show_video_info(index))
 
-            menu.exec_(self.sidebar.viewport().mapToGlobal(pos))
+            # 메뉴가 떠 있는 동안·고른 일을 하는 동안 목록 다시 읽기는 미룸 (index는 줄 번호 — 목록이 바뀌면 다른 영상을 가리킴)
+            with self._hold_sidebar_refresh():
+                menu.exec_(self.sidebar.viewport().mapToGlobal(pos))
 
     def copy_selected_files(self):
         selected_items = self.sidebar.selectedItems()
@@ -529,31 +581,32 @@ class PlayerSidebarMixin:
             print(f"선택된 {len(selected_items)}개 파일의 썸네일 재생성을 시작합니다.")
 
             # 이벤트를 처리하는 동안 목록이 바뀌면(job·폴더를 바꿈) 항목이 지워지므로 경로를 미리 꺼내 두고, 항목은 목록이
-            # 그대로인지 확인한 뒤에만 씀
-            generation = self._sidebar_generation
-            stopped = False
-            for i, (file_path, item) in enumerate([(item.toolTip(), item) for item in selected_items]):
-                if progress_dialog.wasCanceled():
-                    print("썸네일 재생성이 취소되었습니다.")
-                    break
-
-                if file_path and os.path.isfile(file_path):
-                    # 진행 상황 업데이트 (모달 진행 창의 setValue는 이벤트를 처리함)
-                    progress_dialog.setLabelText(f"재생성 중: {os.path.basename(file_path)}")
-                    progress_dialog.setValue(i)
-                    if self._sidebar_generation != generation:
-                        print("사이드바 목록이 바뀌어(job·폴더를 바꿈) 썸네일 재생성을 멈춤")
-                        stopped = True
+            # 그대로인지 확인한 뒤에만 씀. 그동안 목록 다시 읽기는 끝난 뒤로 미룸 (항목을 쥐고 있음)
+            with self._hold_sidebar_refresh():
+                generation = self._sidebar_generation
+                stopped = False
+                for i, (file_path, item) in enumerate([(item.toolTip(), item) for item in selected_items]):
+                    if progress_dialog.wasCanceled():
+                        print("썸네일 재생성이 취소되었습니다.")
                         break
-                    
-                    # 기존 썸네일 삭제 (이 항목의 썸네일 폴더에서)
-                    self.delete_thumbnail_file(file_path, item)
-                    # 썸네일 재생성
-                    self.generate_thumbnail(file_path, item)
-                    print(f"썸네일 재생성 완료: {os.path.basename(file_path)}")
 
-                # UI 업데이트
-                QApplication.processEvents()
+                    if file_path and os.path.isfile(file_path):
+                        # 진행 상황 업데이트 (모달 진행 창의 setValue는 이벤트를 처리함)
+                        progress_dialog.setLabelText(f"재생성 중: {os.path.basename(file_path)}")
+                        progress_dialog.setValue(i)
+                        if self._sidebar_generation != generation:
+                            print("사이드바 목록이 바뀌어(job·폴더를 바꿈) 썸네일 재생성을 멈춤")
+                            stopped = True
+                            break
+                    
+                        # 기존 썸네일 삭제 (이 항목의 썸네일 폴더에서)
+                        self.delete_thumbnail_file(file_path, item)
+                        # 썸네일 재생성
+                        self.generate_thumbnail(file_path, item)
+                        print(f"썸네일 재생성 완료: {os.path.basename(file_path)}")
+
+                    # UI 업데이트
+                    QApplication.processEvents()
 
             progress_dialog.setValue(len(selected_items))
             if stopped:
@@ -804,15 +857,10 @@ class PlayerSidebarMixin:
         # 선택된 폴더 경로 저장 (썸네일 폴더 생성용)
         self.selected_folder_path = folder_path
         
-        # 재귀적으로 폴더 내의 모든 비디오 파일 찾기 (드래그앤드롭과 동일한 방식)
+        # 재귀적으로 폴더 내의 모든 비디오 파일 찾기 (드래그앤드롭과 동일한 방식, 번호 순서)
         video_files = self.get_video_files_from_folder(folder_path)
-        
-        # 번호 순서대로 정렬
-        import re
-        def natural_sort_key(file_path):
-            filename = os.path.basename(file_path)
-            return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', filename)]
-        video_files = sorted(video_files, key=natural_sort_key)
+        read_failed = video_files is None  # 폴더를 읽지 못함 (창으로 알림) — 연결이 돌아오면 다시 읽기(F5)로 목록이 생김
+        video_files = video_files or []
         
         if video_files:
             # 폴더 드래그앤드롭 시에는 기존 썸네일 폴더를 초기화하고 새로 설정 — 항목을 넣기 전에 (항목마다 이 자리를 기억)
@@ -820,10 +868,14 @@ class PlayerSidebarMixin:
             self._thumbnail_folder_problem = None  # 전에 연 job의 썸네일 폴더 문제는 이제 상관없음
             self._thumbnail_memory_only = False
             self.setup_thumbnail_folder()
+            source = self._register_sidebar_source(video_list.ListSource("folder", folder_path))
+        else:
+            source = self._register_unread_folder(folder_path)  # 빈 폴더·읽지 못한 폴더
         
         # 사이드바에 파일들 추가
         self.playlist.extend(video_files)
-        self._add_sidebar_videos([(os.path.basename(file_path), file_path) for file_path in video_files])
+        self._add_sidebar_videos([(os.path.basename(file_path), file_path, source) for file_path in video_files])
+        self._sidebar_read_done(None)  # 방금 읽음 (앱이 다시 활성돼도 곧바로 또 읽지 않게)
         
         if self.playlist:
             self.current_playlist_index = 0
@@ -831,7 +883,7 @@ class PlayerSidebarMixin:
             self.sidebar.selectAll()
             self.schedule_background_thumbnail_loading()
             QMessageBox.information(self, "폴더 로드 완료", f"{len(video_files)}개의 비디오 파일이 사이드바에 추가되었습니다.\n첫 번째 파일이 Video A에 로드되었습니다.")
-        else:
+        elif not read_failed:
             QMessageBox.warning(self, "경고", "폴더에 지원되는 비디오 파일이 없습니다.")
 
     def play_selected_files(self):
@@ -841,6 +893,7 @@ class PlayerSidebarMixin:
             self.playlist = [item.toolTip() for item in selected_items]
             self.current_playlist_index = 0
             self.is_playlist_playing = True
+            self._playlist_played_any = False
             print(f"Play Selected: {len(selected_items)} files selected, starting playback")
             self.play_current_playlist_item()
         else:
@@ -849,8 +902,37 @@ class PlayerSidebarMixin:
             QMessageBox.information(self, "Play Selected", "Please select one or more files from the sidebar first.")
 
     def play_current_playlist_item(self):
-        if 0 <= self.current_playlist_index < len(self.playlist):
+        """선택 재생: 지금 차례의 영상을 열어 재생. 열 수 없는 영상은 건너뛰고 다음 영상으로 (되부르지 않고 반복).
+
+        디스크에 없는 영상을 처음 만나면 남은 차례의 영상을 한 번에 확인해 없는 것을 모두 빼고 창 한 번·목록 다시 읽기 한 번
+        (예전에는 없는 영상마다 창과 NAS 다시 읽기). 영상을 확인하지 못하면(NAS 연결 끊김·권한) 창으로 알리고 선택 재생을
+        멈춤 (다음 영상도 그럴 것이므로 영상마다 창이 뜨지 않게). OpenCV가 열지 못한 영상은 open_file이 알리고 다음 영상으로.
+        다음 영상을 정하는 동안(창이 떠 이벤트를 처리함) 보던 영상이 끝나도 선택 재생을 거기서 또 진행하지 않음
+        (_playlist_resolving — 예전에는 같은 영상을 두 번 열고 하나를 건너뜀).
+        """
+        self._playlist_resolving = True
+        try:
+            self._play_playlist_from_current()
+        finally:
+            self._playlist_resolving = False
+
+    def _play_playlist_from_current(self):
+        while 0 <= self.current_playlist_index < len(self.playlist):
             current_file = self.playlist[self.current_playlist_index]
+            try:
+                os.stat(current_file)
+            except OSError as e:
+                gone, note = video_list.check_gone(current_file, e)
+                if gone:
+                    self._skip_missing_playlist_videos()
+                    continue
+                reason = f"{type(e).__name__}: {e}" + (f"\n{note}" if note else "")
+                print(f"선택 재생할 영상을 확인하지 못함: {current_file} ({reason})")
+                QMessageBox.critical(self, "영상을 열 수 없음",
+                                     "선택 재생할 영상을 확인하지 못해 선택 재생을 멈춥니다 (NAS 연결 끊김·권한 등).\n"
+                                     f"영상: {current_file}\n이유: {reason}")
+                self._end_playlist_mode()
+                return
             print(f"Playing playlist item {self.current_playlist_index + 1}/{len(self.playlist)}: {os.path.basename(current_file)}")
             print(f"is_playlist_playing before: {self.is_playlist_playing}")
             
@@ -875,25 +957,70 @@ class PlayerSidebarMixin:
             
             # 파일 열기 및 재생
             try:
-                self.open_file('A', current_file)
-                # 첫 번째 프레임으로 이동
-                self.seek_to_frame(1)
-                self.play_video()
-                self.playSelectedPauseButton.setText('Selected Pause')
-                self.playSelectedPauseButton.setStyleSheet("background-color: yellow;")
-                print(f"Successfully started playing: {os.path.basename(current_file)}")
-                print(f"is_playlist_playing after: {self.is_playlist_playing}")
+                if self.open_file('A', current_file):
+                    self._playlist_played_any = True
+                    # 첫 번째 프레임으로 이동
+                    self.seek_to_frame(1)
+                    self.play_video()
+                    self.playSelectedPauseButton.setText('Selected Pause')
+                    self.playSelectedPauseButton.setStyleSheet("background-color: yellow;")
+                    print(f"Successfully started playing: {os.path.basename(current_file)}")
+                    print(f"is_playlist_playing after: {self.is_playlist_playing}")
+                    return
+                # 열지 못함 (open_file이 창으로 알림) — 예전에는 보던 영상을 처음부터 다시 재생했음
             except Exception as e:
                 print(f"Error playing file {current_file}: {e}")
+                traceback.print_exc()
                 QMessageBox.warning(self, "Play Error", f"Failed to play file: {os.path.basename(current_file)}\nError: {str(e)}")
-                # 오류 발생 시 다음 파일로 이동
-                if self.current_playlist_index < len(self.playlist) - 1:
-                    self.current_playlist_index += 1
-                    self.play_current_playlist_item()
-        else:
-            print(f"Invalid playlist index: {self.current_playlist_index}, playlist length: {len(self.playlist)}")
-            self.is_playlist_playing = False
-            self.reset_sidebar_colors()
+            # 오류 발생 시 다음 파일로 이동
+            self.current_playlist_index += 1
+        print(f"Playlist index {self.current_playlist_index} is past the end ({len(self.playlist)} items)")
+        self._finish_playlist()
+
+    def _skip_missing_playlist_videos(self):
+        """선택 재생 중 디스크에 없는 영상을 만남 (지금 차례): 남은 차례의 영상도 한 번에 확인해 없어진 것을 모두 선택 재생에서
+        빼고 창 한 번, 목록 다시 읽기 한 번. 확인하지 못한 영상(공유가 끊김 등)은 남겨 그 차례에 알림."""
+        current = self.playlist[self.current_playlist_index]
+        gone = [current]
+        kept = []
+        for path in self.playlist[self.current_playlist_index + 1:]:
+            try:
+                os.stat(path)
+            except OSError as e:
+                if video_list.is_gone(path, e):
+                    gone.append(path)
+                    continue
+            kept.append(path)
+        self.playlist = self.playlist[:self.current_playlist_index] + kept
+        print(f"선택 재생: 디스크에 없는 영상 {len(gone)}개를 건너뜀:\n" + "\n".join(gone))
+        lines = gone[:10] + ([f"… 외 {len(gone) - 10}개"] if len(gone) > 10 else [])
+        QMessageBox.warning(self, "영상 없음",
+                            f"디스크에 없는 영상 {len(gone)}개를 건너뜁니다:\n" + "\n".join(lines) + "\n목록을 다시 읽습니다.")
+        self.refresh_sidebar()
+
+    def _end_playlist_mode(self):
+        """선택 재생 상태만 끝냄 (보던 영상은 그대로)."""
+        self.is_playlist_playing = False
+        self.reset_sidebar_colors()
+        self.playSelectedPauseButton.setText('Selected Play'); self.playSelectedPauseButton.setStyleSheet("")
+        if not self.timer.isActive():
+            # 창이 떠 있는 동안 보던 영상이 끝나 재생이 이미 멈춤 → 재생 버튼이 'Pause'로 남지 않게
+            self.playPauseButton.setText('Play'); self.playPauseButton.setStyleSheet("")
+            if hasattr(self, 'overlayPlayPause'):
+                self.overlayPlayPause.setText('▶')
+
+    def _finish_playlist(self):
+        """선택 재생 끝. 재생한 영상이 있으면 예전처럼 멈추고 알림. 하나도 재생하지 못했으면(모두 없거나 열 수 없음 — 그때마다
+        창으로 알림) 보던 영상은 멈추지 않고 선택 재생만 끝냄."""
+        if not self._playlist_played_any:
+            print("선택 재생: 재생할 수 있는 영상이 없어 선택 재생을 끝냄 (보던 영상은 그대로)")
+            self._end_playlist_mode()
+            return
+        print("Reached end of playlist, stopping playback")
+        self.is_playlist_playing = False
+        self.stop_video()
+        self.reset_sidebar_colors()
+        QMessageBox.information(self, "Playlist Complete", "All selected files have been played.")
 
     def reset_sidebar_colors(self):
         for i in range(self.sidebar.count()):
@@ -907,16 +1034,16 @@ class PlayerSidebarMixin:
                 item.setForeground(QColor("#2c3e50"))  # 라이트 테마에서는 어두운 색상
 
     def play_next_in_playlist(self):
+        if self._playlist_resolving:
+            # 선택 재생이 다음 영상을 정하는 중(창이 떠 있음)에 영상이 끝남: 그 반복이 이어서 엶 — 여기서 또 진행하면 두 번 엶
+            print("선택 재생: 다음 영상을 정하는 중에 영상이 끝남 — 진행은 그 반복이 함")
+            return
         if self.current_playlist_index < len(self.playlist) - 1:
             self.current_playlist_index += 1
             print(f"Moving to next item in playlist: {self.current_playlist_index + 1}/{len(self.playlist)}")
             self.play_current_playlist_item()
         else:
-            print("Reached end of playlist, stopping playback")
-            self.is_playlist_playing = False
-            self.stop_video()
-            self.reset_sidebar_colors()
-            QMessageBox.information(self, "Playlist Complete", "All selected files have been played.")
+            self._finish_playlist()
 
     def initialize_sidebar_width(self):
         """기본 사이드바 폭을 초기화합니다."""
@@ -1962,7 +2089,8 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         print(f"사이드바 디스플레이 업데이트: thumbnail_mode={self.is_thumbnail_mode}, item_count={self.sidebar.count()}")
         
         if self.is_thumbnail_mode:
-            self.generate_thumbnails_for_all_items()
+            with self._hold_sidebar_refresh():  # 그동안 목록 다시 읽기는 끝난 뒤로 미룸 (반복이 멈추지 않게)
+                self.generate_thumbnails_for_all_items()
         else:
             self.clear_thumbnails()
 
@@ -2111,40 +2239,342 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         return ThumbnailContext(pending_base=getattr(self, "selected_folder_path", None) or os.path.dirname(file_path))
 
     def _add_sidebar_videos(self, entries):
-        """영상들을 사이드바에 넣음 — entries: [(표시 이름, 경로)] → 넣은 항목 목록.
+        """영상들을 사이드바 끝에 넣음 — entries: [(표시 이름, 경로, 들어온 곳(ListSource 또는 None))] → 넣은 항목 목록.
 
-        항목마다 썸네일 자리(ThumbnailContext)를 지금 상태로 기억. 이미 목록에 있는 영상이면 그 항목의 자리를 그대로 씀.
-        다만 그 자리에 썸네일 폴더가 없고(화면에만·폴더 문제·아직 정하지 않음) 지금 자리에는 폴더가 있으면(예: 그 영상의
-        폴더를 끌어다 놓음) 지금 자리를 쓰고 원래 항목도 그 자리로 올림. 폴더가 정해진 자리는 다른 폴더로 바꾸지 않음.
+        항목마다 썸네일 자리(ThumbnailContext)를 지금 상태로 기억 (같은 영상이 이미 있으면 _new_sidebar_item의 규칙).
         """
-        known = {}  # path_key → [자리, 그 영상의 항목들]
+        known = self._known_sidebar_videos()
+        added = []
+        for label, file_path, source in entries:
+            item = self._new_sidebar_item(label, file_path, self._new_item_thumbnail_context(file_path), source, known)
+            self.sidebar.addItem(item)
+            added.append(item)
+        return added
+
+    def _known_sidebar_videos(self):
+        """지금 목록의 영상 → {path_key: [썸네일 자리, 그 영상의 항목들]} (_new_sidebar_item이 씀)."""
+        known = {}
         for i in range(self.sidebar.count()):
             item = self.sidebar.item(i)
             if item is not None and item.data(Qt.UserRole):
                 entry = known.setdefault(paths.path_key(item.data(Qt.UserRole)), [item.data(THUMBNAIL_CONTEXT_ROLE), []])
                 entry[1].append(item)
+        return known
+
+    def _new_sidebar_item(self, label, file_path, context, source, known):
+        """사이드바 항목을 만듦 (목록에는 부르는 쪽이 넣음). context: 이 영상이 들어온 곳의 썸네일 자리.
+
+        이미 목록에 있는 영상(known)이면 그 항목의 자리를 그대로 씀. 다만 그 자리에 썸네일 폴더가 없고(화면에만·폴더 문제·
+        아직 정하지 않음) context에는 폴더가 있으면(예: 그 영상의 폴더를 끌어다 놓음) context를 쓰고 원래 항목도 그 자리로
+        올림. 폴더가 정해진 자리는 다른 폴더로 바꾸지 않음. known은 이 항목까지 넣어 갱신.
+        """
+        key = paths.path_key(file_path)
+        entry = known.get(key)
+        if entry is None:
+            entry = known[key] = [context, []]
+        elif entry[0] is not None and (entry[0].folder or not context.folder):
+            context = entry[0]  # 이미 있는 영상: 그 항목의 자리
+        else:
+            print(f"이미 목록에 있는 영상의 썸네일을 이제 이 폴더에: {context.folder} ({file_path})")
+            for existing in entry[1]:
+                existing.setData(THUMBNAIL_CONTEXT_ROLE, context)
+            entry[0] = context
+        item = QListWidgetItem(label)
+        item.setData(Qt.UserRole, file_path)  # 파일 경로를 UserRole에 저장
+        item.setData(THUMBNAIL_CONTEXT_ROLE, context)
+        item.setData(SIDEBAR_SOURCE_ROLE, source)
+        item.setToolTip(file_path)  # toolTip도 설정하여 기존 코드와 호환
+        entry[1].append(item)
+        return item
+
+    def _register_sidebar_source(self, source, context=None):
+        """목록에 영상을 넣는 곳(job 폴더·폴더)을 기억 → source. 목록 다시 읽기가 이곳을 처음과 같은 규칙으로 다시 읽음.
+
+        context: 이곳에서 새로 생긴 영상의 썸네일 자리 (없으면 지금 넣는 영상과 같은 지금 상태의 자리 — 처음 불러올 때와
+        같음). 같은 곳을 또 넣으면 처음 기억한 자리를 그대로. 목록을 비우면(clear) 함께 잊음.
+        """
+        if context is None:
+            context = self._new_item_thumbnail_context(source.folder)
+        self._sidebar_sources.setdefault(source, context)
+        return source
+
+    def _register_unread_folder(self, folder_path):
+        """읽지 못한(또는 빈) 폴더도 목록에 영상을 넣는 곳으로 기억 → 연결이 돌아오면(영상이 생기면) 다시 읽기(F5·앱이 다시
+        활성)로 목록에 들어옴. 그 영상의 썸네일은 처음 쓸 때 이 폴더 아래에 (영상이 있을 때 불러온 것과 같게)."""
+        return self._register_sidebar_source(video_list.ListSource("folder", folder_path),
+                                             ThumbnailContext(pending_base=folder_path))
+
+    def _forget_sidebar_sources(self):
+        """사이드바 목록을 비움(clear → 모델 초기화): 목록에 영상을 넣은 곳도 잊음 (새 목록을 넣는 쪽이 다시 기억).
+        방금 job 목록을 읽었다는 표시도 지움 (목록이 바뀌었으므로 그 job을 다시 고르면 다시 불러옴)."""
+        self._sidebar_sources.clear()
+        self._job_list_loaded_for = None
+
+    @contextlib.contextmanager
+    def _hold_sidebar_refresh(self):
+        """사이드바 항목·줄 번호를 쓰는 동안(썸네일 반복·job 목록 만들기·오른쪽 클릭 메뉴 — 이벤트를 처리함): 목록 다시 읽기는
+        끝난 뒤로 미룸. 그동안 온 다시 읽기 결과도 버리고 끝난 뒤 다시 읽음.
+
+        다시 읽기가 목록을 바꾸면 세대 번호가 올라 썸네일 반복이 '썸네일 생성 멈춤'으로 끝나고, 메뉴의 줄 번호(QModelIndex)가
+        다른 영상을 가리킬 수 있으므로 — 그 대신 하던 일을 끝까지 하고 바로 뒤에 다시 읽음.
+        """
+        self._sidebar_refresh_holds += 1
+        try:
+            yield
+        finally:
+            self._sidebar_refresh_holds -= 1
+            if not self._sidebar_refresh_holds and self._sidebar_refresh_deferred:
+                QTimer.singleShot(0, self._run_deferred_sidebar_refresh)
+
+    def _run_deferred_sidebar_refresh(self):
+        if self._sidebar_refresh_deferred:
+            self.refresh_sidebar()
+
+    def _job_selection(self):
+        return (self.workComboBox.currentText(), self.seasonComboBox.currentText(), self.jobComboBox.currentText())
+
+    def _on_job_activated(self, _index):
+        """job 목록에서 고름 (같은 job을 다시 골라도 옴 — currentIndexChanged는 job이 바뀔 때만 와서 예전에는 아무 일도
+        없었음). 다른 job이면 Qt가 바로 앞에 보낸 currentIndexChanged(update_playlist)가 이미 그 job을 읽었으므로 그대로
+        (update_playlist가 읽은 (작품, 시즌, job)을 기억 — 그 안에서 창이 떠 이벤트를 처리해도 지워지지 않음),
+        같은 job이면 목록을 다시 읽음. 목록이 폴더 불러오기·끌어다 놓기로 바뀌어 job 목록이 아니면 그 job을 새로 불러옴."""
+        loaded, self._job_list_loaded_for = self._job_list_loaded_for, None
+        if loaded == self._job_selection() or self.jobComboBox.currentText() == "job선택":
+            return
+        job_sources = {source for source in self._sidebar_sources if source.kind == "job"}
+        if any(self.sidebar.item(i).data(SIDEBAR_SOURCE_ROLE) in job_sources for i in range(self.sidebar.count())):
+            self.refresh_sidebar()
+        else:
+            # job 목록이 아니거나(폴더를 불러옴·끌어다 놓음) 고를 때 읽지 못해 영상이 없음 → 처음 고를 때처럼 불러옴
+            # (job 경로·썸네일 폴더·첫 영상까지 — 다시 읽기는 영상만 넣음)
+            self.update_playlist()
+
+    def _clear_job_list_loaded_for(self):
+        """update_playlist가 끝난 뒤의 첫 이벤트 처리: 코드로 job을 바꿔(activated가 오지 않음) 남은 표시를 지움. 사용자가
+        고른 것이면 Qt가 update_playlist 바로 다음(이벤트를 처리하기 전) activated를 보내 이미 썼음."""
+        self._job_list_loaded_for = None
+
+    def _on_application_state_changed(self, state):
+        """앱이 다시 활성됨(다른 앱에서 돌아옴 — QGuiApplication.applicationStateChanged): 다른 앱·PC에서 NAS의 영상을
+        지우거나 넣고 돌아왔을 수 있으므로 조금 뒤 목록 다시 읽기. 이 앱의 창 사이를 오가거나 이 앱의 창(메시지 창 등)을
+        닫을 때는 앱이 활성인 채라 오지 않음 (예전에는 창마다 활성이 바뀔 때 읽었음)."""
+        if state == Qt.ApplicationActive:
+            self._sidebar_refresh_timer.start()
+
+    def _refresh_sidebar_on_activation(self):
+        """(앱이 다시 활성된 뒤 조금 뒤) 목록 다시 읽기. 그사이 앱이 다시 비활성이 됐거나 창이 보이지 않거나 모달 대화상자·팝업이
+        떠 있으면 하지 않음. 방금 읽었으면(ACTIVATION_REFRESH_GAP_S초, 마지막 읽기가 오래 걸렸으면 그 시간의
+        ACTIVATION_REFRESH_GAP_FACTOR배 안 — job을 고르거나 폴더를 불러온 것도 읽은 것) 하지 않음."""
+        if (QApplication.applicationState() != Qt.ApplicationActive or not self.isVisible()
+                or QApplication.activeModalWidget() is not None or QApplication.activePopupWidget() is not None):
+            return
+        gap = max(ACTIVATION_REFRESH_GAP_S, ACTIVATION_REFRESH_GAP_FACTOR * self._sidebar_scan_seconds)
+        if self._sidebar_refreshed_at is not None and time.monotonic() - self._sidebar_refreshed_at < gap:
+            print(f"앱이 다시 활성됨: {gap:.1f}초 안에 목록을 읽어서 건너뜀")
+            return
+        self.refresh_sidebar()
+
+    def _sidebar_read_done(self, seconds):
+        """목록을 디스크에서 읽음 (처음 불러오기·다시 읽기): 앱이 다시 활성될 때 곧바로 또 읽지 않게 때·걸린 시간을 남김."""
+        self._sidebar_refreshed_at = time.monotonic()
+        if seconds is not None:
+            self._sidebar_scan_seconds = seconds
+
+    def refresh_sidebar(self):
+        """사이드바 목록 다시 읽기 (새로고침 버튼·F5·창이 다시 활성·같은 job을 다시 고름·디스크에 없는 영상을 엶).
+
+        목록에 영상을 넣은 곳(job 폴더·폴더)마다 처음 불러올 때와 같은 규칙(video_list)으로 다시 읽어 디스크에 없는 영상은
+        빼고 새 영상은 정렬 자리에 넣음 (그곳에서 처음 불러올 때와 같은 썸네일 자리). 따로 끌어다 놓은 파일은 있는 동안만.
+        디스크 읽기는 GUI 밖 스레드(SidebarScan)에서 — Windows SMB의 큰 job이나 응답 없는 NAS에서도 창이 멈추지 않음.
+        결과는 GUI 스레드에서 넣음 (_on_sidebar_scanned). 한 번에 하나만 읽고, 읽는 동안 온 요청은 끝난 뒤 한 번 더.
+        목록을 쓰는 중(_hold_sidebar_refresh)이면 끝난 뒤로 미룸. 선택 재생(Play Selected)은 목록 줄이 아니라 경로 목록
+        (self.playlist)으로 재생하므로 미루지 않음.
+        """
+        if self._sidebar_scan_closed:
+            return  # 창이 닫힘 (미뤄 둔 다시 읽기의 타이머가 늦게 옴) — 닫힌 창이 붙잡는 읽기 스레드를 만들지 않음
+        if self._sidebar_refresh_holds:
+            if not self._sidebar_refresh_deferred:
+                print("목록을 쓰는 중이라(썸네일 만들기·job 목록 만들기·메뉴) 목록 다시 읽기를 끝난 뒤로 미룸")
+            self._sidebar_refresh_deferred = True
+            return
+        self._sidebar_refresh_deferred = False
+        if self._sidebar_scan is not None:
+            self._sidebar_rescan_queued = True
+            return
+        if not self._sidebar_sources and not self.sidebar.count():
+            return
+        files = []
+        for i in range(self.sidebar.count()):
+            item = self.sidebar.item(i)
+            if item.data(SIDEBAR_SOURCE_ROLE) is None and item.data(Qt.UserRole):
+                files.append(item.data(Qt.UserRole))
+        self._sidebar_refreshed_at = time.monotonic()
+        scan = SidebarScan(tuple(self._sidebar_sources), files, self._sidebar_generation)
+        scan.scanned.connect(self._on_sidebar_scanned)  # 창은 GUI 스레드 → 대기열을 거쳐 GUI 스레드에서 실행
+        self._sidebar_scan = scan
+        scan.start()
+
+    def _on_sidebar_scanned(self, scan):
+        """(GUI 스레드) 목록 다시 읽기의 디스크 읽기가 끝남 → 목록을 맞추고 문제를 알림.
+
+        읽는 동안 목록이 바뀌었으면(세대 번호·목록에 영상을 넣은 곳이 다름 — job을 바꿈·폴더를 불러옴·끌어다 놓음) 결과를
+        버리고 다시 읽음. 목록을 쓰는 중이면 버리고 끝난 뒤 다시 읽음. 창이 닫힌 뒤에 온 결과는 버림.
+        """
+        if scan is not self._sidebar_scan or self._sidebar_scan_closed:
+            return  # 창을 닫으며 놓은 읽기 (release_worker가 신호를 막지만 이미 대기열에 들어간 결과)
+        self._sidebar_scan = None
+        scan.wait()  # 결과를 보낸 뒤 곧 끝남
+        try:
+            if scan.unexpected is not None:
+                QMessageBox.critical(self, "목록 다시 읽기 오류",
+                                     f"사이드바 목록을 다시 읽다 예상치 못한 오류가 났습니다.\n\n{scan.unexpected}")
+                return
+            if scan.generation != self._sidebar_generation:
+                # 읽는 동안 목록을 비우고 새로 불러옴(job을 바꿈·폴더를 불러옴): 새 목록은 방금 디스크에서 읽었으므로 버리기만 —
+                # 읽는 동안 다시 읽어 달라는 요청이 왔으면(_sidebar_rescan_queued) 아래에서 한 번 더
+                print("목록 다시 읽기: 읽는 동안 목록을 새로 불러와 결과를 버림")
+                return
+            if set(scan.sources) != set(self._sidebar_sources):
+                print("목록 다시 읽기: 읽는 동안 목록에 폴더를 덧붙여 결과를 버리고 다시 읽음")
+                self._sidebar_rescan_queued = True
+                return
+            if self._sidebar_refresh_holds:
+                print("목록 다시 읽기: 목록을 쓰는 중이라 결과를 버리고 끝난 뒤 다시 읽음")
+                self._sidebar_refresh_deferred = True
+                return
+            self._apply_sidebar_read(scan.read, scan.elapsed)
+        finally:
+            # 예외가 나도 남김: 오류 창 → 앱이 다시 활성 → 다시 읽기 → 오류 창이 되풀이되지 않게
+            self._sidebar_read_done(scan.elapsed)
+            if self._sidebar_rescan_queued:
+                self._sidebar_rescan_queued = False
+                self.refresh_sidebar()
+
+    def _apply_sidebar_read(self, read, elapsed):
+        """(GUI 스레드) 다시 읽은 결과(video_list.SourcesRead)로 목록을 맞춤. 바뀐 것이 없으면 목록을 건드리지 않음
+        (깜빡임 없음, 세대 번호 그대로). 남는 항목은 그대로 둠: 썸네일 자리·아이콘·선택·현재 항목·재생 중 표시(빨간 글자),
+        맨 위에 보이던 영상도 그 자리에. 읽지 못한 폴더(NAS 연결 끊김·권한)의 영상은 빼지 않고 실제 오류를 창으로
+        ((제목, 폴더, 오류)마다 한 번 — 그 폴더를 다시 읽으면 기록을 지워 다음에 또 끊기면 다시 알림). 폴더가 지워졌으면
+        그 영상을 빼고 알림. 썸네일 모드면 새 영상의 썸네일만 붙이거나 만듦.
+        """
+        rows = [(self.sidebar.item(i).data(Qt.UserRole), self.sidebar.item(i).data(SIDEBAR_SOURCE_ROLE))
+                for i in range(self.sidebar.count())]
+        plan = video_list.plan_refresh(rows, read.results, read.gone_files)
         added = []
-        for label, file_path in entries:
-            key = paths.path_key(file_path)
-            context = self._new_item_thumbnail_context(file_path)
-            entry = known.get(key)
-            if entry is None:
-                entry = known[key] = [context, []]
-            elif entry[0] is not None and (entry[0].folder or not context.folder):
-                context = entry[0]  # 이미 있는 영상: 그 항목의 자리
+        if video_list.plan_changes(plan):
+            added = self._apply_sidebar_plan(plan)
+            print(f"목록 다시 읽기: 뺌 {len(plan[0])}개, 넣음 {len(added)}개 → {self.sidebar.count()}개 "
+                  f"(읽은 곳 {len(read.results)}곳, {elapsed:.2f}초)")
+        else:
+            print(f"목록 다시 읽기: 바뀐 것 없음 ({len(rows)}개, 읽은 곳 {len(read.results)}곳, {elapsed:.2f}초)")
+        for source, result in read.results.items():
+            if isinstance(result, video_list.ScanResult):
+                self._report_list_read(source.folder, result)
             else:
-                print(f"이미 목록에 있는 영상의 썸네일을 이제 이 폴더에: {context.folder} ({file_path})")
-                for existing in entry[1]:
-                    existing.setData(THUMBNAIL_CONTEXT_ROLE, context)
-                entry[0] = context
-            item = QListWidgetItem(label)
-            item.setData(Qt.UserRole, file_path)  # 파일 경로를 UserRole에 저장
-            item.setData(THUMBNAIL_CONTEXT_ROLE, context)
-            item.setToolTip(file_path)  # toolTip도 설정하여 기존 코드와 호환
-            self.sidebar.addItem(item)
-            entry[1].append(item)
-            added.append(item)
+                self._report_list_source_problem(source.folder, read.errors[source],
+                                                 gone=result is video_list.FOLDER_GONE, note=read.notes[source])
+        self._report_unverified_files(read.unverified)
+        if self.is_thumbnail_mode and added:
+            # 새 영상만: 저장된 썸네일을 바로 붙이고 없는 것만 만듦 (남은 영상의 썸네일은 다시 만들지 않음)
+            with self._hold_sidebar_refresh():
+                generation = self._sidebar_generation
+                for file_path, context in self._apply_disk_thumbnails(added):
+                    if self._sidebar_generation != generation:
+                        print("사이드바 목록이 바뀌어(job·폴더를 바꿈) 새 영상의 썸네일 만들기를 멈춤")
+                        break
+                    self.generate_thumbnail(file_path, context=context)
+
+    def _apply_sidebar_plan(self, plan):
+        """video_list.plan_refresh의 계획대로 사이드바를 바꿈 → 새로 넣은 항목 목록. 남는 항목은 건드리지 않음.
+
+        먼저 세대 번호를 올림: 썸네일 반복·백그라운드 처리가 예전 줄 번호나 뺀 항목을 쓰지 않게 (반복은 미뤄 두므로 보통은
+        돌고 있지 않음). 맨 위에 보이던 영상이 남으면 다시 맨 위로, 빠졌으면 스크롤 위치를 그대로.
+        """
+        removed, final = plan
+        self._bump_sidebar_generation()
+        anchor = next((self.sidebar.item(i) for i in range(self.sidebar.count())
+                       if self.sidebar.visualItemRect(self.sidebar.item(i)).bottom() >= 0), None)
+        scroll = self.sidebar.verticalScrollBar().value()
+        added = []
+        self.sidebar.setUpdatesEnabled(False)
+        try:
+            for row in reversed(removed):
+                print(f"목록에서 뺌 (디스크에 없음): {self.sidebar.takeItem(row).data(Qt.UserRole)}")
+            known = self._known_sidebar_videos()
+            for index, entry in enumerate(final):
+                if isinstance(entry, int):
+                    continue
+                source, label, file_path = entry
+                item = self._new_sidebar_item(label, file_path, self._sidebar_sources[source], source, known)
+                self.sidebar.insertItem(index, item)
+                added.append(item)
+                print(f"목록에 넣음 (새 영상): {file_path}")
+        finally:
+            self.sidebar.setUpdatesEnabled(True)
+        if anchor is not None and self.sidebar.row(anchor) >= 0:
+            self.sidebar.scrollToItem(anchor, QAbstractItemView.PositionAtTop)
+        else:
+            self.sidebar.verticalScrollBar().setValue(scroll)
         return added
+
+    def _report_list_source_problem(self, folder, error, gone=None, note=""):
+        """목록에 영상을 넣는(넣은) 폴더를 읽지 못함 → 창 ((제목, 폴더, 오류)마다 한 번). 처음 불러올 때와 다시 읽을 때 같은
+        문구·같은 기록 — 같은 문제가 두 번 뜨지 않음. gone: 지워졌는지 (None이면 여기서 video_list.check_gone으로 확인),
+        note: 없어진 것으로 보지 않은 까닭 (확인한 위 폴더와 그 상태 — 창·로그에 덧붙임)."""
+        if gone is None:
+            gone, note = video_list.check_gone(folder, error)
+        reason = f"{type(error).__name__}: {error}" + (f"\n{note}" if note else "")
+        if gone:
+            title = LIST_FOLDER_GONE
+            text = ("영상 목록 폴더가 디스크에 없습니다 (지워졌거나 이름이 바뀜). 이 폴더의 영상은 목록에서 뺍니다.\n"
+                    f"폴더: {folder}\n이유: {reason}")
+        else:
+            title = LIST_READ_FAILED
+            text = ("영상 목록 폴더를 읽지 못했습니다 (NAS 연결 끊김·권한 등). 목록은 그대로 두고, 연결을 확인한 뒤 "
+                    f"새로고침(F5)을 누르면 다시 읽습니다.\n폴더: {folder}\n이유: {reason}")
+        self._report_list_problem(title, folder, (type(error).__name__, str(error)), text)
+
+    def _report_list_read(self, folder, result):
+        """목록 폴더를 읽음: 전에 알린 이 폴더의 문제 기록은 지우고(다시 생기면 또 알림), 읽지 못한 하위 폴더가 있으면 알림
+        (처음 불러올 때와 다시 읽을 때 같은 문구 — 폴더가 많으면(공유가 끊김 등) 10개까지만)."""
+        detail = tuple((paths.path_key(sub), type(e).__name__, str(e)) for sub, e in result.unreadable)
+        key = (LIST_READ_FAILED, paths.path_key(folder), detail)
+        self._list_problems_shown = {shown for shown in self._list_problems_shown
+                                     if shown[1] != key[1] or (result.unreadable and shown == key)}
+        if not result.unreadable:
+            return
+        lines = [f"{sub}\n  → {type(e).__name__}: {e}" for sub, e in result.unreadable]
+        if len(lines) > 10:
+            lines = lines[:10] + [f"… 외 {len(lines) - 10}개"]
+        self._report_list_problem(
+            LIST_READ_FAILED, folder, detail,
+            "목록 폴더 안에서 읽지 못한 폴더가 있어 그 안의 영상은 확인하지 못했습니다 — 목록에 새로 넣지도 빼지도 "
+            f"않습니다 (권한·NAS 연결 끊김 등).\n목록 폴더: {folder}\n\n" + "\n".join(lines))
+
+    def _report_unverified_files(self, unverified):
+        """따로 넣은 영상 중 있는지 확인하지 못한 것(공유가 끊김·권한) → 목록에 그대로 두고 창으로 (같은 문제는 한 번).
+        unverified: [(경로, OSError, 없어진 것으로 보지 않은 까닭)]."""
+        detail = tuple((paths.path_key(path), type(e).__name__, str(e)) for path, e, _note in unverified)
+        self._list_problems_shown = {shown for shown in self._list_problems_shown
+                                     if shown[1] is not None or (unverified and shown[2] == detail)}
+        if unverified:
+            self._report_list_problem(
+                LIST_READ_FAILED, None, detail,
+                "따로 넣은 영상을 확인하지 못해 목록에 그대로 둡니다 (NAS 연결 끊김·권한 등).\n\n"
+                + "\n".join(f"{path}\n  → {type(e).__name__}: {e}" + (f"\n  → {note}" if note else "")
+                            for path, e, note in unverified))
+
+    def _report_list_problem(self, title, folder, detail, text):
+        """영상 목록을 만들거나 다시 읽다 생긴 문제를 알림: 로그에는 매번, 창은 (제목, 폴더, 오류 종류·내용)마다 한 번 —
+        창이 다시 활성될 때마다 다시 읽어도 창이 계속 뜨지 않게. 그 폴더를 다시 읽을 수 있게 되면 기록을 지움
+        (_report_list_read)."""
+        print(f"{title}\n{text}")
+        key = (title, paths.path_key(folder) if folder else None, detail)
+        if key in self._list_problems_shown:
+            return
+        # 창을 띄우기 전에 넣음: 창이 떠 있는 동안 같은 문제가 다시 와도 창을 또 띄우지 않게
+        self._list_problems_shown.add(key)
+        QMessageBox.warning(self, title, text)
 
     def _sidebar_item_for(self, file_path):
         """사이드바에서 그 영상의 (첫) 항목. 없으면 None."""
@@ -2183,15 +2613,19 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             item = self.sidebar.item(i)
             if item is not None and item.data(THUMBNAIL_CONTEXT_ROLE) == context:
                 item.setData(THUMBNAIL_CONTEXT_ROLE, resolved)
+        for source, source_context in self._sidebar_sources.items():  # 그곳에서 새로 생길 영상도 같은 자리
+            if source_context == context:
+                self._sidebar_sources[source] = resolved
         if (not self.current_thumbnail_folder and self._thumbnail_folder_problem is None
                 and not self._thumbnail_memory_only):
             self.current_thumbnail_folder = resolved.folder
             self._thumbnail_folder_problem = resolved.problem
         return resolved
 
-    def _apply_disk_thumbnails(self):
+    def _apply_disk_thumbnails(self, items=None):
         """사이드바 영상마다 그 항목의 썸네일 폴더에 있는 썸네일(영상보다 새것)을 바로 적용하고, 새로 만들어야 할
         [(영상, 그 항목의 자리)]를 돌려줌. 항목 자리의 미뤄 둔 썸네일 폴더 문제는 여기서 창으로 ((폴더, 제목)마다 한 번).
+        items: 그 항목만 (목록 다시 읽기로 새로 넣은 항목 — 남은 항목의 썸네일은 다시 보지 않음). 없으면 모든 항목.
 
         새로 만들 것: 썸네일이 없거나, 영상보다 오래됐거나, 영상보다 새것이지만 읽을 수 없는(깨진) 썸네일, 화면에만인 항목.
         캐시 적용이 이벤트를 처리하는 동안 목록이 바뀌면(job·폴더를 바꿈) 거기서 멈춤. 같은 영상이 여러 번 있으면 한 번만
@@ -2200,11 +2634,12 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         generation = self._sidebar_generation
         to_generate = []
         seen = set()
-        for i in range(self.sidebar.count()):
+        if items is None:
+            items = (self.sidebar.item(i) for i in range(self.sidebar.count()))
+        for item in items:
             if self._sidebar_generation != generation:
                 print("사이드바 목록이 바뀌어(job·폴더를 바꿈) 썸네일 확인을 멈춤")
                 break
-            item = self.sidebar.item(i)
             if item is None:
                 continue  # None인 경우 건너뛰기
             file_path = item.data(Qt.UserRole)

@@ -1,9 +1,12 @@
 """Playback and transport controls for VideoPlayer."""
 
+import errno
 import os
+import stat
 import subprocess
 import sys
 import time
+import traceback
 
 import cv2
 import numpy as np
@@ -24,7 +27,8 @@ from PyQt5.QtWidgets import (
 
 from yesoncheck.frame_utils import FrameCalculator
 from yesoncheck.workers import FFmpegWorker
-from yesoncheck import external_tools, file_names, paths, thumbnails
+from yesoncheck import external_tools, file_names, paths, thumbnails, video_list
+from yesoncheck.player_sidebar import ThumbnailContext
 
 class PlayerPlaybackMixin:
 
@@ -120,9 +124,25 @@ class PlayerPlaybackMixin:
         self.open_file('B', file_path)
 
     def update_playlist(self):
+        """job을 고름(currentIndexChanged): 그 job의 영상 목록을 만듦 (처음 불러오기 — job 폴더를 이 스레드에서 바로 읽음).
+        목록을 만드는 동안(창이 뜰 수 있음) 목록 다시 읽기는 끝난 뒤로 미룸."""
+        try:
+            with self._hold_sidebar_refresh():
+                self._load_job_list()
+            self._sidebar_refreshed_at = time.monotonic()  # 방금 읽음 (앱이 다시 활성돼도 곧바로 또 읽지 않게)
+        finally:
+            # 읽은 job 표시(_job_list_loaded_for): 사용자가 고른 것이면 Qt가 곧바로(이벤트를 처리하기 전) 보내는 activated가
+            # 씀. 코드로 바꾼 것이면 activated가 오지 않으므로 다음 이벤트 처리 때 지움 — 목록을 만드는 동안 뜬 창이 이벤트를
+            # 처리해도 이 예약은 그 뒤라 상관없음
+            QTimer.singleShot(0, self._clear_job_list_loaded_for)
+
+    def _load_job_list(self):
         selected_job = self.jobComboBox.currentText()
         if selected_job != "job선택":
             self.sidebar.clear()
+            # 다른 job을 고르면 Qt가 바로 다음 activated를 보냄 → _on_job_activated가 이 job을 또 읽지 않게
+            # (목록을 비울 때 지워지므로 그 뒤에)
+            self._job_list_loaded_for = self._job_selection()
             selected_work = self.workComboBox.currentText()
             selected_season = self.seasonComboBox.currentText()
 
@@ -144,213 +164,131 @@ class PlayerPlaybackMixin:
                 else:
                     base_path = None
 
-                if base_path and os.path.isdir(base_path):
-                    # 선택된 job 경로를 current_job_path로 설정 (UI job 선택용)
-                    self.current_job_path = base_path
-                    
-                    # UI job 선택 시 직접 썸네일 폴더 설정 (지연 최소화).
-                    # 전에 연 폴더(폴더 선택·끌어다 놓기·북마크)는 이제 상관없음 → 그곳에 썸네일을 저장하지 않게 지움
-                    self.selected_folder_path = None
-                    # 작품·시즌을 바꾸면 job 목록을 비우면서 빈 job으로 불림 → base_path가 작품·시즌 폴더이므로 만들지 않고,
-                    # 이때 보이는 영상(TJS_Animatic은 모든 job의 영상)의 썸네일은 화면에만 (영상 폴더에도 만들지 않음)
-                    if not selected_job:
-                        self.current_thumbnail_folder = None
-                        self._thumbnail_folder_problem = None
-                        self._thumbnail_memory_only = True
-                        print("job을 고르지 않음: 썸네일은 저장하지 않고 화면에만")
-                    else:
-                        self._thumbnail_memory_only = False
-                        try:
-                            self.current_thumbnail_folder = thumbnails.ensure_folder(base_path)
-                            self._thumbnail_folder_problem = None
-                        except OSError as e:
-                            # 썸네일 폴더 생성 실패해도 파일 표시는 계속 진행: 이 작업의 썸네일은 화면에만.
-                            # 지금은 로그만 남기고 창은 썸네일을 쓸 때 (작업을 열 때마다 창이 뜨지 않게)
-                            self.current_thumbnail_folder = None
-                            self._remember_thumbnail_folder_problem(os.path.join(base_path, thumbnails.FOLDER_NAME), e)
-                    
-                    # 메인 스레드에서 직접 처리 (스레드 제거로 지연 해결)
-                    all_mov_files = []
+                if not base_path:
+                    print(f"Directory not found or invalid: {base_path}")  # 작품 경로·시즌이 없음 (경로 문제는 get_work_path가 알림)
+                    return
+                # job 폴더 확인: os.path.isdir은 오류를 숨기고 False를 돌려줌 (예전에는 NAS가 끊기면 목록만 빈 채 로그에만 남음)
+                try:
+                    if not stat.S_ISDIR(os.stat(base_path).st_mode):
+                        raise NotADirectoryError(errno.ENOTDIR, os.strerror(errno.ENOTDIR), base_path)
+                except OSError as e:
+                    # 이 job을 기억 → 연결이 돌아오면(폴더가 생기면) 새로고침(F5)·창이 다시 활성될 때 목록이 생김. 썸네일 폴더는
+                    # 그때 처음 쓸 때 만듦 (job을 고르지 않은 목록은 화면에만)
+                    self._register_sidebar_source(video_list.ListSource("job", base_path, selected_work),
+                                                  ThumbnailContext(pending_base=base_path) if selected_job else ThumbnailContext())
+                    self._report_list_source_problem(base_path, e)
+                    return
+                # 선택된 job 경로를 current_job_path로 설정 (UI job 선택용)
+                self.current_job_path = base_path
 
-                    # MS_Animatic, TJS_Animatic 전용 처리
-                    if selected_work == "MS_Animatic":
-                        mov_files = [f for f in os.listdir(base_path) if file_names.is_listed_video(f)]
-                        for mov_file in mov_files:
-                            full_path = os.path.join(base_path, mov_file)
-                            all_mov_files.append((mov_file, full_path))
-                    elif selected_work == "TJS_Animatic":
-                        # TJS_Animatic: 먼저 base_path에서 직접 파일 검색
-                        print(f"TJS_Animatic: Searching in base_path: {base_path}")
-                        try:
-                            if os.path.isdir(base_path):
-                                # base_path의 모든 항목 확인
-                                all_items = os.listdir(base_path)
-                                print(f"Found {len(all_items)} items in {base_path}")
-                                
-                                mov_files = [f for f in all_items 
-                                           if os.path.isfile(os.path.join(base_path, f))
-                                           and f.lower().endswith(('.mov', '.mp4')) 
-                                           and not f.startswith('.')]
-                                print(f"Found {len(mov_files)} video files in base_path: {mov_files}")
-                                
-                                for mov_file in mov_files:
-                                    full_path = os.path.join(base_path, mov_file)
-                                    all_mov_files.append((mov_file, full_path))
-                                    print(f"Added file: {mov_file}")
-                                
-                                # 하위 폴더에서도 검색 (ANIMATIC 폴더 등)
-                                for folder in all_items:
-                                    folder_path = os.path.join(base_path, folder)
-                                    if os.path.isdir(folder_path) and not folder.startswith('.'):
-                                        try:
-                                            sub_items = os.listdir(folder_path)
-                                            sub_mov_files = [f for f in sub_items 
-                                                            if os.path.isfile(os.path.join(folder_path, f))
-                                                            and f.lower().endswith(('.mov', '.mp4')) 
-                                                            and not f.startswith('.')]
-                                            if sub_mov_files:
-                                                print(f"Found {len(sub_mov_files)} video files in subfolder {folder}: {sub_mov_files}")
-                                            for mov_file in sub_mov_files:
-                                                full_path = os.path.join(folder_path, mov_file)
-                                                all_mov_files.append((mov_file, full_path))
-                                        except (PermissionError, OSError) as e:
-                                            print(f"Error accessing folder {folder_path}: {e}")
-                                            pass
-                                print(f"Total files found: {len(all_mov_files)}")
-                        except Exception as e:
-                            print(f"Error in TJS_Animatic file search: {e}")
-                            import traceback
-                            traceback.print_exc()
-                            print(f"base_path: {base_path}")
-                            print(f"base_path exists: {os.path.exists(base_path) if base_path else False}")
-                            print(f"base_path isdir: {os.path.isdir(base_path) if base_path else False}")
-                    
-                    # 다른 작품들 처리 (최적화)
-                    else:
-                        # 먼저 부모 폴더에서 직접 검색 (가장 빠름)
-                        parent_mov_files = [f for f in os.listdir(base_path) if file_names.is_listed_video(f)]
-                        for parent_mov_file in parent_mov_files:
-                            full_path = os.path.join(base_path, parent_mov_file)
-                            all_mov_files.append((parent_mov_file, full_path))
-                        
-                        # 그 다음 하위 폴더 검색
-                        for folder in os.listdir(base_path):
-                            if os.path.isdir(os.path.join(base_path, folder)):
-                                if selected_work == "BB_Animatic":
-                                    frames_path = os.path.join(base_path, folder, "Quicktime")
-                                elif selected_work == "TGN_Animatic":
-                                    frames_path = os.path.join(base_path, folder, "ANIMATIC")
-                                elif selected_work in ["BM_Animatic", "KOTH_Animatic"]:
-                                    # 아래 특수 케이스에서 고정 폴더만 검색
-                                    frames_path = None
-                                else:
-                                    # 기본: Harmony scene 구조 (scene-*/frames/*.mov)
-                                    # 작품 경로 관리에서 새로 등록한 작품도 이 규칙을 따름
-                                    frames_path = os.path.join(base_path, folder, "frames")
-
-                                if frames_path and os.path.isdir(frames_path):
-                                    mov_files = [f for f in os.listdir(frames_path) if file_names.is_listed_video(f)]
-                                    for mov_file in mov_files:
-                                        full_path = os.path.join(frames_path, mov_file)
-                                        all_mov_files.append((mov_file, full_path))
-
-                        # 특수 케이스 처리
-                        if selected_work == "BM_Animatic":
-                            frames_path = os.path.join(base_path, "ANIMATIC")
-                            if os.path.isdir(frames_path):
-                                mov_files = [f for f in os.listdir(frames_path) if file_names.is_listed_video(f)]
-                                for mov_file in mov_files:
-                                    full_path = os.path.join(frames_path, mov_file)
-                                    all_mov_files.append((mov_file, full_path))
-
-                        if selected_work == "KOTH_Animatic":
-                            # 애니매틱 폴더 이름: 시즌 15까지 'POST-LOCK ANIMATIC', 시즌 16부터 '1601_ANIMATIC'·'1604_ANIMATICS'
-                            for anim_folder in os.listdir(base_path):
-                                frames_path = os.path.join(base_path, anim_folder)
-                                if 'ANIMATIC' in anim_folder.upper() and os.path.isdir(frames_path):
-                                    mov_files = [f for f in os.listdir(frames_path) if file_names.is_listed_video(f)]
-                                    for mov_file in mov_files:
-                                        full_path = os.path.join(frames_path, mov_file)
-                                        all_mov_files.append((mov_file, full_path))
-
-                    def sort_key(item, case_sensitive=False):
-                        filename = item[0]
-                        is_hd = '_HD' in filename
-                        parts = filename.split('_')
-                        if len(parts) >= 4:
-                            series_ep = parts[0] + '_' + parts[1]  # BB_802
-                            scene = parts[2]  # A001, B001 등
-                            scene_letter = scene[0]  # A, B 등
-                            scene_number = int(scene[1:]) if scene[1:].isdigit() else 0  # 001, 002 등을 정수로
-                            take = parts[3]  # TK1 등
-                            return (is_hd, series_ep, scene_letter, scene_number, take)
-                        else:
-                            return (is_hd, filename if case_sensitive else filename.lower())
-
-                    # 파일을 HD와 non-HD로 분리 (최적화)
-                    hd_files = [f for f in all_mov_files if '_HD' in f[0]]
-                    non_hd_files = [f for f in all_mov_files if '_HD' not in f[0]]
-                    
-                    # locale 설정을 한 번만 수행
-                    import locale
-                    try:
-                        current_locale = locale.getlocale()
-                        if current_locale[0] != 'en_US':
-                            locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
-                    except locale.Error:
-                        try:
-                            locale.setlocale(locale.LC_ALL, '')
-                        except:
-                            pass  # locale 설정 실패 시 기본 정렬 사용
-                    
-                    # 정렬 수행
-                    try:
-                        hd_files.sort(key=lambda x: locale.strxfrm(x[0]))
-                        non_hd_files.sort(key=lambda x: locale.strxfrm(x[0]))
-                    except:
-                        # locale 정렬 실패 시 기본 정렬 사용
-                        hd_files.sort(key=lambda x: x[0].lower())
-                        non_hd_files.sort(key=lambda x: x[0].lower())
-
-                    # 정렬된 non-HD 파일을 먼저 추가하고, 그 다음 HD 파일 추가
-                    all_mov_files = non_hd_files + hd_files
-
-                    # 사이드바 업데이트 최적화
-                    self.sidebar.setUpdatesEnabled(False)  # UI 업데이트 일시 중지
-                    # 파일 이름만 표시, 경로는 UserRole·툴팁. 항목마다 이 job의 썸네일 자리(폴더·화면에만·폴더 문제)를 기억
-                    self._add_sidebar_videos(all_mov_files)
-                    self.sidebar.setUpdatesEnabled(True)  # UI 업데이트 재개
-
-                    # Close previous video files
-                    if self.cap_a:
-                        self.cap_a.release()
-                        self.cap_a = None
-                    if self.cap_b:
-                        self.cap_b.release()
-                        self.cap_b = None
-
-                    # Initialize video file info
-                    self.filename_a = ""
-                    self.filename_b = ""
-                    self.frame_a = None
-                    self.frame_b = None
-
-                    # Automatically open the first video file
-                    if all_mov_files:
-                        self.playlist = [full_path for _, full_path in all_mov_files]
-                        self.open_file('A', self.playlist[0])
-                        # 썸네일 로딩은 썸네일 버튼을 누를 때만 실행하도록 변경
+                # UI job 선택 시 직접 썸네일 폴더 설정 (지연 최소화).
+                # 전에 연 폴더(폴더 선택·끌어다 놓기·북마크)는 이제 상관없음 → 그곳에 썸네일을 저장하지 않게 지움
+                self.selected_folder_path = None
+                # 작품·시즌을 바꾸면 job 목록을 비우면서 빈 job으로 불림 → base_path가 작품·시즌 폴더이므로 만들지 않고,
+                # 이때 보이는 영상(TJS_Animatic은 모든 job의 영상)의 썸네일은 화면에만 (영상 폴더에도 만들지 않음)
+                if not selected_job:
+                    self.current_thumbnail_folder = None
+                    self._thumbnail_folder_problem = None
+                    self._thumbnail_memory_only = True
+                    print("job을 고르지 않음: 썸네일은 저장하지 않고 화면에만")
                 else:
-                    print(f"Directory not found or invalid: {base_path}")
+                    self._thumbnail_memory_only = False
+                    try:
+                        self.current_thumbnail_folder = thumbnails.ensure_folder(base_path)
+                        self._thumbnail_folder_problem = None
+                    except OSError as e:
+                        # 썸네일 폴더 생성 실패해도 파일 표시는 계속 진행: 이 작업의 썸네일은 화면에만.
+                        # 지금은 로그만 남기고 창은 썸네일을 쓸 때 (작업을 열 때마다 창이 뜨지 않게)
+                        self.current_thumbnail_folder = None
+                        self._remember_thumbnail_folder_problem(os.path.join(base_path, thumbnails.FOLDER_NAME), e)
+
+                # 메인 스레드에서 직접 처리 (스레드 제거로 지연 해결). 작품별 규칙·정렬(HD가 아닌 영상 먼저, locale
+                # 순서)은 video_list.scan_job — 목록 다시 읽기도 같은 규칙. 읽기 전에 이 job을 기억: 지금 읽지 못해도
+                # (NAS 연결 끊김 등) 새로고침(F5)·창이 다시 활성될 때 다시 읽음
+                source = self._register_sidebar_source(video_list.ListSource("job", base_path, selected_work))
+                started = time.perf_counter()
+                try:
+                    result = video_list.scan_job(selected_work, base_path)
+                except OSError as e:
+                    self._report_list_source_problem(base_path, e)  # 다시 읽기와 같은 문구·기록
+                    return
+                self._sidebar_scan_seconds = time.perf_counter() - started
+                all_mov_files = result.videos
+                print(f"job 목록: 영상 {len(all_mov_files)}개 ({base_path})")
+
+                # 사이드바 업데이트 최적화
+                self.sidebar.setUpdatesEnabled(False)  # UI 업데이트 일시 중지
+                # 파일 이름만 표시, 경로는 UserRole·툴팁. 항목마다 이 job의 썸네일 자리(폴더·화면에만·폴더 문제)를 기억
+                self._add_sidebar_videos([(name, full_path, source) for name, full_path in all_mov_files])
+                self.sidebar.setUpdatesEnabled(True)  # UI 업데이트 재개
+                # 읽지 못한 하위 폴더는 목록을 다 넣은 뒤에 알림 (창이 떠 있는 동안 목록이 반쯤 만들어진 채이지 않게)
+                self._report_list_read(base_path, result)
+
+                # Close previous video files
+                if self.cap_a:
+                    self.cap_a.release()
+                    self.cap_a = None
+                if self.cap_b:
+                    self.cap_b.release()
+                    self.cap_b = None
+
+                # Initialize video file info
+                self.filename_a = ""
+                self.filename_b = ""
+                self.frame_a = None
+                self.frame_b = None
+
+                # Automatically open the first video file
+                if all_mov_files:
+                    self.playlist = [full_path for _, full_path in all_mov_files]
+                    self.open_file('A', self.playlist[0])
+                    # 썸네일 로딩은 썸네일 버튼을 누를 때만 실행하도록 변경
             except Exception as e:
+                # 예상 못 한 오류도 삼키지 않음: 스택 트레이스째 로그와 창으로
                 print(f"An error occurred: {e}")
+                traceback.print_exc()
+                QMessageBox.critical(self, "영상 목록 오류",
+                                     f"job 영상 목록을 만들다 예상치 못한 오류가 났습니다.\n\n{traceback.format_exc()}")
 
     def open_file(self, video_type, file_path=None):
+        """영상을 A 또는 B로 엶 → 열었으면 True. 열지 못하면 창으로 알리고 False — 보던 영상은 멈추지 않음.
+
+        디스크에 없는 영상(목록에 남아 있던 것)이면 알리고 사이드바 목록을 다시 읽음. 영상이 있지만 확인하지 못하거나
+        (권한·NAS 연결 끊김) OpenCV가 열지 못하면 오류 창 (예전에는 보던 영상을 멈춘 뒤 로그에만 남김).
+        """
         if file_path is None:
             file_path, _ = QFileDialog.getOpenFileName(self, f"Open Video {video_type}")
 
         if file_path:
             file_path = paths.normalize_native(file_path)
+            print(f"Attempting to open video file: {file_path}")
+            # 보던 영상을 멈추기 전에 확인하고 열어 봄 (열 수 없는 영상 때문에 빈 화면만 남지 않게)
+            try:
+                os.stat(file_path)
+            except OSError as e:
+                reason = f"{type(e).__name__}: {e}"
+                # 없어짐인지는 위로 올라가며 확인 (끊긴 공유는 Windows에서도 FileNotFoundError — 그때는 '없음'이라 하지 않음)
+                gone, note = video_list.check_gone(file_path, e)
+                if note:
+                    reason += f"\n{note}"
+                if gone:
+                    print(f"디스크에 없는 영상: {file_path} ({reason})")
+                    QMessageBox.warning(self, "영상 없음",
+                                        f"디스크에 없는 영상입니다: {file_path}\n({reason})\n목록을 다시 읽습니다.")
+                    self.refresh_sidebar()
+                    return False
+                print(f"영상을 확인하지 못함: {file_path} ({reason})")
+                QMessageBox.critical(self, "영상을 열 수 없음",
+                                     f"영상을 확인하지 못했습니다 (NAS 연결 끊김·권한 등): {file_path}\n이유: {reason}")
+                return False
+            cap = cv2.VideoCapture(file_path)
+            if not cap.isOpened():
+                print(f"Failed to open video file: {file_path}")
+                QMessageBox.critical(self, "영상을 열 수 없음",
+                                     f"영상을 열지 못했습니다 (OpenCV가 읽지 못함 — 파일이 손상되었거나 지원하지 않는 "
+                                     f"형식일 수 있음): {file_path}")
+                return False
+
             # 플레이리스트 재생 중이 아닐 때만 stop_video 호출
             if not self.is_playlist_playing:
                 self.stop_video()
@@ -358,13 +296,6 @@ class PlayerPlaybackMixin:
                 # 플레이리스트 재생 중에는 타이머만 정지
                 self.timer.stop()
                 self.stop_media_player()
-                
-            print(f"Attempting to open video file: {file_path}")
-            
-            cap = cv2.VideoCapture(file_path)
-            if not cap.isOpened():
-                print(f"Failed to open video file: {file_path}")
-                return
 
             # 새로운 영상을 열 때 프레임 캐시 초기화 (이전 영상 프레임 방지)
             self.clear_cache()
@@ -400,6 +331,8 @@ class PlayerPlaybackMixin:
                 self.reset_ocr_state()
                 if hasattr(self, 'on_video_annotations_reset'):
                     self.on_video_annotations_reset(file_path)
+            return True
+        return False
 
     def change_gpu_backend(self, index):
         backend = self.gpuComboBox.currentText()

@@ -299,6 +299,7 @@ class CustomVideoWidget(QGraphicsView):
         if parent and hasattr(parent, 'open_file'):
             video_files = []
             has_folder = False
+            read_failed = False  # 읽지 못한 폴더가 있음 (창으로 알림 — '지원되는 비디오 파일이 없습니다'는 띄우지 않음)
             folder_paths = []  # 폴더 경로들을 저장할 리스트
             
             # URL들을 파일/폴더로 분류
@@ -313,6 +314,10 @@ class CustomVideoWidget(QGraphicsView):
                     has_folder = True
                     folder_paths.append(local_path)  # 폴더 경로 저장
                     folder_files = parent.get_video_files_from_folder(local_path)
+                    if folder_files is None:
+                        read_failed = True
+                        parent._register_unread_folder(local_path)  # 연결이 돌아오면 새로고침(F5)으로 들어옴
+                        continue
                     folder_files.sort()  # 이름 순서대로 정렬
                     video_files.extend(folder_files)
             
@@ -338,13 +343,13 @@ class CustomVideoWidget(QGraphicsView):
                     parent._use_dropped_folder_for_thumbnails(folder_paths[0])
                     # 기존 사이드바 리스트 초기화
                     parent.sidebar.clear()
-                    parent.add_files_to_sidebar(video_files)
+                    parent.add_files_to_sidebar(video_files, folder_paths)
                     # 첫 번째 파일을 Video A에 로드
                     parent.open_file('A', video_files[0])
                     # 백그라운드 로딩 스케줄링
                     parent.schedule_background_thumbnail_loading()
                     QMessageBox.information(parent, "폴더 로드 완료", f"{len(video_files)}개의 비디오 파일이 사이드바에 추가되었습니다.\n첫 번째 파일이 Video A에 로드되었습니다.")
-                else:
+                elif not read_failed:
                     QMessageBox.warning(parent, "경고", "폴더에 지원되는 비디오 파일이 없습니다.")
             else:
                 # 개별 파일들만 있는 경우
