@@ -128,10 +128,12 @@ def run(workdir):
             report["checks"].append({"name": name, "ok": False, "detail": traceback.format_exc()})
             return None
 
-    from yesoncheck.app import create_application
+    from yesoncheck.app import create_application, load_mount_map
 
     # app.launch와 같은 고해상도 설정 (Windows: 배율 반올림 없이)으로 만듦
     app = QApplication.instance() or create_application([sys.argv[0]])
+    # app.launch처럼 (Mac) 이 Mac에서 공유가 붙은 곳을 읽어 경로 변환에 씀 — 빌드된 앱에서도 같은 코드가 돌게
+    load_mount_map()
     from yesoncheck.main_window import VideoPlayer
 
     player = None

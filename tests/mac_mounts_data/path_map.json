@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "shares": [
+    {
+      "mac": "/Users/studio01/Desktop/usadata4",
+      "windows": [
+        "\\\\203.0.113.14\\usadata4"
+      ]
+    },
+    {
+      "mac": "/Volumes/colordata",
+      "windows": [
+        "\\\\203.0.113.19\\colordata"
+      ]
+    },
+    {
+      "mac": "/usadata2",
+      "windows": [
+        "\\\\Mainnas\\usadata2"
+      ]
+    },
+    {
+      "mac": "/usadata3",
+      "windows": [
+        "\\\\Mainnas\\usadata3"
+      ]
+    }
+  ]
+}

@@ -3304,6 +3304,16 @@ QMessageBox {
         
         if not file_path:
             return
+        try:
+            # 결과 파일에 적을 영상 경로 (Mac: 제자리가 아닌 곳에 붙은 공유는 공유 설정의 Mac 경로). 정하지 못하면 저장하지
+            # 않음 — 이미지 폴더를 만들기 전에 (이 Mac에서만 열리는 /mnt… 경로를 적지 않게)
+            stored_video_path = paths.to_storage(current_video_path)
+        except paths.PathMapError as exc:
+            QMessageBox.critical(
+                self, "저장 실패",
+                f"OCR 결과에 적을 영상 경로를 정하지 못해 저장하지 않았습니다:\n{current_video_path}\n\n{exc}",
+            )
+            return
         
         try:
             # ROI 이미지를 별도 폴더에 저장
@@ -3318,8 +3328,6 @@ QMessageBox {
             if not os.path.exists(images_dir):
                 os.makedirs(images_dir)
             
-            # 현재 분석한 비디오 경로 사용
-            current_video_path = getattr(self, '_current_ocr_video_path', None) or self.get_current_video_path() or self.filename_a
             # OCR 모드 가져오기 (pending_ocr_metadata에서 가져오거나, 현재 선택된 모드 사용)
             ocr_mode = None
             if hasattr(self, 'pending_ocr_metadata') and isinstance(self.pending_ocr_metadata, dict):
@@ -3327,7 +3335,7 @@ QMessageBox {
             if ocr_mode is None:
                 ocr_mode = getattr(self, '_last_ocr_mode', 'titmouse')
             save_data = {
-                "video_path": paths.to_storage(current_video_path),
+                "video_path": stored_video_path,
                 "roi": self.ocr_roi if hasattr(self, 'ocr_roi') and self.ocr_roi else None,
                 "fps": self.fps if hasattr(self, 'fps') and self.fps else 24.0,
                 "total_frames": self.total_frames_a if hasattr(self, 'total_frames_a') and self.total_frames_a else 1,

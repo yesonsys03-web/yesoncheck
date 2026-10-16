@@ -1,0 +1,6 @@
++auto_master		# Use directory service
+/home			auto_home	-nobrowse,hidefromfinder
+/Network/Servers	-fstab
+/-			-static
+
+/System/Volumes/Data/mnt auto_nfs

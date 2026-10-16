@@ -1,0 +1,10 @@
+203.0.113.3:/data/USA_DB	/USA_DB		nfs	bg,intr,hard,async,resvport,timeo=30,nolocks,locallocks
+203.0.113.3:/data/usadata2        /usadata2         nfs     bg,intr,hard,async,resvport,timeo=30,nolocks,locallocks
+203.0.113.3:/data/usadata3        /usadata3         nfs     bg,intr,hard,async,resvport,timeo=30,nolocks,locallocks
+203.0.113.3:/data/CH_PROPS	/CH_PROPS	nfs	bg,intr,hard,async,resvport,timeo=30,nolocks,locallocks
+
+203.0.113.7:/volume1/usadata1		/usadata1	nfs	bg,intr,hard,async,resvport,timeo=30,nolocks,locallocks
+203.0.113.14:/volume1/usadata4		/Users/studio01/Desktop/usadata4	nfs     bg,intr,rw,hard,async,resvport,timeo=30,nolocks,locallocks
+203.0.113.7:/volume1/usadata5		/usadata5	nfs     bg,intr,hard,async,resvport,timeo=30,nolocks,locallocks
+203.0.113.7:/volume1/usadata6		/usadata6	nfs     bg,intr,hard,async,resvport,timeo=30,nolocks,locallocks
+203.0.113.5:/backup/bgfinal        /bgfinal         nfs     bg,intr,hard,async,resvport,nfc,timeo=30,nolocks,locallocks

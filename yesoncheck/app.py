@@ -14,11 +14,11 @@ if __package__ in (None, ""):
     # Allow running the file directly (python yesoncheck/app.py)
     sys.path.append(os.path.dirname(os.path.dirname(__file__)))
     from yesoncheck.main_window import VideoPlayer  # type: ignore  # pylint: disable=import-error
-    from yesoncheck import timing_log  # type: ignore  # pylint: disable=import-error
+    from yesoncheck import mac_mounts, paths, timing_log  # type: ignore  # pylint: disable=import-error
     from yesoncheck.player_base import wait_for_released_workers  # type: ignore  # pylint: disable=import-error
 else:
     from .main_window import VideoPlayer
-    from . import timing_log
+    from . import mac_mounts, paths, timing_log
     from .player_base import wait_for_released_workers
 
 
@@ -114,6 +114,23 @@ def create_application(argv):
     return QApplication(argv)
 
 
+def load_mount_map():
+    """(Mac) 이 Mac에서 공유가 붙은 곳(자동 연결 설정·/etc/fstab)을 읽어 경로 변환에 씀 — 공유 설정을 읽기 전에 한 번.
+
+    launch와 실행 시험(smoke_test)이 같이 씀. 바꾸는 경로마다 한 줄([공유] /usadata2 → … (auto_nfs))과 설정 파일 문제를
+    로그에. 공유(NAS) 자체는 열어 보지 않음 (mac_mounts). Windows는 아무것도 안 하고 None.
+    """
+    if paths.IS_WINDOWS:
+        return None
+    started = time.perf_counter()
+    mount_map = mac_mounts.read_mount_map()
+    for line in mount_map.report_lines():
+        print(f"[공유] {line}", flush=True)
+    paths.activate_mount_map(mount_map)
+    timing_log.startup(f"이 Mac에서 공유가 붙은 곳 읽음 ({timing_log.since(started)})")
+    return mount_map
+
+
 def screen_report(screen):
     """시작 로그용 한 줄: 화면의 논리 크기·작업 영역·devicePixelRatio·논리 DPI·Qt 배율 반올림 정책
     (Windows 150%가 2배로 반올림되는지 등을 사용자 로그로 알 수 있게)."""
@@ -170,6 +187,9 @@ def launch(argv=None):
         app = create_application(argv)
     timing_log.startup("QApplication 준비")
     timing_log.startup(screen_report(app.primaryScreen()))
+    # (Mac) 공유를 다른 곳에 붙인 Mac: 공유 설정 폴더·작품 경로를 열기 전에 이 Mac에서 공유가 붙은 곳을 읽음
+    # (스플래시 전에 — 예상 못 한 오류 창이 항상 위인 스플래시에 가려지지 않게)
+    load_mount_map()
 
     # 스플래시 스크린 생성 (즉시 표시)
     pixmap = QPixmap(500, 300)

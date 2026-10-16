@@ -413,9 +413,11 @@ class FrameAnnotationStore:
         if not self.video_path:
             raise ValueError("No video loaded")
         target = path or annotation_file_path(self.video_path)
+        # 파일을 열기 전에: 적을 영상 경로를 정하지 못하면(paths.PathMapError) 빈 주석 파일을 남기지 않게
+        data = self.to_dict()
         os.makedirs(os.path.dirname(target), exist_ok=True)
         with open(target, "w", encoding="utf-8") as handle:
-            json.dump(self.to_dict(), handle, ensure_ascii=False, indent=2)
+            json.dump(data, handle, ensure_ascii=False, indent=2)
         return target
 
     def load(self, path: Optional[str] = None) -> bool:

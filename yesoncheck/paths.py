@@ -3,7 +3,10 @@
 공유 설정(work_paths.json, OCR 결과·주석 파일의 영상 경로)에는 Mac 경로를 쓴다.
 Windows에서는 공유 설정 폴더의 path_map.json("Mac 경로 앞부분 ↔ UNC" 표)으로 바꿔서 연다.
 UNC(\\\\서버\\공유)는 PC마다 다른 드라이브 문자와 상관없이 같으므로, 드라이브 문자로 고른 경로도
-먼저 UNC로 바꾼 뒤 표와 맞춘다. Mac에서는 변환하지 않는다(기존 동작 유지).
+먼저 UNC로 바꾼 뒤 표와 맞춘다. Mac에서는 공유를 제자리가 아닌 곳에 붙인 Mac에서만 바꾼다: 이 Mac의 자동 연결 설정·
+fstab으로 공유가 붙은 곳을 찾아(mac_mounts.MountMap, activate_mount_map) 공유 설정의 앞부분(공유 설정 폴더·path_map.json의
+"mac")이 이 Mac에 없을 때 그곳을 열고, 그 아래 경로는 공유 설정의 앞부분으로 되돌려 적는다. 공유를 모두 제자리에 붙인
+Mac(기준 Mac)은 예전과 같다.
 """
 
 import functools
@@ -286,17 +289,62 @@ def active_map():
     return _active_map
 
 
+_mount_map = None  # (Mac) 이 Mac에서 공유가 붙은 곳 (mac_mounts.MountMap) — None이면 Mac 경로를 바꾸지 않음
+
+
+def activate_mount_map(mount_map):
+    """(Mac) 이 Mac에서 공유가 붙은 곳(mac_mounts.MountMap)을 정합니다 (None이면 해제). 시작할 때 app.load_mount_map이
+    (공유 설정 폴더의 앞부분만), 공유 설정을 읽은 뒤 path_map.json까지 보고 정한 맵으로 _apply_shared_config가 부름."""
+    global _mount_map
+    _mount_map = mount_map
+
+
+def active_mount_map():
+    return _mount_map
+
+
+def describe_mac_path(mac_path):
+    """(Mac) 공유 설정의 Mac 경로를 이 Mac에서 어디로 여는지 찾아본 내용 (공유 설정·작품 폴더를 열지 못했을 때 오류에 덧붙임)."""
+    if _mount_map is None:
+        return "이 Mac에서 공유가 붙은 곳(자동 연결 설정·fstab)을 읽지 않았습니다 — 공유 설정의 경로를 그대로 엶."
+    return _mount_map.describe(mac_path)
+
+
+def mac_mount_map_dirs():
+    """(Mac) 자동 연결(autofs) 맵 폴더들(실제 경로): 공유가 붙는 곳의 위 — 공유 안이 아님 (video_list.check_gone)."""
+    return _mount_map.map_dirs if _mount_map is not None else frozenset()
+
+
+def _mac_canonical(native_path):
+    """(Mac) 제자리가 아닌 곳에 붙은 공유 아래 경로 → 공유 설정의 Mac 경로. 바꿀 것이 없으면 None. 그런 공유·자동 연결
+    맵 폴더 아래인데 공유 설정에 적을 경로를 정하지 못하면 PathMapError (mac_mounts)."""
+    if _mount_map is None or not native_path:
+        return None
+    return _mount_map.to_canonical(native_path)
+
+
 def to_native(mac_path):
-    """공유 설정의 Mac 경로 → 이 PC에서 여는 경로 (Windows: UNC). Mac은 그대로."""
+    """공유 설정의 Mac 경로 → 이 PC에서 여는 경로 (Windows: UNC).
+
+    Mac: 공유 설정의 앞부분이 이 Mac에 없고 이름이 같은 공유가 다른 곳에 붙어 있으면 그곳 (mac_mounts), 아니면 그대로.
+    맞는 공유가 여럿이면 PathMapError.
+    """
     if not IS_WINDOWS:
-        return mac_path
+        if _mount_map is None or not mac_path:
+            return mac_path
+        return _mount_map.to_native(mac_path)
     return active_map().mac_to_windows(mac_path)
 
 
 def to_canonical(native_path):
-    """이 PC의 경로 → 공유 설정에 저장할 Mac 경로. 못 바꾸면 PathMapError."""
+    """이 PC의 경로 → 공유 설정에 저장할 Mac 경로. 못 바꾸면 PathMapError.
+
+    Mac: 제자리가 아닌 곳에 붙은 공유 아래면 공유 설정의 앞부분으로 (/System/Volumes/Data/mnt/usadata2/… → /usadata2/…),
+    그런 곳인데 정하지 못하면 PathMapError. 그 밖은 예전처럼 /System/Volumes/Data 접두만 뺌.
+    """
     if not IS_WINDOWS:
-        return normalize_mac(native_path)
+        canonical = _mac_canonical(native_path)
+        return canonical if canonical is not None else normalize_mac(native_path)
     return active_map().windows_to_mac(drive_to_unc(native_path))
 
 
@@ -304,9 +352,14 @@ def to_storage(native_path):
     """OCR 결과·주석 파일에 적을 경로.
 
     Windows에서 NAS 경로면 Mac 경로로, 로컬 디스크처럼 변환표 밖이면 원래 경로를 그대로 적는다(스펙 2-4).
+    Mac: 제자리가 아닌 곳에 붙은 공유 아래면 공유 설정의 Mac 경로로, 그 밖은 원래 경로 그대로 (예전과 같음). 그런 곳인데
+    정하지 못하면 PathMapError (/mnt·/System/Volumes/Data/mnt 경로를 적지 않음 — 부른 쪽이 창으로 알림).
     """
-    if not IS_WINDOWS or not native_path:
+    if not native_path:
         return native_path
+    if not IS_WINDOWS:
+        canonical = _mac_canonical(native_path)
+        return canonical if canonical is not None else native_path
     try:
         return to_canonical(native_path)
     except PathMapError:
@@ -314,8 +367,9 @@ def to_storage(native_path):
 
 
 def from_storage(stored_path):
-    """파일에서 읽은 영상 경로 → 이 PC 경로. Windows에서 Mac 경로면 변환 (실패 시 PathMapError)."""
-    if not IS_WINDOWS or not stored_path or not stored_path.startswith("/"):
+    """파일에서 읽은 영상 경로 → 이 PC 경로. Mac 경로면 to_native로 (Windows는 변환표, Mac은 다른 곳에 붙인 공유만;
+    실패 시 PathMapError)."""
+    if not stored_path or not stored_path.startswith("/"):
         return stored_path
     return to_native(stored_path)
 
@@ -352,7 +406,9 @@ def contains_path(paths_list, path):
 def thumbnail_key(path):
     """썸네일 파일 이름(md5). NAS의 썸네일 폴더는 모든 Mac·Windows PC가 함께 쓰므로 같은 영상은 같은 이름이어야 한다.
 
-    Mac: 경로 그대로의 md5 (기존 값 — NAS에 이미 있는 Mac 썸네일을 계속 씀).
+    Mac: 경로 그대로의 md5 (기존 값 — NAS에 이미 있는 Mac 썸네일을 계속 씀). 제자리가 아닌 곳에 붙은 공유(mac_mounts)
+    아래면 공유 설정의 Mac 경로(to_storage와 같은 것)의 md5 → 다른 Mac·Windows가 만든 썸네일을 그대로 씀. 그런 곳인데
+    공유 설정에 적을 경로를 정하지 못하면 예전처럼 경로 그대로의 md5 (그곳마다 한 번 로그).
     Windows: 드라이브 문자를 UNC로 바꾼 뒤(대소문자는 그대로) 변환표로 Mac 경로를 얻어 그 md5 → Mac이 만든
     썸네일을 그대로 찾고, Windows가 만든 썸네일도 Mac이 찾는다. 로컬 디스크, 변환표에 없는 공유, 변환표가
     로드되지 않았을 때는 예전처럼 path_key의 md5 (드라이브 문자와 무관).
@@ -362,6 +418,16 @@ def thumbnail_key(path):
     windows_to_mac의 NFC 경로와 달라 나눠 쓰지 못한다 (각자 만든 것은 각자 계속 씀). /usadata2·/usadata3은 SMB가
     아니라 NFS 마운트다.
     """
+    if not IS_WINDOWS:
+        try:
+            canonical = _mac_canonical(path)
+        except PathMapError as exc:
+            # 공유 설정에 적을 경로를 정하지 못한 곳: 이 Mac 경로로 이름을 지음 (나눠 쓰지 않음 — 그곳마다 한 번 로그,
+            # 시작 로그의 [공유] 줄에도 있음). 썸네일 흐름은 그대로 (보기·만들기는 됨)
+            _mount_map.log_unshared_thumbnail(path, exc)
+            canonical = None
+        if canonical is not None:
+            return hashlib.md5(canonical.encode("utf-8")).hexdigest()
     if IS_WINDOWS and path and _active_map is not None:
         native = _drive_as_unc(path)
         if native.startswith("\\\\"):

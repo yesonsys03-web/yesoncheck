@@ -1,6 +1,7 @@
 """공유 설정 폴더(.yesoncheck) 찾기와 작품 경로 파일(work_paths.json) 읽기·쓰기.
 
-- Mac: /USA_DB/test_jn/.yesoncheck (고정, 기존과 같음)
+- Mac: /USA_DB/test_jn/.yesoncheck (고정, 기존과 같음). 이 Mac에 /USA_DB가 없고 그 공유를 다른 곳에 붙였으면 그곳
+  (paths.to_native — 이 Mac의 자동 연결 설정·fstab, mac_mounts)
 - Windows: PC별 설정 %APPDATA%\\YesonCheck\\settings.json 의 "config_dir"(UNC)
 - 시험·실행 시험용: 환경 변수 YESONCHECK_CONFIG_DIR가 있으면 그 폴더
 공유 파일을 읽다 실패해도 기본값으로 덮어쓰거나 폴더를 새로 만들지 않는다.
@@ -53,13 +54,26 @@ def save_local_settings(updates):
 
 
 def configured_config_dir():
-    """이 PC가 쓸 공유 설정 폴더. Windows에서 아직 정하지 않았으면 None."""
+    """이 PC가 쓸 공유 설정 폴더. Windows에서 아직 정하지 않았으면 None.
+
+    Mac: MAC_CONFIG_DIR를 이 Mac에서 여는 경로 (공유를 다른 곳에 붙인 Mac은 그곳). 맞는 공유가 여럿이라 정하지 못하면
+    SharedConfigError (후보가 보임).
+    """
     override = os.environ.get(CONFIG_DIR_ENV)
     if override:
         return override
     if not paths.IS_WINDOWS:
-        return MAC_CONFIG_DIR
+        try:
+            return paths.to_native(MAC_CONFIG_DIR)
+        except paths.PathMapError as exc:
+            raise SharedConfigError(f"공유 설정 폴더를 이 Mac에서 찾지 못했습니다: {MAC_CONFIG_DIR}\n{exc}") from exc
     return load_local_settings().get("config_dir") or None
+
+
+def mac_config_dir_lookup():
+    """(Mac) 공유 설정 폴더(MAC_CONFIG_DIR)를 이 Mac에서 어디로 찾았는지 — 작품 경로 파일을 읽지 못했을 때 오류에 덧붙임
+    (자동 연결 설정·fstab에서 찾은 것, 또는 그 파일들을 읽다 난 문제)."""
+    return paths.describe_mac_path(MAC_CONFIG_DIR)
 
 
 def validate_config_dir(config_dir):

@@ -84,6 +84,7 @@ class SharedConfigState:
     activate_path_map: bool = False  # (Windows) 넣을 때 paths.activate(path_map) — 아니면 활성 변환표를 그대로 둠
     path_map: object = None  # paths.PathMap (이 PC에 연결된 주소를 앞으로 옮김) 또는 None(변환표 해제)
     works_not_opening: list = None  # (Windows) 시작할 때 미리 계산한 '열리지 않는 작품' — None이면 계산하지 않음
+    mount_map: object = None  # (Mac) path_map.json까지 보고 정한 mac_mounts.MountMap — None이면 활성 맵을 그대로 둠
     elapsed: float = None  # 백그라운드 읽기에 걸린 초
 
 
@@ -187,6 +188,35 @@ def _auto_find_config_dir(state, shares, share_problems):
     return found[0]
 
 
+def _load_mac_mount_map(state, config_dir, mount_map):
+    """(Mac, 뒤 스레드) 공유 설정 폴더의 path_map.json "mac" 항목(공유 설정의 앞부분 — Windows와 같음)으로 이 Mac에서 공유가
+    붙은 곳을 마저 정한 MountMap (mac_mounts.MountMap.with_canonical_roots). 바꾸는 것은 로그에 [공유] 줄로.
+
+    path_map.json을 읽지 못하면 제자리가 아닌 곳에 붙은 공유의 앞부분은 /<이름>으로만 정함: 그런 공유가 이 Mac에 있으면
+    변환표 문제(state.path_map_problem — 창으로 알림), 없으면 바뀌는 것이 없어 로그만. 자동 연결 설정·fstab에 공유가 하나도
+    없으면 읽지 않음.
+    """
+    roots = []
+    if mount_map.mounts:
+        try:
+            roots = ["/" + "/".join(mac_parts) for mac_parts, _uncs in paths.PathMap.load(config_dir).shares]
+        except paths.PathMapError as exc:
+            if mount_map.has_displaced():
+                state.path_map_problem = (
+                    f"{exc}\n\n이 Mac은 공유를 제자리가 아닌 곳(자동 연결 폴더 등)에 붙여 path_map.json의 \"mac\" 항목으로 공유 설정의 "
+                    "앞부분을 정합니다. 읽지 못해 /<이름>으로만 정했습니다 — 이름이 다른 앞부분(예: "
+                    "/Users/studio01/Desktop/usadata4)의 영상은 다른 PC와 경로·썸네일이 맞지 않을 수 있습니다."
+                    f"\n\n{traceback.format_exc()}"
+                )
+            print(f"[공유] path_map.json을 읽지 못함 — 제자리가 아닌 공유의 앞부분은 /<이름>으로만 정함: {exc}", flush=True)
+    loaded = mount_map.with_canonical_roots(roots)
+    for line in loaded.mapping_lines():
+        print(f"[공유] (공유 설정을 읽은 뒤) {line}", flush=True)
+    for problem in loaded.problems[len(mount_map.problems):]:
+        print(f"[공유] (공유 설정을 읽은 뒤) 문제: {problem}", flush=True)
+    return loaded
+
+
 def gather_shared_config(find_works_not_opening=False):
     """공유 설정 폴더를 정하고 작품 경로(Windows는 변환표도)를 읽습니다 → SharedConfigState.
 
@@ -237,8 +267,15 @@ def gather_shared_config(find_works_not_opening=False):
         state.work_paths = shared_config.read_work_paths(work_paths_file)
         timing_log.log("공유 설정", f"작품 경로 읽음 ({timing_log.since(started)}): 작품 {len(state.work_paths)}개")
     except shared_config.SharedConfigError as exc:
-        problems.append(f"{exc}\n\n{traceback.format_exc()}")
+        lookup = ""
+        if not paths.IS_WINDOWS and not os.environ.get(shared_config.CONFIG_DIR_ENV):
+            lookup = f"\n\n{shared_config.mac_config_dir_lookup()}"  # (Mac) 공유 설정 폴더를 어디서 찾아봤는지
+        problems.append(f"{exc}{lookup}\n\n{traceback.format_exc()}")
         timing_log.log("공유 설정", f"작품 경로를 읽지 못함 ({timing_log.since(started)})")
+    if not paths.IS_WINDOWS and paths.active_mount_map() is not None:
+        # (Mac) path_map.json의 "mac"(공유 설정의 앞부분)까지 보고 이 Mac에서 공유가 붙은 곳을 마저 정함. 창에는
+        # _apply_shared_config가 넣음
+        state.mount_map = _load_mac_mount_map(state, config_dir, paths.active_mount_map())
     if paths.IS_WINDOWS:
         state.activate_path_map = True
         timing_log.log("변환표", f"읽는 중: {os.path.join(config_dir, paths.PATH_MAP_FILENAME)}")
@@ -1239,6 +1276,8 @@ class PlayerSidebarMixin:
             self.work_paths_password_file = os.path.join(state.config_dir, shared_config.PASSWORD_FILENAME)
         if state.activate_path_map:
             paths.activate(state.path_map)
+        if state.mount_map is not None:
+            paths.activate_mount_map(state.mount_map)
 
     def start_shared_config_load(self):
         """(창 표시 후) 공유 설정을 백그라운드 스레드에서 읽고, 끝나면 GUI 스레드에서 넣은 뒤 문제를 알립니다.
@@ -1313,7 +1352,7 @@ class PlayerSidebarMixin:
         if self.shared_config_problem:
             title += " — 공유 설정 오류 (작품 목록 없음)"
         if getattr(self, "path_map_problem", None):
-            title += " — 변환표 오류 (작품 경로 관리에서 자동 설정)"
+            title += " — 변환표 오류 (작품 경로 관리에서 자동 설정)" if paths.IS_WINDOWS else " — 변환표 오류"
         self.setWindowTitle(title)
 
     def resolve_shared_config_problem(self, works_not_opening=None):
@@ -1340,6 +1379,10 @@ class PlayerSidebarMixin:
                 "공유 설정 오류",
                 f"{self._shared_config_problem_text()}\n\n작품 목록 없이 계속합니다. 파일 직접 열기와 드래그는 쓸 수 있습니다.",
             )
+            return
+        if not paths.IS_WINDOWS and self.path_map_problem:
+            # (Mac) path_map.json을 읽지 못해 공유 설정의 앞부분을 /<이름>으로만 정함 (_load_mac_mount_map)
+            QMessageBox.warning(self, "변환표 오류", self.path_map_problem)
             return
         self._offer_path_map_setup(works_not_opening)
 
@@ -1611,9 +1654,10 @@ class PlayerSidebarMixin:
         self.save_password_hash(password_hash)
 
     def get_work_path(self, work_name):
-        """작품 경로를 이 PC에서 여는 경로로 돌려줍니다 (Windows: 변환표로 UNC 변환).
+        """작품 경로를 이 PC에서 여는 경로로 돌려줍니다 (Windows: 변환표로 UNC 변환, Mac: 공유를 제자리가 아닌 곳에 붙인
+        Mac은 그곳 — mac_mounts).
 
-        변환하지 못하거나 (Windows에서) 폴더가 없으면 오류 창을 한 번 띄우고 ""를 돌려줍니다.
+        변환하지 못하거나 폴더가 없으면 오류 창을 한 번 띄우고 ""를 돌려줍니다.
         """
         stored = self.work_paths.get(work_name, "")
         if not stored:
@@ -1627,6 +1671,13 @@ class PlayerSidebarMixin:
             self._report_work_path_problem(
                 f"작품 '{work_name}' 폴더를 열 수 없습니다.\n\n이 PC 경로: {native}\n공유 설정 경로: {stored}\n\n"
                 "NAS 연결과 path_map.json을 확인하세요."
+            )
+            return ""
+        if not paths.IS_WINDOWS and not os.path.isdir(native):
+            # (Mac) 빈 시즌 목록만 보이지 않게: 어디를 찾아봤는지(이 Mac에서 공유가 붙은 곳)와 함께 알림
+            self._report_work_path_problem(
+                f"작품 '{work_name}' 폴더를 열 수 없습니다.\n\n이 Mac 경로: {native}\n공유 설정 경로: {stored}\n\n"
+                f"{paths.describe_mac_path(stored)}\n\nNAS 연결을 확인하세요."
             )
             return ""
         return native
@@ -1656,6 +1707,15 @@ class PlayerSidebarMixin:
                     text += f"\n    → {paths.to_native(path)}"
                 except paths.PathMapError:
                     text += "\n    → 변환표에 없음 (path_map.json 확인)"
+            else:
+                # (Mac) 공유를 다른 곳에 붙인 Mac에서만 이 Mac에서 여는 경로를 덧붙임 (같으면 예전처럼 한 줄)
+                try:
+                    native = paths.to_native(path)
+                except paths.PathMapError:
+                    text += "\n    → 이 Mac에서 열 곳을 정하지 못함 (맞는 공유가 여럿 — 시작 로그의 [공유] 줄 확인)"
+                else:
+                    if native != path:
+                        text += f"\n    → {native}"
             item = QListWidgetItem(text)
             item.setData(Qt.UserRole, work_name)
             table.addItem(item)

@@ -1,0 +1,9 @@
+USA_DB -fstype=nfs,rw,soft,intr,resvport,nolock nfs://203.0.113.3:/data/USA_DB
+usadata2 -fstype=nfs,rw,soft,intr,resvport,nolock nfs://203.0.113.3:/data/usadata2
+usadata3 -fstype=nfs,rw,soft,intr,resvport,nolock nfs://203.0.113.3:/data/usadata3
+usadata1 -fstype=nfs,rw,soft,intr,resvport,nolock,nfc nfs://203.0.113.7:/volume1/usadata1
+usadata5 -fstype=nfs,rw,soft,intr,resvport,nolock,nfc nfs://203.0.113.7:/volume1/usadata5
+usadata6 -fstype=nfs,rw,soft,intr,resvport,nolock,nfc nfs://203.0.113.7:/volume1/usadata6
+usadata7 -fstype=nfs,rw,soft,intr,resvport,nolock,nfc nfs://203.0.113.7:/volume1/usadata7
+usadata4 -fstype=nfs,rw,soft,intr,resvport,nolock,nfc nfs://203.0.113.14:/volume1/usadata4
+bgfinal -fstype=nfs,rw,soft,intr,resvport,nolock,nfc nfs://203.0.113.5:/backup/bgfinal

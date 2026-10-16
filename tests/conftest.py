@@ -113,6 +113,17 @@ def make_video():
 
 
 @pytest.fixture(autouse=True)
+def _no_mac_mount_map(monkeypatch):
+    """(Mac) 이 Mac에서 공유가 붙은 곳(mac_mounts)은 시험마다 비움: launch·실행 시험이 이 Mac의 /etc를 읽지 않게(없는 폴더를
+    기준으로) 하고, 시험에서 정한 맵이 다른 시험에 남지 않게."""
+    from yesoncheck import mac_mounts, paths
+
+    monkeypatch.setattr(mac_mounts, "DEFAULT_ROOT", os.path.join(ROOT, "tests", "no_such_mac_root"))
+    yield
+    paths.activate_mount_map(None)
+
+
+@pytest.fixture(autouse=True)
 def _fresh_shortcut_cache():
     """바로 가기 대상 캐시는 프로세스 전체에 하나 → 시험마다 비움 (가짜 경로가 다른 시험의 결과를 쓰지 않게)."""
     from yesoncheck import path_map_setup

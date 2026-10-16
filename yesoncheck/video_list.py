@@ -24,7 +24,8 @@ FOLDER_GONE = "folder_gone"  # plan_refresh 결과 값: 목록을 넣은 폴더�
 # Mac: 공유·디스크를 붙이는 폴더. 떼면 /Volumes/x가 없어지거나 빈 폴더로 남으므로 이 폴더와 그 바로 아래(붙어 있지
 # 않은 것)는 공유 안이 아님 (is_gone)
 MAC_MOUNT_PARENT = "/Volumes"
-# Mac: 공유를 붙이는 곳의 위(/, autofs 마운트들이 있는 Data 볼륨) — 여기까지 올라가면 공유가 떨어졌을 수 있음 (is_gone)
+# Mac: 공유를 붙이는 곳의 위(/, autofs 마운트들이 있는 Data 볼륨) — 여기까지 올라가면 공유가 떨어졌을 수 있음 (is_gone).
+# 이 Mac의 자동 연결 맵 폴더(paths.mac_mount_map_dirs)도 같음
 MAC_LOCAL_ROOTS = ("/", "/System/Volumes/Data")
 _sort_locale_set = False  # set_sort_locale을 이 프로세스에서 이미 불렀는지
 
@@ -303,14 +304,18 @@ def _is_mount_root(folder):
 
 def _inside_share(folder):
     """확인된 폴더 folder가 공유(마운트) 안인지 → (안인지, 아니면 그 까닭). Windows는 위로 올라가도 \\\\서버\\공유·드라이브
-    맨 위에서 멈추므로 확인되면 공유 안. Mac은 / · Data 볼륨(autofs 마운트들의 위) · /Volumes와, /Volumes 바로 아래의
-    붙어 있지 않은 폴더(떼고 남은 것)가 아니어야 함 — 장치 번호를 보기 전에 (예전 macOS는 /Volumes의 장치가 /와 달라
-    붙인 공유의 맨 위처럼 보임)."""
+    맨 위에서 멈추므로 확인되면 공유 안. Mac은 / · Data 볼륨(autofs 마운트들의 위) · /Volumes · 이 Mac의 자동 연결(autofs)
+    맵 폴더(예: mac_b의 /System/Volumes/Data/mnt — paths.mac_mount_map_dirs)와, /Volumes 바로 아래의 붙어 있지 않은
+    폴더(떼고 남은 것)가 아니어야 함 — 장치 번호를 보기 전에 (예전 macOS는 /Volumes의 장치가 /와 달라 붙인 공유의 맨 위처럼
+    보임)."""
     if paths.IS_WINDOWS:
         return True, ""
     real = os.path.realpath(folder)
     if real in MAC_LOCAL_ROOTS or real == MAC_MOUNT_PARENT:
         return False, f"공유를 붙이는 곳까지 올라감 (공유가 떨어졌을 수 있음): {real}"
+    if real in paths.mac_mount_map_dirs():
+        # 맵 폴더의 목록은 붙은 공유만 보일 수 있음(-nobrowse) → 공유 이름이 목록에 없어도 지워진 것이 아님
+        return False, f"자동 연결(autofs) 맵 폴더까지 올라감 (공유가 붙지 않았거나 서버가 응답하지 않을 수 있음): {real}"
     if os.path.dirname(real) == MAC_MOUNT_PARENT:
         try:
             mounted = _is_mount_root(real)

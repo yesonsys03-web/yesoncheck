@@ -29,7 +29,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from yesoncheck import external_tools
+from yesoncheck import external_tools, paths
 from yesoncheck.annotation_export import AnnotationExportWorker
 from yesoncheck.annotation_burn import burn_annotations_on_frame
 from yesoncheck.frame_annotations import (
@@ -611,6 +611,18 @@ class PlayerAnnotationsMixin:
             path = self.annotation_store.save()
             self._update_annotation_storage_label(path)
             return True
+        except paths.PathMapError as exc:
+            # (Mac) 주석 파일에 적을 영상 경로를 정하지 못함 (제자리가 아닌 곳에 붙은 공유) → 저장하지 않음. 자동 저장은
+            # 주석을 바꿀 때마다 불리므로 창은 (영상, 까닭)마다 한 번
+            self.annotationStorageLabel.setText(f"⚠ 주석 저장 실패: {exc}")
+            shown = self.__dict__.setdefault("_annotation_path_problems_shown", set())
+            if (self.filename_a, str(exc)) not in shown:
+                shown.add((self.filename_a, str(exc)))
+                QMessageBox.critical(
+                    self, "주석 저장 실패",
+                    f"주석 파일에 적을 영상 경로를 정하지 못해 주석을 저장하지 않았습니다:\n{self.filename_a}\n\n{exc}",
+                )
+            return False
         except Exception as exc:
             self.annotationStorageLabel.setText(f"⚠ 주석 저장 실패: {exc}")
             return False
