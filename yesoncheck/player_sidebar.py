@@ -45,6 +45,7 @@ LOADING_TITLE = "Yeson Checker — 공유 설정 불러오는 중…"
 LOADING_NOTICE = "공유 설정을 불러오는 중입니다. 잠시 뒤 다시 시도하세요."
 LOADING_WORK_ITEM = "공유 설정 불러오는 중…"  # 불러오는 동안 작품 목록의 첫 항목 ("작품선택" 대신)
 WORK_PLACEHOLDER = "작품선택"
+NO_SEASON_WORKS = ("The_Johnsons", "TJS_Animatic")  # 시즌이 없는 작품: 작품 폴더 바로 아래가 job (작품 → job)
 THUMBNAIL_SAVE_FAILED = "썸네일 저장 실패"  # 썸네일 파일을 쓰지 못함 (창 제목)
 THUMBNAIL_FOLDER_PROBLEM = "썸네일 폴더 문제"  # 썸네일 폴더를 만들지 못함 등 (창 제목)
 THUMBNAIL_VIDEO_PROBLEM = "영상 확인 실패"  # 썸네일을 만들 영상을 확인하지 못함 (창 제목)
@@ -59,7 +60,7 @@ ACTIVATION_REFRESH_GAP_FACTOR = 10  # … 마지막 읽기가 오래 걸렸으�
 @dataclass(frozen=True)
 class ThumbnailContext:
     """사이드바 영상의 썸네일을 어디에 둘지. 항목을 넣을 때의 상태로 정하고, 나중에 다른 폴더를 끌어다 놓아 덧붙이거나
-    job·북마크를 바꿔도 그 항목은 바뀌지 않음 (재검토 L1). 모두 None이면 화면에만 (job을 고르지 않은 목록).
+    job·북마크를 바꿔도 그 항목은 바뀌지 않음 (재검토 L1).
     """
 
     folder: str = None  # 썸네일 폴더: 여기서 읽고 여기에 저장
@@ -827,11 +828,13 @@ class PlayerSidebarMixin:
             except FileNotFoundError:
                 print(f"Directory not found: {path}")
             return
-        
-        if selected_season != "시즌선택":
-            self.jobComboBox.clear()
-            self.jobComboBox.addItem("job선택")
 
+        # 시즌이 있는 작품: job 목록은 늘 비우고 시즌을 골랐을 때만 그 시즌의 job (작품 → 시즌 → job). 작품을 바꾸거나
+        # '시즌선택'으로 돌리면 'job선택'만. 예전에는 '시즌선택'이 아닌 글자를 시즌으로 여겨, 시즌 목록을 비울 때(clear가 빈
+        # 글자로 보냄) 작품 폴더의 하위 폴더를 job으로 넣고 이어서 온 '시즌선택'에서는 그 목록을 그대로 두었음
+        self.jobComboBox.clear()
+        self.jobComboBox.addItem("job선택")
+        if self._picked(self.seasonComboBox):
             try:
                 # JSON에서 가져온 기본 경로와 시즌을 결합
                 if base_path:
@@ -903,7 +906,6 @@ class PlayerSidebarMixin:
             # 폴더 드래그앤드롭 시에는 기존 썸네일 폴더를 초기화하고 새로 설정 — 항목을 넣기 전에 (항목마다 이 자리를 기억)
             self.current_thumbnail_folder = None  # 기존 썸네일 폴더 초기화
             self._thumbnail_folder_problem = None  # 전에 연 job의 썸네일 폴더 문제는 이제 상관없음
-            self._thumbnail_memory_only = False
             self.setup_thumbnail_folder()
             source = self._register_sidebar_source(video_list.ListSource("folder", folder_path))
         else:
@@ -1203,7 +1205,6 @@ class PlayerSidebarMixin:
     def setup_thumbnail_folder_for_bookmark(self, folder_path):
         """북마크 폴더용 썸네일 폴더를 설정합니다."""
         self._thumbnail_folder_problem = None  # 전에 연 job의 썸네일 폴더 문제는 이제 상관없음
-        self._thumbnail_memory_only = False
         try:
             thumbnail_folder = thumbnails.ensure_folder(folder_path)
             self.current_thumbnail_folder = thumbnail_folder
@@ -2286,7 +2287,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         self._sidebar_generation += 1
 
     def _new_item_thumbnail_context(self, file_path):
-        """지금 사이드바에 넣는 영상의 썸네일 자리: 지금의 썸네일 폴더·폴더 문제·'화면에만' 상태.
+        """지금 사이드바에 넣는 영상의 썸네일 자리: 지금의 썸네일 폴더·폴더 문제.
 
         아무것도 정하지 않았으면(예: 처음 끌어다 놓은 파일) 예전처럼 불러온 폴더 또는 영상 폴더 아래에 — 처음 쓸 때 만듦.
         """
@@ -2294,8 +2295,6 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             return ThumbnailContext(folder=self.current_thumbnail_folder)
         if self._thumbnail_folder_problem is not None:
             return ThumbnailContext(problem=self._thumbnail_folder_problem)
-        if self._thumbnail_memory_only:
-            return ThumbnailContext()
         return ThumbnailContext(pending_base=getattr(self, "selected_folder_path", None) or os.path.dirname(file_path))
 
     def _add_sidebar_videos(self, entries):
@@ -2324,7 +2323,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     def _new_sidebar_item(self, label, file_path, context, source, known):
         """사이드바 항목을 만듦 (목록에는 부르는 쪽이 넣음). context: 이 영상이 들어온 곳의 썸네일 자리.
 
-        이미 목록에 있는 영상(known)이면 그 항목의 자리를 그대로 씀. 다만 그 자리에 썸네일 폴더가 없고(화면에만·폴더 문제·
+        이미 목록에 있는 영상(known)이면 그 항목의 자리를 그대로 씀. 다만 그 자리에 썸네일 폴더가 없고(폴더 문제·
         아직 정하지 않음) context에는 폴더가 있으면(예: 그 영상의 폴더를 끌어다 놓음) context를 쓰고 원래 항목도 그 자리로
         올림. 폴더가 정해진 자리는 다른 폴더로 바꾸지 않음. known은 이 항목까지 넣어 갱신.
         """
@@ -2393,13 +2392,25 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     def _job_selection(self):
         return (self.workComboBox.currentText(), self.seasonComboBox.currentText(), self.jobComboBox.currentText())
 
+    @staticmethod
+    def _picked(combo):
+        """시즌·job 콤보에서 항목을 골랐는지: 0번은 안내 항목('시즌선택'·'job선택'), -1은 비었거나 비우는 중 (clear가 빈
+        글자로 currentIndexChanged를 보냄 — 안내 글자와만 비교하면 빈 글자를 고른 것으로 여김)."""
+        return combo.currentIndex() > 0
+
+    def _job_picked(self):
+        """작품 → 시즌 → job 순서로 job까지 골랐는지 (시즌이 없는 작품은 작품 → job)."""
+        return self._picked(self.jobComboBox) and (
+            self.workComboBox.currentText() in NO_SEASON_WORKS or self._picked(self.seasonComboBox))
+
     def _on_job_activated(self, _index):
         """job 목록에서 고름 (같은 job을 다시 골라도 옴 — currentIndexChanged는 job이 바뀔 때만 와서 예전에는 아무 일도
         없었음). 다른 job이면 Qt가 바로 앞에 보낸 currentIndexChanged(update_playlist)가 이미 그 job을 읽었으므로 그대로
         (update_playlist가 읽은 (작품, 시즌, job)을 기억 — 그 안에서 창이 떠 이벤트를 처리해도 지워지지 않음),
-        같은 job이면 목록을 다시 읽음. 목록이 폴더 불러오기·끌어다 놓기로 바뀌어 job 목록이 아니면 그 job을 새로 불러옴."""
+        같은 job이면 목록을 다시 읽음. 목록이 폴더 불러오기·끌어다 놓기로 바뀌어 job 목록이 아니면 그 job을 새로 불러옴.
+        'job선택'을 고르면 아무것도 읽지 않음."""
         loaded, self._job_list_loaded_for = self._job_list_loaded_for, None
-        if loaded == self._job_selection() or self.jobComboBox.currentText() == "job선택":
+        if loaded == self._job_selection() or not self._job_picked():
             return
         job_sources = {source for source in self._sidebar_sources if source.kind == "job"}
         if any(self.sidebar.item(i).data(SIDEBAR_SOURCE_ROLE) in job_sources for i in range(self.sidebar.count())):
@@ -2676,8 +2687,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         for source, source_context in self._sidebar_sources.items():  # 그곳에서 새로 생길 영상도 같은 자리
             if source_context == context:
                 self._sidebar_sources[source] = resolved
-        if (not self.current_thumbnail_folder and self._thumbnail_folder_problem is None
-                and not self._thumbnail_memory_only):
+        if not self.current_thumbnail_folder and self._thumbnail_folder_problem is None:
             self.current_thumbnail_folder = resolved.folder
             self._thumbnail_folder_problem = resolved.problem
         return resolved
@@ -2748,10 +2758,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
 
         없어진 것: FileNotFoundError이고 영상의 폴더는 확인됨. Windows는 끊긴 SMB 공유(ERROR_BAD_NETPATH·BAD_NET_NAME)도
         FileNotFoundError로 올리고 Mac autofs도 그럴 수 있어, 폴더까지 확인하지 못하면 두 오류를 함께 알림.
-        창은 목록 단위로 한 번: 그 항목 자리의 썸네일 폴더(또는 만들지 못한 폴더·정할 폴더), 없으면(화면에만) 불러온 폴더
-        (폴더 선택·끌어다 놓기·북마크) 또는 job 경로(job을 고르지 않았으면 작품·시즌 폴더). selected_folder_path가 먼저:
-        current_job_path는 폴더를 불러와도 지우지 않아 그때는 예전 job이고, selected_folder_path는 update_playlist가 지움.
-        영상 폴더마다 창이 뜨지 않게.
+        창은 목록 단위로 한 번: 그 항목 자리의 썸네일 폴더(또는 만들지 못한 폴더·정할 폴더) — 영상 폴더마다 창이 뜨지 않게.
         """
         reason = f"이유: {type(error).__name__}: {error}"
         if isinstance(error, FileNotFoundError):
@@ -2766,10 +2773,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         self._report_thumbnail_problem(
             context.folder
             or (context.problem[0] if context.problem else None)
-            or context.pending_base
-            or getattr(self, "selected_folder_path", None)
-            or getattr(self, "current_job_path", None)
-            or os.path.dirname(file_path),
+            or context.pending_base,
             THUMBNAIL_VIDEO_PROBLEM,
             "썸네일을 만들 영상을 확인하지 못해 이 영상의 썸네일은 건너뜁니다 (권한·연결 끊김 등).\n"
             f"영상: {file_path}\n{reason}",
@@ -2778,7 +2782,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     def _has_disk_thumbnail(self, file_path, context):
         """그 항목의 썸네일 폴더에 영상보다 새 썸네일이 있는지 확인합니다 (영상이 바뀌었으면 False → 새로 만듦).
 
-        썸네일 폴더가 없는 자리(화면에만·폴더 문제)면 False. 영상을 확인하지 못하면 None (건너뜀): 없어졌으면 로그만,
+        썸네일 폴더가 없는 자리(폴더 문제)면 False. 영상을 확인하지 못하면 None (건너뜀): 없어졌으면 로그만,
         다른 오류는 창으로 (_report_video_problem). 썸네일 파일을 확인하지 못하면(권한 등) 창으로 알리고
         ((폴더, 제목)마다 한 번) False → 새로 만듦.
         """
@@ -2821,7 +2825,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             context = self._resolve_pending_thumbnail_context(context)
         # 이 항목 자리의 미뤄 둔 썸네일 폴더 문제(폴더를 만들지 못함·권한을 바꾸지 못함)를 창으로 ((폴더, 제목)마다 한 번)
         self._report_context_problem(context)
-        # 폴더가 없으면(job을 고르지 않은 목록·썸네일 폴더 문제) 다른 폴더로 대신하지 않고 화면에만
+        # 폴더가 없으면(썸네일 폴더 문제) 다른 폴더로 대신하지 않고 화면에만
         thumbnail_folder = context.folder
         
         # 동시 실행 제한 (1개로 더 줄임)
@@ -2885,14 +2889,13 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     def _use_dropped_folder_for_thumbnails(self, folder_path):
         """끌어다 놓은 폴더(여러 개면 첫 폴더)의 썸네일은 그 폴더의 썸네일 폴더에 (전에 고른 job·폴더가 아니라).
 
-        영상 영역·사이드바·창 어디에 끌어다 놓아도 같음. 전에 연 job의 썸네일 폴더 문제·'화면에만' 상태는 이제 상관없음.
+        영상 영역·사이드바·창 어디에 끌어다 놓아도 같음. 전에 연 job의 썸네일 폴더 문제는 이제 상관없음.
         썸네일 폴더를 만들지 못하면 job 폴더처럼 기억만 하고(화면에만, 창은 썸네일을 쓸 때) 예외는 올리지 않음.
         """
         # 폴더 경로를 selected_folder_path로 설정 (썸네일 폴더 생성용)
         self.selected_folder_path = folder_path
         print(f"드래그앤드롭으로 썸네일 폴더 설정: {folder_path}")
         self._thumbnail_folder_problem = None
-        self._thumbnail_memory_only = False
         try:
             self.current_thumbnail_folder = thumbnails.ensure_folder(folder_path)
         except OSError as e:
@@ -3092,7 +3095,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         """백그라운드에서 썸네일 로딩을 시작합니다."""
         try:
             # 현재 사이드바의 영상마다 그 항목의 썸네일 폴더에 있는 썸네일 (썸네일 폴더가 정해진 항목만 —
-            # 화면에만·폴더 문제·아직 정하지 않은 항목은 읽을 썸네일이 없음)
+            # 폴더 문제·아직 정하지 않은 항목은 읽을 썸네일이 없음)
             thumbnail_files = []
             for i in range(self.sidebar.count()):
                 item = self.sidebar.item(i)

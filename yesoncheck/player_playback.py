@@ -125,6 +125,7 @@ class PlayerPlaybackMixin:
 
     def update_playlist(self):
         """job을 고름(currentIndexChanged): 그 job의 영상 목록을 만듦 (처음 불러오기 — job 폴더를 이 스레드에서 바로 읽음).
+        job을 고르지 않았으면(job 목록을 비우는 중·'job선택') 목록만 비우고 읽지 않음.
         목록을 만드는 동안(창이 뜰 수 있음) 목록 다시 읽기는 끝난 뒤로 미룸."""
         try:
             with self._hold_sidebar_refresh():
@@ -137,118 +138,117 @@ class PlayerPlaybackMixin:
             QTimer.singleShot(0, self._clear_job_list_loaded_for)
 
     def _load_job_list(self):
-        selected_job = self.jobComboBox.currentText()
-        if selected_job != "job선택":
+        if not self._job_picked():
+            # 작품 → 시즌 → job 순서로 job까지 고르지 않음: 작품·시즌을 바꿔 job 목록을 비우는 중(clear가 빈 글자로 보냄)이거나
+            # 'job선택'. 보이던 목록과 그 job·폴더의 썸네일 자리만 비우고 어떤 폴더도 읽지 않음 (예전에는 빈 글자를 job으로
+            # 여겨 작품·시즌 폴더를 job 폴더처럼 읽었음). 썸네일 자리를 비워 두면 이제 넣는 파일은 처음 끌어다 놓을 때처럼
+            # 그 파일 옆에 (예전 job·폴더의 썸네일 폴더가 아니라)
             self.sidebar.clear()
-            # 다른 job을 고르면 Qt가 바로 다음 activated를 보냄 → _on_job_activated가 이 job을 또 읽지 않게
-            # (목록을 비울 때 지워지므로 그 뒤에)
-            self._job_list_loaded_for = self._job_selection()
-            selected_work = self.workComboBox.currentText()
-            selected_season = self.seasonComboBox.currentText()
+            self.current_job_path = None
+            self.selected_folder_path = None
+            self.current_thumbnail_folder = None
+            self._thumbnail_folder_problem = None
+            return
+        selected_job = self.jobComboBox.currentText()
+        self.sidebar.clear()
+        # 다른 job을 고르면 Qt가 바로 다음 activated를 보냄 → _on_job_activated가 이 job을 또 읽지 않게
+        # (목록을 비울 때 지워지므로 그 뒤에)
+        self._job_list_loaded_for = self._job_selection()
+        selected_work = self.workComboBox.currentText()
+        selected_season = self.seasonComboBox.currentText()
 
+        try:
+            # JSON에서 작품 기본 경로 가져오기
+            work_base_path = self.get_work_path(selected_work)
+            
+            if not work_base_path:
+                base_path = None
+            elif selected_work == "The_Johnsons":
+                # The_Johnsons는 시즌이 없으므로 시즌 경로 제외
+                base_path = os.path.join(work_base_path, selected_job)
+            elif selected_work == "TJS_Animatic":
+                # TJS_Animatic는 시즌이 없으므로 시즌 경로 제외
+                base_path = os.path.join(work_base_path, selected_job)
+            else:
+                # 시즌이 있는 경우 (_job_picked: 시즌을 골랐음)
+                base_path = os.path.join(work_base_path, selected_season, selected_job)
+
+            if not base_path:
+                print(f"Directory not found or invalid: {base_path}")  # 작품 경로가 없음 (경로 문제는 get_work_path가 알림)
+                return
+            # job 폴더 확인: os.path.isdir은 오류를 숨기고 False를 돌려줌 (예전에는 NAS가 끊기면 목록만 빈 채 로그에만 남음)
             try:
-                # JSON에서 작품 기본 경로 가져오기
-                work_base_path = self.get_work_path(selected_work)
-                
-                if not work_base_path:
-                    base_path = None
-                elif selected_work == "The_Johnsons":
-                    # The_Johnsons는 시즌이 없으므로 시즌 경로 제외
-                    base_path = os.path.join(work_base_path, selected_job)
-                elif selected_work == "TJS_Animatic":
-                    # TJS_Animatic는 시즌이 없으므로 시즌 경로 제외
-                    base_path = os.path.join(work_base_path, selected_job)
-                elif selected_season != "시즌선택":
-                    # 시즌이 있는 경우
-                    base_path = os.path.join(work_base_path, selected_season, selected_job)
-                else:
-                    base_path = None
+                if not stat.S_ISDIR(os.stat(base_path).st_mode):
+                    raise NotADirectoryError(errno.ENOTDIR, os.strerror(errno.ENOTDIR), base_path)
+            except OSError as e:
+                # 이 job을 기억 → 연결이 돌아오면(폴더가 생기면) 새로고침(F5)·창이 다시 활성될 때 목록이 생김. 썸네일 폴더는
+                # 그때 처음 쓸 때 만듦
+                self._register_sidebar_source(video_list.ListSource("job", base_path, selected_work),
+                                              ThumbnailContext(pending_base=base_path))
+                self._report_list_source_problem(base_path, e)
+                return
+            # 선택된 job 경로를 current_job_path로 설정 (UI job 선택용)
+            self.current_job_path = base_path
 
-                if not base_path:
-                    print(f"Directory not found or invalid: {base_path}")  # 작품 경로·시즌이 없음 (경로 문제는 get_work_path가 알림)
-                    return
-                # job 폴더 확인: os.path.isdir은 오류를 숨기고 False를 돌려줌 (예전에는 NAS가 끊기면 목록만 빈 채 로그에만 남음)
-                try:
-                    if not stat.S_ISDIR(os.stat(base_path).st_mode):
-                        raise NotADirectoryError(errno.ENOTDIR, os.strerror(errno.ENOTDIR), base_path)
-                except OSError as e:
-                    # 이 job을 기억 → 연결이 돌아오면(폴더가 생기면) 새로고침(F5)·창이 다시 활성될 때 목록이 생김. 썸네일 폴더는
-                    # 그때 처음 쓸 때 만듦 (job을 고르지 않은 목록은 화면에만)
-                    self._register_sidebar_source(video_list.ListSource("job", base_path, selected_work),
-                                                  ThumbnailContext(pending_base=base_path) if selected_job else ThumbnailContext())
-                    self._report_list_source_problem(base_path, e)
-                    return
-                # 선택된 job 경로를 current_job_path로 설정 (UI job 선택용)
-                self.current_job_path = base_path
+            # UI job 선택 시 직접 썸네일 폴더 설정 (지연 최소화).
+            # 전에 연 폴더(폴더 선택·끌어다 놓기·북마크)는 이제 상관없음 → 그곳에 썸네일을 저장하지 않게 지움
+            self.selected_folder_path = None
+            try:
+                self.current_thumbnail_folder = thumbnails.ensure_folder(base_path)
+                self._thumbnail_folder_problem = None
+            except OSError as e:
+                # 썸네일 폴더 생성 실패해도 파일 표시는 계속 진행: 이 작업의 썸네일은 화면에만.
+                # 지금은 로그만 남기고 창은 썸네일을 쓸 때 (작업을 열 때마다 창이 뜨지 않게)
+                self.current_thumbnail_folder = None
+                self._remember_thumbnail_folder_problem(os.path.join(base_path, thumbnails.FOLDER_NAME), e)
 
-                # UI job 선택 시 직접 썸네일 폴더 설정 (지연 최소화).
-                # 전에 연 폴더(폴더 선택·끌어다 놓기·북마크)는 이제 상관없음 → 그곳에 썸네일을 저장하지 않게 지움
-                self.selected_folder_path = None
-                # 작품·시즌을 바꾸면 job 목록을 비우면서 빈 job으로 불림 → base_path가 작품·시즌 폴더이므로 만들지 않고,
-                # 이때 보이는 영상(TJS_Animatic은 모든 job의 영상)의 썸네일은 화면에만 (영상 폴더에도 만들지 않음)
-                if not selected_job:
-                    self.current_thumbnail_folder = None
-                    self._thumbnail_folder_problem = None
-                    self._thumbnail_memory_only = True
-                    print("job을 고르지 않음: 썸네일은 저장하지 않고 화면에만")
-                else:
-                    self._thumbnail_memory_only = False
-                    try:
-                        self.current_thumbnail_folder = thumbnails.ensure_folder(base_path)
-                        self._thumbnail_folder_problem = None
-                    except OSError as e:
-                        # 썸네일 폴더 생성 실패해도 파일 표시는 계속 진행: 이 작업의 썸네일은 화면에만.
-                        # 지금은 로그만 남기고 창은 썸네일을 쓸 때 (작업을 열 때마다 창이 뜨지 않게)
-                        self.current_thumbnail_folder = None
-                        self._remember_thumbnail_folder_problem(os.path.join(base_path, thumbnails.FOLDER_NAME), e)
+            # 메인 스레드에서 직접 처리 (스레드 제거로 지연 해결). 작품별 규칙·정렬(HD가 아닌 영상 먼저, locale
+            # 순서)은 video_list.scan_job — 목록 다시 읽기도 같은 규칙. 읽기 전에 이 job을 기억: 지금 읽지 못해도
+            # (NAS 연결 끊김 등) 새로고침(F5)·창이 다시 활성될 때 다시 읽음
+            source = self._register_sidebar_source(video_list.ListSource("job", base_path, selected_work))
+            started = time.perf_counter()
+            try:
+                result = video_list.scan_job(selected_work, base_path)
+            except OSError as e:
+                self._report_list_source_problem(base_path, e)  # 다시 읽기와 같은 문구·기록
+                return
+            self._sidebar_scan_seconds = time.perf_counter() - started
+            all_mov_files = result.videos
+            print(f"job 목록: 영상 {len(all_mov_files)}개 ({base_path})")
 
-                # 메인 스레드에서 직접 처리 (스레드 제거로 지연 해결). 작품별 규칙·정렬(HD가 아닌 영상 먼저, locale
-                # 순서)은 video_list.scan_job — 목록 다시 읽기도 같은 규칙. 읽기 전에 이 job을 기억: 지금 읽지 못해도
-                # (NAS 연결 끊김 등) 새로고침(F5)·창이 다시 활성될 때 다시 읽음
-                source = self._register_sidebar_source(video_list.ListSource("job", base_path, selected_work))
-                started = time.perf_counter()
-                try:
-                    result = video_list.scan_job(selected_work, base_path)
-                except OSError as e:
-                    self._report_list_source_problem(base_path, e)  # 다시 읽기와 같은 문구·기록
-                    return
-                self._sidebar_scan_seconds = time.perf_counter() - started
-                all_mov_files = result.videos
-                print(f"job 목록: 영상 {len(all_mov_files)}개 ({base_path})")
+            # 사이드바 업데이트 최적화
+            self.sidebar.setUpdatesEnabled(False)  # UI 업데이트 일시 중지
+            # 파일 이름만 표시, 경로는 UserRole·툴팁. 항목마다 이 job의 썸네일 자리(폴더·폴더 문제)를 기억
+            self._add_sidebar_videos([(name, full_path, source) for name, full_path in all_mov_files])
+            self.sidebar.setUpdatesEnabled(True)  # UI 업데이트 재개
+            # 읽지 못한 하위 폴더는 목록을 다 넣은 뒤에 알림 (창이 떠 있는 동안 목록이 반쯤 만들어진 채이지 않게)
+            self._report_list_read(base_path, result)
 
-                # 사이드바 업데이트 최적화
-                self.sidebar.setUpdatesEnabled(False)  # UI 업데이트 일시 중지
-                # 파일 이름만 표시, 경로는 UserRole·툴팁. 항목마다 이 job의 썸네일 자리(폴더·화면에만·폴더 문제)를 기억
-                self._add_sidebar_videos([(name, full_path, source) for name, full_path in all_mov_files])
-                self.sidebar.setUpdatesEnabled(True)  # UI 업데이트 재개
-                # 읽지 못한 하위 폴더는 목록을 다 넣은 뒤에 알림 (창이 떠 있는 동안 목록이 반쯤 만들어진 채이지 않게)
-                self._report_list_read(base_path, result)
+            # Close previous video files
+            if self.cap_a:
+                self.cap_a.release()
+                self.cap_a = None
+            if self.cap_b:
+                self.cap_b.release()
+                self.cap_b = None
 
-                # Close previous video files
-                if self.cap_a:
-                    self.cap_a.release()
-                    self.cap_a = None
-                if self.cap_b:
-                    self.cap_b.release()
-                    self.cap_b = None
+            # Initialize video file info
+            self.filename_a = ""
+            self.filename_b = ""
+            self.frame_a = None
+            self.frame_b = None
 
-                # Initialize video file info
-                self.filename_a = ""
-                self.filename_b = ""
-                self.frame_a = None
-                self.frame_b = None
-
-                # Automatically open the first video file
-                if all_mov_files:
-                    self.playlist = [full_path for _, full_path in all_mov_files]
-                    self.open_file('A', self.playlist[0])
-                    # 썸네일 로딩은 썸네일 버튼을 누를 때만 실행하도록 변경
-            except Exception as e:
-                # 예상 못 한 오류도 삼키지 않음: 스택 트레이스째 로그와 창으로
-                print(f"An error occurred: {e}")
-                traceback.print_exc()
-                QMessageBox.critical(self, "영상 목록 오류",
-                                     f"job 영상 목록을 만들다 예상치 못한 오류가 났습니다.\n\n{traceback.format_exc()}")
+            # Automatically open the first video file
+            if all_mov_files:
+                self.playlist = [full_path for _, full_path in all_mov_files]
+                self.open_file('A', self.playlist[0])
+                # 썸네일 로딩은 썸네일 버튼을 누를 때만 실행하도록 변경
+        except Exception as e:
+            # 예상 못 한 오류도 삼키지 않음: 스택 트레이스째 로그와 창으로
+            print(f"An error occurred: {e}")
+            traceback.print_exc()
+            QMessageBox.critical(self, "영상 목록 오류",
+                                 f"job 영상 목록을 만들다 예상치 못한 오류가 났습니다.\n\n{traceback.format_exc()}")
 
     def open_file(self, video_type, file_path=None):
         """영상을 A 또는 B로 엶 → 열었으면 True. 열지 못하면 창으로 알리고 False — 보던 영상은 멈추지 않음.

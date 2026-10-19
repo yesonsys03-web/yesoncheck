@@ -140,6 +140,9 @@ class VideoPlayer(PlayerSidebarMixin, PlayerPlaybackMixin, VideoPlayerBase):
 - 북마크 생성 및 탐색
 - 파일 드래그 앤 드롭 처리
 - 컨텍스트 메뉴 작업
+- 작품 → 시즌 → job 순서 (시즌이 없는 The_Johnsons·TJS_Animatic은 작품 → job): 시즌을 고르기 전에는 job 목록이 'job선택'만,
+  job을 고르기 전에는 영상 목록을 읽지 않음. 고른 것은 콤보의 `currentIndex() > 0`으로 판단 (`_picked`·`_job_picked` — 0번은
+  안내 항목, -1은 비우는 중: clear가 빈 글자로 currentIndexChanged를 보냄)
 - 목록 다시 읽기: 다른 앱에서 돌아올 때·같은 job을 다시 고를 때·새로고침 버튼(F5)·없는 영상을 열 때. 항목마다 들어온 곳
   (`SIDEBAR_SOURCE_ROLE`: job·폴더)을 기억하고 그 규칙(`video_list`)으로 뒤에서(`SidebarScan`) 다시 읽어 없어진 영상은 빼고
   새 영상은 넣음. 지워졌다는 근거가 있을 때만 뺌 (공유가 떨어진 것은 남기고 창으로 알림)
@@ -371,7 +374,7 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 - 썸네일: job 폴더의 `.yesoncheck_thumb/<md5>.jpg` — 모든 Mac·Windows PC가 함께 씀 (`yesoncheck/thumbnails.py`).
   이름은 Mac 경로의 md5 (Windows도 변환표로 Mac 경로를 구해 같은 이름 → 서로 만든 썸네일을 씀, `paths.thumbnail_key`).
   영상이 썸네일보다 새것이면 다시 만듦. 저장은 임시 파일 + `os.replace`. Mac은 만든 폴더를 0o777로(다른 NAS 계정의
-  Windows도 쓰게). 저장·폴더 문제는 썸네일을 쓸 때 (폴더, 제목)마다 한 번 창으로. job을 고르지 않은 목록은 화면에만.
+  Windows도 쓰게). 저장·폴더 문제는 썸네일을 쓸 때 (폴더, 제목)마다 한 번 창으로.
 
 ### 빌드 파일
 - `YesonCheck_Autocut.spec`: PyInstaller 설정 (TransNetV2 및 PySceneDetect 포함)
