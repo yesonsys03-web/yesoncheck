@@ -3,6 +3,7 @@
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File update_helper_windows.ps1
 #       -AppPid PID -InstallDir DIR -Installer EXE -Target VER -OkFile OK -Log LOG [-TimeoutSeconds S] [-ExeName NAME]
+#   powershell ... -File update_helper_windows.ps1 -Recover      (다음 로그인에서 — RunOnce가 부름, 아래 '되살림')
 #
 # 앱(update_install.launch_helper_windows)이 이 파일을 업데이트 상태 폴더로 복사해 창 없는 콘솔로 띄운 뒤 끝난다.
 # 순서:
@@ -10,18 +11,30 @@
 #      그 pid의 실행 파일이 DIR\ExeName일 때만 기다린다.
 #   2. 지난번에 치워 둔 DIR.update-failed-*를 지워 봄(못 지워도 계속), 남은 DIR.update-backup을 지움(못 지우면 설치하지
 #      않음).
-#   3. DIR을 DIR.update-backup으로 이름만 바꿈(약 1 GB를 복사하지 않음). 안의 파일이 잡혀 있어 못 바꾸면 — 다른
-#      YesonCheck 창이 켜져 있거나 백신 등이 파일을 잡고 있음 — 설치하지 않고 옛 앱을 다시 켬.
+#   3. 다음 로그인의 되살림을 등록(아래)한 뒤 DIR을 DIR.update-backup으로 이름만 바꿈(약 1 GB를 복사하지 않음). 안의
+#      파일이 잡혀 있어 못 바꾸면 — 다른 YesonCheck 창이 켜져 있거나 백신 등이 파일을 잡고 있음 — 설치하지 않고 옛 앱을
+#      다시 켬.
 #   4. 설치 파일을 /VERYSILENT로 DIR에 설치(설치 파일 자체 기록은 LOG.inno.txt). 종료 코드 ≠ 0이면 되돌림. 30분 안에
 #      끝나지 않으면 설치 파일과 그 자손 프로세스(Inno의 is-*.tmp\Setup.tmp 등)를 끝내고 되돌림.
 #   5. OK를 지우고 DIR\ExeName을 켬(환경 변수는 이 도우미의 것 그대로, 작업 폴더는 DIR — 바로 가기와 같음).
-#   6. 새 앱이 창을 보인 뒤 쓰는 OK({"version": "VER"})를 -TimeoutSeconds초까지 기다림 → 되면 백업과 OK를 지움.
+#   6. 새 앱이 창을 보인 뒤 쓰는 OK({"version": "VER"})를 -TimeoutSeconds초까지 기다림 → 되면 백업·되살림 등록·OK를 지움.
 # 중간에 실패하거나, 새 앱이 표시 없이 끝나거나, 시간이 지나면 되돌림: 새 앱과 그 자손 프로세스, 실행 파일이 DIR
 # 아래인 프로세스를 끝내고(이름으로는 찾지 않음), 반쯤 깔린 DIR을 옆 이름으로 치운 뒤 백업을 DIR로 되돌리고, 치운 것을
 # 지운 다음 옛 앱을 켠다. DIR에 앱이 없는 채로 끝내지 않는다 — 되돌리기마저 실패하면 두 오류를 모두 기록하고, 알림 창을
 # 띄우고(앱이 없으니 다음 실행에서 알릴 수 없음) 종료 코드 2.
 #
 # 종료 코드: 0 업데이트 성공, 1 바꾸지 않았거나 되돌림(옛 앱을 켬), 2 되돌리기 실패·설치 폴더에 앱이 없음·잘못된 인자.
+#
+# 되살림 (컴퓨터가 꺼지거나 로그아웃되어 이 도우미와 설치 파일이 중간에 끝난 경우): DIR의 이름을 바꾸기 바로 전에
+# HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce에 값 YesonCheckUpdateRecover(= 이 스크립트 -Recover)를 등록하고,
+# 되살림에 쓸 값(DIR·VER·OK·LOG·NAME)을 이 스크립트 옆 update_recover.txt에 적는다(RunOnce 명령 줄은 260자 안으로 — 경로를
+# 다 넣으면 넘음). 끝날 때(성공·되돌림·바꾸지 않음) 둘 다 지운다 — 되돌리기마저 실패한 종료 코드 2만 남겨 둬, 다음 로그인에서
+# 다시 되살려 본다. Windows는 다음 로그인에서 그 값을 지우고 한 번 실행한다. -Recover:
+#   - DIR.update-backup이 없으면 할 일 없음 (종료 코드 0).
+#   - OK가 VER이고 DIR에 앱이 있으면 업데이트는 성공했던 것 → 백업만 지움 (0).
+#   - 그 밖이면 끝나지 않은 업데이트 → DIR(반쯤 깔린 것)을 옆 이름으로 치우고 백업을 DIR로 되돌림 (1). 앱은 켜지 않는다 —
+#     로그인 때 저절로 창이 뜨지 않게; 다음에 켠 옛 앱이 업데이트 기록을 보고 '업데이트 실패' 창으로 알림.
+#   - 되살리지 못하면 기록하고 알림 창 (2).
 #
 # 모든 단계와 실패를 LOG에 "YYYY-MM-DDTHH:MM:SS 도우미: 내용" 한 줄씩 UTF-8로 덧붙인다 — update_install.log()와 같은
 # 형식이라 다시 켜진 앱이 log_tail_since로 이 줄들을 "업데이트 실패" 창에 보여 준다(시각 없이 이어지는 줄은 앞줄을 따름).
@@ -33,6 +46,8 @@
 #   YC_UPDATE_PID_TIMEOUT_S      앱이 끝나기를 기다리는 시간 (없으면 300초)
 #   YC_UPDATE_INSTALL_TIMEOUT_S  설치 파일이 끝나기를 기다리는 시간 (없으면 1800초)
 #   YC_UPDATE_NO_MESSAGEBOX      1이면 종료 코드 2의 알림 창을 띄우지 않음 (시험이 멈추지 않게)
+#   YC_UPDATE_RUNONCE_KEY        되살림을 등록할 HKCU 아래 키 (없으면 Software\Microsoft\Windows\CurrentVersion\RunOnce —
+#                                시험은 진짜 RunOnce를 건드리지 않게 다른 키로)
 
 param(
     [string]$AppPid = '',
@@ -42,7 +57,8 @@ param(
     [string]$OkFile = '',
     [string]$Log = '',
     [string]$TimeoutSeconds = '',
-    [string]$ExeName = 'YesonCheck_Autocut.exe'
+    [string]$ExeName = 'YesonCheck_Autocut.exe',
+    [switch]$Recover
 )
 
 $ErrorActionPreference = 'Stop'
@@ -61,6 +77,12 @@ $script:NewProc = $null    # 켠 새 앱 프로세스
 $script:NewProcStart = [DateTime]::MinValue  # 새 앱을 켜기 바로 전 시각 (자손 프로세스를 가릴 때 씀)
 $script:InstallerProc = $null  # 실행한 설치 파일 프로세스 — 되돌리기의 두 번째 이름 바꾸기 전에 그 자손을 다시 끝냄
 $script:InstallerStart = [DateTime]::MinValue
+$script:RecoverSet = $false  # 다음 로그인의 되살림을 등록했음 — 끝날 때 지워야 함
+
+$RecoverValueName = 'YesonCheckUpdateRecover'  # RunOnce 값 이름
+$RunOnceKey = $env:YC_UPDATE_RUNONCE_KEY
+if (-not $RunOnceKey) { $RunOnceKey = 'Software\Microsoft\Windows\CurrentVersion\RunOnce' }
+$RecoverFile = [System.IO.Path]::Combine($PSScriptRoot, 'update_recover.txt')  # 되살림에 쓸 값 (이 스크립트 옆)
 
 # ---- 기록 ----
 
@@ -421,6 +443,98 @@ function Wait-OkMarker {
     }
 }
 
+# ---- 다음 로그인의 되살림 (RunOnce) ----
+
+function Remove-RecoverFile {
+    try {
+        if ([System.IO.File]::Exists($RecoverFile)) { [System.IO.File]::Delete($RecoverFile) }
+    } catch {
+        Write-Log ('되살림 정보 파일을 지우지 못함: ' + $RecoverFile + ' (' + (Format-Err $_) + ')')
+    }
+}
+
+function Register-Recover {
+    # DIR의 이름을 바꾸기 바로 전: 되살림 정보 파일을 쓰고 RunOnce에 이 스크립트 -Recover를 등록. 등록하지 못해도 업데이트는
+    # 계속 (되돌리기는 그대로 돎 — 중간에 컴퓨터가 꺼질 때만 손으로 되돌려야 함), 기록만
+    $text = ('InstallDir=' + $InstallDir + "`r`n" + 'Target=' + $Target + "`r`n" + 'OkFile=' + $OkFile + "`r`n" +
+        'Log=' + $Log + "`r`n" + 'ExeName=' + $ExeName + "`r`n")
+    $command = ('"' + [System.IO.Path]::Combine($PSHOME, 'powershell.exe') +
+        '" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $PSCommandPath + '" -Recover')
+    try {
+        [System.IO.File]::WriteAllText($RecoverFile, $text, $Utf8NoBom)
+        $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($RunOnceKey)
+        if ($null -eq $key) { throw ('레지스트리 키를 만들지 못함: HKCU\' + $RunOnceKey) }
+        try {
+            $key.SetValue($RecoverValueName, $command, [Microsoft.Win32.RegistryValueKind]::String)
+        } finally {
+            $key.Close()
+        }
+    } catch {
+        Write-Log ('다음 로그인의 되살림을 등록하지 못함 — 업데이트는 계속 (설치 중에 컴퓨터가 꺼지면 손으로 되돌려야 함): ' + (Format-Err $_))
+        Remove-RecoverFile
+        return
+    }
+    $script:RecoverSet = $true
+    Write-Log ('다음 로그인에서 되살리도록 등록함 (HKCU\' + $RunOnceKey + ' 의 ' + $RecoverValueName + ', ' + $command.Length + '자): ' + $command)
+    if ($command.Length -gt 260) {
+        Write-Log ('되살림 명령이 260자를 넘음 — Windows가 실행하지 않을 수 있음 (' + $command.Length + '자)')
+    }
+}
+
+function Clear-Recover {
+    # 등록한 되살림을 지움 (RunOnce 값, 그다음 되살림 정보 파일) → $true: 지웠거나 등록하지 않았음, $false: 값을 지우지 못함
+    # (기록 — 정보 파일은 남겨 둠: 다음 로그인의 되살림이 읽을 수 있게)
+    if (-not $script:RecoverSet) { return $true }
+    try {
+        $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($RunOnceKey, $true)
+        if ($null -ne $key) {
+            try {
+                $key.DeleteValue($RecoverValueName, $false)
+            } finally {
+                $key.Close()
+            }
+        }
+    } catch {
+        Write-Log ('다음 로그인의 되살림 등록을 지우지 못함 (HKCU\' + $RunOnceKey + ' 의 ' + $RecoverValueName + '): ' + (Format-Err $_))
+        return $false
+    }
+    $script:RecoverSet = $false
+    Remove-RecoverFile
+    Write-Log '다음 로그인의 되살림 등록을 지움'
+    return $true
+}
+
+function Read-RecoverInfo {
+    # 되살림 정보 파일 → 값 (InstallDir·Target·OkFile·Log·ExeName). 없거나 형식이 다르면 예외
+    $info = @{}
+    foreach ($line in [System.IO.File]::ReadAllLines($RecoverFile, $Utf8NoBom)) {
+        if (-not $line) { continue }
+        $i = $line.IndexOf('=')
+        if ($i -lt 1) { throw ('형식이 다른 줄: ' + $line) }
+        $info[$line.Substring(0, $i)] = $line.Substring($i + 1)
+    }
+    foreach ($name in @('InstallDir', 'Target', 'OkFile', 'Log', 'ExeName')) {
+        if (-not $info[$name]) { throw ($name + ' 값이 없음') }
+    }
+    foreach ($name in @('InstallDir', 'OkFile', 'Log')) {
+        if ($info[$name] -notmatch '^(?:[A-Za-z]:\\|\\\\)') { throw ($name + ' 값이 전체 경로가 아님: ' + $info[$name]) }
+    }
+    return $info
+}
+
+function Remove-OkMarkerForRollback {
+    # 되돌리기로 정함 — 새 앱이 늦게 쓴 '잘 켜짐' 표시가 있으면 지움: 되돌리는 중에 컴퓨터가 꺼져도 다음 로그인의 되살림이
+    # 표시를 보고 반쯤 되돌린 새 버전을 남긴 채 백업을 지우지 않게
+    try {
+        if ([System.IO.File]::Exists($OkFile)) {
+            [System.IO.File]::Delete($OkFile)
+            Write-Log ("되돌리기로 정해 '잘 켜짐' 표시를 지움: " + $OkFile)
+        }
+    } catch {
+        Write-Log ("'잘 켜짐' 표시를 지우지 못함 (되돌림은 계속): " + $OkFile + ' (' + (Format-Err $_) + ')')
+    }
+}
+
 # ---- 되돌리기 ----
 
 function Move-DirForRestore([string]$From, [string]$To) {
@@ -483,6 +597,7 @@ function Exit-Rollback {
         exit 1
     }
     Write-Log '되돌림 시작'
+    if ($script:Renamed) { Remove-OkMarkerForRollback }
     if ($script:Launched) {
         try { Stop-NewApp } catch { Write-Log ('새 앱 프로세스를 끝내다 오류: ' + (Format-Err $_)) }
     }
@@ -505,10 +620,12 @@ function Exit-Rollback {
     if (-not $restored) {
         Write-Log ('되돌리기 실패 — 처음 실패: ' + $script:FailReason)
         Write-Log "되돌리기 실패 — 옛 앱 백업: $Backup, 설치 폴더: $InstallDir (백업 폴더 이름을 설치 폴더 이름으로 손으로 바꿔 주세요)"
+        if ($script:RecoverSet) { Write-Log '다음 로그인에서 다시 되살려 보도록 되살림 등록을 남겨 둠' }
         Exit-Fatal ("업데이트에 실패했고, 이전 버전으로 되돌리지도 못했습니다.`r`n`r`n" +
             '이전 버전(백업): ' + $Backup + "`r`n설치 폴더: " + $InstallDir + "`r`n`r`n" +
             '설치 폴더를 지우거나 다른 이름으로 바꾼 뒤, 백업 폴더의 이름을 설치 폴더 이름으로 바꾸면 이전 버전을 다시 쓸 수 있습니다.')
     }
+    $null = Clear-Recover
     Write-Log '되돌림: 옛 앱을 다시 켬'
     try { $null = Start-App '옛 앱' } catch { Write-Log ('옛 앱을 켜지 못함: ' + (Format-Err $_)) }
     exit 1
@@ -517,6 +634,84 @@ function Exit-Rollback {
 # ---- 인자 확인 ----
 
 if ($ExtraArgs.Count -gt 0) { Exit-Usage ('알 수 없는 인자: ' + ($ExtraArgs -join ' ')) }
+
+# ---- 다음 로그인에서 되살림 (-Recover — RunOnce가 부름, 머리 설명의 '되살림') ----
+
+if ($Recover) {
+    foreach ($given in @($AppPid, $InstallDir, $Installer, $Target, $OkFile, $Log, $TimeoutSeconds)) {
+        if ($given) { Exit-Usage '-Recover에는 다른 인자를 함께 쓰지 않음 (되살림 정보 파일에서 읽음)' }
+    }
+    try {
+        $info = Read-RecoverInfo
+    } catch {
+        $why = Format-Err $_
+        [Console]::Error.WriteLine('되살림 정보를 읽지 못함: ' + $RecoverFile + ' (' + $why + ')')
+        Exit-Fatal ("지난 업데이트를 되살려야 하는지 확인하지 못했습니다 — 되살림 정보를 읽지 못함:`r`n" + $RecoverFile + "`r`n" + $why)
+    }
+    $InstallDir = $info['InstallDir'].TrimEnd('\')
+    $Target = $info['Target']
+    $OkFile = $info['OkFile']
+    $Log = $info['Log']
+    $ExeName = $info['ExeName']
+    $ExePath = [System.IO.Path]::Combine($InstallDir, $ExeName)
+    $Backup = $InstallDir + '.update-backup'
+    try {
+        $null = [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($Log))
+    } catch {
+        [Console]::Error.WriteLine('로그 폴더를 만들지 못함: ' + $Log + ' (' + (Format-Err $_) + ')')
+    }
+    try {
+        [System.IO.Directory]::SetCurrentDirectory($PSScriptRoot)
+    } catch {
+        Write-Log ('작업 폴더를 이 스크립트 폴더로 바꾸지 못함: ' + $PSScriptRoot + ' (' + (Format-Err $_) + ')')
+    }
+    Write-Log ('되살림 확인 (다음 로그인, RunOnce): 대상 버전 ' + $Target + ', 설치 폴더 ' + $InstallDir)
+    if (-not (Test-Exists $Backup)) {
+        Write-Log ('되살림: 백업이 없음 — 할 일 없음 (' + $Backup + ')')
+        Remove-RecoverFile
+        exit 0
+    }
+    $okVersion = Read-OkVersion
+    if (($okVersion -eq $Target) -and [System.IO.File]::Exists($ExePath)) {
+        Write-Log ('되살림: 새 버전(' + $Target + ')이 잘 켜졌던 업데이트 — 새 버전을 그대로 두고 남은 백업만 지움: ' + $Backup)
+        try {
+            Remove-Dir $Backup
+            Write-Log "백업을 지움: $Backup"
+        } catch {
+            Write-Log ('백업을 지우지 못함 (다음 업데이트가 다시 지워 봄): ' + $Backup + ' (' + (Format-Err $_) + ')')
+        }
+        Remove-RecoverFile
+        exit 0
+    }
+    Write-Log ("되살림: 끝나지 않은 업데이트 (컴퓨터가 꺼짐·로그아웃 등, '잘 켜짐' 표시: " + (Get-OkSummary $okVersion) +
+        ') — 이전 버전을 되살림')
+    $script:Launched = $true  # 이름 바꾸기가 막히면 실행 파일이 설치 폴더 아래인 프로세스(반쯤 깔린 앱)를 끝내고 다시 해 봄
+    $restored = $false
+    try {
+        $restored = Restore-Backup
+        if ($restored -and (-not [System.IO.File]::Exists($ExePath))) {
+            Write-Log ('되살림 실패 — 설치 폴더에 이전 버전 앱이 없음: ' + $ExePath)
+            $restored = $false
+        }
+    } catch {
+        Write-Log ('되살림 실패 — 예상 못 한 오류: ' + (Format-Err $_) + "`r`n" + $_.ScriptStackTrace)
+        $restored = $false
+    }
+    Remove-RecoverFile
+    if (-not $restored) {
+        Write-Log ('되살림 실패 — 이전 버전(백업): ' + $Backup + ', 설치 폴더: ' + $InstallDir +
+            ' (백업 폴더 이름을 설치 폴더 이름으로 손으로 바꿔 주세요)')
+        Exit-Fatal ("지난 업데이트가 끝나지 않은 채(컴퓨터가 꺼짐·로그아웃 등) 남아 이전 버전으로 되살리려 했지만 하지 못했습니다.`r`n`r`n" +
+            '이전 버전(백업): ' + $Backup + "`r`n설치 폴더: " + $InstallDir + "`r`n`r`n" +
+            '설치 폴더를 지우거나 다른 이름으로 바꾼 뒤, 백업 폴더의 이름을 설치 폴더 이름으로 바꾸면 이전 버전을 다시 쓸 수 있습니다.')
+    }
+    Write-Log ('다음 로그인에서 되살림: 이전 버전을 설치 폴더로 되돌림 (' + $InstallDir +
+        ') — 앱은 켜지 않음 (다음에 켤 때 업데이트 실패를 알림)')
+    exit 1
+}
+
+# ---- 업데이트의 인자 ----
+
 $required = [ordered]@{
     '-AppPid' = $AppPid; '-InstallDir' = $InstallDir; '-Installer' = $Installer; '-Target' = $Target
     '-OkFile' = $OkFile; '-Log' = $Log; '-ExeName' = $ExeName
@@ -613,7 +808,9 @@ try {
         }
     }
 
-    # 4. 설치 폴더를 백업 이름으로 (여기는 짧게 — 오래 잡혀 있으면 다른 창이 켜져 있는 것)
+    # 4. 설치 폴더를 백업 이름으로 (여기는 짧게 — 오래 잡혀 있으면 다른 창이 켜져 있는 것). 바로 전에 다음 로그인의 되살림을
+    #    등록: 여기부터 컴퓨터가 꺼지면 앱이 백업 이름에 있거나 반쯤 깔린 채로 남음 (지난 백업을 지운 뒤라 남은 백업은 이번 것)
+    Register-Recover
     try {
         Move-Dir $InstallDir $Backup $RetryCount
     } catch {
@@ -671,10 +868,15 @@ try {
     } catch {
         Write-Log ('백업을 지우지 못함: ' + $Backup + ' (' + (Format-Err $_) + ')')
     }
-    try {
-        if ([System.IO.File]::Exists($OkFile)) { [System.IO.File]::Delete($OkFile) }
-    } catch {
-        Write-Log ("'잘 켜짐' 표시를 지우지 못함: " + $OkFile + ' (' + (Format-Err $_) + ')')
+    if (Clear-Recover) {
+        try {
+            if ([System.IO.File]::Exists($OkFile)) { [System.IO.File]::Delete($OkFile) }
+        } catch {
+            Write-Log ("'잘 켜짐' 표시를 지우지 못함: " + $OkFile + ' (' + (Format-Err $_) + ')')
+        }
+    } else {
+        # 다음 로그인의 되살림이 (백업이 남았으면) 이 표시를 보고 새 버전을 그대로 두고 백업만 지우게
+        Write-Log "되살림 등록을 지우지 못해 '잘 켜짐' 표시를 남겨 둠 — 다음 로그인의 되살림은 새 버전을 그대로 두고 백업만 지움"
     }
     Write-Log "업데이트 끝: $Target"
     exit 0

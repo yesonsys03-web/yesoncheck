@@ -13,7 +13,8 @@ make_test_data.py --update-dir이 가짜 공유 설정의 updates/에 꾸러미�
 
 경우 둘 (각각 <work>/<경우> 아래, 업데이트 상태 폴더도 따로):
 - success: 꾸러미 99.0.0 → 옛 앱 --smoke-test(update 시나리오: 알림 → 받기 → 도우미에 넘김) → 도우미 기록 "업데이트 끝: 99.0.0",
-  설치된 앱의 버전 99.0.0, 새 앱 프로세스가 떠 있음, 업데이트 기록(pending_update.json)이 지워짐, 백업 없음 → 새 앱을 끝냄.
+  설치된 앱의 버전 99.0.0, 새 앱 프로세스가 떠 있음, 업데이트 기록(pending_update.json)이 지워짐, 백업 없음, (Windows) 다음
+  로그인의 되살림이 남지 않음 → 새 앱을 끝냄.
 - rollback: latest.json은 99.0.0인데 새 앱이 '잘 켜짐' 표시를 쓰지 않음 (Windows: 꾸러미 버전 98.0.0, Mac: 꾸러미의
   build_info는 99.0.0이고 실행 파일은 바로 exit 1 하는 스크립트) → 도우미 기록에 되돌림, 설치된 앱의 버전이 옛 것, 다시 켜진
   옛 앱이 60초 안에 업데이트 기록을 지움(실패를 알렸다는 뜻), 백업 없음 → 옛 앱을 끝냄.
@@ -53,6 +54,10 @@ WINDOWS_APP_DIR_NAME = "YesonCheck"
 MAC_APP_PREFIX = "YesonCheck_Autocut_"
 MAC_LABELS = ("Intel", "AppleSilicon")
 WINDOWS_MAC_ROOT = "/Volumes/yc_update"  # Windows 경우의 공유 설정에 적는 Mac 경로 (변환표로 UNC가 됨)
+# Windows 도우미가 설치 폴더의 이름을 바꾸기 전에 등록하는 다음 로그인의 되살림 (update_helper_windows.ps1) — 끝나면 지워져야 함
+RUNONCE_KEY = r"Software\Microsoft\Windows\CurrentVersion\RunOnce"
+RECOVER_VALUE = "YesonCheckUpdateRecover"
+RECOVER_FILE_NAME = "update_recover.txt"  # 도우미 스크립트 옆
 
 # 기다림마다의 한도 — 모두 전체 제한 시간(Deadline) 안에서만
 INSTALL_TIMEOUT_S = 900  # 원래 설치 파일의 조용한 설치
@@ -269,6 +274,8 @@ def state_files(case):
             "ok": update_install.ok_marker_path(),
             "helper": os.path.join(state, helper),
             "console": update_install.helper_console_path(),  # 도우미의 stdout·stderr
+            "recover": os.path.join(state, RECOVER_FILE_NAME),  # (Windows) 되살림 정보
+            "downloads": os.path.join(state, "downloads"),  # 받은 설치 파일·dmg
         }
 
 
@@ -620,12 +627,16 @@ def one_app_process(case, what):
 
 
 def success_sequence(windows):
-    """성공 경로에서 도우미 기록에 이 순서로 있어야 하는 글 (update_helper_windows.ps1·update_helper_mac.sh의 Write-Log·log)."""
+    """성공 경로에서 도우미 기록에 이 순서로 있어야 하는 글 (update_helper_windows.ps1·update_helper_mac.sh의 Write-Log·log).
+    Windows는 설치 폴더의 이름을 바꾸기 전에 다음 로그인의 되살림을 등록하고, 끝나며 지움."""
     if windows:
-        replaced = ["설치 폴더를 백업 이름으로 바꿈", "설치 파일이 끝남 (종료 코드 0)", "새 앱을 켬 (pid"]
+        replaced = ["다음 로그인에서 되살리도록 등록함", "설치 폴더를 백업 이름으로 바꿈", "설치 파일이 끝남 (종료 코드 0)",
+                    "새 앱을 켬 (pid"]
+        cleared = ["다음 로그인의 되살림 등록을 지움"]
     else:
         replaced = ["옛 앱을 백업 이름으로 옮김", "새 앱을 앱 자리로 옮김", "새 앱을 켬 (직접 실행, pid"]
-    return [*replaced, f"새 앱이 잘 켜짐 (버전 {NEW_VERSION})", "백업을 지움", f"업데이트 끝: {NEW_VERSION}"]
+        cleared = []
+    return [*replaced, f"새 앱이 잘 켜짐 (버전 {NEW_VERSION})", "백업을 지움", *cleared, f"업데이트 끝: {NEW_VERSION}"]
 
 
 def rollback_sequence(windows):
@@ -633,13 +644,30 @@ def rollback_sequence(windows):
     전의 실패로 되돌린 것은 통과가 아님 (Windows: 98.0.0 앱은 떠 있지만 표시를 쓰지 않아 시간이 지남, Mac: 실행 파일이
     바로 끝남)."""
     if windows:
-        launched = ["설치 파일이 끝남 (종료 코드 0)", "새 앱을 켬 (pid",
+        launched = ["다음 로그인에서 되살리도록 등록함", "설치 파일이 끝남 (종료 코드 0)", "새 앱을 켬 (pid",
                     f"업데이트 실패: {APP_ENV['YC_UPDATE_OK_TIMEOUT_S']}초 안에 '잘 켜짐' 표시가 없음"]
+        cleared = ["다음 로그인의 되살림 등록을 지움"]
         relaunched = "옛 앱을 켬 (pid"
     else:
         launched = ["새 앱을 켬 (직접 실행, pid", "업데이트 실패: 새 앱이 '잘 켜짐' 표시 없이 끝남"]
+        cleared = []
         relaunched = "옛 앱을 켬 (직접 실행, pid"
-    return [*launched, "되돌림 시작", "백업을 제자리로 되돌림", "되돌림: 옛 앱을 다시 켬", relaunched]
+    return [*launched, "되돌림 시작", "백업을 제자리로 되돌림", *cleared, "되돌림: 옛 앱을 다시 켬", relaunched]
+
+
+def check_recover_cleared(files):
+    """(Windows) 도우미가 끝난 뒤 다음 로그인의 되살림이 남아 있지 않은지 — 진짜 HKCU RunOnce 값과 되살림 정보 파일."""
+    if not WINDOWS:
+        return
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUNONCE_KEY) as key:
+            value = winreg.QueryValueEx(key, RECOVER_VALUE)[0]
+    except FileNotFoundError:
+        value = None
+    assert value is None, f"도우미가 끝났는데 RunOnce에 되살림이 남아 있습니다: HKCU\\{RUNONCE_KEY} {RECOVER_VALUE} = {value}"
+    assert not os.path.exists(files["recover"]), f"되살림 정보 파일이 남아 있습니다: {files['recover']}"
 
 
 def check_success(case, files, log_text):
@@ -650,6 +678,7 @@ def check_success(case, files, log_text):
     running = one_app_process(case, "새 앱")
     assert not os.path.exists(files["pending"]), f"새 앱이 업데이트 기록을 지우지 않았습니다: {files['pending']}"
     assert not leftovers(case), f"앱 옆에 남은 것: {leftovers(case)}"
+    check_recover_cleared(files)
     print(f"설치된 앱 {case.app}: 버전 {version}, 새 앱 pid {[p.pid for p in running]}, 백업 없음", flush=True)
     return kill(running)
 
@@ -666,6 +695,7 @@ def check_rollback(case, files, log_text):
         time.sleep(1)
     running = one_app_process(case, "되돌린 옛 앱")
     assert not leftovers(case), f"앱 옆에 남은 것: {leftovers(case)}"
+    check_recover_cleared(files)
     print(f"설치된 앱 {case.app}: 옛 버전 {version}, 업데이트 기록 지워짐, 옛 앱 pid {[p.pid for p in running]}, "
           "백업 없음", flush=True)
     return kill(running)
@@ -685,7 +715,7 @@ def remove_large_files(case):
     앱 프로세스는 결과 확인에서 끝냈음."""
     files = state_files(case)
     for path in (os.path.dirname(case.app), case.package_dir,
-                 os.path.join(case.share_root, ".yesoncheck", "updates"), os.path.join(files["state"], "downloads")):
+                 os.path.join(case.share_root, ".yesoncheck", "updates"), files["downloads"]):
         if os.path.exists(path):
             shutil.rmtree(path)
             print(f"지움: {path}", flush=True)
@@ -737,6 +767,8 @@ def show_diagnostics(case):
     show_file("실행 시험 결과", os.path.join(case.smoke_dir, "smoke_result.json"))
     show_file("업데이트 기록 파일 (pending)", files["pending"])
     show_file("'잘 켜짐' 표시", files["ok"])
+    if WINDOWS:
+        show_file("되살림 정보", files["recover"])
     parent = os.path.dirname(case.app)
     print(f"===== 설치 폴더 상태 ({parent})", flush=True)
     if os.path.isdir(parent):

@@ -34,6 +34,8 @@ WINDOWS_START = [
     "downloads\\YesonCheck_Setup_98.0.0.exe",
     "앱이 끝나기를 기다림 (pid 4100, 최대 300초)",
     "앱이 끝남 (pid 4100)",
+    "다음 로그인에서 되살리도록 등록함 (HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce 의 "
+    "YesonCheckUpdateRecover, 160자): …",
     f"설치 폴더를 백업 이름으로 바꿈: {WIN_DIR} → {WIN_DIR}.update-backup",
 ]
 WINDOWS_ROLLBACK_AFTER_TIMEOUT = [
@@ -48,6 +50,7 @@ WINDOWS_ROLLBACK_AFTER_TIMEOUT = [
     f"반쯤 깔린 설치 폴더를 치움: {WIN_DIR} → {WIN_DIR}.update-failed-3900",
     f"백업을 제자리로 되돌림: {WIN_DIR}.update-backup → {WIN_DIR}",
     f"치운 새 버전을 지움: {WIN_DIR}.update-failed-3900",
+    "다음 로그인의 되살림 등록을 지움",
     "되돌림: 옛 앱을 다시 켬",
     f"옛 앱을 켬 (pid 5600): {WIN_DIR}\\YesonCheck_Autocut.exe",
 ]
@@ -86,9 +89,9 @@ def test_rollback_after_new_app_was_launched_passes():
       f"백업을 제자리로 되돌림: {WIN_DIR}.update-backup → {WIN_DIR}", "되돌림: 옛 앱을 다시 켬", "옛 앱을 켬 (pid 5600): …"],
      "설치 파일이 끝남 (종료 코드 0)"),
     # 새 앱이 표시 없이 끝남 (죽음) — 이 시험이 만든 실패(98.0.0이 떠 있다 시간이 지남)가 아님
-    ([*WINDOWS_ROLLBACK_AFTER_TIMEOUT[:7],
+    ([*WINDOWS_ROLLBACK_AFTER_TIMEOUT[:8],
       "업데이트 실패: 새 앱이 '잘 켜짐' 표시 없이 끝남 (종료 코드 -1073740791, 표시: 없음)",
-      *WINDOWS_ROLLBACK_AFTER_TIMEOUT[9:]],
+      *WINDOWS_ROLLBACK_AFTER_TIMEOUT[10:]],
      "업데이트 실패: 60초 안에 '잘 켜짐' 표시가 없음"),
 ])
 def test_windows_rollback_for_another_reason_fails(lines, missing):
@@ -106,8 +109,14 @@ def test_mac_rollback_before_launch_fails():
 
 def test_success_sequence_needs_the_order():
     windows = [*WINDOWS_START, "설치 파일이 끝남 (종료 코드 0)", f"새 앱을 켬 (pid 5200): {WIN_DIR}\\YesonCheck_Autocut.exe",
-               "새 앱이 잘 켜짐 (버전 99.0.0)", f"백업을 지움: {WIN_DIR}.update-backup", "업데이트 끝: 99.0.0"]
+               "새 앱이 잘 켜짐 (버전 99.0.0)", f"백업을 지움: {WIN_DIR}.update-backup", "다음 로그인의 되살림 등록을 지움",
+               "업데이트 끝: 99.0.0"]
     update_e2e.assert_helper_sequence(helper_log(*windows), update_e2e.success_sequence(True))
+    # 되살림을 등록하지 않았거나(이름을 바꾸기 전) 지우지 않았으면 통과가 아님
+    for missing in ("다음 로그인에서 되살리도록 등록함", "다음 로그인의 되살림 등록을 지움"):
+        with pytest.raises(AssertionError, match=missing):
+            update_e2e.assert_helper_sequence(helper_log(*[line for line in windows if not line.startswith(missing)]),
+                                              update_e2e.success_sequence(True))
     mac = [*MAC_ROLLBACK_AFTER_EXIT[:6], "새 앱이 잘 켜짐 (버전 99.0.0)", "백업을 지움: …", "업데이트 끝: 99.0.0"]
     update_e2e.assert_helper_sequence(helper_log(*mac), update_e2e.success_sequence(False))
     # '업데이트 끝'이 새 앱을 켜기 전에 있으면 (순서가 다름) 통과가 아님

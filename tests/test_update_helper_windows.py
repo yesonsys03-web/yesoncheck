@@ -17,7 +17,9 @@ C# 프로그램 하나(FAKE_EXE_SOURCE)를 시험 세션마다 한 번 .NET Fram
 
 도우미에게 넘기는 앱 pid는 보통 이 시험 프로세스(python.exe)의 것 — 살아 있지만 설치 폴더의 exe가 아니므로 도우미가
 기다리지 않는다. 출력은 파일로 받는다(파이프로 받으면 도우미가 켠 가짜 앱이 파이프를 물려받아 끝을 기다리다 멈출 수 있음).
-종료 코드 2의 알림 창은 YC_UPDATE_NO_MESSAGEBOX=1로 띄우지 않는다(시험이 멈추지 않게).
+종료 코드 2의 알림 창은 YC_UPDATE_NO_MESSAGEBOX=1로 띄우지 않는다(시험이 멈추지 않게). 도우미는 앱처럼 상태 폴더에 둔
+복사본을 실행하고(되살림 정보 파일이 그 옆에 생김), 다음 로그인의 되살림은 진짜 RunOnce가 아니라 시험마다 다른
+HKCU\Software\YesonCheckTest\RunOnce-<…> 키에 등록한다(YC_UPDATE_RUNONCE_KEY, 시험이 끝나면 지움).
 
 launch_helper_windows 시험(subprocess.Popen을 바꿔 끼움)과 스크립트·spec 글자 확인은 모든 플랫폼에서 돈다.
 """
@@ -44,6 +46,9 @@ TARGET = "1.1.1"
 EXE_NAME = "YesonCheck_Autocut.exe"
 LOG_LINE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2} ")  # update_install.log()와 같은 줄 앞 시각
 POWERSHELL = update_install._windows_powershell()
+RECOVER_VALUE = "YesonCheckUpdateRecover"  # 도우미가 RunOnce에 등록하는 값 이름
+RECOVER_FILE_NAME = "update_recover.txt"  # 되살림 정보 파일 (도우미 스크립트 옆)
+TEST_RUNONCE_PARENT = "Software\\YesonCheckTest"
 
 windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows 업데이트 도우미 (Windows PowerShell 5.1)")
 
@@ -157,6 +162,39 @@ static class FakeYesonCheck
 
 
 # ---- 시험 도우미 (이 시험 모듈 안에만 둠) ----
+
+
+@pytest.fixture(autouse=True)
+def runonce_test_key(monkeypatch):
+    """도우미가 되살림을 등록할 키를 이 시험만의 키로 (진짜 RunOnce를 건드리지 않게) — 시험이 끝나면 지움."""
+    import uuid
+
+    key = f"{TEST_RUNONCE_PARENT}\\RunOnce-{uuid.uuid4().hex[:12]}"
+    monkeypatch.setenv("YC_UPDATE_RUNONCE_KEY", key)
+    yield key
+    if sys.platform == "win32":
+        import winreg
+
+        for path in (key, TEST_RUNONCE_PARENT):
+            try:
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, path)
+            except OSError:
+                pass  # 없음 (등록하지 않음), 또는 다른 시험의 키가 아직 있는 부모
+
+
+def runonce_value(case):
+    """시험 키에 등록된 되살림 명령 (없으면 None)."""
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, case.env["YC_UPDATE_RUNONCE_KEY"]) as key:
+            return winreg.QueryValueEx(key, RECOVER_VALUE)[0]
+    except FileNotFoundError:
+        return None
+
+
+def recover_file(case):
+    return case.script.parent / RECOVER_FILE_NAME
 
 
 @pytest.fixture(scope="session")
@@ -363,6 +401,8 @@ def update_case(tmp_path, fake_exe):
         logs.mkdir()
         state = base / "state"
         state.mkdir()
+        script = state / HELPER.name  # 앱처럼 상태 폴더의 복사본을 실행 (되살림 정보 파일이 그 옆에 생김)
+        shutil.copyfile(HELPER, script)
         ok_file = state / "update_ok.json"
         ok_file.write_text('{"version": "0.0.1"}', encoding="utf-8")  # 지난번 표시 — 도우미가 켜기 전에 지워야 함
         env = dict(os.environ)
@@ -384,6 +424,7 @@ def update_case(tmp_path, fake_exe):
             exe=install_dir / EXE_NAME,
             backup=parent / "YesonCheck.update-backup",
             installer=installer,
+            script=script,
             ok_file=ok_file,
             log=logs / "update.log",
             trace=trace,
@@ -409,7 +450,7 @@ def update_case(tmp_path, fake_exe):
 def helper_cmd(case, pid, timeout_s):
     """도우미 명령. timeout_s가 None이면 -TimeoutSeconds를 넘기지 않음(YC_UPDATE_OK_TIMEOUT_S·180초가 기본)."""
     cmd = [
-        POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(HELPER),
+        POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(case.script),
         "-AppPid", str(pid),
         "-InstallDir", str(case.install_dir),
         "-Installer", str(case.installer),
@@ -482,6 +523,9 @@ def test_helper_installs_and_keeps_new(update_case):
     lines = [line for line in text.splitlines() if line]
     assert lines and all(LOG_LINE_RE.match(line) for line in lines), text
     assert "업데이트 끝" in text
+    # 다음 로그인의 되살림: 이름을 바꾸기 전에 등록했고, 끝나며 지움
+    assert "다음 로그인에서 되살리도록 등록함" in text and "다음 로그인의 되살림 등록을 지움" in text, text
+    assert runonce_value(case) is None and not recover_file(case).exists()
 
 
 @windows_only
@@ -498,6 +542,7 @@ def test_helper_restores_when_installer_fails(update_case):
     assert not trace_pids(case, "new")
     text = log_text(case)
     assert "되돌림" in text and "종료 코드 3" in text
+    assert "다음 로그인의 되살림 등록을 지움" in text and runonce_value(case) is None and not recover_file(case).exists()
     assert f"{case.log}.inno.txt" in text  # 설치 파일 자체 기록의 위치
     assert "fake inno log: installing into" in text  # 그 기록의 끝 줄들도 실패 창에 보이게
 
@@ -534,6 +579,8 @@ def test_helper_rename_blocked_keeps_old(update_case):
     assert app_kind(case.install_dir) == "old" and not case.backup.exists()
     assert wait_until(lambda: trace_pids(case, "old")), "옛 앱이 다시 켜지지 않음\n" + failure_details(case, code)
     assert "다른 YesonCheck 창이 켜져 있거나 파일이 잡혀 있음" in log_text(case)
+    assert "다음 로그인의 되살림 등록을 지움" in log_text(case)  # 이름을 바꾸기 전에 등록했던 것
+    assert runonce_value(case) is None and not recover_file(case).exists()
 
 
 # ---- 브리핑 밖 추가 시험 ----
@@ -726,6 +773,91 @@ def test_helper_fails_loudly_when_app_missing(update_case):
     assert installer_args(case) is None and siblings(case) == ["YesonCheck"]
     text = log_text(case)
     assert "설치 폴더에 지금 앱이 없음" in text and "알림 창은 띄우지 않음" in text
+
+
+# ---- 다음 로그인의 되살림 (-Recover) ----
+
+
+def recover_cmd(case):
+    return [POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(case.script), "-Recover"]
+
+
+def interrupt_during_install(case):
+    """설치 파일이 도는 중에 컴퓨터가 꺼진 것처럼: 멈춘 설치 파일이 설치 폴더를 반쯤 채우고 자식까지 띄운 뒤 도우미·설치
+    파일·그 자식을 모두 끝냄 → 그때 RunOnce(시험 키)에 등록돼 있던 명령."""
+    case.env.update(YC_TEST_INSTALLER_HANG="1", YC_UPDATE_INSTALL_TIMEOUT_S="600")
+    helper = start_helper(case, helper_cmd(case, os.getpid(), 4))
+    command = None
+    try:
+        assert wait_until(lambda: trace_pids(case, "installer_child"), 120), failure_details(case, helper.poll())
+        command = runonce_value(case)
+        info = recover_file(case).read_text(encoding="utf-8")
+    finally:
+        helper.kill()
+        helper.wait(30)
+        kill_processes_under(case.base)  # 설치 파일 (내려받은 곳 아래)
+        for pid in holder_tree_pids(trace_pids(case, "installer_child")):
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass  # 그 사이에 끝남
+    assert command is not None, "설치하는 동안 되살림이 등록돼 있지 않음\n" + failure_details(case, None)
+    assert command.startswith('"') and command.endswith(f'-File "{case.script}" -Recover'), command
+    assert len(command) <= 260, command  # RunOnce 명령 줄 한도
+    assert info.splitlines() == [f"InstallDir={case.install_dir}", f"Target={TARGET}", f"OkFile={case.ok_file}",
+                                 f"Log={case.log}", f"ExeName={EXE_NAME}"], info
+    assert app_kind(case.install_dir) == "new" and app_kind(case.backup) == "old"  # 반쯤 깔린 채, 옛 앱은 백업 이름
+    return command
+
+
+@windows_only
+def test_helper_recover_restores_half_installed_dir_at_next_logon(update_case):
+    case = update_case("new")
+    command = interrupt_during_install(case)
+    code = run_helper(case, cmd=command)  # 다음 로그인: Windows가 RunOnce의 명령 줄 그대로 실행
+    assert code == 1, failure_details(case, code)
+    assert app_kind(case.install_dir) == "old" and (case.install_dir / "_internal" / "old.txt").exists()
+    assert not (case.install_dir / "_internal" / "new.txt").exists()
+    assert siblings(case) == ["YesonCheck"]  # 백업도, 치운 반쯤 깔린 폴더도 남지 않음
+    assert not trace_pids(case, "old") and not trace_pids(case, "new")  # 로그인 때 앱을 켜지 않음
+    assert not recover_file(case).exists()
+    text = log_text(case)
+    assert "다음 로그인에서 되살림" in text and "반쯤 깔린 설치 폴더를 치움" in text, text
+    lines = [line for line in text.splitlines() if line]
+    assert all(LOG_LINE_RE.match(line) for line in lines), text
+
+
+@windows_only
+def test_helper_recover_keeps_new_version_that_started_fine(update_case):
+    case = update_case("new")
+    command = interrupt_during_install(case)
+    case.ok_file.write_text(f'{{"version": "{TARGET}"}}', encoding="utf-8")  # 새 앱이 '잘 켜짐'을 남긴 뒤 꺼진 것처럼
+    code = run_helper(case, cmd=command)
+    assert code == 0, failure_details(case, code)
+    assert app_kind(case.install_dir) == "new" and siblings(case) == ["YesonCheck"]  # 백업만 지움
+    assert "남은 백업만 지움" in log_text(case) and not recover_file(case).exists()
+
+
+@windows_only
+def test_helper_recover_without_backup_does_nothing(update_case):
+    case = update_case("new")
+    recover_file(case).write_text(
+        f"InstallDir={case.install_dir}\r\nTarget={TARGET}\r\nOkFile={case.ok_file}\r\nLog={case.log}\r\n"
+        f"ExeName={EXE_NAME}\r\n", encoding="utf-8")
+    code = run_helper(case, cmd=recover_cmd(case))
+    assert code == 0, failure_details(case, code)
+    assert app_kind(case.install_dir) == "old" and siblings(case) == ["YesonCheck"]
+    assert "할 일 없음" in log_text(case) and not recover_file(case).exists()
+
+
+@windows_only
+def test_helper_recover_without_info_fails_loudly(update_case):
+    case = update_case("new")
+    code = run_helper(case, cmd=recover_cmd(case))  # 되살림 정보 파일 없음
+    assert code == 2, failure_details(case, code)
+    assert "되살림 정보를 읽지 못함" in case.stderr.read_bytes().decode("utf-8", "replace") + case.stdout.read_bytes().decode(
+        "utf-8", "replace"), failure_details(case, code)
+    assert app_kind(case.install_dir) == "old"
 
 
 # ---- launch_helper_windows·스크립트 글자 (모든 플랫폼) ----
@@ -953,16 +1085,20 @@ def test_launch_helper_windows_does_not_swallow_popen_failure(tmp_state_dir, mon
         update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1")
 
 
+def helper_code():
+    """도우미 스크립트에서 주석(줄 전체·줄 끝)을 뺀 코드만 — 이 스크립트는 글자 안에 #을 쓰지 않음."""
+    return "\n".join(
+        re.sub(r"\s+#.*$", "", line)
+        for line in HELPER.read_bytes()[3:].decode("utf-8").splitlines()
+        if not line.lstrip().startswith("#")
+    )
+
+
 def test_helper_script_is_utf8_bom_ps51_and_stops_on_errors():
     raw = HELPER.read_bytes()
     # Windows PowerShell 5.1은 BOM 없는 .ps1을 ANSI(한국어 Windows는 cp949)로 읽어 한글 기록 글자가 깨짐
     assert raw.startswith(b"\xef\xbb\xbf")
-    # 주석(줄 전체·줄 끝)을 뺀 코드만 — 이 스크립트는 글자 안에 #을 쓰지 않음
-    code = "\n".join(
-        re.sub(r"\s+#.*$", "", line)
-        for line in raw[3:].decode("utf-8").splitlines()
-        if not line.lstrip().startswith("#")
-    )
+    code = helper_code()
     assert re.search(r"^\$ErrorActionPreference = 'Stop'$", code, re.M)
     # 5.1의 Add-Content·Out-File·Set-Content는 ANSI·UTF-16이 기본 — 로그는 UTF-8로 직접 씀
     assert not re.search(r"\b(Add-Content|Out-File|Set-Content)\b", code)
@@ -972,6 +1108,20 @@ def test_helper_script_is_utf8_bom_ps51_and_stops_on_errors():
     assert not re.search(r"\$[A-Za-z_][A-Za-z0-9_]*[가-힣]", code)
     # 종료 코드 2(앱을 다시 켜지 못함)의 마지막 알림 창 — 시험은 YC_UPDATE_NO_MESSAGEBOX=1로 끔
     assert "[System.Windows.Forms.MessageBox]::Show(" in code and "$env:YC_UPDATE_NO_MESSAGEBOX -eq '1'" in code
+
+
+def test_helper_registers_recover_after_stale_backup_and_before_rename():
+    """다음 로그인의 되살림은 지난 백업을 지운 뒤(남은 백업이 이번 것이어야 되살림이 옳음), 설치 폴더의 이름을 바꾸기 바로
+    전에 등록. 기본은 진짜 HKCU RunOnce, 시험은 YC_UPDATE_RUNONCE_KEY."""
+    code = helper_code()
+    stale = code.index("$script:FailReason = '지난 업데이트의 백업을 지우지 못함")
+    register = code.index("\n    Register-Recover\n")
+    rename = code.index("Move-Dir $InstallDir $Backup $RetryCount")
+    assert stale < register < rename
+    assert "$RecoverValueName = 'YesonCheckUpdateRecover'" in code
+    assert "$RunOnceKey = 'Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce'" in code
+    assert "$RunOnceKey = $env:YC_UPDATE_RUNONCE_KEY" in code
+    assert "[switch]$Recover" in code
 
 
 def test_spec_bundles_windows_helper_only_on_windows():
