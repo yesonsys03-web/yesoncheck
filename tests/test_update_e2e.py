@@ -6,6 +6,7 @@
 
 import importlib.util
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -126,3 +127,51 @@ def test_deadline_caps_waits_and_stops_after_the_limit(monkeypatch):
     now[0] += 1
     with pytest.raises(TimeoutError, match="전체 제한 시간 2분"):
         deadline.left(900)
+
+
+# ---- 켜진 앱: 정확히 하나, 계속 떠 있음 ----
+
+
+CASE = SimpleNamespace(app="C:\\yc_update\\rollback\\apps\\YesonCheck")
+
+
+def _app(pid, ppid=1):
+    exe = "C:\\yc_update\\rollback\\apps\\YesonCheck\\YesonCheck_Autocut.exe"
+    return update_e2e.Proc(pid, exe, f'"{exe}"', ppid, "2026-10-19T17:15:37.500")
+
+
+@pytest.fixture
+def fast_clock(monkeypatch):
+    """one_app_process의 기다림을 시험 시간 없이: sleep은 시계를 1초 움직이기만."""
+    now = [0.0]
+    monkeypatch.setattr(update_e2e.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(update_e2e.time, "sleep", lambda s: now.__setitem__(0, now[0] + s))
+    monkeypatch.setattr(update_e2e, "DEADLINE", update_e2e.Deadline(60))
+    helper = update_e2e.Proc(4000, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                             "powershell.exe -File update_helper_windows.ps1", 1, "")
+    monkeypatch.setattr(update_e2e, "list_processes", lambda: [helper])
+    return now
+
+
+def test_one_app_process_needs_the_same_single_process_to_stay(monkeypatch, fast_clock):
+    monkeypatch.setattr(update_e2e, "app_processes", lambda case: [_app(7528, 4000)])
+    assert [p.pid for p in update_e2e.one_app_process(CASE, "되돌린 옛 앱")] == [7528]
+    assert fast_clock[0] >= update_e2e.STAYS_RUNNING_S
+
+
+def test_one_app_process_shows_parents_of_two_processes(monkeypatch, fast_clock):
+    monkeypatch.setattr(update_e2e, "app_processes", lambda case: [_app(7528, 4000), _app(7964, 7528)])
+    with pytest.raises(AssertionError) as info:
+        update_e2e.one_app_process(CASE, "되돌린 옛 앱")
+    text = str(info.value)
+    assert "하나가 아닙니다 (2개)" in text
+    assert "pid 7528 (부모 4000 powershell.exe -File update_helper_windows.ps1)" in text
+    assert "pid 7964 (부모 7528 (이미 끝남))" in text and "만든 시각 2026-10-19T17:15:37.500" in text
+
+
+def test_one_app_process_fails_when_the_app_dies_after_starting(monkeypatch, fast_clock):
+    """켜진 뒤 몇 초 안에 죽는 앱(예: 메시지 창에서 죽음)은 '떠 있음'이 아님."""
+    seen = iter([[_app(7528, 4000)], [_app(7528, 4000)], []])
+    monkeypatch.setattr(update_e2e, "app_processes", lambda case: next(seen))
+    with pytest.raises(AssertionError, match=r"pid 7528\)가 10초 동안 혼자 떠 있지 않았습니다 — 지금: 없음"):
+        update_e2e.one_app_process(CASE, "되돌린 옛 앱")

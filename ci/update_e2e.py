@@ -17,7 +17,8 @@ make_test_data.py --update-dir이 가짜 공유 설정의 updates/에 꾸러미�
 - rollback: latest.json은 99.0.0인데 새 앱이 '잘 켜짐' 표시를 쓰지 않음 (Windows: 꾸러미 버전 98.0.0, Mac: 꾸러미의
   build_info는 99.0.0이고 실행 파일은 바로 exit 1 하는 스크립트) → 도우미 기록에 되돌림, 설치된 앱의 버전이 옛 것, 다시 켜진
   옛 앱이 60초 안에 업데이트 기록을 지움(실패를 알렸다는 뜻), 백업 없음 → 옛 앱을 끝냄.
-앱 환경: YESONCHECK_CONFIG_DIR(가짜 공유 설정 — Windows는 UNC), YESONCHECK_UPDATE_URL=off, QT_QPA_PLATFORM=offscreen,
+앱 환경: YESONCHECK_CONFIG_DIR(가짜 공유 설정 — Windows는 UNC), YESONCHECK_UPDATE_URL=off, QT_QPA_PLATFORM(Mac offscreen,
+Windows는 실제 화면 windows — APP_ENV의 설명),
 YC_UPDATE_DIRECT_LAUNCH=1, YC_UPDATE_OK_TIMEOUT_S=60, YC_UPDATE_NO_MESSAGEBOX=1, 업데이트 상태 폴더는 작업 폴더 아래
 (Windows LOCALAPPDATA, Mac HOME). PYTHONUTF8은 뺌 (사용자 PC와 같게 — ci/run_smoke_test.ps1처럼).
 
@@ -60,13 +61,20 @@ SMOKE_TIMEOUT_S = 900  # 옛 앱 실행 시험 (받기·Mac 새 앱 준비 포�
 HELPER_TIMEOUT_S = 900  # 도우미가 끝날 때까지 (Windows 조용한 설치 포함)
 PENDING_CLEARED_S = 60  # 되돌린 옛 앱이 업데이트 기록을 지울 때까지
 KILL_WAIT_S = 15
+STAYS_RUNNING_S = 10  # 결과 확인: 켜진 앱이 이만큼 계속 떠 있어야 함 (켜진 뒤 메시지 창 등에서 죽으면 실패)
 # 전체 제한 시간 기본값 (분) — 워크플로 단계의 timeout-minutes(Windows 45, Mac 30)보다 짧게: 남은 시간에 진단·정리
 DEFAULT_TIME_LIMIT_MIN = {"windows": 38, "mac": 24}
 
+# Qt 화면 플러그인. Windows는 offscreen을 쓰지 않고 실제 화면(windows — 사용자 PC와 같음, GitHub의 Windows 러너에는
+# 데스크톱이 있음): Qt 5.15.2(Windows lock의 pyqt5-qt5)의 QMessageBox::showEvent는 Windows에서 qt_getWindowsSystemMenu로
+# QGuiApplication::platformNativeInterface()->nativeResourceForWindow(...)를 부르는데, offscreen 플러그인은 nativeInterface()가
+# 없어(기본 nullptr) 실제 메시지 창을 띄우는 순간 앱이 죽는다 — 되돌린 옛 앱의 '업데이트 실패' 창(CI 39286794460: 앱 기록이
+# '실패 창' 줄에서 끝나고 몇 초 안에 프로세스가 사라짐). 실행 시험은 메시지 창을 바꿔 끼워 띄우지 않아 이 문제가 없었음
+QT_PLATFORM = "windows" if WINDOWS else "offscreen"
 # 옛 앱(그리고 도우미가 물려받아 다시 켜는 앱)의 환경
 APP_ENV = {
     "YESONCHECK_UPDATE_URL": "off",
-    "QT_QPA_PLATFORM": "offscreen",
+    "QT_QPA_PLATFORM": QT_PLATFORM,
     "YC_UPDATE_DIRECT_LAUNCH": "1",
     "YC_UPDATE_OK_TIMEOUT_S": "60",
     "YC_UPDATE_NO_MESSAGEBOX": "1",
@@ -280,6 +288,8 @@ class Proc:
     pid: int
     exe: str  # 실행 파일 경로 (Mac은 명령 줄의 첫 부분)
     command: str
+    ppid: int = 0  # 부모 프로세스
+    started: str = ""  # 만든 시각 (Windows CreationDate, Mac lstart)
 
 
 def list_processes():
@@ -287,20 +297,34 @@ def list_processes():
         script = (
             "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
             "ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process | "
-            "Select-Object ProcessId, ExecutablePath, CommandLine)"
+            "Select-Object ProcessId, ParentProcessId, ExecutablePath, CommandLine, "
+            "@{n='Created'; e={ if ($_.CreationDate) { $_.CreationDate.ToString('yyyy-MM-ddTHH:mm:ss.fff') } else { '' } }})"
         )
         out = subprocess.run([update_install._windows_powershell(), "-NoProfile", "-NonInteractive", "-Command", script],
                              capture_output=True, check=True, timeout=120).stdout.decode("utf-8-sig")
-        return [Proc(int(item["ProcessId"]), item.get("ExecutablePath") or "", item.get("CommandLine") or "")
+        return [Proc(int(item["ProcessId"]), item.get("ExecutablePath") or "", item.get("CommandLine") or "",
+                     int(item.get("ParentProcessId") or 0), item.get("Created") or "")
                 for item in json.loads(out)]
-    out = subprocess.run(["ps", "-axww", "-o", "pid=,command="], capture_output=True, text=True, check=True,
-                         timeout=60).stdout
+    # lstart는 고정 폭 24자 ("Mon Oct 19 23:22:31 2026")
+    out = subprocess.run(["ps", "-axww", "-o", "pid=,ppid=,lstart=,command="], capture_output=True, text=True,
+                         check=True, timeout=60).stdout
     procs = []
     for line in out.splitlines():
-        pid_text, _, command = line.strip().partition(" ")
-        command = command.strip()
-        procs.append(Proc(int(pid_text), command, command))
+        pid_text, ppid_text, rest = line.strip().split(None, 2)
+        started, command = rest[:24], rest[24:].strip()
+        procs.append(Proc(int(pid_text), command, command, int(ppid_text), started))
     return procs
+
+
+def describe_processes(procs):
+    """프로세스마다 한 줄: pid·부모(pid와 명령 줄)·만든 시각·명령 줄 — 누가 언제 켰는지 알 수 있게."""
+    by_pid = {p.pid: p for p in list_processes()}
+    lines = []
+    for proc in procs:
+        parent = by_pid.get(proc.ppid)
+        parent_text = f"{proc.ppid} {parent.command[:200]}" if parent else f"{proc.ppid} (이미 끝남)"
+        lines.append(f"pid {proc.pid} (부모 {parent_text}) 만든 시각 {proc.started}: {proc.command[:300]}")
+    return "\n".join(lines)
 
 
 def contains(text, part):
@@ -576,9 +600,22 @@ def assert_helper_sequence(log_text, expected):
 
 
 def one_app_process(case, what):
+    """이 경우의 설치된 앱 프로세스가 정확히 하나이고 STAYS_RUNNING_S초 동안 계속 떠 있는지 → [그 프로세스].
+
+    앱(PyInstaller onedir)은 프로세스 하나로 돈다 — Windows·Mac 부트로더는 onedir에서 자식을 만들지 않음(onefile만,
+    pyi_main.c). 둘이면 두 번 켜진 것이거나, 앱이 죽어 Windows 오류 보고가 만든 복제(process reflection, 같은 명령 줄)일 수
+    있음 — 어느 쪽이든 실패. 실패 메시지에 부모·만든 시각."""
     running = app_processes(case)
     assert len(running) == 1, (f"{what} 프로세스가 하나가 아닙니다 ({len(running)}개): {executable(case.app)}\n"
-                               + "\n".join(f"pid {p.pid}: {p.command[:300]}" for p in running))
+                               + describe_processes(running))
+    print(f"{what}: {describe_processes(running)}", flush=True)
+    deadline = time.monotonic() + DEADLINE.left(STAYS_RUNNING_S)
+    while time.monotonic() < deadline:
+        time.sleep(1)
+        now = app_processes(case)
+        assert [p.pid for p in now] == [running[0].pid], (
+            f"{what}(pid {running[0].pid})가 {STAYS_RUNNING_S}초 동안 혼자 떠 있지 않았습니다 — 지금: "
+            + (describe_processes(now) or "없음 (끝났거나 죽음)"))
     return running
 
 
@@ -715,9 +752,30 @@ def show_diagnostics(case):
     downloads = os.path.join(files["state"], "downloads")
     if os.path.isdir(downloads):
         print(f"받은 파일 ({downloads}): {os.listdir(downloads)}", flush=True)
-    print("===== 이 경우의 프로세스", flush=True)
-    for proc in our_processes([case.root], [files["helper"]]):
-        print(f"  pid {proc.pid}: {proc.command[:400]}", flush=True)
+    print("===== 이 경우의 프로세스 (부모·만든 시각)", flush=True)
+    print(describe_processes(our_processes([case.root], [files["helper"]])) or "  (없음)", flush=True)
+    if WINDOWS:
+        show_windows_crash_reports()
+
+
+def show_windows_crash_reports():
+    """(Windows, 진단) 지난 90분의 앱 오류·Windows 오류 보고 이벤트(Application 기록)와 WER 보고서(Report.wer) 중
+    YesonCheck_Autocut의 것 — 앱이 기록 없이 죽었을 때 예외 코드·오류 모듈."""
+    script = (
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+        "try { Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=(Get-Date).AddMinutes(-90)} -ErrorAction Stop "
+        "| Where-Object { $_.ProviderName -in @('Application Error','Windows Error Reporting','Application Hang') "
+        "-and $_.Message -like '*YesonCheck*' } | ForEach-Object { '--- ' + $_.TimeCreated.ToString('o') + ' ' + "
+        "$_.ProviderName + ' ' + $_.Id; $_.Message } } catch { '(이벤트 기록을 읽지 못함: ' + $_ + ')' }; "
+        "foreach ($root in @(\"$env:ProgramData\\Microsoft\\Windows\\WER\", "
+        "\"$env:LOCALAPPDATA\\Microsoft\\Windows\\WER\")) { foreach ($kind in @('ReportArchive','ReportQueue')) { "
+        "Get-ChildItem -Path (Join-Path $root $kind) -Filter '*YesonCheck*' -Directory -ErrorAction SilentlyContinue "
+        "| ForEach-Object { '--- ' + $_.FullName; Get-Content (Join-Path $_.FullName 'Report.wer') -ErrorAction Continue } } }"
+    )
+    done = subprocess.run([update_install._windows_powershell(), "-NoProfile", "-NonInteractive", "-Command", script],
+                          capture_output=True, timeout=120)
+    print("===== Windows 앱 오류 이벤트·오류 보고 (YesonCheck, 지난 90분)\n"
+          + (done.stdout + done.stderr).decode("utf-8-sig", errors="replace").strip(), flush=True)
 
 
 # ---- 시작 ----
