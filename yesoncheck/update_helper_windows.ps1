@@ -11,9 +11,10 @@
 #      그 pid의 실행 파일이 DIR\ExeName일 때만 기다린다.
 #   2. 지난번에 치워 둔 DIR.update-failed-*를 지워 봄(못 지워도 계속), 남은 DIR.update-backup을 지움(못 지우면 설치하지
 #      않음).
-#   3. 다음 로그인의 되살림을 등록(아래)한 뒤 DIR을 DIR.update-backup으로 이름만 바꿈(약 1 GB를 복사하지 않음). 안의
-#      파일이 잡혀 있어 못 바꾸면 — 다른 YesonCheck 창이 켜져 있거나 백신 등이 파일을 잡고 있음 — 설치하지 않고 옛 앱을
-#      다시 켬.
+#   3. 지난 OK를 지우고(못 지우면 바꾸지 않고 옛 앱을 다시 켬 — 남은 OK가 이번 업데이트의 것으로 보이면 다음 로그인의
+#      되살림이 반쯤 깔린 DIR을 남길 수 있음) 다음 로그인의 되살림을 등록(아래)한 뒤 DIR을 DIR.update-backup으로 이름만
+#      바꿈(약 1 GB를 복사하지 않음). 안의 파일이 잡혀 있어 못 바꾸면 — 다른 YesonCheck 창이 켜져 있거나 백신 등이 파일을
+#      잡고 있음 — 설치하지 않고 옛 앱을 다시 켬.
 #   4. 설치 파일을 /VERYSILENT로 DIR에 설치(설치 파일 자체 기록은 LOG.inno.txt). 종료 코드 ≠ 0이면 되돌림. 30분 안에
 #      끝나지 않으면 설치 파일과 그 자손 프로세스(Inno의 is-*.tmp\Setup.tmp 등)를 끝내고 되돌림.
 #   5. OK를 지우고 DIR\ExeName을 켬(환경 변수는 이 도우미의 것 그대로, 작업 폴더는 DIR — 바로 가기와 같음).
@@ -33,7 +34,8 @@
 # 지운다 — 되돌리기마저 실패한 종료 코드 2만 남겨 둬, 다음 로그인에서 다시 되살려 본다. Windows는 다음 로그인에서 그 값을
 # 지우고 한 번 실행한다. -Recover:
 #   - DIR.update-backup이 없으면 할 일 없음 (종료 코드 0).
-#   - OK가 VER이고 DIR에 앱이 있으면 업데이트는 성공했던 것 → 백업만 지움 (0).
+#   - OK가 VER이고 DIR에 앱이 있으면 업데이트는 성공했던 것 → 백업만 지움 (0). (등록 전에 지난 OK를 지우고, 되돌릴 때는
+#     새 앱을 끝낸 뒤에 지우므로 OK는 이 업데이트의 새 앱이 잘 켜진 뒤에만 있음)
 #   - 그 밖이면 끝나지 않은 업데이트 → DIR(반쯤 깔린 것)을 옆 이름으로 치우고 백업을 DIR로 되돌림 (1). 앱은 켜지 않는다 —
 #     로그인 때 저절로 창이 뜨지 않게; 다음에 켠 옛 앱이 업데이트 기록을 보고 '업데이트 실패' 창으로 알림.
 #   - 되살리지 못하면 기록하고 알림 창 (2).
@@ -573,16 +575,18 @@ function Read-RecoverInfo {
     return $info
 }
 
-function Remove-OkMarkerForRollback {
-    # 되돌리기로 정함 — 새 앱이 늦게 쓴 '잘 켜짐' 표시가 있으면 지움: 되돌리는 중에 컴퓨터가 꺼져도 다음 로그인의 되살림이
-    # 표시를 보고 반쯤 되돌린 새 버전을 남긴 채 백업을 지우지 않게
+function Remove-OkMarker([string]$Why) {
+    # '잘 켜짐' 표시(OK)가 있으면 지움 → $true: 없음·지움, $false: 지우지 못함 (기록). 다음 로그인의 되살림은 OK가 VER이면
+    # 새 버전을 남기므로 OK는 이 업데이트의 새 앱이 잘 켜진 뒤에만 있어야 함 — 되살림 등록 전·되돌릴 때·되살림 끝에 지움
     try {
         if ([System.IO.File]::Exists($OkFile)) {
             [System.IO.File]::Delete($OkFile)
-            Write-Log ("되돌리기로 정해 '잘 켜짐' 표시를 지움: " + $OkFile)
+            Write-Log ("'잘 켜짐' 표시를 지움 (" + $Why + '): ' + $OkFile)
         }
+        return $true
     } catch {
-        Write-Log ("'잘 켜짐' 표시를 지우지 못함 (되돌림은 계속): " + $OkFile + ' (' + (Format-Err $_) + ')')
+        Write-Log ("'잘 켜짐' 표시를 지우지 못함 (" + $Why + '): ' + $OkFile + ' (' + (Format-Err $_) + ')')
+        return $false
     }
 }
 
@@ -648,10 +652,12 @@ function Exit-Rollback {
         exit 1
     }
     Write-Log '되돌림 시작'
-    if ($script:Renamed) { Remove-OkMarkerForRollback }
     if ($script:Launched) {
         try { Stop-NewApp } catch { Write-Log ('새 앱 프로세스를 끝내다 오류: ' + (Format-Err $_)) }
     }
+    # 새 앱을 끝낸 뒤에 — 끝나기 전에 늦게 쓴 표시도 남지 않게 (되돌리는 중에 컴퓨터가 꺼져도 다음 로그인의 되살림이 이
+    # 표시를 보고 반쯤 되돌린 새 버전을 남긴 채 백업을 지우지 않게). 지우지 못해도 되돌림은 계속
+    if ($script:Renamed) { $null = Remove-OkMarker '되돌리기로 정함 — 새 앱을 끝낸 뒤' }
     $restored = $false
     try {
         if ($script:Renamed) {
@@ -731,6 +737,7 @@ if ($Recover) {
         } catch {
             Write-Log ('백업을 지우지 못함 (다음 업데이트가 다시 지워 봄): ' + $Backup + ' (' + (Format-Err $_) + ')')
         }
+        $null = Remove-OkMarker '되살림 끝'
         Remove-RecoverFile
         exit 0
     }
@@ -756,6 +763,7 @@ if ($Recover) {
             '이전 버전(백업): ' + $Backup + "`r`n설치 폴더: " + $InstallDir + "`r`n`r`n" +
             '설치 폴더를 지우거나 다른 이름으로 바꾼 뒤, 백업 폴더의 이름을 설치 폴더 이름으로 바꾸면 이전 버전을 다시 쓸 수 있습니다.')
     }
+    $null = Remove-OkMarker '되살림 끝'
     Write-Log ('다음 로그인에서 되살림: 이전 버전을 설치 폴더로 되돌림 (' + $InstallDir +
         ') — 앱은 켜지 않음 (다음에 켤 때 업데이트 실패를 알림)')
     exit 1
@@ -863,8 +871,15 @@ try {
         }
     }
 
-    # 4. 설치 폴더를 백업 이름으로 (여기는 짧게 — 오래 잡혀 있으면 다른 창이 켜져 있는 것). 바로 전에 다음 로그인의 되살림을
-    #    등록: 여기부터 컴퓨터가 꺼지면 앱이 백업 이름에 있거나 반쯤 깔린 채로 남음 (지난 백업을 지운 뒤라 남은 백업은 이번 것)
+    # 4. 설치 폴더를 백업 이름으로 (여기는 짧게 — 오래 잡혀 있으면 다른 창이 켜져 있는 것). 바로 전에 지난 '잘 켜짐' 표시를
+    #    지우고(같은 버전을 다시 해 볼 때 지난번 것이 남아 있으면 다음 로그인의 되살림이 반쯤 깔린 설치 폴더를 새 버전으로
+    #    봄 — 못 지우면 아무것도 바꾸지 않고 멈춤) 다음 로그인의 되살림을 등록: 여기부터 컴퓨터가 꺼지면 앱이 백업 이름에
+    #    있거나 반쯤 깔린 채로 남음 (지난 백업을 지운 뒤라 남은 백업은 이번 것)
+    if (-not (Remove-OkMarker '되살림 등록 전 — 지난 업데이트의 것')) {
+        $script:FailReason = ("지난 '잘 켜짐' 표시를 지우지 못해 이름을 바꾸기 전에 멈춤 (남아 있으면 설치 중에 꺼졌을 때 다음 " +
+            '로그인의 되살림이 반쯤 깔린 설치 폴더를 새 버전으로 볼 수 있음): ' + $OkFile)
+        Exit-Rollback
+    }
     Register-Recover
     try {
         Move-Dir $InstallDir $Backup $RetryCount

@@ -519,6 +519,11 @@ def log_text(case):
     return case.log.read_text(encoding="utf-8")  # UTF-8이 아니면 여기서 실패 (5.1의 기본 ANSI·UTF-16 아님)
 
 
+def log_so_far(case):
+    """도는 중인 도우미의 기록 (없으면 빈 글자, 쓰는 중인 마지막 줄이 반쪽이어도 읽힘)."""
+    return case.log.read_bytes().decode("utf-8", "replace") if case.log.exists() else ""
+
+
 def failure_details(case, code):
     def read(path):
         return path.read_bytes().decode("utf-8", "replace") if path.exists() else "(없음)"
@@ -858,7 +863,7 @@ def test_helper_recover_restores_half_installed_dir_at_next_logon(update_case, p
     assert not (case.install_dir / "_internal" / "new.txt").exists()
     assert siblings(case) == ["YesonCheck"]  # 백업도, 치운 반쯤 깔린 폴더도 남지 않음
     assert not trace_pids(case, "old") and not trace_pids(case, "new")  # 로그인 때 앱을 켜지 않음
-    assert not recover_file(case).exists()
+    assert not recover_file(case).exists() and not case.ok_file.exists()
     text = log_text(case)
     assert "다음 로그인에서 되살림" in text and "반쯤 깔린 설치 폴더를 치움" in text, text
     lines = [line for line in text.splitlines() if line]
@@ -866,14 +871,69 @@ def test_helper_recover_restores_half_installed_dir_at_next_logon(update_case, p
 
 
 @windows_only
-def test_helper_recover_keeps_new_version_that_started_fine(update_case, production_like_state_dir):
+def test_helper_recover_ignores_marker_left_from_earlier_attempt(update_case, production_like_state_dir):
+    """같은 버전을 다시 해 볼 때 지난번(되돌린 업데이트)의 '잘 켜짐' 표시가 남아 있어도 되살림 등록 전에 지움 → 설치 중에
+    꺼진 뒤의 되살림은 (Inno가 실행 파일까지 복사해 둔) 반쯤 깔린 설치 폴더를 남기지 않고 백업을 되돌림."""
     case = update_case("new", script_dir=production_like_state_dir)
+    case.ok_file.write_text(f'{{"version": "{TARGET}"}}', encoding="utf-8")  # 지난 시도의 새 앱이 늦게 쓴 표시
     command = interrupt_during_install(case)
-    case.ok_file.write_text(f'{{"version": "{TARGET}"}}', encoding="utf-8")  # 새 앱이 '잘 켜짐'을 남긴 뒤 꺼진 것처럼
+    assert not case.ok_file.exists()
+    text = log_text(case)
+    assert text.index("'잘 켜짐' 표시를 지움 (되살림 등록 전") < text.index("다음 로그인에서 되살리도록 등록함"), text
+    assert (case.install_dir / EXE_NAME).exists()  # 반쯤 깔린 설치 폴더에도 실행 파일은 있음
+    code = run_helper(case, cmd=command)
+    assert code == 1, failure_details(case, code)
+    assert app_kind(case.install_dir) == "old" and siblings(case) == ["YesonCheck"]
+    assert "다음 로그인에서 되살림" in log_text(case)
+
+
+@windows_only
+def test_helper_recover_keeps_new_version_that_started_fine(update_case, production_like_state_dir):
+    """새 버전이 다 깔리고(설치 파일 종료 코드 0) 새 앱이 — 되살림을 등록한 뒤에 — '잘 켜짐'을 남겼는데 도우미가 백업을 지우기
+    전에 컴퓨터가 꺼짐 → 다음 로그인의 되살림은 새 버전을 그대로 두고 백업만 지움."""
+    case = update_case("new", script_dir=production_like_state_dir)
+    case.env["YC_TEST_HOLD_S"] = "6"  # 새 앱이 표시를 쓰기 전에 기다림 — 그사이 백업 안의 파일을 잡아 백업 지우기를 늦춤
+    helper = start_helper(case, helper_cmd(case, os.getpid(), 60))
+    held = None
+    command = marker = None
+    try:
+        assert wait_until(lambda: "설치 폴더를 백업 이름으로 바꿈" in log_so_far(case), 60), failure_details(case, helper.poll())
+        held = open(case.backup / "_internal" / "old.txt", "rb")  # 백업 지우기가 몇 초 동안 다시 해 봄 — 그사이에 끔
+        assert wait_until(lambda: "새 앱이 잘 켜짐" in log_so_far(case), 60), failure_details(case, helper.poll())
+        command = runonce_value(case)
+        marker = case.ok_file.read_text(encoding="utf-8")
+    finally:
+        helper.kill()  # 컴퓨터가 꺼짐 흉내
+        helper.wait(30)
+        kill_processes_under(case.base)
+        if held is not None:
+            held.close()
+    text = log_text(case)
+    assert command is not None and f'"{TARGET}"' in marker, (command, marker, text)
+    assert text.index("다음 로그인에서 되살리도록 등록함") < text.index("설치 파일이 끝남 (종료 코드 0)") < text.index(
+        "새 앱이 잘 켜짐"), text
+    assert "업데이트 끝" not in text and case.backup.exists() and app_kind(case.install_dir) == "new"
     code = run_helper(case, cmd=command)
     assert code == 0, failure_details(case, code)
     assert app_kind(case.install_dir) == "new" and siblings(case) == ["YesonCheck"]  # 백업만 지움
-    assert "남은 백업만 지움" in log_text(case) and not recover_file(case).exists()
+    assert "남은 백업만 지움" in log_text(case) and not recover_file(case).exists() and not case.ok_file.exists()
+
+
+@windows_only
+def test_helper_refuses_when_old_marker_cannot_be_removed(update_case):
+    """지난 '잘 켜짐' 표시를 지우지 못하면 이름을 바꾸기 전에 멈춤 — 설치하지 않고 되살림도 등록하지 않고 옛 앱을 다시 켬."""
+    case = update_case("new")
+    held = open(case.ok_file, "rb")  # 지울 수 없게
+    try:
+        code = run_helper(case)
+    finally:
+        held.close()
+    assert code == 1, failure_details(case, code)
+    assert installer_args(case) is None and app_kind(case.install_dir) == "old" and not case.backup.exists()
+    assert wait_until(lambda: trace_pids(case, "old")), "옛 앱이 다시 켜지지 않음\n" + failure_details(case, code)
+    text = log_text(case)
+    assert "지난 '잘 켜짐' 표시를 지우지 못해 이름을 바꾸기 전에 멈춤" in text, text
+    assert "다음 로그인에서 되살리도록 등록함" not in text and runonce_value(case) is None
 
 
 @windows_only
@@ -1190,9 +1250,13 @@ def test_helper_registers_recover_after_stale_backup_and_before_rename():
     전에 등록. 기본은 진짜 HKCU RunOnce, 시험은 YC_UPDATE_RUNONCE_KEY."""
     code = helper_code()
     stale = code.index("$script:FailReason = '지난 업데이트의 백업을 지우지 못함")
+    marker = code.index("if (-not (Remove-OkMarker '되살림 등록 전")
     register = code.index("\n    Register-Recover\n")
     rename = code.index("Move-Dir $InstallDir $Backup $RetryCount")
-    assert stale < register < rename
+    assert stale < marker < register < rename  # 지난 '잘 켜짐' 표시도 등록 전에 (못 지우면 멈춤)
+    # 되돌릴 때는 새 앱을 끝낸 뒤에 표시를 지움 (끝나기 전에 늦게 쓴 표시도 남지 않게)
+    rollback = code[code.index("function Exit-Rollback"):code.index("if ($ExtraArgs.Count -gt 0)")]
+    assert rollback.index("Stop-NewApp") < rollback.index("Remove-OkMarker") < rollback.index("Restore-Backup")
     assert "$RecoverValueName = 'YesonCheckUpdateRecover'" in code
     assert "$RunOnceKey = 'Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce'" in code
     assert "$RunOnceKey = $env:YC_UPDATE_RUNONCE_KEY" in code
