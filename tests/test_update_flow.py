@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import QApplication, QMessageBox
 from yesoncheck import build_info, player_base, update_install, updates
 from yesoncheck.update_install import Pending, ok_marker_path, read_pending, write_pending
 from tests.test_fast_startup import wait_until
-from tests.test_update_ui import _settle, check_now, fake_check, player_with_build  # noqa: F401 (fixture)
+from tests.test_update_ui import _settle, check_now, error, fake_check, found, player_with_build  # noqa: F401 (fixture)
 from tests.test_work_paths_ui import new_player  # noqa: F401 (fixture)
 
 INSTALLER = bytes(range(256)) * 4096 * 3  # 3 MB → 받기는 1 MB씩 세 번 (중간에 멈추는 시험)
@@ -537,6 +537,49 @@ def test_thread_log_failure_prints_both_to_stderr(player_offer, downloads, broke
     assert "시험용 받기 실패" in dialogs.criticals[0]
     err = capsys.readouterr().err
     assert "시험용 받기 실패" in err and "OSError: 시험용 기록 쓰기 실패" in err
+
+
+def test_log_failure_in_check_result_does_not_escape_the_slot(player_with_build, broken_log, dialogs, capsys):
+    """확인 결과 슬롯(3시간마다의 자동 확인)이 업데이트 기록을 쓰지 못해도 예외가 슬롯 밖으로 나가지 않음 — Mac(excepthook
+    없음)에서는 나가면 PyQt가 앱을 끝냄. 결과는 그대로 띠에, 줄과 이유는 stderr에. 슬롯을 직접 불러 확인 (나가면 여기서 실패)."""
+    player = player_with_build("1.1.0")
+    broken_log()
+    results = [found("NAS", "1.1.1"), error("GitHub", "GitHub 응답 오류: HTTP 500")]
+    current = updates.Version.parse("1.1.0")
+    offer = updates.choose_offer(current, build_info.platform_key(), results)
+    player._update_check_current = current  # 확인이 돌던 상태 (start_update_check가 정함)
+    player._on_update_checked(updates.CheckResult(results, offer))
+    assert player.update_banner.mode() == "offer" and player.update_banner.full_text() == OFFER_TEXT
+    assert [m[1] for m in dialogs.messages] == ["업데이트 확인 실패"]  # 오류 창은 그대로
+    player.update_banner.show_progress(1, 4, "1.1.1 받는 중…")  # 받는 중: '띠는 그대로 둠' 기록 줄
+    player._update_check_current = current
+    player._on_update_checked(updates.CheckResult(results, offer))
+    assert player.update_banner.mode() == "progress"
+    err = capsys.readouterr().err
+    assert "새 버전 1.1.1 (NAS)" in err and "받는 중이라" in err and "OSError: 시험용 기록 쓰기 실패" in err
+
+
+def test_log_failure_in_check_failure_does_not_escape_the_slot(player_with_build, broken_log, dialogs, capsys):
+    player = player_with_build("1.1.0")
+    broken_log()
+    player._on_update_check_failed("Traceback (most recent call last):\nRuntimeError: 시험용 확인 오류")
+    [(kind, title, text)] = dialogs.messages
+    assert (kind, title) == ("warning", "업데이트 확인 실패") and "RuntimeError: 시험용 확인 오류" in text
+    err = capsys.readouterr().err
+    assert "예상치 못한 오류" in err and "OSError: 시험용 기록 쓰기 실패" in err
+
+
+def test_log_failure_when_auto_check_comes_during_a_check(player_with_build, fake_check, broken_log, capsys):
+    """확인 중에 온 자동 확인(3시간 타이머의 슬롯)이 '끝나면 다시' 기록을 쓰지 못해도 예외가 나가지 않고 다시 확인함."""
+    player = player_with_build("1.1.0", [found("NAS", "1.1.1")])
+    fake_check.gate = threading.Event()
+    player.start_update_check(manual=False)
+    assert fake_check.entered.wait(5)
+    broken_log()
+    player.start_update_check(manual=False)  # 타이머 슬롯과 같은 부름
+    fake_check.gate.set()
+    wait_until(lambda: len(fake_check.calls) == 2 and not player.update_check_running)
+    assert "끝나면 다시 확인" in capsys.readouterr().err
 
 
 def test_new_job_during_download_asks_before_hand_off(player_offer, downloads, dialogs, fake_helpers, quits):

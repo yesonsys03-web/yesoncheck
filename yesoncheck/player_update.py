@@ -9,8 +9,9 @@
 - 새 버전(offer): 알림 띠. '나중에'를 누른 버전과 같거나 낮은 번호는 이번 실행 동안 다시 보이지 않음(더 큰 번호는 보임).
   Help → 업데이트 확인…은 숨긴 버전도 다시 보임 (업데이트를 시작하는 곳은 띠뿐). 받는 중(띠가 진행을 보임)에는 결과를
   기록에만 남기고 update_offer와 띠를 그대로 둠.
-- 소스마다 읽은 결과는 업데이트 기록(update_install.log — Mac도 파일)에 한 줄씩. 예상된 실패(expected_problem)는
-  자동 확인이면 기록에만.
+- 소스마다 읽은 결과는 업데이트 기록(update_install.log — Mac도 파일)에 한 줄씩 (_log_update — 기록을 쓰지 못해도 슬롯
+  밖으로 예외를 내지 않음: 3시간마다의 자동 확인이 Mac 앱을 끝내지 않게). 예상된 실패(expected_problem)는 자동 확인이면
+  기록에만.
 - 오류(error): 자동 확인은 창 — 한 실행에 같은 문제는 한 번 ((소스, 첫 줄). 트레이스백은 첫 줄이 늘 같아 마지막 줄).
 - 수동 확인: 언제나 결과 창 — 소스마다 찾은 버전·예상된 문제·오류 전부 (오류가 있으면 경고 창).
 
@@ -320,7 +321,7 @@ class PlayerUpdateMixin:
                 self._update_check_manual = True
             else:
                 self._update_check_again = True
-                update_install.log("업데이트 확인 (자동): 앞의 확인이 아직 끝나지 않음 — 끝나면 다시 확인")
+                _log_update("업데이트 확인 (자동): 앞의 확인이 아직 끝나지 않음 — 끝나면 다시 확인")
             return
         current = updates.Version.parse(info.version)
         check = UpdateCheck(current, build_info.platform_key(), self.work_paths_config_dir, updates.github_base_url())
@@ -353,15 +354,15 @@ class PlayerUpdateMixin:
             return  # 창을 닫은 뒤 (release_worker가 신호를 막지만 이미 대기열에 들어간 결과)
         kind = "수동" if manual else "자동"
         for source_result in result.results:
-            update_install.log(f"업데이트 확인 ({kind}) {_source_state(source_result, current)}")
+            _log_update(f"업데이트 확인 ({kind}) {_source_state(source_result, current)}")
         offer = result.offer
         if offer is None:
-            update_install.log(f"업데이트 확인 ({kind}) → 새 버전 없음 (지금 {current})")
+            _log_update(f"업데이트 확인 ({kind}) → 새 버전 없음 (지금 {current})")
         else:
-            update_install.log(f"업데이트 확인 ({kind}) → 새 버전 {offer.manifest.version} ({offer.result.source})")
+            _log_update(f"업데이트 확인 ({kind}) → 새 버전 {offer.manifest.version} ({offer.result.source})")
         if self.update_banner.mode() == "progress":
             # 받는 중: 받고 있는 버전(update_offer)과 띠(받기 진행)는 그대로 — 이번 결과는 위의 기록에만
-            update_install.log(f"업데이트 확인 ({kind}) 받는 중이라 알림 띠와 고른 버전은 그대로 둠")
+            _log_update(f"업데이트 확인 ({kind}) 받는 중이라 알림 띠와 고른 버전은 그대로 둠")
         else:
             self.update_offer = offer
             self._show_update_offer(current, manual)
@@ -379,7 +380,7 @@ class PlayerUpdateMixin:
         if self._update_closed:
             return
         kind = "수동" if manual else "자동"
-        update_install.log(f"업데이트 확인 ({kind}) 예상치 못한 오류:\n{text}")
+        _log_update(f"업데이트 확인 ({kind}) 예상치 못한 오류:\n{text}")
         if self._first_time_update_error(_UNEXPECTED_SOURCE, text) or manual:
             QMessageBox.warning(self, CHECK_FAILED_TITLE, f"업데이트를 확인하다 예상치 못한 오류가 났습니다.\n\n{text}")
         if again:
