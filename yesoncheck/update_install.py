@@ -35,6 +35,7 @@ PENDING_FILE_NAME = "pending_update.json"
 OK_MARKER_FILE_NAME = "update_ok.json"
 LOG_FILE_NAME = "update.log"
 APP_EXECUTABLE_NAME = "YesonCheck_Autocut"
+HELPER_MAC_FILE_NAME = "update_helper_mac.sh"  # Mac 도우미 (빌드된 앱에는 spec이 yesoncheck/ 아래에 넣음)
 
 NEEDED_BYTES = {"windows": 1_500_000_000, "mac-x86_64": 3_000_000_000, "mac-arm64": 3_000_000_000}
 
@@ -390,6 +391,53 @@ def stage_mac(dmg_path: str, app_path: str, target_version: str) -> str:
         raise copy_error
     _verify_staged_app(dest_path, target_version)
     return dest_path
+
+
+# ---- Mac: 앱이 끝난 뒤 바꾸고 다시 켜는 도우미 ----
+
+
+def _bundled_file(name: str) -> str:
+    """yesoncheck 패키지 옆에 둔 데이터 파일의 경로: 빌드된 앱은 sys._MEIPASS/yesoncheck/(spec datas),
+    소스 실행은 저장소의 yesoncheck/ — 둘 다 "<맨 위>/yesoncheck/<name>"."""
+    top = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(top, "yesoncheck", name)
+
+
+def launch_helper_mac(staged_app: str, app_path: str, target: str) -> None:
+    """앱이 끝나기를 기다렸다가 staged_app을 app_path 자리로 바꾸고 다시 켜는 도우미(update_helper_mac.sh)를 띄움.
+
+    부른 쪽은 업데이트 기록(write_pending)을 남긴 뒤 이것을 부르고 앱을 끝낸다. 도우미는 바뀔 앱 번들 밖에서
+    돌아야 하므로(번들째 백업 이름으로 옮기고, 되돌릴 때는 지움) 번들 안의 스크립트를 state_dir()로 복사해
+    실행한다 — 임시 파일 + os.replace(bash는 스크립트를 조금씩 읽으므로 돌고 있는 파일을 덮어쓰지 않음).
+    새 세션(start_new_session)으로 띄워 앱이 끝나도 같이 끝나지 않게 한다. Popen 실패는 그대로 올린다.
+    """
+    dest = os.path.join(state_dir(), HELPER_MAC_FILE_NAME)
+    fd, tmp_path = tempfile.mkstemp(dir=state_dir(), prefix=".tmp-")
+    os.close(fd)
+    try:
+        shutil.copyfile(_bundled_file(HELPER_MAC_FILE_NAME), tmp_path)
+        os.replace(tmp_path, dest)
+    except Exception:
+        try:
+            os.remove(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
+    subprocess.Popen(
+        [
+            "/bin/bash", dest,
+            "--pid", str(os.getpid()),
+            "--app", app_path,
+            "--staged", staged_app,
+            "--target", target,
+            "--ok", ok_marker_path(),
+            "--log", log_path(),
+        ],
+        start_new_session=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 # ---- 업데이트 기록 (재시작한 앱이 성공/실패를 판정) ----
