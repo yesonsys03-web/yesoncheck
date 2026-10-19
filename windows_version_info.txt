@@ -1,13 +1,16 @@
+# Windows exe 파일 버전 정보 템플릿: spec이 build/build_info.json의 버전으로 자리 표시자(밑줄 두 개로 감싼
+# VERSION_TUPLE → (1, 1, 0, 0) — 버전의 X.Y.Z 부분, VERSION → 1.1.0 또는 1.1.0+0f4d3d7)를 채워
+# build/windows_version_info.txt로 쓰고 그 파일을 EXE(version=)에 넘김
 VSVersionInfo(
-    ffi=FixedFileInfo(filevers=(1, 0, 0, 0), prodvers=(1, 0, 0, 0), mask=0x3F, flags=0x0, OS=0x40004,
+    ffi=FixedFileInfo(filevers=__VERSION_TUPLE__, prodvers=__VERSION_TUPLE__, mask=0x3F, flags=0x0, OS=0x40004,
                       fileType=0x1, subtype=0x0, date=(0, 0)),
     kids=[
         StringFileInfo([StringTable("041204B0", [
             StringStruct("CompanyName", "Yeson"),
             StringStruct("FileDescription", "Yeson Checker"),
-            StringStruct("FileVersion", "1.0.0"),
+            StringStruct("FileVersion", "__VERSION__"),
             StringStruct("ProductName", "YesonCheck_Autocut"),
-            StringStruct("ProductVersion", "1.0.0"),
+            StringStruct("ProductVersion", "__VERSION__"),
             StringStruct("OriginalFilename", "YesonCheck_Autocut.exe"),
         ])]),
         VarFileInfo([VarStruct("Translation", [0x0412, 1200])]),

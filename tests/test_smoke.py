@@ -42,3 +42,29 @@ def test_ocr_model_files(tmp_path):
         ocr_model_files(str(tmp_path))
     (tmp_path / "whl" / "det" / "en" / "inference.pdmodel").write_bytes(b"x")
     assert ocr_model_files(str(tmp_path)) == [os.path.join("whl", "det", "en", "inference.pdmodel")]
+
+
+def test_app_version_check(monkeypatch):
+    """실행 시험의 '앱 버전': 빌드된 앱이 읽은 버전(build_info.json)이 기대 버전이고 창 제목에 보이는지."""
+    from yesoncheck import build_info
+    from yesoncheck.smoke_test import app_version
+
+    with pytest.raises(AssertionError, match="소스 실행"):
+        app_version("1.1.0", "Yeson Checker")
+    monkeypatch.setattr(build_info, "current",
+                        lambda: build_info.BuildInfo("1.1.0+0f4d3d7", "0f4d3d7" + "0" * 33, "2026-10-20T10:00:00+09:00", "windows"))
+    assert app_version("1.1.0+0f4d3d7", "Yeson Checker 1.1.0+0f4d3d7")["version"] == "1.1.0+0f4d3d7"
+    with pytest.raises(AssertionError, match="기대 1.1.0"):
+        app_version("1.1.0", "Yeson Checker 1.1.0+0f4d3d7")
+    with pytest.raises(AssertionError, match="창 제목"):
+        app_version("1.1.0+0f4d3d7", "Yeson Checker")
+
+
+@pytest.mark.parametrize("extra", [["--auto-connect", "--expect-version", "1.1.0"], ["--expect-version", ""]])
+def test_make_test_data_rejects_unused_expect_version(tmp_path, extra):
+    """기대 버전은 기본 시나리오만 확인 → 자동 연결 시험이나 빈 값이면 조용히 무시하지 않고 멈춤."""
+    result = subprocess.run([sys.executable, os.path.join(ROOT, "ci", "make_test_data.py"), "--share-root", str(tmp_path),
+                             "--mac-root", str(tmp_path), "--workdir", str(tmp_path / "work"), *extra],
+                            capture_output=True, text=True, encoding="utf-8", env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+    assert result.returncode == 2 and "--expect-version" in result.stderr, result.stderr
+    assert not (tmp_path / "work").exists()

@@ -59,6 +59,12 @@ TensorFlow를 넣은 Apple Silicon 빌드는 아직 실제로 만들어 보지 �
 ./build_app.sh
 ```
 
+PyInstaller 앞에 `tools/write_build_info.py`가 `build/build_info.json`(버전·커밋·빌드 시각·플랫폼)을 만들고, spec이 앱의
+`Contents/Resources/`에 넣습니다 (창 제목·Help → 정보에 보이는 버전, 앱 `Info.plist`의 `CFBundleShortVersionString`).
+버전은 git 태그로 정합니다: HEAD에 `vX.Y.Z` 태그가 있고 작업 폴더가 깨끗하면 `X.Y.Z`(배포판), 아니면
+`<가장 큰 vX.Y.Z>+<커밋 7자리>`(태그가 없으면 `0.0.0+…`, 커밋 안 된 변경이 있으면 끝에 `.dirty`) — 정보 창에 "(시험 빌드)".
+git 저장소가 아닌 폴더에서는 버전을 정할 수 없어 빌드가 멈춥니다.
+
 빌드가 끝나면 두 가지 검사를 하고, 하나라도 실패하면 빌드 스크립트가 실패로 끝납니다.
 
 1. `check_min_macos.py` — 앱 안의 모든 바이너리
@@ -78,10 +84,14 @@ TensorFlow를 넣은 Apple Silicon 빌드는 아직 실제로 만들어 보지 �
 배포 전에 빌드된 앱으로 실행 시험도 해 보세요 (화면 없이 공유 설정·작품 목록·OCR·애니매틱2·내보내기·병합을 실제 앱 코드로 실행):
 
 ```bash
-~/coding/p310_tf/bin/python ci/make_test_data.py --share-root /tmp/yc --mac-root /tmp/yc --workdir /tmp/yc_smoke
+VERSION="$(~/coding/p310_tf/bin/python -c 'import json; print(json.load(open("build/build_info.json"))["version"])')"
+~/coding/p310_tf/bin/python ci/make_test_data.py --share-root /tmp/yc --mac-root /tmp/yc --workdir /tmp/yc_smoke --expect-version "$VERSION"
 QT_QPA_PLATFORM=offscreen YESONCHECK_CONFIG_DIR=/tmp/yc/.yesoncheck \
   dist/YesonCheck_Autocut_<Intel|AppleSilicon>.app/Contents/MacOS/YesonCheck_Autocut --smoke-test /tmp/yc_smoke
 ```
+
+`--expect-version`: 앱이 읽은 버전(앱 안의 `build_info.json`)이 이번 빌드의 `build/build_info.json`과 같고 창 제목에 보이는지
+`앱 버전` 항목으로 확인합니다.
 
 종료 코드 0, `/tmp/yc_smoke/smoke_result.json`의 `"ok": true`, `애니매틱2 (TransNetV2)` 항목의 `"cuts": [0, 30, 60]`이면 정상입니다
 (`/tmp/yc`·`/tmp/yc_smoke`가 이미 있으면 지우고 다시 만드세요).
@@ -89,7 +99,7 @@ QT_QPA_PLATFORM=offscreen YESONCHECK_CONFIG_DIR=/tmp/yc/.yesoncheck \
 빌드가 끝나면 `dist/YesonCheck_Autocut_<Intel|AppleSilicon>.commit.txt`에 이 빌드의 출처가 남습니다:
 `commit`(빌드를 시작할 때의 `git rev-parse HEAD`), `tree`(`clean` 또는 커밋 안 된 변경이 있었으면 `dirty`), 빌드 시각, dmg 이름.
 `dirty` 빌드는 커밋과 내용이 다를 수 있으니 배포하지 말고, 커밋한 뒤 다시 빌드하세요.
-git 저장소가 아닌 폴더(직접 복사한 폴더)에서 빌드하면 경고를 내고 커밋을 "알 수 없음"으로 적습니다.
+git 저장소가 아닌 폴더(직접 복사한 폴더)에서는 버전을 정할 수 없어 빌드하지 않습니다.
 
 ## 3. 배포
 
@@ -109,7 +119,9 @@ git 저장소가 아닌 폴더(직접 복사한 폴더)에서 빌드하면 경�
 - Windows lock은 `--override requirements-build-windows.overrides.txt`(protobuf 3.20.3)와 함께 설치해야 합니다:
   paddle 2.6.2 Windows 휠은 protobuf <=3.20.2를, TensorFlow 2.15는 >=3.20.3을 요구해 덮어쓰지 않으면 uv가 설치를 거부합니다.
 - TensorFlow는 import할 때 msvcp140.dll·msvcp140_1.dll을 찾습니다. spec이 두 DLL을 `_internal` 맨 위에 넣고(의존성 분석에 없으면 빌드 PC의 System32에서), 워크플로가 있는지 확인합니다.
-- 결과: 실행 기록 페이지 아래 **Artifacts**의 `YesonCheck_Setup_Windows_<커밋 7자리>` 하나 (설치 파일 `YesonCheck_Setup_<커밋>.exe`를 담은 zip). 14일 보관. **GitHub Release에는 올리지 않습니다.**
+- 버전: Mac과 같이 `tools/write_build_info.py`가 git 태그로 정합니다 (체크아웃은 `fetch-depth: 0` — 태그까지 받음). 설치 파일 이름 꼬리
+  `<file_tag>`는 배포판(`vX.Y.Z` 태그)이면 `X.Y.Z`, 아니면 커밋 7자리. 두 실행 시험(빌드된 exe·설치된 exe)이 `--expect-version`으로 앱의 버전도 확인합니다.
+- 결과: 실행 기록 페이지 아래 **Artifacts**의 `YesonCheck_Setup_Windows_<file_tag>` 하나 (설치 파일 `YesonCheck_Setup_<file_tag>.exe`를 담은 zip). 14일 보관. **GitHub Release에는 올리지 않습니다.**
   폴더째 받은 앱(`YesonCheck_Autocut_Windows_<커밋>`)은 2026-10-15부터 올리지 않습니다(사용자 요청 — 설치 파일만 씀).
-- Windows PC에서 직접 빌드하려면: Python 3.10 + uv 설치 → `uv venv .venv --python 3.10 --managed-python` → `uv pip install --python .venv\Scripts\python.exe -r requirements-build-windows.lock --override requirements-build-windows.overrides.txt` → opencv contrib 재설치(워크플로 참고) → `./fetch_ffmpeg_windows.ps1` → `.venv\Scripts\python.exe -m PyInstaller --clean -y YesonCheck_Autocut.spec`.
+- Windows PC에서 직접 빌드하려면: Python 3.10 + uv 설치 → `uv venv .venv --python 3.10 --managed-python` → `uv pip install --python .venv\Scripts\python.exe -r requirements-build-windows.lock --override requirements-build-windows.overrides.txt` → opencv contrib 재설치(워크플로 참고) → `./fetch_ffmpeg_windows.ps1` → `.venv\Scripts\python.exe tools\write_build_info.py --out build\build_info.json` → `.venv\Scripts\python.exe -m PyInstaller --clean -y YesonCheck_Autocut.spec`.
 - 배포·첫 설정은 내부 문서 저장소(yesoncheck-internal)의 `docs/windows-deploy.md`.

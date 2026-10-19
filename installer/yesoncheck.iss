@@ -1,8 +1,9 @@
 ; YesonCheck Windows 설치 파일 (Inno Setup 6)
 ;
 ; CI(windows-build.yml)가 PyInstaller onedir 빌드(dist\YesonCheck_Autocut)를 만든 뒤
-; 이 스크립트로 Setup.exe 하나로 묶는다. 버전 정보는 CI가 커맨드라인에서 넘긴다:
-;   ISCC /DAppVersion=1.2.3 /DAppSha=abcdef1 installer\yesoncheck.iss
+; 이 스크립트로 Setup.exe 하나로 묶는다. 버전 정보는 CI가 커맨드라인에서 넘긴다 (tools/write_build_info.py의
+; 버전과 file_tag — 배포판이면 둘 다 X.Y.Z, 아니면 1.1.0+0f4d3d7과 커밋 7자리):
+;   ISCC /DAppVersion=1.2.3 /DAppFileTag=1.2.3 installer\yesoncheck.iss
 ; 로컬에서 그냥 열어 컴파일할 수 있도록 기본값도 정의해 둔다.
 
 #define MyAppName "Yeson Checker"
@@ -12,8 +13,8 @@
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
-#ifndef AppSha
-  #define AppSha "dev"
+#ifndef AppFileTag
+  #define AppFileTag "dev"
 #endif
 
 ; Inno Setup이 Korean.isl을 들고 있는지 컴파일 타임에 확인 (없으면 영어만 제공)
@@ -55,9 +56,9 @@ SolidCompression=yes
 ; 삼도록 SourceDir을 한 단계 위로 돌린다 (dist\YesonCheck_Autocut\... 그대로 쓰기 위함)
 SourceDir=..
 ; OutputDir도 상대 경로면 SourceDir(저장소 루트) 기준이다 (Inno Setup 문서; CI에서 OutputDir=. 은
-; 저장소 루트에 만들어졌음) → 결과물이 installer\YesonCheck_Setup_<sha>.exe 로 만들어지도록 installer로 지정
+; 저장소 루트에 만들어졌음) → 결과물이 installer\YesonCheck_Setup_<file_tag>.exe 로 만들어지도록 installer로 지정
 OutputDir=installer
-OutputBaseFilename=YesonCheck_Setup_{#AppSha}
+OutputBaseFilename=YesonCheck_Setup_{#AppFileTag}
 
 UninstallDisplayIcon={app}\{#MyAppExeName}
 #ifexist "..\icon.ico"

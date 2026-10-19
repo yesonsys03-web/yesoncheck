@@ -2,7 +2,8 @@
 
 화면 없이(QT_QPA_PLATFORM=offscreen) 실제 앱 코드로 공유 설정·작품 목록·영상 열기·OCR·내보내기·병합을
 실행하고 결과를 <작업 폴더>/smoke_result.json에 쓴 뒤 종료 코드(0 성공, 1 실패)로 알린다.
-작업 폴더의 smoke_config.json(ci/make_test_data.py가 만듦)에 고를 작품·시즌·job과 기대 파일 수가 있다.
+작업 폴더의 smoke_config.json(ci/make_test_data.py가 만듦)에 고를 작품·시즌·job과 기대 파일 수가 있다
+(빌드된 앱 시험이면 기대 버전 expect_version도 — 앱이 읽은 build_info.json의 버전과 창 제목을 확인).
 대화상자는 띄우지 않고 기록하며, 오류·경고 대화상자가 하나라도 나오면 실패로 본다.
 """
 
@@ -32,6 +33,20 @@ def ocr_model_files(base_dir):
     )
     assert files, f"OCR 모델 폴더가 비어 있습니다: {whl}"
     return files
+
+
+def app_version(expected, window_title):
+    """빌드된 앱이 읽은 빌드 정보(build_info.json)의 버전이 expected이고 창 제목에 보이는지 → 빌드 정보 (dict)."""
+    import dataclasses
+
+    from yesoncheck import build_info
+
+    info = build_info.current()
+    assert info is not None, "소스 실행에는 빌드 정보(build_info.json)가 없습니다 (기대 버전은 빌드된 앱에서만 확인)"
+    assert info.version == expected, f"앱 버전 {info.version} (기대 {expected})"
+    assert window_title.split(" — ")[0] == build_info.title_base(), \
+        f"창 제목 {window_title!r}에 버전이 없습니다 (기대 {build_info.title_base()!r})"
+    return dataclasses.asdict(info)
 
 
 # 애니매틱2 시험 영상(write_three_shot_clip)에서 TransNetV2가 찾아야 할 씬 시작 프레임
@@ -265,6 +280,8 @@ def run(workdir):
         return finish(bool(listed))
 
     player = VideoPlayer()  # 기존 실행 시험: 동기 생성자(공유 설정을 여기서 읽음)
+    if "expect_version" in config:  # make_test_data.py --expect-version (빌드된 앱)
+        check("앱 버전", lambda: app_version(config["expect_version"], player.windowTitle()))
     files = check("공유 설정", shared_config_ok) and check("작품 목록", work_listing)
     video = files[0] if files else None
 

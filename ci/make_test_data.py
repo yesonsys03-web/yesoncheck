@@ -52,7 +52,11 @@ def main():
     parser.add_argument("--dead-share",
                         help="자동 연결 시험: 서버가 없는 기억된 네트워크 드라이브의 UNC (CI가 등록) — 실행 시험이 "
                              "실패하지 않고 공유 문제로 알렸는지 확인")
+    parser.add_argument("--expect-version",
+                        help="빌드된 앱의 버전 (기본 시나리오만) — 실행 시험이 앱이 읽은 build_info.json의 버전·창 제목을 확인")
     args = parser.parse_args()
+    if args.expect_version is not None and (not args.expect_version or args.auto_connect):
+        parser.error("--expect-version은 빈 값이 아닌 버전으로, 기본 시나리오(--auto-connect 없이)에만 씁니다")
 
     ffmpeg = external_tools.ffmpeg_path()
     if args.auto_connect:
@@ -76,6 +80,8 @@ def main():
         smoke_config.update({"scenario": "auto_connect", "mac_prefix": args.mac_root})
         if args.dead_share:
             smoke_config["dead_share"] = args.dead_share
+    if args.expect_version is not None:
+        smoke_config["expect_version"] = args.expect_version
     write_json(os.path.join(args.workdir, "smoke_config.json"), smoke_config)
     if args.settings and args.auto_connect:
         if os.path.exists(args.settings):

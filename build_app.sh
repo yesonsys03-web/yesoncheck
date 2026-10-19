@@ -29,10 +29,14 @@ if [ "$(git rev-parse --show-toplevel 2>/dev/null)" = "$(pwd -P)" ]; then
         BUILD_TREE="clean"
     fi
 else
-    echo "경고: git 저장소가 아니어서 빌드한 커밋을 기록할 수 없습니다 (.commit.txt에 그대로 적음)"
-    BUILD_COMMIT="알 수 없음 (git 저장소가 아님)"
-    BUILD_TREE="알 수 없음"
+    # 버전은 git 태그로 정하므로(tools/write_build_info.py) git 저장소가 아니면 빌드하지 않음
+    echo "git 저장소의 맨 위가 아니어서 버전을 정할 수 없습니다: $(pwd -P) (git clone한 폴더에서 빌드하세요)"
+    exit 1
 fi
+# 빌드 정보(build/build_info.json: 버전·커밋·빌드 시각·플랫폼) — spec이 앱에 넣음. 버전은 git 태그로 정하고
+# git이 실패하면 멈춤. 표준 출력은 파일 이름 꼬리(file_tag: 배포판이면 X.Y.Z, 아니면 커밋 7자리) 한 줄
+echo "빌드 정보 만들기 (tools/write_build_info.py)..."
+"$PY" tools/write_build_info.py --out build/build_info.json
 echo "빌드 시작 (YesonCheck_Autocut.spec, $ARCH)..."
 "$PY" -m PyInstaller --clean -y YesonCheck_Autocut.spec
 OUT="dist/YesonCheck_Autocut_${LABEL}.app"

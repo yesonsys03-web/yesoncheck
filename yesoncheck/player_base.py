@@ -65,7 +65,7 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck.video_widget import CustomVideoWidget
-from yesoncheck import external_tools, image_io, paths, shared_config, timing_log, video_list
+from yesoncheck import build_info, external_tools, image_io, paths, shared_config, timing_log, video_list
 from yesoncheck.slider_style import jump_to_click
 from yesoncheck.window_layout import ElidedLabel, InfoRowLayout, VerticalScrollArea, startup_geometry
 # 무거운 모듈들은 lazy import로 변경 (실제 사용 시점에만 로드)
@@ -181,7 +181,7 @@ class VideoPlayerBase(QMainWindow):
         self._shared_config_closed = False  # 창이 닫힘 → 늦게 온 공유 설정 결과는 버림
         # job 목록 정렬의 locale (이름 순서): 시작할 때 GUI 스레드에서 한 번 — 목록 다시 읽기 스레드의 정렬은 locale을 바꾸지 않음
         video_list.set_sort_locale()
-        self.setWindowTitle("Yeson Checker")
+        self.setWindowTitle(build_info.title_base())
         self.setGeometry(100, 100, 1080, 720)
 
         # 메뉴바 생성 (GPU 확인 포함 — 드라이버에 따라 느릴 수 있음)
@@ -4225,10 +4225,15 @@ QMessageBox {
         """프로그램 정보를 표시합니다."""
         today = datetime.date.today()
         today_str = today.strftime("%Y년 %m월 %d일")
+        # 버전: 빌드된 앱은 build_info.json의 버전·커밋 7자리·빌드 날짜, 소스 실행은 "개발(소스)"
+        info = build_info.current()
+        version_text = build_info.display_version()
+        if info is not None:
+            version_text += f" · 커밋 {info.commit[:7]} · {info.built[:10]} 빌드"
         about_text = f"""
 <h2>Yeson Checker</h2>
 <p><b>애니매틱 자르기 버전</b></p>
-<p><b>버전:</b> 2025.11</p>
+<p><b>버전:</b> {version_text}</p>
 <p>동영상 재생 및 OCR 분석 도구</p>
 <p>{today_str}까지 기록</p>
 <p>© 2025 Yeson Entertainment</p>

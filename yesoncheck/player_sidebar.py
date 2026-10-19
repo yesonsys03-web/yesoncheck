@@ -38,10 +38,10 @@ from PyQt5.QtWidgets import (
 from yesoncheck.workers import ThumbnailLoaderWorker, ThumbnailWorker
 import traceback
 
-from yesoncheck import path_map_setup, paths, shared_config, thumbnails, timing_log, video_list
+from yesoncheck import build_info, path_map_setup, paths, shared_config, thumbnails, timing_log, video_list
 from yesoncheck.path_map_setup_dialog import PathMapSetupDialog
 
-LOADING_TITLE = "Yeson Checker — 공유 설정 불러오는 중…"
+LOADING_TITLE_SUFFIX = " — 공유 설정 불러오는 중…"  # 불러오는 동안 창 제목: build_info.title_base() 뒤에 붙임
 LOADING_NOTICE = "공유 설정을 불러오는 중입니다. 잠시 뒤 다시 시도하세요."
 LOADING_WORK_ITEM = "공유 설정 불러오는 중…"  # 불러오는 동안 작품 목록의 첫 항목 ("작품선택" 대신)
 WORK_PLACEHOLDER = "작품선택"
@@ -1296,7 +1296,7 @@ class PlayerSidebarMixin:
         if self._shared_config_load is not None:
             raise RuntimeError("공유 설정을 이미 불러오는 중입니다 (start_shared_config_load를 두 번 부름)")
         self.shared_config_loading = True
-        self.setWindowTitle(LOADING_TITLE)
+        self.setWindowTitle(build_info.title_base() + LOADING_TITLE_SUFFIX)
         timing_log.startup("공유 설정 불러오기 시작 (백그라운드)")
         load = SharedConfigLoad()
         load.loaded.connect(self._on_shared_config_loaded)  # 창은 GUI 스레드 → 대기열을 거쳐 GUI 스레드에서 실행
@@ -1351,9 +1351,9 @@ class PlayerSidebarMixin:
 
     def _update_shared_config_title(self):
         if getattr(self, "shared_config_loading", False):
-            self.setWindowTitle(LOADING_TITLE)
+            self.setWindowTitle(build_info.title_base() + LOADING_TITLE_SUFFIX)
             return
-        title = "Yeson Checker"
+        title = build_info.title_base()  # 빌드된 앱은 "Yeson Checker 1.1.0", 소스 실행은 "Yeson Checker"
         if self.shared_config_problem:
             title += " — 공유 설정 오류 (작품 목록 없음)"
         if getattr(self, "path_map_problem", None):

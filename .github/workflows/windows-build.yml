@@ -19,6 +19,9 @@ jobs:
       PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v7
+        with:
+          # 버전(tools/write_build_info.py)을 git 태그로 정함 → 전체 기록과 태그를 받음 (기본은 커밋 하나만)
+          fetch-depth: 0
 
       - uses: astral-sh/setup-uv@v10.3.0
 
@@ -44,6 +47,21 @@ jobs:
 
       - name: 소스 시험 (pytest)
         run: .venv\Scripts\python.exe -m pytest tests -v -rs
+
+      - name: 빌드 정보 (버전·커밋 → build\build_info.json)
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          # 버전: HEAD에 vX.Y.Z 태그가 있고 작업 폴더가 깨끗하면 X.Y.Z, 아니면 <가장 큰 vX.Y.Z>+<커밋 7자리>
+          # 표준 출력 한 줄 = 파일 이름 꼬리 file_tag (배포판이면 X.Y.Z, 아니면 커밋 7자리). spec이 JSON을 앱에 넣음
+          $fileTag = .venv\Scripts\python.exe tools\write_build_info.py --out build\build_info.json
+          if (-not ($fileTag -is [string]) -or -not ($fileTag -match '^(\d+\.\d+\.\d+|[0-9a-f]{7})$')) {
+            throw "write_build_info.py의 출력이 file_tag 한 줄이 아닙니다: $fileTag"
+          }
+          $version = (Get-Content build\build_info.json -Raw -Encoding utf8 | ConvertFrom-Json).version
+          if (-not $version) { throw "build\build_info.json에 version이 없습니다" }
+          "INSTALLER_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "INSTALLER_FILE_TAG=$fileTag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "빌드 버전: $version (파일 이름 꼬리 $fileTag)"
 
       - name: PyInstaller 빌드
         run: .venv\Scripts\python.exe -m PyInstaller --clean -y YesonCheck_Autocut.spec
@@ -87,24 +105,11 @@ jobs:
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           $env:PATH = "$PWD\vendor\ffmpeg\windows;$env:PATH"
-          .venv\Scripts\python.exe ci\make_test_data.py --share-root $env:YC_TEST_SHARE_ROOT --mac-root /Volumes/yc_test --unc $env:YC_TEST_UNC --workdir C:\yc_smoke --settings "$env:APPDATA\YesonCheck\settings.json"
+          # --expect-version: 이 시험 데이터를 쓰는 두 실행 시험(빌드된 exe·설치된 exe)이 앱의 버전·창 제목도 확인
+          .venv\Scripts\python.exe ci\make_test_data.py --share-root $env:YC_TEST_SHARE_ROOT --mac-root /Volumes/yc_test --unc $env:YC_TEST_UNC --workdir C:\yc_smoke --settings "$env:APPDATA\YesonCheck\settings.json" --expect-version $env:INSTALLER_VERSION
 
       - name: 실행 시험 (빌드된 exe)
         run: ./ci/run_smoke_test.ps1
-
-      - name: 설치 파일 버전 정보
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $true
-          $shortSha = "${{ github.sha }}".Substring(0, 7)
-          $ref = "${{ github.ref }}"
-          if ($ref -like "refs/tags/v*") {
-            $version = $ref.Substring("refs/tags/v".Length)
-          } else {
-            $version = "0.0.0-$shortSha"
-          }
-          "INSTALLER_SHA=$shortSha" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "INSTALLER_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "설치 파일 버전: $version (커밋 $shortSha)"
 
       - name: Inno Setup(ISCC) 찾기
         run: |
@@ -131,8 +136,8 @@ jobs:
       - name: 설치 파일 빌드 (Inno Setup)
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
-          & $env:ISCC_PATH /DAppVersion="$env:INSTALLER_VERSION" /DAppSha="$env:INSTALLER_SHA" installer\yesoncheck.iss
-          $setupExe = "installer\YesonCheck_Setup_$($env:INSTALLER_SHA).exe"
+          & $env:ISCC_PATH /DAppVersion="$env:INSTALLER_VERSION" /DAppFileTag="$env:INSTALLER_FILE_TAG" installer\yesoncheck.iss
+          $setupExe = "installer\YesonCheck_Setup_$($env:INSTALLER_FILE_TAG).exe"
           if (-not (Test-Path $setupExe)) { throw "설치 파일이 만들어지지 않았습니다: $setupExe" }
           "SETUP_EXE=$setupExe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "설치 파일 생성됨: $setupExe"
@@ -211,7 +216,7 @@ jobs:
       - name: 설치 파일 artifact 이름
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
-          "SETUP_ARTIFACT_NAME=YesonCheck_Setup_Windows_$($env:INSTALLER_SHA)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "SETUP_ARTIFACT_NAME=YesonCheck_Setup_Windows_$($env:INSTALLER_FILE_TAG)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - uses: actions/upload-artifact@v7
         with:

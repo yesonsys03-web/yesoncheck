@@ -5,8 +5,10 @@
 
 from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
 import hashlib
+import json
 import os
 import platform
+import re
 import sys
 import sysconfig
 
@@ -70,6 +72,34 @@ for _name in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):
     if not os.path.isfile(_path):
         raise SystemExit(f"[spec] {_name}가 없습니다: {_path}")
     license_datas.append((_path, '.'))
+
+# 빌드 정보(버전·커밋·빌드 시각·플랫폼): tools/write_build_info.py가 PyInstaller 앞에 만든 build/build_info.json을
+# 앱 맨 위에 넣음 (Mac: Contents/Resources, Windows: _internal — yesoncheck/build_info.py가 sys._MEIPASS에서 읽음).
+# 같은 버전의 X.Y.Z 부분을 Mac 번들 Info.plist와 Windows exe 파일 버전 정보에도 넣음 (아래 BUNDLE·EXE)
+BUILD_INFO_PATH = os.path.join(project_root, 'build', 'build_info.json')
+if not os.path.isfile(BUILD_INFO_PATH):
+    raise SystemExit("[spec] build/build_info.json이 없습니다 — tools/write_build_info.py를 먼저 실행")
+with open(BUILD_INFO_PATH, encoding='utf-8') as _fh:
+    BUILD_VERSION = json.load(_fh)['version']
+_version_match = re.match(r'(\d+)\.(\d+)\.(\d+)(\+|$)', BUILD_VERSION)
+if not _version_match:
+    raise SystemExit(f"[spec] build/build_info.json의 버전 형식이 다릅니다 (X.Y.Z 또는 X.Y.Z+<커밋>): {BUILD_VERSION!r}")
+BUILD_VERSION_XYZ = '.'.join(_version_match.groups()[:3])  # 1.1.0+0f4d3d7 → 1.1.0
+print(f"[spec] 빌드 버전: {BUILD_VERSION} (번들·파일 버전 {BUILD_VERSION_XYZ}, {BUILD_INFO_PATH})")
+
+# Windows exe 파일 버전 정보: windows_version_info.txt(템플릿)의 자리 표시자를 채워 build/windows_version_info.txt로
+WINDOWS_VERSION_INFO = None
+if IS_WINDOWS:
+    with open(os.path.join(project_root, 'windows_version_info.txt'), encoding='utf-8') as _fh:
+        _template = _fh.read()
+    for _placeholder in ('__VERSION_TUPLE__', '__VERSION__'):
+        if _placeholder not in _template:
+            raise SystemExit(f"[spec] windows_version_info.txt에 자리 표시자 {_placeholder}가 없습니다")
+    WINDOWS_VERSION_INFO = os.path.join(project_root, 'build', 'windows_version_info.txt')
+    with open(WINDOWS_VERSION_INFO, 'w', encoding='utf-8') as _fh:
+        _fh.write(_template.replace('__VERSION_TUPLE__', '(%s, %s, %s, 0)' % _version_match.groups()[:3])
+                  .replace('__VERSION__', BUILD_VERSION))
+    print(f"[spec] Windows 파일 버전 정보: {WINDOWS_VERSION_INFO}")
 
 # 기본 라이브러리 수집 (collect_all 사용)
 cv2_binaries, cv2_datas, cv2_hiddenimports = [], [], []
@@ -187,7 +217,7 @@ a = Analysis(
         (os.path.join(p310_site_packages, 'paddle'), 'paddle'),
         # apted 모듈 추가 (PaddleOCR 분석에 필수)
         (os.path.join(project_root, 'apted'), 'apted'),
-    ] + cv2_datas + transnet_datas + license_datas + scenedetect_datas + paddleocr_datas + paddle_datas + skimage_datas + imageio_datas + cython_datas + ([] if IS_WINDOWS else [('Info.plist', '.')]),
+    ] + [(BUILD_INFO_PATH, '.')] + cv2_datas + transnet_datas + license_datas + scenedetect_datas + paddleocr_datas + paddle_datas + skimage_datas + imageio_datas + cython_datas + ([] if IS_WINDOWS else [('Info.plist', '.')]),
     hiddenimports=[
         # apted 모듈 (PaddleOCR이 사용하는 fallback 구현)
         'apted',
@@ -336,7 +366,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon='icon.ico' if IS_WINDOWS else None,
-    version='windows_version_info.txt' if IS_WINDOWS else None,
+    version=WINDOWS_VERSION_INFO,  # Windows만 (위에서 build_info.json의 버전으로 채운 파일)
 )
 
 coll = COLLECT(
@@ -355,7 +385,9 @@ if not IS_WINDOWS:
         name='YesonCheck_Autocut.app',
         icon='icon.icns',
         bundle_identifier='com.yeson.check',
-        # BUNDLE은 dict만 병합함 (파일 경로 문자열은 무시됨)
-        info_plist={'LSMinimumSystemVersion': MIN_MACOS},
+        # BUNDLE은 dict만 병합함 (파일 경로 문자열은 무시됨). 번들 버전은 build_info.json 버전의 X.Y.Z 부분
+        info_plist={'LSMinimumSystemVersion': MIN_MACOS,
+                    'CFBundleShortVersionString': BUILD_VERSION_XYZ,
+                    'CFBundleVersion': BUILD_VERSION_XYZ},
     )
 
