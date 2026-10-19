@@ -67,6 +67,7 @@ from PyQt5.QtWidgets import (
 from yesoncheck.video_widget import CustomVideoWidget
 from yesoncheck import build_info, external_tools, image_io, paths, shared_config, timing_log, video_list
 from yesoncheck.slider_style import jump_to_click
+from yesoncheck.update_banner import UpdateBanner
 from yesoncheck.window_layout import ElidedLabel, InfoRowLayout, VerticalScrollArea, startup_geometry
 # 무거운 모듈들은 lazy import로 변경 (실제 사용 시점에만 로드)
 # from yesoncheck.workers import OCRWorker, OCRExportWorker, SceneDetectWorker
@@ -367,6 +368,8 @@ QMessageBox {
         started = time.perf_counter()
         self.initUI()
         timing_log.startup(f"창: 화면 구성 끝 ({timing_log.since(started)})")
+        # 업데이트 확인 상태·3시간 타이머·알림 띠 버튼 (확인은 공유 설정을 불러온 뒤 시작 — PlayerUpdateMixin)
+        self.setup_updates()
 
         self.loopEnabled = False
         self.filename_a = ""
@@ -1220,6 +1223,10 @@ QPushButton:pressed {
         mainSplitter.setStretchFactor(0,0); mainSplitter.setStretchFactor(1,0); mainSplitter.setStretchFactor(2,1)
         mainSplitter.setSizes([200, 220, 1000]); layout = QVBoxLayout(); layout.addWidget(mainSplitter)  # middle 영역 초기 너비를 220으로 증가하여 OCR 버튼 텍스트가 잘리지 않도록
         layout.addLayout(controlLayoutRight); layout.setContentsMargins(0,0,0,0); layout.setSpacing(5)
+        # 새 버전 알림 띠: 맨 위 전체 너비, 알릴 것이 있을 때만 보임 (숨긴 동안은 자리·간격도 차지하지 않음).
+        # 글자는 좁으면 …로 줄여 창의 최소 너비를 늘리지 않음 (update_banner)
+        self.update_banner = UpdateBanner()
+        layout.insertWidget(0, self.update_banner)
         widget = QWidget(); widget.setLayout(layout); self.setCentralWidget(widget)
         self.setAcceptDrops(True)
         self.control_widgets = [
@@ -3990,6 +3997,10 @@ QMessageBox {
             run_build_action = help_menu.addAction('실행 및 빌드')
             run_build_action.triggered.connect(self.show_run_and_build_dialog)
 
+        # 업데이트 확인 (NAS·GitHub — 결과 창을 언제나 보임, PlayerUpdateMixin)
+        update_check_action = help_menu.addAction('업데이트 확인…')
+        update_check_action.triggered.connect(lambda: self.start_update_check(manual=True))
+
         # About 액션
         about_action = help_menu.addAction('정보')
         about_action.triggered.connect(self.show_about)
@@ -4338,6 +4349,8 @@ QMessageBox {
             scan, self._sidebar_scan = getattr(self, '_sidebar_scan', None), None
             if scan is not None:
                 release_worker(scan, "사이드바 목록 다시 읽기")
+            # 업데이트 확인: 3시간 타이머를 멈추고, 실행 중인 확인은 결과를 버린 채 끝날 때까지 붙잡아 둠
+            self.stop_update_checks()
 
             # 실행 중인 내보내기·병합 중지 (ffmpeg 종료)
             self.stop_running_jobs()

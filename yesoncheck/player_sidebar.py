@@ -1324,6 +1324,8 @@ class PlayerSidebarMixin:
             f"작품 {len(state.work_paths)}개, 문제 {problem}"
         )
         self.resolve_shared_config_problem(works_not_opening=state.works_not_opening)
+        # 새 버전 확인: 공유 설정(NAS의 updates 폴더 위치)을 안 뒤 처음 (뒤 스레드), 그 뒤 3시간마다 — PlayerUpdateMixin
+        self.start_update_check(manual=False)
 
     def wait_for_shared_config_load(self, timeout_ms):
         """(창을 닫을 때) 실행 중인 공유 설정 불러오기를 timeout_ms까지만 기다립니다 → 끝났으면 True.
