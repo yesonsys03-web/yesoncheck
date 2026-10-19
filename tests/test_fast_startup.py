@@ -361,12 +361,16 @@ def test_launch_shows_window_then_loads_shared_config(qapp, monkeypatch):
         def start_shared_config_load(self):
             events.append("load")
 
+        def handle_update_startup(self):
+            events.append("update")
+
     created = []
     monkeypatch.setattr(app_module, "VideoPlayer", lambda **kwargs: created.append(FakePlayer(**kwargs)) or created[-1])
     assert app_module.launch(["yesoncheck"]) == 0
     assert events == [("init", {"load_shared_config": False}), "show"]  # 불러오기는 창을 보인 뒤 이벤트 루프에서
     wait_until(lambda: "load" in events)
-    assert events[-1] == "load"
+    # 업데이트 결과(지난번 업데이트의 기록 — 로컬 파일만)는 창을 보인 뒤 맨 먼저: 새 버전의 "잘 켜짐" 표시를 바로 남김
+    assert events[1:] == ["show", "update", "load"]
     created[0].close()
 
 
@@ -389,6 +393,9 @@ def test_launch_opens_command_line_file_after_window_is_shown(qapp, monkeypatch,
         def start_shared_config_load(self):
             events.append("load")
 
+        def handle_update_startup(self):
+            events.append("update")
+
         def open_file(self, video_type, file_path):
             events.append(("open", video_type, file_path))
 
@@ -397,15 +404,15 @@ def test_launch_opens_command_line_file_after_window_is_shown(qapp, monkeypatch,
     try:
         assert app_module.launch(["yesoncheck", str(video)]) == 0
         assert events == ["show"]  # launch 안에서는 열지 않음
-        wait_until(lambda: len(events) == 3)
-        assert events == ["show", "load", ("open", "A", str(video))]
+        wait_until(lambda: len(events) == 4)
+        assert events == ["show", "update", "load", ("open", "A", str(video))]
 
         events.clear()
         missing = str(tmp_path / "없음.mov")
         assert app_module.launch(["yesoncheck", missing]) == 0
         wait_until(lambda: "load" in events)
         QApplication.processEvents()
-        assert events == ["show", "load"]
+        assert events == ["show", "update", "load"]
         assert f"File does not exist: {missing}" in capsys.readouterr().out
     finally:
         for player in created:

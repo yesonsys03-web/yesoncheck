@@ -218,6 +218,9 @@ def launch(argv=None):
     player.show()
     splash.finish(player)
     timing_log.startup("창 표시")
+    # 지난 업데이트의 결과(이 컴퓨터의 기록 파일만 — NAS·인터넷 없음): 창을 보인 뒤 맨 먼저 — 새 버전이면 "잘 켜짐" 표시를
+    # 바로 남겨 업데이트 도우미가 기다림을 끝냄
+    QTimer.singleShot(0, player.handle_update_startup)
     # 공유 설정(설정 폴더·작품 경로·변환표)은 창을 보인 뒤 백그라운드에서 읽고, 끝나면 문제를 알림
     # (스플래시가 닫힌 뒤라 대화상자가 가려지지 않음)
     QTimer.singleShot(0, player.start_shared_config_load)

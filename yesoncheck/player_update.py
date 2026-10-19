@@ -1,4 +1,5 @@
-"""업데이트 확인 일정·결과 보이기 (PlayerUpdateMixin): 새 버전 알림 띠(update_banner)와 Help → '업데이트 확인…'.
+"""업데이트 (PlayerUpdateMixin): 확인 일정·결과(새 버전 알림 띠 update_banner, Help → '업데이트 확인…'), '업데이트'를
+누른 뒤의 받기·도우미에 넘기기, 다시 켜진 앱의 결과 알림.
 
 확인(updates.check — NAS·GitHub의 latest.json 읽기)은 언제나 뒤 스레드(UpdateCheck)에서 한다. 자동 확인은 공유 설정을
 불러온 뒤(_on_shared_config_loaded) 한 번, 그 뒤 켜 둔 동안 3시간마다. 소스 실행(build_info.current()가 None)은
@@ -12,11 +13,29 @@
   자동 확인이면 기록에만.
 - 오류(error): 자동 확인은 창 — 한 실행에 같은 문제는 한 번 ((소스, 첫 줄). 트레이스백은 첫 줄이 늘 같아 마지막 줄).
 - 수동 확인: 언제나 결과 창 — 소스마다 찾은 버전·예상된 문제·오류 전부 (오류가 있으면 경고 창).
+
+'업데이트'를 누르면 (start_update, 설계 5-2) — 누른 때의 update_offer를 끝까지 씀 (그 뒤의 확인 결과가 바꾸지 않음):
+1. (Mac) 바꿀 수 없는 위치(dmg 안·격리 위치)에서 켠 앱이면 "업데이트할 수 없음" 안내 창, 받지 않음.
+2. 진행 중인 작업(running_jobs — 창 닫기가 멈추는 작업)이 있으면 멈추고 업데이트할지 물음. 작업은 넘긴 뒤 앱을 끝낼 때
+   창 닫기가 멈춤 — 받다 실패·취소하면 그대로 이어짐. 받는 동안 새로 시작한 작업은 넘기기 전에 다시 물음.
+3. 여유 공간 확인(update_install.NEEDED_BYTES) → 뒤 스레드(UpdateDownload)가 <state_dir>/downloads에 받기(크기·sha256),
+   Mac은 이어서 dmg에서 새 앱을 준비("준비 중…"). 띠에 진행·[취소].
+4. 다 되면 업데이트 기록(write_pending) → 도우미(launch_helper_mac/windows) → 창을 닫고 앱을 끝냄. 도우미를 띄우지
+   못하면 기록을 지우고 실패 창, 앱은 그대로.
+실패는 "업데이트 실패" 창(출처 NAS/GitHub·위치·이유 — 예상 못 한 예외는 트레이스백) 뒤 띠를 다시 그 알림으로. 다른 곳에서
+저절로 받지 않음 — 다시 누르면 처음부터. 취소·창 닫기는 받던 것을 지우고 넘기지 않음. 단계마다 update_install.log.
+
+다시 켜진 앱 (handle_update_startup — 창을 보인 뒤 한 번, 이 컴퓨터의 파일만): 기록의 목표 버전이면 "잘 켜짐" 표시를
+남기고 띠에 잠깐 "{버전}로 업데이트했습니다", 예전 버전이 켜졌으면(도우미가 되돌림) "업데이트 실패" 창에 그 뒤의 기록.
 """
 
 import functools
+import os
+import shutil
 import sys
+import threading
 import traceback
+from dataclasses import dataclass
 
 from PyQt5.QtCore import QThread, QTimer, pyqtSignal
 from PyQt5.QtWidgets import QApplication, QMessageBox
@@ -31,6 +50,15 @@ NOTES_TITLE = "바뀐 점 — {version}"
 NO_NOTES = "(바뀐 점이 적혀 있지 않습니다)"
 _TRACEBACK_HEAD = "Traceback (most recent call last):"
 _UNEXPECTED_SOURCE = "확인"  # updates.check 자체가 예외를 올림 (소스 하나의 문제가 아님)
+UPDATE_FAILED_TITLE = "업데이트 실패"
+CANNOT_UPDATE_TITLE = "업데이트할 수 없음"
+BUSY_TITLE = "업데이트"
+BUSY_QUESTION = "진행 중인 작업({jobs})을 멈추고 업데이트할까요?"
+UPDATED_MESSAGE = "{version}로 업데이트했습니다"
+DOWNLOAD_TEXT = "{version} 받는 중 ({source})… {done} / {total} MB"
+STAGING_TEXT = "준비 중…"
+CANCELLING_TEXT = "취소하는 중…"
+DOWNLOADS_DIR_NAME = "downloads"  # <update_install.state_dir()>/downloads — 받은 설치 파일·dmg (한 번에 하나만 둠)
 
 
 class UpdateCheck(QThread):
@@ -70,6 +98,139 @@ class UpdateCheck(QThread):
     def _forget(self):
         self.wait()  # finished는 스레드가 끝나기 직전에 옴 → 완전히 끝날 때까지 (곧 끝남)
         UpdateCheck._running.discard(self)
+
+
+def download_text(version, source, done, total):
+    """받는 중인 띠의 글: "1.1.1 받는 중 (NAS)… 120.0 / 730.0 MB"."""
+    return DOWNLOAD_TEXT.format(version=version, source=source, done=f"{done / 1e6:,.1f}", total=f"{total / 1e6:,.1f}")
+
+
+def remove_prepared(path):
+    """받은 설치 파일·dmg 또는 준비한 앱(폴더)을 지움. 실패는 그대로 올림."""
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path)
+    else:
+        os.remove(path)
+
+
+def empty_folder(folder):
+    """folder를 (없으면 만들고) 비움 — 지난번에 받은 설치 파일, 앱이 받다 죽어 남은 .part."""
+    os.makedirs(folder, exist_ok=True)
+    for name in os.listdir(folder):
+        remove_prepared(os.path.join(folder, name))
+
+
+def _failure_text(exc):
+    """실패 창·기록의 이유: UpdateError(예상한 문제 — 무엇이 왜인지 적혀 있음)는 그 글, 그 밖은 트레이스백.
+    except 안에서 부름."""
+    if isinstance(exc, update_install.UpdateError):
+        return str(exc)
+    return traceback.format_exc()
+
+
+class UpdateDownload(QThread):
+    """업데이트 파일을 GUI 밖에서 받는 스레드: 받기 폴더(dest_dir)를 비우고 update_install.download(크기·sha256 확인),
+    Mac(app_path를 줌)이면 이어서 update_install.stage_mac으로 dmg에서 새 앱을 지금 앱 옆에 준비하고 dmg는 지움.
+    위젯은 건드리지 않음.
+
+    신호 (GUI 스레드로): progress(받은 바이트, 전체 바이트, 띠의 글 — 준비 중에는 전체 0 = 움직이는 막대), ready(Windows
+    설치 파일 또는 Mac 준비한 앱의 경로), failed(UpdateError의 글, 예상 못 한 예외는 트레이스백 — 로그(stderr)에도),
+    cancelled(). 넷 중 마지막 하나(ready·failed·cancelled)는 run()의 맨 끝.
+
+    cancel(): 멈추라고 알림 — 받기는 다음 조각에서 멈추고(.part를 지움), 중간에 멈출 수 없는 Mac 준비(hdiutil·ditto)는
+    끝난 뒤 준비한 앱을 지움. 다 받은 뒤에 본 취소도 받은 것을 지우고 cancelled (넘기지 않음).
+
+    UpdateCheck처럼 부모 없이 만들고 실행 중에는 _running에 붙잡아 둠. 창을 닫을 때 실행 중이면 cancel() 뒤 release_worker
+    (stop_update_download).
+    """
+
+    progress = pyqtSignal("qint64", "qint64", str)  # 파일은 2 GiB 미만이지만 32비트 int의 끝에 가까움 → 64비트
+    ready = pyqtSignal(str)
+    failed = pyqtSignal(str)
+    cancelled = pyqtSignal()
+    _running = set()
+
+    def __init__(self, location, entry, dest_dir, version, source, app_path=None):
+        super().__init__()
+        self._location = location  # NAS 경로 또는 URL (updates.asset_location)
+        self._entry = entry  # updates.FileEntry
+        self._dest_dir = dest_dir
+        self._version = version
+        self._source = source  # "NAS"·"GitHub" (띠의 글)
+        self._app_path = app_path  # Mac: 지금 앱 번들 (그 옆에 새 앱을 준비), Windows: None
+        self._cancel = threading.Event()
+        self.finished.connect(self._forget)
+
+    def start(self, *args):
+        UpdateDownload._running.add(self)
+        super().start(*args)
+
+    def cancel(self):
+        self._cancel.set()
+
+    def is_cancelled(self):
+        return self._cancel.is_set()
+
+    def run(self):
+        try:
+            prepared = self._download_and_prepare()
+        except update_install.Cancelled:
+            self.cancelled.emit()
+            return
+        except update_install.UpdateError as exc:
+            self.failed.emit(str(exc))
+            return
+        except Exception:
+            text = traceback.format_exc()
+            print(f"[업데이트 받기] 예상치 못한 오류:\n{text}", file=sys.stderr, flush=True)
+            self.failed.emit(text)
+            return
+        self.ready.emit(prepared)
+
+    def _download_and_prepare(self):
+        empty_folder(self._dest_dir)
+        self._report(0)
+        path = update_install.download(self._location, self._entry, self._dest_dir,
+                                       lambda done, _total: self._report(done), self._cancel.is_set)
+        if self._app_path is not None:
+            self.progress.emit(0, 0, STAGING_TEXT)
+            staged = update_install.stage_mac(path, self._app_path, self._version)
+            os.remove(path)  # 새 앱을 꺼낸 dmg는 더 쓰지 않음
+            path = staged
+        if self._cancel.is_set():  # 받기를 끝낸 뒤·준비하는 동안 취소 (준비는 중간에 멈출 수 없음)
+            remove_prepared(path)
+            raise update_install.Cancelled("받은 뒤 취소되었습니다")
+        return path
+
+    def _report(self, done):
+        total = self._entry.size
+        self.progress.emit(done, total, download_text(self._version, self._source, done, total))
+
+    def _forget(self):
+        self.wait()  # finished는 스레드가 끝나기 직전에 옴 → 완전히 끝날 때까지 (곧 끝남)
+        UpdateDownload._running.discard(self)
+
+
+@dataclass
+class _UpdateRun:
+    """'업데이트'를 누른 때 정한 것 — 그 뒤의 확인 결과가 바꾸지 않음. download: 받는 스레드 (시작한 뒤)."""
+
+    offer: updates.Offer
+    version: str  # 받는 버전 (latest.json의 version)
+    current: str  # 지금 버전 (build_info)
+    platform_key: str
+    location: str  # 받을 곳 (NAS 경로 또는 URL)
+    app_path: str = ""  # Mac: 지금 앱 번들, Windows: 설치 폴더 (update_install.running_app_location)
+    approved: tuple = ()  # 멈추고 업데이트하기로 한 작업 (워커)
+    download: UpdateDownload | None = None
+
+    @property
+    def mac(self):
+        return self.platform_key != "windows"
+
+    @property
+    def source(self):
+        return self.offer.result.source
 
 
 def _problem_key(text):
@@ -117,8 +278,11 @@ class PlayerUpdateMixin:
         self._update_check_timer = QTimer(self)
         self._update_check_timer.setInterval(self.UPDATE_CHECK_INTERVAL_MS)
         self._update_check_timer.timeout.connect(functools.partial(self.start_update_check, manual=False))
+        self._update_run = None  # 받는 중인 업데이트 (_UpdateRun) — 받기가 끝나 결과를 처리하면 None
         self.update_banner.notes_clicked.connect(self.show_update_notes)
+        self.update_banner.update_clicked.connect(self.start_update)
         self.update_banner.later_clicked.connect(self.dismiss_update_offer)
+        self.update_banner.cancel_clicked.connect(self.cancel_update)
 
     def start_update_check(self, manual: bool) -> None:
         """NAS·GitHub에서 새 버전을 뒤 스레드로 확인 (결과는 _on_update_checked). 바로 돌아옴.
@@ -290,3 +454,233 @@ class PlayerUpdateMixin:
         if check is not None:
             release_worker(check, "업데이트 확인")
             UpdateCheck._running.discard(check)  # 이제 release_worker가 붙잡음 (신호를 막아 finished로는 놓지 못함)
+
+    # ---- '업데이트'를 누른 뒤: 받기·넘기기 ----
+
+    def start_update(self) -> None:
+        """알림 띠의 '업데이트': 알리는 버전(누른 때의 update_offer — 끝까지 이것)을 받아 도우미에 넘기고 앱을 끝냄.
+        받기는 뒤 스레드 — 바로 돌아옴. 순서와 실패는 모듈 설명 ('업데이트'를 누르면)."""
+        offer = self._offered()
+        if self._update_run is not None:
+            raise RuntimeError(f"이미 {self._update_run.version}을 받는 중인데 '업데이트'가 불렸습니다")
+        info = build_info.current()
+        if info is None:
+            raise RuntimeError("소스 실행에서 '업데이트'가 불렸습니다 (알림 띠는 빌드된 앱에서만 보임)")
+        version = str(offer.manifest.version)
+        location = updates.asset_location(offer.result, offer.manifest, offer.entry)
+        run = _UpdateRun(offer, version, info.version, build_info.platform_key(), location)
+        update_install.log(f"업데이트 {version}: 시작 — 지금 {run.current}, {run.source}에서 받음 ({location})")
+        try:
+            run.app_path = update_install.running_app_location()
+        except Exception as exc:
+            self._show_update_failure(run, _failure_text(exc))
+            return
+        if run.mac:
+            reason = update_install.refuse_reason_mac(run.app_path)
+            if reason is not None:
+                update_install.log(f"업데이트 {version}: 이 자리의 앱은 바꿀 수 없음 ({run.app_path}) — {reason}")
+                QMessageBox.warning(self, CANNOT_UPDATE_TITLE, reason)
+                return
+        jobs = self.running_jobs()
+        if jobs:
+            if not self._confirm_stop_jobs(run, [label for label, _worker in jobs]):
+                return
+            run.approved = tuple(worker for _label, worker in jobs)
+        try:
+            state_dir = update_install.state_dir()
+            update_install.check_free_space(state_dir, update_install.NEEDED_BYTES[run.platform_key])
+        except Exception as exc:
+            self._show_update_failure(run, _failure_text(exc))
+            return
+        dest_dir = os.path.join(state_dir, DOWNLOADS_DIR_NAME)
+        run.download = UpdateDownload(location, offer.entry, dest_dir, version, run.source,
+                                      app_path=run.app_path if run.mac else None)
+        run.download.progress.connect(self._on_update_progress)  # GUI 스레드에서 (대기열을 거쳐)
+        run.download.ready.connect(self._on_update_ready)
+        run.download.failed.connect(self._on_update_download_failed)
+        run.download.cancelled.connect(self._on_update_cancelled)
+        self._update_run = run
+        then = f", 이어서 새 앱을 {run.app_path} 옆에 준비" if run.mac else ""
+        update_install.log(f"업데이트 {version}: 받기 시작 → {dest_dir}{then}")
+        self.update_banner.show_progress(0, offer.entry.size, download_text(version, run.source, 0, offer.entry.size))
+        run.download.start()
+
+    def _confirm_stop_jobs(self, run, labels):
+        """진행 중인 작업(labels)을 멈추고 업데이트할지 물음 → 예면 True. 묻고 대답을 기록에."""
+        jobs = ", ".join(labels)
+        update_install.log(f"업데이트 {run.version}: 진행 중인 작업({jobs}) — 멈추고 업데이트할지 물음")
+        answer = QMessageBox.question(self, BUSY_TITLE, BUSY_QUESTION.format(jobs=jobs),
+                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        yes = answer == QMessageBox.Yes
+        update_install.log(f"업데이트 {run.version}: → {'멈추고 업데이트' if yes else '업데이트하지 않음'}")
+        return yes
+
+    def cancel_update(self) -> None:
+        """띠의 [취소]: 받기를 멈추라고 알림 — 멈추면 띠가 다시 알림으로 (_on_update_cancelled). Mac 준비 중이면 준비가
+        끝난 뒤 지우고 멈춤. [취소]는 받는 중에만 보이므로 받는 중이 아니면 프로그램 오류 (조용히 넘기지 않음)."""
+        run = self._update_run
+        if run is None:
+            raise RuntimeError(f"받는 중이 아닌데 '취소'가 눌렸습니다 (띠: {self.update_banner.mode()})")
+        if run.download.is_cancelled():
+            return  # 이미 멈추는 중 (두 번 누름)
+        update_install.log(f"업데이트 {run.version}: 취소를 누름")
+        run.download.cancel()
+        self.update_banner.show_progress(0, 0, CANCELLING_TEXT)
+
+    def _on_update_progress(self, done, total, text):
+        """(GUI 스레드) 받기·준비 진행을 띠에. 취소를 누른 뒤에는 "취소하는 중…" 그대로."""
+        run = self._update_run
+        if run is None or run.download.is_cancelled():
+            return
+        self.update_banner.show_progress(done, total, text)
+
+    def _end_update_download(self):
+        """받기가 끝남 → 그 업데이트(_UpdateRun), 창을 닫은 뒤면 None. 결과를 받는 세 슬롯이 맨 먼저 부름 — GUI 스레드가
+        아니면 상태를 바꾸기 전에 RuntimeError. 결과 신호는 run()의 맨 끝이라 스레드가 곧 끝남 → 끝날 때까지 기다림
+        (넘긴 뒤 앱을 끝낼 때 실행 중인 스레드가 남지 않게)."""
+        if QThread.currentThread() is not QApplication.instance().thread():
+            raise RuntimeError("업데이트 받기 결과를 GUI 스레드가 아닌 곳에서 받았습니다")
+        run, self._update_run = self._update_run, None
+        if run is None or self._update_closed:
+            return None  # 창을 닫은 뒤 (release_worker가 신호를 막지만 이미 대기열에 들어간 결과)
+        run.download.wait()
+        return run
+
+    def _on_update_ready(self, prepared):
+        """(GUI 스레드) 받기(+ Mac 준비)가 끝남: 그사이 취소를 눌렀으면 받은 것을 지우고 멈춤. 받는 동안 새로 시작한
+        작업이 있으면 다시 물음(아니오 — 받은 것을 지우고 띠를 알림으로). 그다음 도우미에 넘김."""
+        run = self._end_update_download()
+        if run is None:
+            return
+        update_install.log(f"업데이트 {run.version}: 받기 끝 — {prepared}")
+        if run.download.is_cancelled():  # 다 받은 뒤, 이 결과가 오기 전에 '취소'를 누름
+            if self._discard_prepared(run, prepared):
+                self._update_cancelled(run)
+            return
+        new_jobs = [label for label, worker in self.running_jobs() if worker not in run.approved]
+        if new_jobs and not self._confirm_stop_jobs(run, new_jobs):
+            if self._discard_prepared(run, prepared):
+                self._restore_update_offer(run)
+            return
+        self._hand_off(run, prepared)
+
+    def _hand_off(self, run, prepared):
+        """업데이트 기록(다시 켜진 앱이 결과를 판정) → 도우미(앱이 끝나기를 기다렸다 바꾸고 다시 켬) → 창을 닫고 앱을 끝냄
+        (창 닫기가 진행 중인 작업을 멈춤). 기록·도우미가 실패하면 기록을 지우고 실패 창, 앱은 그대로."""
+        pending = update_install.Pending(target=run.version, previous=run.current, platform_key=run.platform_key,
+                                         started=update_install.timestamp())
+        try:
+            update_install.write_pending(pending)
+            update_install.log(f"업데이트 {run.version}: 업데이트 기록을 남김 ({pending})")
+            if run.mac:
+                update_install.launch_helper_mac(prepared, run.app_path, run.version)
+            else:
+                update_install.launch_helper_windows(prepared, run.app_path, run.version)
+        except Exception as exc:
+            text = _failure_text(exc)
+            update_install.clear_pending()  # 넘기지 못함 — 다음에 켤 때 이 기록으로 실패를 알리지 않게
+            self._show_update_failure(run, f"업데이트 도우미를 띄우지 못했습니다.\n{text}")
+            return
+        update_install.log(f"업데이트 {run.version}: 도우미를 띄움 ({prepared} → {run.app_path}) — 앱을 끝냄 "
+                           "(도우미가 바꾸고 다시 켬)")
+        self.close()
+        QApplication.instance().quit()
+
+    def _on_update_download_failed(self, text):
+        """(GUI 스레드) 받기·준비 실패 → 실패 창, 띠는 다시 알림."""
+        run = self._end_update_download()
+        if run is None:
+            return
+        self._show_update_failure(run, text)
+
+    def _on_update_cancelled(self):
+        """(GUI 스레드) 취소로 멈춤 (받던 것은 스레드가 지웠음) → 띠는 다시 알림."""
+        run = self._end_update_download()
+        if run is None:
+            return
+        self._update_cancelled(run)
+
+    def _update_cancelled(self, run):
+        update_install.log(f"업데이트 {run.version}: 취소됨 — 알림 띠를 되돌림")
+        self._restore_update_offer(run)
+
+    def _discard_prepared(self, run, prepared):
+        """넘기지 않기로 한 받은 파일·준비한 앱을 지움 → 지웠으면 True, 못 지웠으면 실패 창 뒤 False."""
+        try:
+            remove_prepared(prepared)
+        except Exception as exc:
+            self._show_update_failure(run, f"받은 것을 지우지 못했습니다: {prepared}\n{_failure_text(exc)}")
+            return False
+        update_install.log(f"업데이트 {run.version}: 넘기지 않음 — 받은 것을 지움 ({prepared})")
+        return True
+
+    def _restore_update_offer(self, run):
+        """띠를 누른 때의 알림으로 되돌림 (다시 '업데이트'를 누르면 처음부터)."""
+        self.update_offer = run.offer
+        self.update_banner.show_offer(run.version, run.current)
+
+    def _show_update_failure(self, run, text):
+        """"업데이트 실패" 창: 출처(NAS/GitHub)·위치·이유 전부. 띠는 먼저 알림으로 되돌림 — 다른 곳에서 저절로 받지 않음."""
+        update_install.log(f"업데이트 {run.version}: 실패 ({run.source}: {run.location})\n{text}")
+        self._restore_update_offer(run)
+        QMessageBox.critical(
+            self, UPDATE_FAILED_TITLE,
+            f"{run.version}로 업데이트하지 못했습니다.\n\n출처: {run.source}\n위치: {run.location}\n\n{text}\n\n"
+            f"지금 버전({run.current})은 그대로입니다. 다시 '업데이트'를 누르면 처음부터 다시 받습니다.",
+        )
+
+    def stop_update_download(self):
+        """(창을 닫을 때) 받는 중이면 멈추라고 알리고(cancel — 받던 .part·준비하던 앱은 스레드가 지움) 끝날 때까지
+        붙잡아 둠 (release_worker — 결과 신호를 막음: 닫은 뒤에는 업데이트 기록·도우미로 넘어가지 않음)."""
+        run, self._update_run = self._update_run, None
+        if run is None:
+            return
+        update_install.log(f"업데이트 {run.version}: 창을 닫음 — 받기를 멈춤")
+        run.download.cancel()
+        release_worker(run.download, "업데이트 받기")
+        UpdateDownload._running.discard(run.download)  # 이제 release_worker가 붙잡음 (신호를 막아 finished로는 놓지 못함)
+
+    # ---- 다시 켜진 앱: 지난 업데이트의 결과 ----
+
+    def handle_update_startup(self) -> None:
+        """(창을 보인 뒤 한 번 — app.launch) 지난 업데이트의 기록(pending_update.json)이 있으면 지금 버전과 비교
+        (update_install.startup_result — 목표 버전이면 "잘 켜짐" 표시를 남겨 도우미가 기다림을 끝냄). 성공이면 띠에 잠깐
+        "{버전}로 업데이트했습니다", 실패(예전 버전이 켜짐 — 도우미가 되돌림)면 "업데이트 실패" 창에 그 뒤의 업데이트 기록.
+        이 컴퓨터의 파일만 읽음 (NAS·인터넷 없음). 소스 실행은 아무것도 하지 않음. 기록이 깨졌으면 창에 보인 뒤 지움
+        (켤 때마다 같은 창이 뜨지 않게). 예상 못 한 오류는 트레이스백째 창."""
+        info = build_info.current()
+        if info is None:
+            return
+        try:
+            result = update_install.startup_result(info.version)
+        except update_install.UpdateError as exc:
+            update_install.log(f"켜짐: 업데이트 기록을 읽지 못함 — 보이고 지움\n{exc}")
+            try:
+                update_install.clear_pending()
+                cleared = "기록은 지웠습니다."
+            except OSError as clear_exc:
+                cleared = f"기록을 지우지도 못했습니다: {type(clear_exc).__name__}: {clear_exc}"
+            QMessageBox.critical(self, UPDATE_FAILED_TITLE,
+                                 f"지난 업데이트의 결과를 알 수 없습니다 — 업데이트 기록이 깨졌습니다.\n\n{exc}\n\n{cleared}")
+            return
+        except Exception:
+            text = traceback.format_exc()
+            update_install.log(f"켜짐: 지난 업데이트의 결과를 확인하다 예상치 못한 오류\n{text}")
+            QMessageBox.critical(self, UPDATE_FAILED_TITLE,
+                                 f"지난 업데이트의 결과를 확인하다 예상치 못한 오류가 났습니다.\n\n{text}")
+            return
+        if result is None:
+            return
+        kind, pending = result
+        if kind == "ok":
+            message = UPDATED_MESSAGE.format(version=pending.target)
+            update_install.log(f"켜짐: {message} (전 버전 {pending.previous})")
+            self.update_banner.show_message(message)
+            return
+        tail = update_install.log_tail_since(pending.started) or "(이 업데이트 뒤의 기록이 없습니다)\n"
+        update_install.log(f"켜짐: {pending.target}로 업데이트하지 못해 {pending.previous}이(가) 켜짐 — 실패 창")
+        QMessageBox.critical(
+            self, UPDATE_FAILED_TITLE,
+            f"{pending.target}로 업데이트하지 못했습니다 — 지금 버전 {pending.previous}이(가) 그대로 켜졌습니다.\n\n"
+            f"업데이트 기록 ({update_install.log_path()}, {pending.started}부터):\n{tail}",
+        )

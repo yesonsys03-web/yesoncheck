@@ -30,18 +30,30 @@ def qapp():
 
 @pytest.fixture
 def dialogs(monkeypatch):
-    """QMessageBox·폴더 선택 창을 띄우지 않고 기록한다. folders에 넣어 둔 경로를 차례로 '고른다'."""
+    """QMessageBox·폴더 선택 창을 띄우지 않고 기록한다. folders에 넣어 둔 경로를 차례로 '고른다'.
+
+    messages: 모든 창의 (종류, 제목, 글). questions·warnings·criticals: 그 종류의 글만 차례로.
+    question 창의 대답은 기본 Yes — answer_question(QMessageBox.No)로 그 뒤의 대답을 바꿈.
+    """
     from PyQt5.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
-    rec = SimpleNamespace(messages=[], folders=[])
+    rec = SimpleNamespace(messages=[], folders=[], questions=[], warnings=[], criticals=[])
+    answers = {"question": QMessageBox.Yes}
+    texts = {"question": rec.questions, "warning": rec.warnings, "critical": rec.criticals}
 
     def recorder(kind, answer):
         def fake(parent, title, text, *args, **kwargs):
             rec.messages.append((kind, title, text))
-            return answer
+            if kind in texts:
+                texts[kind].append(text)
+            return answers.get(kind, answer)
 
         return fake
 
+    def answer_question(answer):
+        answers["question"] = answer
+
+    rec.answer_question = answer_question
     monkeypatch.setattr(QMessageBox, "critical", recorder("critical", QMessageBox.Ok))
     monkeypatch.setattr(QMessageBox, "warning", recorder("warning", QMessageBox.Ok))
     monkeypatch.setattr(QMessageBox, "information", recorder("information", QMessageBox.Ok))

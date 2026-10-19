@@ -4305,6 +4305,28 @@ QMessageBox {
     
     
     
+    # 창을 닫을 때 멈추는(그리고 '업데이트' 전에 묻는) 작업: (이름, 워커 속성). 썸네일 만들기·목록 다시 읽기는 넣지 않음
+    # — 묻지 않고 멈춤 (설계 5-2)
+    RUNNING_JOB_ATTRS = (
+        ("OCR 분석·컷 감지", "ocr_worker"),
+        ("OCR 구간 내보내기", "ocr_export_worker"),
+        ("주석 영상 내보내기", "annotation_export_worker"),
+        ("영상 병합", "merge_worker"),
+    )
+
+    def running_jobs(self):
+        """실행 중인 작업 [(이름, 워커)] — RUNNING_JOB_ATTRS 순서."""
+        jobs = []
+        for label, attr in self.RUNNING_JOB_ATTRS:
+            worker = getattr(self, attr, None)
+            if worker is not None and worker.isRunning():
+                jobs.append((label, worker))
+        return jobs
+
+    def running_job_labels(self) -> list[str]:
+        """실행 중인 OCR·컷 감지/OCR 구간 내보내기/주석 영상 내보내기/영상 병합의 이름."""
+        return [label for label, _worker in self.running_jobs()]
+
     def stop_running_jobs(self, timeout_ms=None):
         """창을 닫을 때: 실행 중인 OCR 분석·컷 감지, OCR 구간 내보내기·주석 내보내기·병합을 멈추고 끝날 때까지 기다립니다
         (최대 timeout_ms, 기본 JOB_CLOSE_WAIT_MS).
@@ -4315,16 +4337,7 @@ QMessageBox {
         """
         if timeout_ms is None:
             timeout_ms = self.JOB_CLOSE_WAIT_MS
-        jobs = [
-            ("OCR 분석·컷 감지", "ocr_worker"),
-            ("OCR 구간 내보내기", "ocr_export_worker"),
-            ("주석 영상 내보내기", "annotation_export_worker"),
-            ("영상 병합", "merge_worker"),
-        ]
-        for label, attr in jobs:
-            worker = getattr(self, attr, None)
-            if worker is None or not worker.isRunning():
-                continue
+        for label, worker in self.running_jobs():
             print(f"창 닫기: {label} 중지 중…")
             worker.blockSignals(True)  # 멈춘 뒤의 '취소됨'·오류 신호로 닫히는 중에 대화상자가 뜨지 않게
             worker.stop()
@@ -4351,6 +4364,8 @@ QMessageBox {
                 release_worker(scan, "사이드바 목록 다시 읽기")
             # 업데이트 확인: 3시간 타이머를 멈추고, 실행 중인 확인은 결과를 버린 채 끝날 때까지 붙잡아 둠
             self.stop_update_checks()
+            # 업데이트 받기: 멈추라고 알리고 끝날 때까지 붙잡아 둠 (결과는 버림 — 기록·도우미로 넘어가지 않음)
+            self.stop_update_download()
 
             # 실행 중인 내보내기·병합 중지 (ffmpeg 종료)
             self.stop_running_jobs()
