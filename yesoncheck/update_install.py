@@ -18,6 +18,7 @@ import dataclasses
 import datetime
 import hashlib
 import json
+import locale
 import os
 import re
 import shutil
@@ -38,6 +39,7 @@ LOG_FILE_NAME = "update.log"
 APP_EXECUTABLE_NAME = "YesonCheck_Autocut"
 HELPER_MAC_FILE_NAME = "update_helper_mac.sh"  # Mac 도우미 (빌드된 앱에는 spec이 yesoncheck/ 아래에 넣음)
 HELPER_WINDOWS_FILE_NAME = "update_helper_windows.ps1"  # Windows 도우미 (빌드된 앱에는 spec이 yesoncheck/ 아래에 넣음)
+HELPER_CONSOLE_FILE_NAME = "update_helper_console.txt"  # 도우미의 stdout·stderr (state_dir 안, 띄울 때마다 새로)
 
 # Windows 도우미를 앱과 떨어진 프로세스로(콘솔 없이, 새 프로세스 그룹) 띄우는 플래그. Mac의 subprocess에는 이 상수들이
 # 없으므로 Win32 문서의 값으로 대신한다 — 모듈을 Mac에서도 불러오고 launch_helper_windows 시험을 모든 플랫폼에서 돌리려고
@@ -438,15 +440,61 @@ PYINSTALLER_RESET_ENV = "PYINSTALLER_RESET_ENVIRONMENT"
 
 
 def _helper_env() -> dict:
-    """도우미에 넘길 환경 변수: 이 앱의 것 그대로 + PYINSTALLER_RESET_ENVIRONMENT=1.
+    """도우미에 넘길 환경 변수: 이 앱의 것 그대로 + PYINSTALLER_RESET_ENVIRONMENT=1, Windows는 PSModulePath를 뺌.
 
     도우미가 다시 켜는 앱(새 버전 또는 되돌린 옛 버전)은 도우미의 환경을 물려받는다 — Windows는 언제나, Mac은 직접
     실행(YC_UPDATE_DIRECT_LAUNCH=1, 시험)일 때. 빌드된 앱(PyInstaller 6.14)의 부트로더는 _PYI_ARCHIVE_FILE·
     _PYI_PARENT_PROCESS_LEVEL을 환경에 남기고, 같은 자리의 실행 파일이 그 환경을 물려받으면 자기를 이 앱의 하위 작업
     프로세스로 본다(6.9부터). 이 변수가 1이면 부트로더가 그 환경을 지우고 새로 시작한 앱으로 켠다(그리고 변수를 지워
     그 앱의 자식에게는 넘기지 않음) — PyInstaller 문서 "Using sys.executable to spawn subprocesses that outlive the
-    application process". 이 앱의 os.environ은 바꾸지 않음."""
-    return {**os.environ, PYINSTALLER_RESET_ENV: "1"}
+    application process".
+
+    PSModulePath (Windows): 앱을 PowerShell 7(pwsh)에서 켰으면(CI의 단계, pwsh 터미널) PS7의 모듈 폴더가 앞에 든 값을
+    물려받는다. 도우미는 Windows PowerShell 5.1이라 그 값으로는 맨 처음 쓰는 New-Object(Microsoft.PowerShell.Utility)를
+    PS7의 모듈에서 불러오다 실패해, 기록 한 줄 없이 끝난다(CI 업데이트 끝까지 시험에서 봄). 빼면 5.1이 자기 기본 모듈
+    경로를 만든다 — 탐색기에서 켠 앱과 같은 상태. 이 앱의 os.environ은 바꾸지 않음."""
+    env = {**os.environ, PYINSTALLER_RESET_ENV: "1"}
+    if paths.IS_WINDOWS:
+        for key in [k for k in env if k.upper() == "PSMODULEPATH"]:  # Windows의 os.environ 키는 대문자
+            del env[key]
+    return env
+
+
+def helper_console_path() -> str:
+    """도우미의 stdout·stderr를 받는 파일 (state_dir()/update_helper_console.txt)."""
+    return os.path.join(state_dir(), HELPER_CONSOLE_FILE_NAME)
+
+
+def _decode_console(data: bytes) -> tuple[str, str | None]:
+    """도우미 출력의 바이트 → (글, UTF-8이 아니어서 대신 쓴 인코딩 또는 None). bash는 UTF-8, Windows PowerShell 5.1은
+    파일로 보낸 출력을 이 컴퓨터의 코드 페이지로 씀 — UTF-8로 읽히지 않으면 그 인코딩으로 (어떻게 읽었는지 함께 돌려줌)."""
+    try:
+        return data.decode("utf-8"), None
+    except UnicodeDecodeError:
+        encoding = locale.getpreferredencoding(False)
+        return data.decode(encoding, errors="replace"), encoding
+
+
+def helper_console_extra() -> str:
+    """도우미 출력(helper_console_path) 중 업데이트 기록(log_path)에 없는 줄 — 도우미가 기록을 쓰기 전에 실패한 이유
+    (PowerShell이 모듈을 불러오지 못함, bash 오류 등)가 여기에만 남는다. 도우미는 기록의 줄을 stdout에도 쓰므로 그 줄은
+    뺌. 파일이 없거나 남는 줄이 없으면 빈 글자. 읽기 오류는 그대로 올림."""
+    try:
+        with open(helper_console_path(), "rb") as fh:
+            data = fh.read()
+    except FileNotFoundError:
+        return ""
+    text, encoding = _decode_console(data)
+    try:
+        with open(log_path(), encoding="utf-8", errors="replace") as fh:
+            logged = {line.rstrip("\r\n") for line in fh}
+    except FileNotFoundError:
+        logged = set()
+    extra = [line.rstrip("\r") for line in text.split("\n") if line.strip() and line.rstrip("\r") not in logged]
+    if not extra:
+        return ""
+    note = f"(UTF-8이 아니어서 {encoding}로 읽음)\n" if encoding else ""
+    return note + "\n".join(extra) + "\n"
 
 
 def _kernel32():
@@ -495,25 +543,28 @@ def launch_helper_mac(staged_app: str, app_path: str, target: str) -> None:
     부른 쪽은 업데이트 기록(write_pending)을 남긴 뒤 이것을 부르고 앱을 끝낸다. 도우미는 바뀔 앱 번들 밖에서
     돌아야 하므로(번들째 백업 이름으로 옮기고, 되돌릴 때는 지움) 번들 안의 스크립트를 state_dir()로 복사해
     실행한다(_copy_helper_to_state_dir). 새 세션(start_new_session)으로 띄워 앱이 끝나도 같이 끝나지 않게 한다.
-    환경은 _helper_env (다시 켜는 앱이 새로 시작한 앱이 되게). Popen 실패는 그대로 올린다.
+    환경은 _helper_env (다시 켜는 앱이 새로 시작한 앱이 되게). stdout·stderr는 helper_console_path(띄울 때마다 새로) —
+    도우미가 기록을 쓰기 전에 실패해도 그 출력이 남음. Popen 실패는 그대로 올린다.
     """
     dest = _copy_helper_to_state_dir(HELPER_MAC_FILE_NAME)
-    subprocess.Popen(
-        [
-            "/bin/bash", dest,
-            "--pid", str(os.getpid()),
-            "--app", app_path,
-            "--staged", staged_app,
-            "--target", target,
-            "--ok", ok_marker_path(),
-            "--log", log_path(),
-        ],
-        start_new_session=True,
-        env=_helper_env(),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    args = [
+        "/bin/bash", dest,
+        "--pid", str(os.getpid()),
+        "--app", app_path,
+        "--staged", staged_app,
+        "--target", target,
+        "--ok", ok_marker_path(),
+        "--log", log_path(),
+    ]
+    with open(helper_console_path(), "wb") as console:
+        subprocess.Popen(
+            args,
+            start_new_session=True,
+            env=_helper_env(),
+            stdin=subprocess.DEVNULL,
+            stdout=console,
+            stderr=subprocess.STDOUT,
+        )
 
 
 def _windows_powershell() -> str:
@@ -531,8 +582,9 @@ def launch_helper_windows(installer: str, install_dir: str, target: str) -> None
     설치 폴더 안의 스크립트를 state_dir()로 복사해 실행하고, 작업 폴더도 state_dir()로 둔다 — 앱의 작업 폴더(바로
     가기가 설치 폴더로 정함)를 물려받으면 그 폴더 핸들 때문에 설치 폴더의 이름을 바꿀 수 없음. 콘솔 없이
     (DETACHED_PROCESS·CREATE_NO_WINDOW), 새 프로세스 그룹으로 띄워 앱이 끝나도 같이 끝나지 않게 한다. 환경은
-    _helper_env(다시 켜는 앱이 새로 시작한 앱이 되게), DLL 찾는 곳은 기본(_default_dll_search_for_children). Popen
-    실패는 그대로 올린다.
+    _helper_env(다시 켜는 앱이 새로 시작한 앱이 되게, PS7의 PSModulePath 없이), DLL 찾는 곳은 기본
+    (_default_dll_search_for_children). stdout·stderr는 helper_console_path(띄울 때마다 새로) — PowerShell이 스크립트를
+    시작하지 못하거나 기록을 쓰기 전에 실패해도 그 출력이 남음. Popen 실패는 그대로 올린다.
     """
     script = _copy_helper_to_state_dir(HELPER_WINDOWS_FILE_NAME)
     args = [
@@ -545,15 +597,15 @@ def launch_helper_windows(installer: str, install_dir: str, target: str) -> None
         "-OkFile", ok_marker_path(),
         "-Log", log_path(),
     ]
-    with _default_dll_search_for_children():
+    with open(helper_console_path(), "wb") as console, _default_dll_search_for_children():
         subprocess.Popen(
             args,
             creationflags=_WINDOWS_HELPER_CREATIONFLAGS,
             cwd=state_dir(),
             env=_helper_env(),
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=console,
+            stderr=subprocess.STDOUT,
         )
 
 

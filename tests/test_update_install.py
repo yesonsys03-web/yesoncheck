@@ -441,3 +441,35 @@ def test_running_app_location_mac(monkeypatch):
 def test_refuse_reason_mac_mentions_applications_folder():
     msg = refuse_reason_mac("/Volumes/YesonCheck_Autocut_Intel/YesonCheck_Autocut_Intel.app")
     assert "응용 프로그램 폴더" in msg
+
+
+# ---- 도우미 출력 (update_helper_console.txt): 기록에 없는 줄 ----
+
+
+def test_helper_console_extra_without_file_is_empty(tmp_state_dir):
+    assert update_install.helper_console_extra() == ""
+
+
+def test_helper_console_extra_keeps_only_lines_missing_from_log(tmp_state_dir):
+    """도우미는 기록의 줄을 stdout에도 씀 → 그 줄은 빼고, 기록을 쓰기 전의 실패(PowerShell 오류 등)만 남김."""
+    log("도우미: 시작: 대상 버전 1.1.1")
+    with open(log_path(), encoding="utf-8") as fh:
+        logged = fh.read().splitlines()[0]
+    error = "New-Object : The 'New-Object' command was found in the module 'Microsoft.PowerShell.Utility', but the module could not be loaded."
+    with open(update_install.helper_console_path(), "wb") as fh:
+        fh.write(f"{logged}\r\n\r\n{error}\r\n    + FullyQualifiedErrorId : CouldNotAutoloadMatchingModule\r\n".encode("utf-8"))
+    extra = update_install.helper_console_extra()
+    assert extra == f"{error}\n    + FullyQualifiedErrorId : CouldNotAutoloadMatchingModule\n"
+    # 모두 기록에 있는 줄이면 빈 글자 (성공한 도우미의 출력)
+    with open(update_install.helper_console_path(), "wb") as fh:
+        fh.write(f"{logged}\n".encode("utf-8"))
+    assert update_install.helper_console_extra() == ""
+
+
+def test_helper_console_extra_reads_non_utf8_with_this_computers_encoding(tmp_state_dir, monkeypatch):
+    """Windows PowerShell 5.1이 파일로 보낸 출력은 이 컴퓨터의 코드 페이지 — UTF-8로 읽히지 않으면 그 인코딩으로, 어떻게
+    읽었는지 적어서."""
+    monkeypatch.setattr(update_install.locale, "getpreferredencoding", lambda do_setlocale=True: "cp949")
+    with open(update_install.helper_console_path(), "wb") as fh:
+        fh.write("모듈을 불러오지 못했습니다\r\n".encode("cp949"))
+    assert update_install.helper_console_extra() == "(UTF-8이 아니어서 cp949로 읽음)\n모듈을 불러오지 못했습니다\n"

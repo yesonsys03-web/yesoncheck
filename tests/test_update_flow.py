@@ -648,6 +648,23 @@ def test_startup_failed_shows_log(tmp_state_dir, player_with_build, dialogs):
     assert read_pending() is None and not os.path.exists(ok_marker_path())
 
 
+def test_startup_failed_shows_helper_output_missing_from_log(tmp_state_dir, player_with_build, dialogs):
+    """도우미가 기록을 쓰기 전에 실패했으면(PowerShell이 모듈을 불러오지 못함 등) 그 이유는 도우미 출력에만 있음 → 실패 창에
+    기록과 함께 보임 (기록과 같은 줄은 다시 보이지 않음)."""
+    write_pending(Pending("1.1.1", "1.1.0", "windows", now()))
+    update_install.log("업데이트 1.1.1: 도우미를 띄움")
+    with open(update_install.log_path(), encoding="utf-8") as fh:
+        logged = fh.read().splitlines()[-1]
+    error = "New-Object : The 'New-Object' command was found in the module 'Microsoft.PowerShell.Utility', but the module could not be loaded."
+    with open(update_install.helper_console_path(), "w", encoding="utf-8") as fh:
+        fh.write(f"{logged}\n{error}\n")
+    p = player_with_build("1.1.0")
+    p.handle_update_startup()
+    [(kind, title, text)] = dialogs.messages
+    assert (kind, title) == ("critical", "업데이트 실패")
+    assert error in text and update_install.helper_console_path() in text and text.count(logged) == 1
+
+
 def test_startup_corrupt_record_shows_dialog(tmp_state_dir, player_with_build, dialogs):
     with open(os.path.join(tmp_state_dir, update_install.PENDING_FILE_NAME), "w", encoding="utf-8") as fh:
         fh.write("{깨진")

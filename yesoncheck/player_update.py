@@ -26,7 +26,8 @@
 저절로 받지 않음 — 다시 누르면 처음부터. 취소·창 닫기는 받던 것을 지우고 넘기지 않음. 단계마다 update_install.log.
 
 다시 켜진 앱 (handle_update_startup — 창을 보인 뒤 한 번, 이 컴퓨터의 파일만): 기록의 목표 버전이면 "잘 켜짐" 표시를
-남기고 띠에 잠깐 "{버전}로 업데이트했습니다", 예전 버전이 켜졌으면(도우미가 되돌림) "업데이트 실패" 창에 그 뒤의 기록.
+남기고 띠에 잠깐 "{버전}로 업데이트했습니다", 예전 버전이 켜졌으면(도우미가 되돌림) "업데이트 실패" 창에 그 뒤의 기록
+(도우미 출력 중 기록에 없는 것도 — 도우미가 기록을 쓰기 전에 실패한 이유).
 """
 
 import functools
@@ -667,7 +668,8 @@ class PlayerUpdateMixin:
     def handle_update_startup(self) -> None:
         """(창을 보인 뒤 한 번 — app.launch) 지난 업데이트의 기록(pending_update.json)이 있으면 지금 버전과 비교
         (update_install.startup_result — 목표 버전이면 "잘 켜짐" 표시를 남겨 도우미가 기다림을 끝냄). 성공이면 띠에 잠깐
-        "{버전}로 업데이트했습니다", 실패(예전 버전이 켜짐 — 도우미가 되돌림)면 "업데이트 실패" 창에 그 뒤의 업데이트 기록.
+        "{버전}로 업데이트했습니다", 실패(예전 버전이 켜짐 — 도우미가 되돌림)면 "업데이트 실패" 창에 그 뒤의 업데이트 기록과
+        도우미 출력 중 기록에 없는 것(update_install.helper_console_extra).
         이 컴퓨터의 파일만 읽음 (NAS·인터넷 없음). 소스 실행은 아무것도 하지 않음. 기록이 깨졌으면 창에 보인 뒤 지움
         (켤 때마다 같은 창이 뜨지 않게). 예상 못 한 오류는 트레이스백째 창."""
         info = build_info.current()
@@ -703,9 +705,16 @@ class PlayerUpdateMixin:
             tail = update_install.log_tail_since(pending.started) or "(이 업데이트 뒤의 기록이 없습니다)\n"
         except Exception:
             tail = f"(업데이트 기록을 읽지 못했습니다)\n{traceback.format_exc()}"
+        # 도우미가 기록을 쓰기 전에 실패했으면(PowerShell·bash가 스크립트를 시작하지 못함 등) 그 이유는 도우미 출력에만 있음
+        try:
+            extra = update_install.helper_console_extra()
+            if extra:
+                extra = f"\n도우미 출력 중 기록에 없는 것 ({update_install.helper_console_path()}):\n{extra}"
+        except Exception:
+            extra = f"\n(도우미 출력을 읽지 못했습니다)\n{traceback.format_exc()}"
         _log_update(f"켜짐: {pending.target}로 업데이트하지 못해 {pending.previous}이(가) 켜짐 — 실패 창")
         QMessageBox.critical(
             self, UPDATE_FAILED_TITLE,
             f"{pending.target}로 업데이트하지 못했습니다 — 지금 버전 {pending.previous}이(가) 그대로 켜졌습니다.\n\n"
-            f"업데이트 기록 ({update_install.log_path()}, {pending.started}부터):\n{tail}",
+            f"업데이트 기록 ({update_install.log_path()}, {pending.started}부터):\n{tail}{extra}",
         )

@@ -22,7 +22,7 @@ YC_UPDATE_DIRECT_LAUNCH=1, YC_UPDATE_OK_TIMEOUT_S=60, YC_UPDATE_NO_MESSAGEBOX=1,
 (Windows LOCALAPPDATA, Mac HOME). PYTHONUTF8은 뺌 (사용자 PC와 같게 — ci/run_smoke_test.ps1처럼).
 
 전체 제한 시간(--time-limit-min, 워크플로 단계의 timeout-minutes보다 몇 분 짧게)이 지나면 기다리던 단계가 실패해 단계가 끊기기
-전에 진단을 보인다. 단계마다 이름을 찍고, 실패하면 그 단계·트레이스백·도우미 기록(update.log)·앱 기록(Windows %LOCALAPPDATA%\\YesonCheck\\logs,
+전에 진단을 보인다. 단계마다 이름을 찍고, 실패하면 그 단계·트레이스백·도우미 기록(update.log)·도우미 출력(update_helper_console.txt)·앱 기록(Windows %LOCALAPPDATA%\\YesonCheck\\logs,
 Mac은 옛 앱의 stdout·stderr — 도우미가 다시 켠 앱의 출력은 update.log에)·smoke_result.json·설치 폴더 상태를 보이고 종료 코드 1.
 끝낼 때 작업 폴더 아래의 실행 파일로 도는 프로세스(앱·설치 파일)와 작업 폴더의 도우미 스크립트를 실행 중인 프로세스를 모두 끝냄.
 """
@@ -260,6 +260,7 @@ def state_files(case):
             "pending": os.path.join(state, update_install.PENDING_FILE_NAME),
             "ok": update_install.ok_marker_path(),
             "helper": os.path.join(state, helper),
+            "console": update_install.helper_console_path(),  # 도우미의 stdout·stderr
         }
 
 
@@ -546,7 +547,9 @@ def wait_helper(case, files):
     text = read_text(files["log"])
     helper_lines = [line for line in text.splitlines() if " 도우미: " in line]
     print("\n".join(helper_lines), flush=True)
-    assert any(" 도우미: 시작: " in line for line in helper_lines), "도우미가 시작 기록 없이 끝났습니다 (도우미가 돌지 않음)"
+    assert any(" 도우미: 시작: " in line for line in helper_lines), (
+        f"도우미가 시작 기록 없이 끝났습니다 (도우미가 돌지 않음) — 도우미 출력 ({files['console']}):\n"
+        + (read_text(files["console"]) if os.path.isfile(files["console"]) else "(없음)"))
     return text
 
 
@@ -631,6 +634,21 @@ def check_rollback(case, files, log_text):
     return kill(running)
 
 
+def probe_windows_powershell():
+    """(Windows, 진단만 — 실패하지 않음) 이 단계의 환경(pwsh 단계라 PS7의 PSModulePath가 들어 있음)과 PSModulePath를 뺀
+    환경에서 Windows PowerShell 5.1이 New-Object(도우미가 맨 처음 쓰는 cmdlet)를 실행하는지 — 앱은 도우미를 띄울 때
+    PSModulePath를 뺌(update_install._helper_env). 두 결과를 그대로 보임."""
+    script = "$ErrorActionPreference = 'Stop'; $null = New-Object System.Text.UTF8Encoding($false); 'New-Object OK'"
+    module_path = next((v for k, v in os.environ.items() if k.upper() == "PSMODULEPATH"), None)
+    print(f"이 단계의 PSModulePath: {module_path!r}", flush=True)
+    without = {k: v for k, v in os.environ.items() if k.upper() != "PSMODULEPATH"}
+    for label, env in (("이 단계의 환경 그대로", dict(os.environ)), ("PSModulePath를 뺌 (앱이 도우미를 띄우는 환경)", without)):
+        done = subprocess.run([update_install._windows_powershell(), "-NoProfile", "-NonInteractive", "-Command", script],
+                              env=env, capture_output=True, timeout=DEADLINE.left(120))
+        output = (done.stdout + done.stderr).decode("utf-8", errors="replace").strip()
+        print(f"[{label}] 종료 코드 {done.returncode}\n{output}", flush=True)
+
+
 def check_state_free_space(files, platform_key):
     """업데이트 상태 폴더(작업 폴더 아래로 돌린 곳)의 여유 공간이 앱이 확인하는 크기(update_install.NEEDED_BYTES) 이상인지 —
     모자라면 앱이 '여유 공간이 모자랍니다' 창을 띄워 실행 시험이 실패하므로 여기서 먼저 분명하게."""
@@ -685,6 +703,7 @@ def show_file(title, path):
 def show_diagnostics(case):
     files = state_files(case)
     show_file("업데이트 기록 (앱·도우미, Mac은 도우미가 다시 켠 앱의 출력도)", files["log"])
+    show_file("도우미 출력 (stdout·stderr — 기록을 쓰기 전의 실패도)", files["console"])
     show_file("도우미가 실행한 설치 파일의 기록", files["log"] + ".inno.txt")
     if WINDOWS:
         for path in sorted(glob.glob(os.path.join(case.user_dir, "YesonCheck", "logs", "*.log"))):
@@ -772,6 +791,9 @@ def main():
                 step(case, "지난 공유 폴더 지우기", shutil.rmtree, case.share_root)
             os.makedirs(case.share_root)
         step(None, "디스크 여유 (시작)", free_space, work, cases[0].share_root)
+        if WINDOWS:
+            step(None, "환경 확인 (진단만): Windows PowerShell 5.1이 PSModulePath에 따라 New-Object를 실행하는지",
+                 probe_windows_powershell)
         if WINDOWS:
             step(None, f"새 버전 설치 파일 만들기 ({NEW_VERSION}·{BROKEN_WINDOWS_VERSION}, ISCC 둘을 함께)",
                  build_windows_installers, args, cases, work)
