@@ -197,3 +197,16 @@ def http_server():
     server = _TestHTTPServer()
     yield server
     server.shutdown()
+
+
+@pytest.fixture
+def tmp_state_dir(monkeypatch, tmp_path):
+    """update_install.state_dir()/log_path()가 읽는 환경 변수(Windows LOCALAPPDATA, Mac HOME)를 tmp_path로
+    돌림 — 시험마다 깨끗한 업데이트 상태 폴더를 씀. 돌려주는 값은 그 결과인 state_dir() 경로."""
+    if sys.platform == "win32":
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    else:
+        monkeypatch.setenv("HOME", str(tmp_path))
+    from yesoncheck import update_install
+
+    return update_install.state_dir()
