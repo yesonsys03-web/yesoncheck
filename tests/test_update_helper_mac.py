@@ -10,6 +10,7 @@ Contents/MacOS/YesonCheck_Autocut이 작은 셸 스크립트다: "new"는 시험
 launch_helper_mac 시험(subprocess.Popen을 바꿔 끼움)은 모든 플랫폼에서 돈다.
 """
 
+import json
 import os
 import re
 import signal
@@ -131,15 +132,36 @@ def update_case(tmp_path):
         return case
 
     yield make
-    for case in made:
-        for name in ("old", "new"):
-            for pid in trace_pids(case.trace, name):
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-        if case.apps_dir.exists():
-            case.apps_dir.chmod(0o755)
+    if made:
+        kill_processes_under(tmp_path)
+        unlock_tree(tmp_path)
+
+
+def kill_processes_under(path):
+    """명령줄에 path가 든 프로세스(이 시험이 켠 가짜 앱·도우미)만 끝냄 — 흔적 파일의 pid를 믿지 않음(pid는 다시
+    쓰일 수 있어 엉뚱한 프로세스를 끝낼 수 있음)."""
+    listing = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, check=True).stdout
+    for line in listing.decode("utf-8", errors="replace").splitlines():
+        pid_text, _, command = line.strip().partition(" ")
+        if str(path) in command and int(pid_text) != os.getpid():
+            try:
+                os.kill(int(pid_text), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def unlock_tree(path):
+    """시험이 잠근(chmod 555) 폴더를 모두 다시 열어 tmp_path를 지울 수 있게."""
+    for root, dirs, _files in os.walk(path):
+        for name in dirs:
+            full = os.path.join(root, name)
+            if not os.path.islink(full):
+                os.chmod(full, 0o755)
+
+
+def lock(path):
+    """폴더를 이 사용자가 바꿀 수 없게 (chmod 555) — 다른 계정·root 것인 폴더 흉내."""
+    Path(path).chmod(0o555)
 
 
 def helper_cmd(case, pid, timeout_s):
@@ -281,35 +303,66 @@ def test_helper_changes_nothing_when_app_does_not_quit(update_case):
 
 
 FAKE_ADMIN_OSASCRIPT = r'''#!{python}
-"""관리자 암호 창 흉내: 받은 AppleScript에서 셸 명령을 꺼내, 잠긴 폴더를 잠깐 열고 그대로 실행한다."""
+"""관리자 암호 창 흉내: 받은 AppleScript에서 셸 명령을 꺼내 기록하고, 잠긴 폴더들을 잠깐 열어 그대로 실행한다.
+
+YC_TEST_LOCKED_DIRS(줄마다 하나) = root 권한이면 바꿀 수 있는, 시험이 잠근 폴더들. YC_TEST_ADMIN_REFUSE가 명령에
+들어 있으면 사용자가 암호 창에서 '취소'를 누른 것처럼 실행하지 않고 끝난다.
+"""
+import json
 import os
 import subprocess
 import sys
 
-trace = os.environ["YC_TEST_TRACE_DIR"]
-with open(os.path.join(trace, "osascript_args"), "a", encoding="utf-8") as fh:
-    fh.write(repr(sys.argv[1:]) + "\n")
 assert len(sys.argv) == 3 and sys.argv[1] == "-e", sys.argv
 script = sys.argv[2]
 head = 'do shell script "'
 assert script.startswith(head), script
-command, i = [], len(head)
+chars, i = [], len(head)
 while script[i] != '"':
     if script[i] == "\\":
         i += 1
-    command.append(script[i])
+    chars.append(script[i])
     i += 1
 assert script[i + 1:].rstrip().endswith("with administrator privileges"), script
-locked = os.environ["YC_TEST_LOCKED_DIR"]
-os.chmod(locked, 0o755)
+command = "".join(chars)
+with open(os.path.join(os.environ["YC_TEST_TRACE_DIR"], "admin_commands"), "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(command, ensure_ascii=False) + "\n")
+refuse = os.environ.get("YC_TEST_ADMIN_REFUSE")
+if refuse and refuse in command:
+    sys.stderr.write("execution error: User canceled. (-128)\n")
+    sys.exit(1)
+locked = [d for d in os.environ.get("YC_TEST_LOCKED_DIRS", "").split("\n") if d]
+for d in locked:
+    if os.path.isdir(d):
+        os.chmod(d, 0o755)
 try:
-    done = subprocess.run(["/bin/sh", "-c", "".join(command)], capture_output=True, text=True)
+    done = subprocess.run(["/bin/sh", "-c", command], capture_output=True, text=True)
 finally:
-    os.chmod(locked, 0o555)
+    for d in locked:
+        if os.path.isdir(d):
+            os.chmod(d, 0o555)
 if done.returncode != 0:
     sys.stderr.write(f"execution error: {{done.stderr}} ({{done.returncode}})\n")
     sys.exit(1)
 '''
+
+
+def use_fake_admin(case, tmp_path, locked_dirs, refuse=None):
+    """관리자 암호 창 대신 FAKE_ADMIN_OSASCRIPT를 쓰게 함. locked_dirs는 '관리자'가 바꿀 수 있는 잠긴 폴더들
+    (부를 때의 경로 — 도우미가 옮긴 뒤의 이름일 수 있음). 잠그는 것은 부른 쪽이 lock()으로."""
+    fake = tmp_path / "fake_admin_osascript"
+    fake.write_text(FAKE_ADMIN_OSASCRIPT.format(python=sys.executable), encoding="utf-8")
+    fake.chmod(0o755)
+    case.env.update(YC_UPDATE_OSASCRIPT=str(fake), YC_TEST_LOCKED_DIRS="\n".join(str(d) for d in locked_dirs))
+    if refuse:
+        case.env["YC_TEST_ADMIN_REFUSE"] = refuse
+
+
+def admin_commands(case):
+    path = case.trace / "admin_commands"
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
 @darwin_only
@@ -317,16 +370,11 @@ if done.returncode != 0:
 def test_helper_admin_path_quotes_paths_and_finishes(update_case, tmp_path, new_kind):
     # 따옴표·$·역슬래시·공백·한글이 든 폴더 이름 — 셸·AppleScript 따옴표 처리가 틀리면 mv가 엉뚱한 곳으로 감
     case = update_case(new_kind, apps_dir_name='앱 "큰" \'작은\' $HOME \\ (1)', staged_in_apps_dir=False)
-    fake = tmp_path / "fake_admin_osascript"
-    fake.write_text(FAKE_ADMIN_OSASCRIPT.format(python=sys.executable), encoding="utf-8")
-    fake.chmod(0o755)
-    case.env.update(YC_UPDATE_OSASCRIPT=str(fake), YC_TEST_LOCKED_DIR=str(case.apps_dir))
-    case.apps_dir.chmod(0o555)
-    try:
-        result = run_helper(case, timeout_s=4)
-    finally:
-        case.apps_dir.chmod(0o755)
-    calls = (case.trace / "osascript_args").read_text(encoding="utf-8").splitlines()
+    use_fake_admin(case, tmp_path, [case.apps_dir])
+    lock(case.apps_dir)
+    result = run_helper(case, timeout_s=4)
+    unlock_tree(tmp_path)
+    calls = admin_commands(case)
     if new_kind == "new":
         assert result.returncode == 0, failure_details(case, result)
         assert app_kind(case.app) == "new"
@@ -338,6 +386,78 @@ def test_helper_admin_path_quotes_paths_and_finishes(update_case, tmp_path, new_
         assert wait_until(lambda: trace_pids(case.trace, "old")), log_text(case)
     assert not case.backup.exists() and not case.staged.exists()
     assert [p.name for p in case.apps_dir.iterdir()] == [case.app.name]
+
+
+@darwin_only
+def test_helper_admin_swap_undoes_itself_when_second_move_fails(update_case, tmp_path):
+    case = update_case("new", apps_dir_name="응용 프로그램", staged_in_apps_dir=False)
+    use_fake_admin(case, tmp_path, [case.apps_dir])  # 준비한 새 앱의 폴더는 '관리자'도 못 바꿈 → 두 번째 mv 실패
+    lock(case.apps_dir)
+    lock(case.staged.parent)
+    result = run_helper(case)
+    unlock_tree(tmp_path)
+    assert result.returncode == 1, failure_details(case, result)
+    assert app_kind(case.app) == "old" and not case.backup.exists()
+    # 같은 관리자 명령 안에서 옛 앱을 되돌려 놓음 — 되돌리려고 암호 창을 또 띄우지 않음
+    assert len([c for c in admin_commands(case) if "mv " in c]) == 1, admin_commands(case)
+    assert wait_until(lambda: trace_pids(case.trace, "old")), log_text(case)
+
+
+@darwin_only
+def test_helper_deletes_stale_backup_user_cannot_delete_with_admin(update_case, tmp_path):
+    # 지난 업데이트의 백업이 다른 계정·root 것이라 사용자로 못 지우면, 그대로 두면 모든 다음 업데이트가 막힘
+    case = update_case("new")
+    make_fake_app(case.backup, "old")
+    locked = case.backup / "Contents" / "Resources"
+    use_fake_admin(case, tmp_path, [locked])
+    lock(locked)
+    result = run_helper(case)
+    unlock_tree(tmp_path)
+    assert result.returncode == 0, failure_details(case, result)
+    assert app_kind(case.app) == "new" and not case.backup.exists()
+    assert admin_commands(case) == [f"rm -rf '{case.backup}'"]
+
+
+@darwin_only
+def test_helper_deletes_backup_user_cannot_delete_with_admin_after_success(update_case, tmp_path):
+    case = update_case("new")
+    lock(case.app / "Contents" / "Resources")  # 옛 앱 안 — 바꾼 뒤에는 백업 안
+    use_fake_admin(case, tmp_path, [case.backup / "Contents" / "Resources"])
+    result = run_helper(case)
+    unlock_tree(tmp_path)
+    assert result.returncode == 0, failure_details(case, result)
+    assert app_kind(case.app) == "new" and not case.backup.exists()
+    assert admin_commands(case) == [f"rm -rf '{case.backup}'"]
+
+
+@darwin_only
+def test_helper_deletes_staged_with_admin_after_cancelled_prompt(update_case, tmp_path):
+    case = update_case("new", apps_dir_name="응용 프로그램", staged_in_apps_dir=False)
+    locked = case.staged / "Contents" / "Resources"
+    use_fake_admin(case, tmp_path, [locked], refuse="mv ")  # 바꾸기 암호 창은 '취소'
+    lock(case.apps_dir)
+    lock(locked)
+    result = run_helper(case)
+    unlock_tree(tmp_path)
+    assert result.returncode == 1, failure_details(case, result)
+    assert app_kind(case.app) == "old" and not case.staged.exists()
+    calls = admin_commands(case)
+    assert len(calls) == 2 and "mv " in calls[0] and calls[1] == f"rm -rf '{case.staged}'", calls
+    assert "User canceled" in log_text(case)
+
+
+@darwin_only
+def test_helper_restore_ignores_undeletable_leftover_from_earlier_run(update_case):
+    case = update_case("crash")
+    leftover = case.apps_dir / ".YesonCheck_Autocut_Intel.app.update-failed"  # 지난번 이름, 사용자로 못 지움
+    make_fake_app(leftover, "new")
+    lock(leftover / "Contents" / "Resources")
+    result = run_helper(case, timeout_s=30)
+    unlock_tree(case.apps_dir)
+    assert result.returncode == 1, failure_details(case, result)
+    assert app_kind(case.app) == "old" and not case.backup.exists()
+    assert sorted(p.name for p in case.apps_dir.iterdir()) == sorted([case.app.name, leftover.name])
+    assert wait_until(lambda: trace_pids(case.trace, "old")), log_text(case)
 
 
 # ---- launch_helper_mac (모든 플랫폼) ----
@@ -403,3 +523,10 @@ def test_helper_script_runs_under_bash_without_errexit():
     assert text.startswith("#!/bin/bash\n")
     # set -e를 쓰면 중간 실패에서 그냥 끝나 되돌리기가 돌지 않음 — 실패마다 직접 처리해야 함
     assert re.search(r"^set -u$", text, re.M) and not re.search(r"^set -[a-z]*e", text, re.M)
+
+
+def test_helper_only_looks_at_own_users_processes():
+    # 다른 사용자가 같은 Mac에서 같은 자리의 앱을 켜 두었어도 보지도 끝내지도 않음
+    calls = [line for line in HELPER.read_text(encoding="utf-8").splitlines()
+             if re.search(r"(^\s*|\$\()(pgrep|pkill) ", line)]  # 명령으로 부르는 줄 (주석·로그 글자 말고)
+    assert len(calls) == 3 and all('-U "$MY_UID"' in line for line in calls), calls

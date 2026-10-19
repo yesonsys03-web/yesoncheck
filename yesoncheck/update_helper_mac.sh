@@ -43,6 +43,7 @@ NEW_LAUNCHED=0   # 1: 새 앱을 켰음 (되돌릴 때 그 프로세스를 끝�
 LAUNCHED_PID=""  # 직접 실행(YC_UPDATE_DIRECT_LAUNCH=1)으로 켠 프로세스의 pid
 FS_OUT=""        # fs_run이 남긴 출력(오류)
 FAIL_REASON=""
+MY_UID=$(id -u)  # pgrep/pkill은 이 사용자의 프로세스만 (다른 사용자가 같은 자리의 앱을 켜 두었어도 건드리지 않음)
 
 log() {
     local line
@@ -86,7 +87,7 @@ pid_alive() {  # 좀비(끝났지만 아직 거둬들이지 않음)는 끝난 �
 
 app_pids() {  # APP/Contents/MacOS/ 아래 실행 파일로 도는 프로세스들의 pid (한 줄에 하나)
     local out rc
-    out=$(pgrep -f "$PATTERN")
+    out=$(pgrep -U "$MY_UID" -f "$PATTERN")
     rc=$?
     if [ "$rc" -gt 1 ]; then
         log "pgrep 오류 (종료 코드 $rc, 패턴 $PATTERN)"
@@ -115,12 +116,12 @@ kill_new_app() {
         return 0
     fi
     log "새 앱 프로세스를 끝냄 (TERM): $(printf '%s' "$pids" | tr '\n' ' ')"
-    pkill -TERM -f "$PATTERN"
+    pkill -TERM -U "$MY_UID" -f "$PATTERN"
     deadline=$((SECONDS + 10))
     while [ -n "$(app_pids)" ]; do
         if [ "$SECONDS" -gt "$deadline" ]; then
             log "10초 안에 끝나지 않아 강제로 끝냄 (KILL)"
-            pkill -KILL -f "$PATTERN"
+            pkill -KILL -U "$MY_UID" -f "$PATTERN"
             sleep 1
             break
         fi
@@ -164,26 +165,65 @@ fs_run() {  # $1 = 셸 명령. 출력(오류)은 FS_OUT에
     fi
 }
 
+is_permission_error() {  # $1 = 명령 출력
+    case "$1" in
+        *"Permission denied"* | *"Operation not permitted"*) return 0 ;;
+    esac
+    return 1
+}
+
+exists() {
+    [ -e "$1" ] || [ -L "$1" ]
+}
+
+first_lines() {  # $1 = 명령 출력 → 앞 5줄만 (rm -rf는 못 지운 파일마다 한 줄 — 앱 번들이면 수천 줄이 로그에 쌓임)
+    local total
+    total=$(printf '%s\n' "$1" | wc -l | tr -d ' ')
+    if [ "$total" -le 5 ]; then
+        printf '%s' "$1"
+        return
+    fi
+    printf '%s\n… (%s줄 더)' "$(printf '%s\n' "$1" | head -n 5)" "$((total - 5))"
+}
+
+delete_path() {  # $1 = 지울 경로. 끝난 뒤 남아 있으면 실패 (출력은 FS_OUT에)
+    # 다른 계정·root 것(관리자 계정이 둘이거나 sudo로 설치한 앱)이라 사용자로 못 지우면 관리자 암호 창으로 지운다
+    # — 그대로 두면 남은 백업이 다음 업데이트를 모두 막음
+    local q rc
+    q=$(sh_quote "$1")
+    fs_run "rm -rf $q"
+    rc=$?
+    if exists "$1" && [ "$ADMIN" = 0 ] && is_permission_error "$FS_OUT"; then
+        log "권한이 없어 지우지 못함 — 관리자 암호 창으로 지움: $1 ($(first_lines "$FS_OUT"))"
+        FS_OUT=$(run_admin "rm -rf $q" 2>&1)
+        rc=$?
+    fi
+    if [ -n "$FS_OUT" ]; then
+        FS_OUT=$(first_lines "$FS_OUT")
+    else
+        FS_OUT="종료 코드 $rc"  # 출력 없이 실패한 경우에도 무엇이 있었는지 남김
+    fi
+    ! exists "$1"
+}
+
 remove_staged() {
-    local out
-    if [ ! -e "$STAGED" ]; then
+    if ! exists "$STAGED"; then
         return 0
     fi
-    if out=$(rm -rf "$STAGED" 2>&1); then
+    if delete_path "$STAGED"; then
         log "준비했던 새 앱을 지움: $STAGED"
     else
-        log "준비했던 새 앱을 지우지 못함: $STAGED ($out)"
+        log "준비했던 새 앱을 지우지 못함: $STAGED ($FS_OUT)"
     fi
 }
 
 remove_stale_backup() {  # 지난 업데이트의 백업이 남아 있으면 지움 (그대로 두면 mv가 그 안으로 옮김)
-    local out
-    if [ ! -e "$BACKUP" ] && [ ! -L "$BACKUP" ]; then
+    if ! exists "$BACKUP"; then
         return 0
     fi
     log "지난 업데이트의 백업이 남아 있어 먼저 지움: $BACKUP"
-    if ! out=$(rm -rf "$BACKUP" 2>&1) || [ -e "$BACKUP" ] || [ -L "$BACKUP" ]; then
-        FAIL_REASON="지난 업데이트의 백업을 지우지 못함: $BACKUP ($out)"
+    if ! delete_path "$BACKUP"; then
+        FAIL_REASON="지난 업데이트의 백업을 지우지 못함: $BACKUP ($FS_OUT)"
         return 1
     fi
     return 0
@@ -204,16 +244,15 @@ swap() {
         FAIL_REASON="새 앱을 앱 자리로 옮기지 못함: $FS_OUT"
         return 1
     fi
-    case "$FS_OUT" in
-        *"Permission denied"* | *"Operation not permitted"*) ;;
-        *)
-            FAIL_REASON="옛 앱을 백업 이름으로 옮기지 못함: $FS_OUT"
-            return 1
-            ;;
-    esac
+    if ! is_permission_error "$FS_OUT"; then
+        FAIL_REASON="옛 앱을 백업 이름으로 옮기지 못함: $FS_OUT"
+        return 1
+    fi
     log "앱 폴더에 쓸 수 없어 관리자 암호 창으로 바꿈 ($FS_OUT)"
     ADMIN=1
-    if ! fs_run "mv $q_app $q_backup && mv $q_staged $q_app"; then
+    # 두 번째 mv가 실패하면 같은 명령 안에서 옛 앱을 되돌려 놓음 — 되돌리려고 암호 창을 또 띄우지 않음
+    # (그 창에서 취소하면 앱 자리가 빈 채로 남음)
+    if ! fs_run "mv $q_app $q_backup && { mv $q_staged $q_app || { mv $q_backup $q_app; exit 1; }; }"; then
         FAIL_REASON="관리자 권한으로 바꾸지 못함: $FS_OUT"
         return 1
     fi
@@ -268,12 +307,20 @@ wait_ok() {
 }
 
 restore_backup() {  # 새 앱을 숨김 이름으로 치우고 백업을 제자리로 (둘 다 이름 바꾸기) → 치운 것을 지움
-    local q_app q_backup q_failed rc
+    local q_app q_backup q_failed rc n
+    # 치울 이름은 이번 실행만의 것(지난번에 못 지운 것이 남아 있어도 막히지 않음), 있는 이름은 피함
+    FAILED="$APP_DIR/.$APP_BASE.update-failed-$$"
+    n=0
+    while exists "$FAILED"; do
+        n=$((n + 1))
+        FAILED="$APP_DIR/.$APP_BASE.update-failed-$$-$n"
+    done
     q_app=$(sh_quote "$APP")
     q_backup=$(sh_quote "$BACKUP")
     q_failed=$(sh_quote "$FAILED")
-    fs_run "rm -rf $q_failed || exit 1; if [ -e $q_app ] || [ -L $q_app ]; then mv $q_app $q_failed || exit 1; fi; mv $q_backup $q_app || exit 1; rm -rf $q_failed"
+    fs_run "if [ -e $q_app ] || [ -L $q_app ]; then mv $q_app $q_failed || exit 1; fi; mv $q_backup $q_app || exit 1; rm -rf $q_failed"
     rc=$?
+    FS_OUT=$(first_lines "$FS_OUT")
     if [ -e "$BACKUP" ] || [ ! -x "$APP/Contents/MacOS/$EXE_NAME" ]; then
         log "되돌리기 실패 — 백업을 제자리로 옮기지 못함 (종료 코드 $rc): $FS_OUT"
         log "되돌리기 실패 — 처음 실패: $FAIL_REASON"
@@ -281,7 +328,7 @@ restore_backup() {  # 새 앱을 숨김 이름으로 치우고 백업을 제자�
         return 1
     fi
     log "백업을 제자리로 되돌림: $BACKUP → $APP"
-    if [ "$rc" != 0 ] || [ -e "$FAILED" ]; then
+    if [ "$rc" != 0 ] || exists "$FAILED"; then
         log "치운 새 앱을 지우지 못함: $FAILED (종료 코드 $rc)${FS_OUT:+ $FS_OUT}"
     fi
     return 0
@@ -349,7 +396,7 @@ STAGED="${STAGED%/}"
 APP_DIR=$(dirname "$APP")
 APP_BASE=$(basename "$APP")
 BACKUP="$APP_DIR/${APP_BASE%.app}.update-backup.app"
-FAILED="$APP_DIR/.$APP_BASE.update-failed"
+FAILED=""  # 되돌릴 때 restore_backup이 정함
 PATTERN=$(regex_escape "$APP/Contents/MacOS/")
 
 log "시작: 대상 버전 $TARGET, 앱 $APP, 준비한 새 앱 $STAGED"
@@ -387,7 +434,7 @@ if ! wait_ok; then
     rollback
 fi
 log "새 앱이 잘 켜짐 (버전 $TARGET)"
-if fs_run "rm -rf $(sh_quote "$BACKUP")"; then
+if delete_path "$BACKUP"; then
     log "백업을 지움: $BACKUP"
 else
     log "백업을 지우지 못함: $BACKUP ($FS_OUT)"
