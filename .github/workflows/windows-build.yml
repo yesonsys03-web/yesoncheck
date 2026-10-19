@@ -147,6 +147,12 @@ jobs:
             if ($p.ExitCode -ne 0) { throw "자동 설치 실패 (종료 코드 $($p.ExitCode))" }
             if (-not (Test-Path "C:\yc_install\YesonCheck_Autocut.exe")) { throw "설치 후 YesonCheck_Autocut.exe가 없습니다" }
             if (-not (Test-Path "C:\yc_install\_internal")) { throw "설치 후 _internal 폴더가 없습니다" }
+            # 라이선스(GPL-3.0)·제3자 고지: 실행 파일 옆(yesoncheck.iss)과 _internal(spec)
+            foreach ($f in @("LICENSE", "THIRD_PARTY_NOTICES.md")) {
+              foreach ($path in @("C:\yc_install\$f", "C:\yc_install\_internal\$f")) {
+                if (-not (Test-Path $path)) { throw "설치 후 ${f}이 없습니다: $path" }
+              }
+            }
             $startMenu = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Yeson Checker.lnk"
             if (-not (Test-Path $startMenu)) { throw "시작 메뉴 바로 가기가 없습니다: $startMenu" }
             $desktop = Join-Path ([Environment]::GetFolderPath("Desktop")) "Yeson Checker.lnk"

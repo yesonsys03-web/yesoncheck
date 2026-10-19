@@ -75,6 +75,9 @@ Name: "desktopicon"; Description: "바탕 화면에 바로 가기 만들기 (Cre
 
 [Files]
 Source: "dist\YesonCheck_Autocut\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; 라이선스(GPL-3.0)와 제3자 구성 요소 고지를 실행 파일 옆에도 둔다 (_internal 안에는 spec이 넣음)
+Source: "LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [InstallDelete]
 ; 업데이트 설치 때마다 예전 _internal을 통째로 지우고 새로 복사한다 —

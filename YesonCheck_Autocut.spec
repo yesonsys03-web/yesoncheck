@@ -62,6 +62,15 @@ for _name in ('LICENSE', 'README.md'):
         raise SystemExit(f"[spec] TransNetV2 {_name}가 없습니다: {_path}")
     transnet_datas.append((_path, 'transnetv2-weights'))
 
+# YesonCheck 라이선스(GPL-3.0 전문)와 제3자 구성 요소 고지도 앱에 넣음 (Mac: Contents/Resources, Windows: _internal).
+# Windows 설치 파일은 installer/yesoncheck.iss가 설치 폴더(실행 파일 옆)에도 따로 복사함
+license_datas = []
+for _name in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):
+    _path = os.path.join(project_root, _name)
+    if not os.path.isfile(_path):
+        raise SystemExit(f"[spec] {_name}가 없습니다: {_path}")
+    license_datas.append((_path, '.'))
+
 # 기본 라이브러리 수집 (collect_all 사용)
 cv2_binaries, cv2_datas, cv2_hiddenimports = [], [], []
 scenedetect_binaries, scenedetect_datas, scenedetect_hiddenimports = [], [], []
@@ -178,7 +187,7 @@ a = Analysis(
         (os.path.join(p310_site_packages, 'paddle'), 'paddle'),
         # apted 모듈 추가 (PaddleOCR 분석에 필수)
         (os.path.join(project_root, 'apted'), 'apted'),
-    ] + cv2_datas + transnet_datas + scenedetect_datas + paddleocr_datas + paddle_datas + skimage_datas + imageio_datas + cython_datas + ([] if IS_WINDOWS else [('Info.plist', '.')]),
+    ] + cv2_datas + transnet_datas + license_datas + scenedetect_datas + paddleocr_datas + paddle_datas + skimage_datas + imageio_datas + cython_datas + ([] if IS_WINDOWS else [('Info.plist', '.')]),
     hiddenimports=[
         # apted 모듈 (PaddleOCR이 사용하는 fallback 구현)
         'apted',

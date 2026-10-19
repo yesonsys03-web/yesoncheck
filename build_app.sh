@@ -42,6 +42,13 @@ echo "번들 바이너리 검사 (아키텍처·최소 macOS·외부 dylib)..."
 "$PY" check_min_macos.py "$OUT" "$ARCH"
 echo "번들 모듈 검사 (OCR·씬 감지 실행 경로의 모듈이 앱에 모두 있는지)..."
 "$PY" check_frozen_imports.py "$OUT"
+echo "라이선스·제3자 고지 확인 (LICENSE, THIRD_PARTY_NOTICES.md)..."
+for NOTICE in LICENSE THIRD_PARTY_NOTICES.md; do
+    if ! cmp -s "$NOTICE" "$OUT/Contents/Resources/$NOTICE"; then
+        echo "앱에 $NOTICE가 없거나 저장소의 것과 다릅니다: $OUT/Contents/Resources/$NOTICE"
+        exit 1
+    fi
+done
 # 배포용 디스크 이미지: .app 안에는 심볼릭 링크가 수백 개 있어 폴더째 NAS·메신저로 옮기면 링크가 깨지고
 # 실행 시 "No module named 'encodings'"로 멈춤 → 파일 하나(.dmg)로 묶어서 옮김
 DMG="dist/YesonCheck_Autocut_${LABEL}.dmg"
