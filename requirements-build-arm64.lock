@@ -176,7 +176,9 @@ more-itertools==11.1.0
     #   jaraco-functools
     #   jaraco-text
 networkx==3.4.2
-    # via scikit-image
+    # via
+    #   paddlepaddle
+    #   scikit-image
 numpy==1.26.4
     # via
     #   -r requirements-build.txt
@@ -235,7 +237,7 @@ packaging==26.3
     #   wheel
 paddleocr==2.7.3
     # via -r requirements-build.txt
-paddlepaddle==2.6.2
+paddlepaddle==3.0.0
     # via -r requirements-build.txt
 pandas==2.3.3
     # via visualdl
@@ -377,6 +379,7 @@ typing-extensions==4.16.0
     #   cryptography
     #   exceptiongroup
     #   grpcio
+    #   paddlepaddle
     #   python-docx
     #   tensorflow
     #   typeguard

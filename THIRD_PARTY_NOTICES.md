@@ -20,7 +20,7 @@
 | Qt (PyQt5-Qt5 휠의 Qt 라이브러리·플러그인) | Mac 5.15.19, Windows 5.15.2 | LGPL-3.0 (Qt 안의 제3자 코드: https://doc.qt.io/qt-5/licenses-used-in-qt.html ) | https://download.qt.io/archive/qt/5.15/5.15.19/ , https://download.qt.io/archive/qt/5.15/5.15.2/ |
 | FFmpeg (`ffmpeg`·`ffprobe` 정적 실행 파일) | 9.0.2 | GPL-3.0-or-later (libx264 등 GPL 라이브러리 포함) | 2절 |
 | OpenCV (opencv-python·opencv-contrib-python·opencv-python-headless 휠, contrib 포함) | 4.6.0.66 (OpenCV 4.6.0) | OpenCV: Apache-2.0, 휠 포장 스크립트: MIT (휠 안의 FFmpeg 4.4.2 등은 3절) | https://github.com/opencv/opencv/tree/4.6.0 , https://github.com/opencv/opencv_contrib/tree/4.6.0 , https://github.com/opencv/opencv-python/tree/66 |
-| PaddlePaddle | Mac Intel 3.0.0, Mac Apple Silicon·Windows 2.6.2 | Apache-2.0 | https://github.com/PaddlePaddle/Paddle/tree/v3.0.0 , https://github.com/PaddlePaddle/Paddle/tree/v2.6.2 |
+| PaddlePaddle | Mac 3.0.0, Windows 2.6.2 | Apache-2.0 | https://github.com/PaddlePaddle/Paddle/tree/v3.0.0 , https://github.com/PaddlePaddle/Paddle/tree/v2.6.2 |
 | PaddleOCR | 2.7.3 | Apache-2.0 | https://github.com/PaddlePaddle/PaddleOCR/tree/v2.7.3 |
 | PaddleOCR 모델 (PP-OCR 검출·인식·방향 분류) | PaddleOCR 2.7.3 기본 모델 | Apache-2.0 | **앱에 넣지 않음** — 처음 OCR을 쓸 때 PaddleOCR이 내려받아 사용자 폴더(`~/.paddleocr` 등)에 둠. 목록: https://github.com/PaddlePaddle/PaddleOCR/blob/v2.7.3/doc/doc_en/models_list_en.md |
 | TensorFlow | 2.15.1 (Windows: tensorflow-intel 2.15.1) | Apache-2.0 (TensorFlow 안의 제3자 코드: https://github.com/tensorflow/tensorflow/tree/v2.15.1/third_party ) | https://github.com/tensorflow/tensorflow/tree/v2.15.1 |
@@ -67,7 +67,7 @@ Windows 앱에는 같은 배포본의 Windows 휠이 들어가며 이름이 `.dl
 | opencv-python 4.6.0.66 | FFmpeg 4.4.2(libavcodec·libavformat·libavutil·libswscale·libswresample·libavresample), GnuTLS·Nettle·GMP·libidn2·libunistring·libtasn1·p11-kit, OpenSSL 1.1(libssl·libcrypto), mbedTLS, libaom·dav1d·rav1e·libvpx·libwebp·libjxl·openjpeg·libpng, LAME·Opus·Vorbis·Theora·Speex·opencore-amr·soxr, libbluray·SRT·RIST·ZeroMQ·libsodium, freetype·fontconfig·libintl, snappy·brotli·lzma·libffi·cJSON·vmaf | FFmpeg는 `--enable-version3`로 GPL 부분 없이 빌드 → LGPL-3.0-or-later. GnuTLS·libtasn1·libbluray·soxr·libintl: LGPL-2.1-or-later, Nettle·GMP·libidn2·libunistring: LGPL-3.0-or-later 또는 GPL-2.0-or-later, LAME: LGPL-2.0-or-later, ZeroMQ·SRT: MPL-2.0, OpenSSL 1.1: OpenSSL/SSLeay, freetype: FTL, libpng: libpng, 나머지는 BSD·MIT·ISC·Apache 계열. 원문: https://github.com/opencv/opencv-python/blob/66/LICENSE-3RD-PARTY.txt |
 | opencv-contrib-python 4.6.0.66 | Tesseract, Leptonica, libarchive, libtiff, libjpeg, giflib, lz4, zstd, libb2 | Apache-2.0(Tesseract), BSD 계열(Leptonica·libarchive·lz4·zstd), libtiff·IJG·MIT(giflib)·CC0(libb2) |
 | numpy 1.26.4, scipy 1.15.3 | OpenBLAS, GCC 런타임(libgfortran·libgcc_s·libquadmath) | OpenBLAS: BSD-3-Clause, libgfortran·libgcc_s: GPL-3.0-or-later WITH GCC-exception-3.1, libquadmath: LGPL-2.1-or-later |
-| paddlepaddle | libpaddle·libphi·libpir·libcommon, warpctc·warprnnt, BLAS·LAPACK, GCC 런타임 | Apache-2.0(Paddle과 그 안의 제3자 코드: https://github.com/PaddlePaddle/Paddle/tree/v3.0.0/third_party ), BSD-3-Clause 계열(BLAS·LAPACK), GCC 런타임은 위와 같음 |
+| paddlepaddle | libpaddle·libphi·libpir·libcommon, warpctc·warprnnt, BLAS·LAPACK·GCC 런타임(Apple Silicon 앱에는 없음) | Apache-2.0(Paddle과 그 안의 제3자 코드: https://github.com/PaddlePaddle/Paddle/tree/v3.0.0/third_party ), BSD-3-Clause 계열(BLAS·LAPACK), GCC 런타임은 위와 같음 |
 | pillow 12.3.0 | libjpeg-turbo, libpng, libtiff, libwebp, libavif, openjpeg, freetype, harfbuzz, lcms2, xz(liblzma), zlib-ng, brotli, libxcb·libXau | 휠의 LICENSE에 각 원문 (IJG/BSD/Zlib, libpng, libtiff, BSD-3, BSD-2, FTL, MIT, 0BSD 등) |
 | pymupdf 1.28.2 | MuPDF(libmupdf·libmupdfcpp) | AGPL-3.0 (Artifex 이중 라이선스) |
 | shapely 2.1.2 | GEOS(libgeos·libgeos_c) | LGPL-2.1 (원문: 휠의 `LICENSE_GEOS`) |
@@ -145,7 +145,7 @@ Windows(`requirements-build-windows.lock`)에서 다른 것은 괄호에 적었�
 | opt-einsum | 3.3.0 | MIT | https://pypi.org/project/opt-einsum/3.3.0/ |
 | packaging | 26.3 | Apache-2.0 OR BSD-2-Clause | https://pypi.org/project/packaging/26.3/ |
 | paddleocr | 2.7.3 | Apache-2.0 | https://pypi.org/project/paddleocr/2.7.3/ |
-| paddlepaddle | 3.0.0 (Apple Silicon 2.6.2, Windows 2.6.2) | Apache-2.0 | https://pypi.org/project/paddlepaddle/3.0.0/ |
+| paddlepaddle | 3.0.0 (Windows 2.6.2) | Apache-2.0 | https://pypi.org/project/paddlepaddle/3.0.0/ |
 | pandas | 2.3.3 | BSD-3-Clause | https://pypi.org/project/pandas/2.3.3/ |
 | pdf2docx | 0.5.13 | MIT | https://pypi.org/project/pdf2docx/0.5.13/ |
 | pillow | 12.3.0 | MIT-CMU | https://pypi.org/project/pillow/12.3.0/ |

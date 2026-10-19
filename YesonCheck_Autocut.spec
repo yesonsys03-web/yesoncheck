@@ -311,22 +311,23 @@ a = Analysis(
     optimize=0,
 )
 
-# arm64용 paddle 2.6.2 휠에는 x86_64 전용 dylib(libblas.3, liblapack.3, libgfortran.5 등)가 섞여 있음.
-# paddle 본체가 링크하지 않고(liblapack만 LAPACK 연산 때 dlopen) 이 아키텍처에서는 어차피 못 쓰므로 제외
+# arm64용 paddle 3.0.0 휠의 LAPACK 보조 라이브러리(libblas·liblapack과 그 Fortran 런타임 libgfortran·libgcc_s·libquadmath):
+# paddle 본체(libphi·libpaddle)는 링크하지 않고(BLAS는 시스템 Accelerate, liblapack만 LAPACK 연산 때 dlopen — OCR은 안 씀),
+# libblas·liblapack은 macOS 14.0 이상 + 휠을 만든 Mac의 Homebrew(/opt/homebrew)를 가리켜 사용자 Mac에서는 어차피 못 씀
+# → 제외 (check_min_macos.py 12.3 통과). Intel(x86_64) 휠의 것은 12.3 이하·외부 참조 없음이라 그대로 둠
 # (paddle 폴더를 datas로도 통째로 넣으므로 binaries와 datas 양쪽에서 거름)
-if sys.platform == 'darwin':
-    from PyInstaller.utils.osx import get_binary_architectures
+if sys.platform == 'darwin' and platform.machine() == 'arm64':
+    _LAPACK_HELPERS = ('libblas', 'liblapack', 'libgfortran', 'libgcc_s', 'libquadmath')
 
-    def _lacks_target_arch(entry):
-        dest, src = entry[0], entry[1]
+    def _is_lapack_helper(entry):
+        dest = entry[0]
         return (dest.startswith('paddle/libs/') and dest.endswith('.dylib')
-                and platform.machine() not in get_binary_architectures(src)[1])
+                and os.path.basename(dest).startswith(_LAPACK_HELPERS))
 
-    _dropped = sorted({e[0] for e in list(a.binaries) + list(a.datas) if _lacks_target_arch(e)})
-    if _dropped:
-        print(f"[spec] {platform.machine()} 슬라이스가 없는 paddle 라이브러리 제외: {_dropped}")
-        a.binaries = [e for e in a.binaries if e[0] not in _dropped]
-        a.datas = [e for e in a.datas if e[0] not in _dropped]
+    _dropped = sorted({e[0] for e in list(a.binaries) + list(a.datas) if _is_lapack_helper(e)})
+    print(f"[spec] arm64: 앱에 넣지 않는 paddle LAPACK 보조 라이브러리: {_dropped}")
+    a.binaries = [e for e in a.binaries if e[0] not in _dropped]
+    a.datas = [e for e in a.datas if e[0] not in _dropped]
 
 # Windows: TensorFlow가 import할 때(self_check.preload_check) msvcp140.dll·msvcp140_1.dll을 이름으로 불러봄.
 # VC++ 재배포 패키지가 없는 PC에서도 되도록 _internal 맨 위에 두 DLL이 있게 함

@@ -10,7 +10,7 @@ YesonCheck는 PyQt5 기반의 영상 비교/검토 툴입니다. 이번 리팩�
 
 ### 필수 파이썬 패키지
 `./setup_build_env.sh`가 아래 패키지를 `requirements-build.txt`의 고정 버전으로 설치합니다 ([BUILD.md](BUILD.md)).
-(paddleocr 2.7.3 때문에 opencv는 4.6.0.66. paddlepaddle은 몬터레이 지원을 위해 Intel 3.0.0, Apple Silicon 2.6.2를 씁니다.)
+(paddleocr 2.7.3 때문에 opencv는 4.6.0.66. paddlepaddle은 Mac(Intel·Apple Silicon) 3.0.0, Windows 2.6.2를 씁니다.)
 - `PyQt5` : 데스크톱 UI 프레임워크
 - `opencv-python` : 프레임 단위 이미지/영상 처리
 - `numpy` : 배열 연산 및 영상 버퍼 처리

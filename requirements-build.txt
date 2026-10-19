@@ -15,14 +15,15 @@ numpy==1.26.4
 opencv-python==4.6.0.66
 opencv-contrib-python==4.6.0.66
 opencv-python-headless==4.6.0.66
-# paddle은 아키텍처마다 몬터레이에서 도는 버전이 다름 (휠 안 라이브러리의 최소 macOS 기준)
-#   x86_64: 2.6.2는 macOS 13.0 필요 → 3.0.0(12.3)   arm64: 3.0.0은 libblas가 14.0 필요 → 2.6.2(11.4)
-#   paddleocr 2.7.3 OCR 결과는 두 버전에서 동일함을 확인
-paddlepaddle==3.0.0; sys_platform == "darwin" and platform_machine == "x86_64"
-paddlepaddle==2.6.2; sys_platform == "darwin" and platform_machine == "arm64"
-# uv의 Windows 타깃 마커 환경은 platform_machine을 (실제 Windows의 AMD64가 아니라) "x86_64"로 보고해
-# 위 Mac 줄과 겹치므로, Mac 줄은 sys_platform == "darwin"으로 묶어 Windows와 분리함
-#   Windows: 2.6.2 (macOS용 3.0.0의 OCR 중단 버그가 없는 버전, 실리콘 Mac과 같은 버전)
+# paddle: Mac은 두 아키텍처 모두 3.0.0 (휠 안 라이브러리의 최소 macOS 기준으로 몬터레이 12.3에서 도는 버전)
+#   x86_64: 2.6.2는 macOS 13.0 필요 → 3.0.0(12.3)
+#   arm64: 2.6.2는 쓰지 않음 — 안에 정적으로 든 OpenBLAS(0.3.18 이전)의 sgemm_itcopy가 macOS가 예약한 x18 레지스터를
+#     반복 횟수로 써서 Apple Silicon에서 OCR 추론 중에 죽음 (OpenBLAS 0.3.18 "fixed crashes (use of reserved register x18)
+#     on Apple M1 under OSX", CI 실행 시험에서 첫 OCR에서 프로세스가 끝남). 3.0.0 본체(libphi·libpaddle, 11.4)는 BLAS를
+#     시스템 Accelerate로 씀. 함께 든 LAPACK 보조 라이브러리(libblas·liblapack 14.0 + Fortran 런타임)는 spec이 앱에서 뺌
+#   paddleocr 2.7.3 OCR 결과는 2.6.2와 3.0.0에서 동일함을 확인 (x86_64)
+paddlepaddle==3.0.0; sys_platform == "darwin"
+#   Windows: 2.6.2 (macOS용 3.0.0의 OCR 중단 버그가 없는 버전, MKL을 써서 위 OpenBLAS 문제와 무관)
 paddlepaddle==2.6.2; sys_platform == "win32"
 paddleocr==2.7.3
 scikit-image==0.24.0
