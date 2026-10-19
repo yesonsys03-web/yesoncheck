@@ -3,6 +3,7 @@
 - 지원 대상: **macOS 12.3(몬터레이) 이상**, Intel Mac과 Apple Silicon Mac
   (12.3인 이유: Intel용 paddle 3.0.0이 12.3을 요구. 몬터레이 최종 업데이트는 12.7.x)
 - PyInstaller는 다른 아키텍처용으로 빌드할 수 없으므로, **아키텍처마다 해당 Mac에서 한 번씩** 빌드합니다.
+  GitHub Actions가 두 아키텍처의 Mac 러너에서 각각 빌드·검사·실행 시험도 합니다 (5절). 아래 1·2절의 로컬 빌드는 그대로 쓸 수 있습니다.
 
 | 빌드한 Mac | 결과물 | 배포 대상 |
 |---|---|---|
@@ -25,7 +26,7 @@ Intel 앱도 Apple Silicon에서 Rosetta로 실행되지만, macOS 26.4부터 �
 
 ## 1. 빌드 환경 만들기 (Mac마다 최초 1회)
 
-1. 소스 받기: `git clone https://github.com/yesonsys03-web/yesoncheck.git` (비공개 저장소라 GitHub 로그인 필요)
+1. 소스 받기: `git clone https://github.com/yesonsys03-web/yesoncheck.git` (퍼블릭 저장소 — GitHub 로그인 없이 받을 수 있음)
 2. 정적 ffmpeg 받기: 프로젝트 폴더에서 `./fetch_ffmpeg.sh`
    - git에 없는 `vendor/ffmpeg/{x86_64,arm64}`를 배포처에서 받아 sha256을 대조합니다 (`vendor/ffmpeg/README.md`). 이미 맞는 파일이 있으면 건너뜁니다.
    - 저장소 대신 폴더를 직접 복사했다면 `vendor/ffmpeg/`가 이미 들어 있으니 이 단계는 건너뛰어도 됩니다.
@@ -113,8 +114,9 @@ git 저장소가 아닌 폴더(직접 복사한 폴더)에서는 버전을 정�
 
 ## 4. Windows 빌드 (GitHub Actions)
 
-- 빌드는 GitHub Actions의 `windows-build` 워크플로가 합니다. Windows PC에서 직접 빌드할 필요는 없습니다.
-- 실행: GitHub 저장소 → Actions → windows-build → **Run workflow** (또는 `gh workflow run windows-build.yml --ref main`). `v*` 태그를 푸시해도 실행됩니다.
+- 빌드는 GitHub Actions의 `build (Windows·Mac)` 워크플로(파일 `.github/workflows/windows-build.yml`)의 `build` job이 합니다. Windows PC에서 직접 빌드할 필요는 없습니다.
+- 실행: GitHub 저장소 → Actions → build (Windows·Mac) → **Run workflow** (또는 `gh workflow run windows-build.yml --ref main`). `v*` 태그를 푸시해도 실행됩니다.
+  한 번 실행하면 Windows와 Mac 두 종류(5절)를 함께 빌드합니다.
 - 하는 일: Windows lock 설치 → ffmpeg(gyan 9.0.2) 받기 → 시험용 SMB 공유를 만들어 경로 시험 → PyInstaller 빌드 → `_internal`에 msvcp140.dll·msvcp140_1.dll 확인 → 모듈 검사 → 빌드된 exe로 실행 시험(한글 UNC 경로의 작품 목록·ffprobe·OpenCV·OCR·애니매틱2·내보내기·병합) → 설치 파일 시험.
 - Windows lock은 `--override requirements-build-windows.overrides.txt`(protobuf 3.20.3)와 함께 설치해야 합니다:
   paddle 2.6.2 Windows 휠은 protobuf <=3.20.2를, TensorFlow 2.15는 >=3.20.3을 요구해 덮어쓰지 않으면 uv가 설치를 거부합니다.
@@ -125,3 +127,21 @@ git 저장소가 아닌 폴더(직접 복사한 폴더)에서는 버전을 정�
   폴더째 받은 앱(`YesonCheck_Autocut_Windows_<커밋>`)은 2026-10-15부터 올리지 않습니다(사용자 요청 — 설치 파일만 씀).
 - Windows PC에서 직접 빌드하려면: Python 3.10 + uv 설치 → `uv venv .venv --python 3.10 --managed-python` → `uv pip install --python .venv\Scripts\python.exe -r requirements-build-windows.lock --override requirements-build-windows.overrides.txt` → opencv contrib 재설치(워크플로 참고) → `./fetch_ffmpeg_windows.ps1` → `.venv\Scripts\python.exe tools\write_build_info.py --out build\build_info.json` → `.venv\Scripts\python.exe -m PyInstaller --clean -y YesonCheck_Autocut.spec`.
 - 배포·첫 설정은 내부 문서 저장소(yesoncheck-internal)의 `docs/windows-deploy.md`.
+
+## 5. Mac 빌드 (GitHub Actions — Apple Silicon·Intel)
+
+- 같은 워크플로 `build (Windows·Mac)`의 `mac` job이 Apple Silicon(`macos-15` 러너)과 Intel(`macos-15-intel` 러너)에서 각각 빌드합니다.
+  실행 방법은 4절과 같고(수동 실행 또는 `v*` 태그), 한쪽이 실패해도 다른 쪽은 끝까지 돕니다.
+- 하는 일은 1·2절의 스크립트 그대로입니다: `./fetch_ffmpeg.sh` → `VENV=<러너 임시 폴더>/p310_tf ./setup_build_env.sh`
+  (+ `requirements-test.txt`) → 소스 시험(pytest) → `PY=… ./build_app.sh`(빌드 정보·PyInstaller·`check_min_macos.py`·
+  `check_frozen_imports.py`·라이선스·dmg) → 2절의 실행 시험(`--expect-version` 포함, 시험 자료는 러너 임시 폴더) → dmg 올리기.
+  - 빌드 전에 작업 폴더가 깨끗한지 확인합니다 (커밋 안 된 변경이 있으면 버전 끝에 `.dirty`가 붙어 멈춤).
+  - 실행 시험은 25분 안에 끝나야 합니다 (Windows와 같음, macOS에는 `timeout` 명령이 없어 `perl`의 alarm으로 끊음).
+    `smoke_result.json`은 성공해도 로그에 남습니다 — `애니매틱2 (TransNetV2)`의 `"cuts": [0, 30, 60]`을 여기서 확인할 수 있습니다.
+  - 러너는 macOS 15지만 lock 설치가 `MACOSX_DEPLOYMENT_TARGET=12.0`으로 휠을 고르고 `check_min_macos.py`가 12.3 이하를
+    확인하므로 몬터레이용 앱이 됩니다. 러너 디스크 여유는 시작과 끝에 `df -h /`로 기록합니다.
+- 결과: Artifacts의 `YesonCheck_Autocut_AppleSilicon_<file_tag>`와 `YesonCheck_Autocut_Intel_<file_tag>`
+  (각각 `YesonCheck_Autocut_<AppleSilicon|Intel>_<file_tag>.dmg`를 담은 zip, 14일 보관). `<file_tag>`는 4절과 같음
+  (배포판 `vX.Y.Z` 태그면 `X.Y.Z`, 아니면 커밋 7자리). 받은 dmg는 3절처럼 씁니다.
+- 로컬 `./build_app.sh`(1·2절)는 바뀌지 않았습니다. GitHub의 Intel Mac 러너는 언젠가 없어질 수 있습니다 —
+  그때 Intel 앱은 다시 Intel Mac에서 `./build_app.sh`로 만듭니다.

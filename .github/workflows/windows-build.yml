@@ -1,4 +1,5 @@
-name: windows-build
+# 파일 이름은 windows-build.yml 그대로 (문서·명령 `gh workflow run windows-build.yml`이 이 이름을 씀)
+name: build (Windows·Mac)
 
 on:
   workflow_dispatch:
@@ -224,3 +225,138 @@ jobs:
           path: ${{ env.SETUP_EXE }}
           retention-days: 14
           if-no-files-found: error
+
+  mac:
+    # PyInstaller는 다른 아키텍처용으로 빌드할 수 없음 → 아키텍처마다 그 러너에서 build_app.sh (BUILD.md 5절)
+    name: mac (${{ matrix.label }})
+    strategy:
+      # 한쪽이 실패해도 다른 쪽은 끝까지 → 두 아키텍처의 문제를 한 번에 봄
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            label: AppleSilicon
+          - runner: macos-15-intel
+            label: Intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    defaults:
+      run:
+        # bash -eo pipefail: 여러 줄 단계에서 중간 명령이 실패해도 단계가 실패하도록
+        shell: bash
+    env:
+      # build_app.sh가 venv Python의 아키텍처로 정하는 앱·dmg 이름의 꼬리 — 아래 빌드 환경 단계에서 맞는지 확인
+      LABEL: ${{ matrix.label }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # 버전(tools/write_build_info.py)을 git 태그로 정함 → 전체 기록과 태그를 받음 (기본은 커밋 하나만)
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v10.3.0
+
+      - name: 디스크 여유 (시작)
+        # 러너 디스크가 작음(문서상 14 GB) — 빌드 환경(Paddle·TensorFlow) + 앱 + dmg가 들어가는지 기록
+        run: df -h /
+
+      - name: ffmpeg (정적 9.0.2, sha256 확인)
+        run: ./fetch_ffmpeg.sh
+
+      - name: 빌드 환경 (Python 3.10, 아키텍처별 lock — setup_build_env.sh)
+        run: |
+          # 저장소 밖(러너 임시 폴더)에 만듦 → 작업 폴더가 깨끗하게 남아 버전 끝에 .dirty가 붙지 않음
+          export VENV="$RUNNER_TEMP/p310_tf"
+          ./setup_build_env.sh
+          # 소스 시험용 (앱·빌드에는 들어가지 않음)
+          uv pip install --python "$VENV/bin/python" -r requirements-test.txt
+          # 러너가 아니라 venv Python의 아키텍처로 lock·앱 이름이 정해짐 → 이 job의 라벨과 같아야 함
+          ARCH="$("$VENV/bin/python" -c 'import platform; print(platform.machine())')"
+          case "$LABEL/$ARCH" in
+            AppleSilicon/arm64 | Intel/x86_64) echo "아키텍처: $ARCH ($LABEL)" ;;
+            *) echo "이 job($LABEL)과 빌드 환경 Python의 아키텍처($ARCH)가 맞지 않습니다"; exit 1 ;;
+          esac
+          echo "VENV=$VENV" >> "$GITHUB_ENV"
+          echo "ARCH=$ARCH" >> "$GITHUB_ENV"
+
+      - name: 소스 시험 (pytest)
+        run: |
+          "$VENV/bin/python" -m pytest tests -v -rs
+
+      - name: 앱 빌드 (build_app.sh — 빌드 정보·PyInstaller·두 검사·라이선스·dmg)
+        run: |
+          # CI는 저장소 파일을 바꾸지 않음 → 커밋 안 된 변경이 있으면 버전 끝에 .dirty가 붙고
+          # vX.Y.Z 태그 빌드도 배포판 X.Y.Z가 되지 못하므로 빌드 전에 멈춤
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "작업 폴더에 커밋 안 된 변경이 있습니다:"
+            git status --porcelain
+            exit 1
+          fi
+          PY="$VENV/bin/python" ./build_app.sh
+
+      - name: 빌드 버전 (build/build_info.json → 파일 이름 꼬리)
+        run: |
+          # build_app.sh가 만들어 앱에 넣은 파일에서 읽음 (write_build_info.py를 다시 돌리지 않음 — 빌드 시각이 바뀜)
+          BUILD_VERSION="$("$VENV/bin/python" -c 'import json; print(json.load(open("build/build_info.json", encoding="utf-8"))["version"])')"
+          # 파일 이름 꼬리는 write_build_info.py의 file_tag와 같은 규칙 (배포판이면 X.Y.Z, 아니면 커밋 7자리)
+          FILE_TAG="$("$VENV/bin/python" -c 'import json, sys; sys.path.insert(0, "tools"); from write_build_info import file_tag; info = json.load(open("build/build_info.json", encoding="utf-8")); print(file_tag(info["version"], info["commit"]))')"
+          TAG_RE='^([0-9]+\.[0-9]+\.[0-9]+|[0-9a-f]{7})$'
+          if ! [[ "$FILE_TAG" =~ $TAG_RE ]]; then
+            echo "파일 이름 꼬리가 X.Y.Z나 커밋 7자리가 아닙니다: $FILE_TAG"
+            exit 1
+          fi
+          echo "BUILD_VERSION=$BUILD_VERSION" >> "$GITHUB_ENV"
+          echo "FILE_TAG=$FILE_TAG" >> "$GITHUB_ENV"
+          echo "빌드 버전: $BUILD_VERSION (파일 이름 꼬리 $FILE_TAG)"
+
+      - name: 실행 시험 데이터 (러너 임시 폴더에 공유 설정·한글 작품 폴더·시험 영상)
+        run: |
+          # 시험 영상은 받아 둔 정적 ffmpeg로 만듦 (러너에 ffmpeg가 있든 없든)
+          export PATH="$PWD/vendor/ffmpeg/$ARCH:$PATH"
+          # --expect-version: 실행 시험이 앱이 읽은 버전(앱 안의 build_info.json)과 창 제목도 확인
+          "$VENV/bin/python" ci/make_test_data.py --share-root "$RUNNER_TEMP/yc" --mac-root "$RUNNER_TEMP/yc" --workdir "$RUNNER_TEMP/yc_smoke" --expect-version "$BUILD_VERSION"
+
+      - name: 실행 시험 (빌드된 앱)
+        run: |
+          APP="dist/YesonCheck_Autocut_${LABEL}.app/Contents/MacOS/YesonCheck_Autocut"
+          WORKDIR="$RUNNER_TEMP/yc_smoke"
+          LIMIT=1500  # 초 — Windows의 ci/run_smoke_test.ps1과 같음
+          # macOS에는 timeout 명령이 없음 → perl이 alarm을 건 뒤 같은 프로세스에서 앱으로 exec (alarm은 exec 뒤에도 남음).
+          # LIMIT초 안에 끝나지 않으면 앱이 SIGALRM으로 끝나고 종료 코드 142(128+14) — 대화상자 등에 멈춰도 job 시간을 다 쓰지 않게
+          STATUS=0
+          QT_QPA_PLATFORM=offscreen YESONCHECK_CONFIG_DIR="$RUNNER_TEMP/yc/.yesoncheck" \
+            perl -e 'alarm shift @ARGV; exec @ARGV or die "실행할 수 없습니다: $ARGV[0]: $!\n"' "$LIMIT" "$APP" --smoke-test "$WORKDIR" || STATUS=$?
+          # 성공해도 결과를 남김 (애니매틱2 (TransNetV2)의 "cuts": [0, 30, 60] 등을 로그에서 확인)
+          if [ -f "$WORKDIR/smoke_result.json" ]; then
+            echo "===== $WORKDIR/smoke_result.json"
+            cat "$WORKDIR/smoke_result.json"
+            echo  # 파일 끝에 줄바꿈이 없음 → 아래 메시지가 같은 줄에 붙지 않게
+          else
+            echo "smoke_result.json 없음"
+          fi
+          if [ "$STATUS" -eq 142 ]; then
+            echo "실행 시험이 ${LIMIT}초 안에 끝나지 않았습니다 (대화상자에서 멈췄을 수 있음)"
+            exit 1
+          fi
+          if [ "$STATUS" -ne 0 ]; then
+            echo "실행 시험 실패 (종료 코드 $STATUS)"
+            exit 1
+          fi
+
+      - name: dmg 이름 (YesonCheck_Autocut_<라벨>_<파일 이름 꼬리>.dmg)
+        run: |
+          DMG="dist/YesonCheck_Autocut_${LABEL}_${FILE_TAG}.dmg"
+          mv "dist/YesonCheck_Autocut_${LABEL}.dmg" "$DMG"
+          ls -l "$DMG"
+          echo "DMG_PATH=$DMG" >> "$GITHUB_ENV"
+          echo "DMG_ARTIFACT_NAME=YesonCheck_Autocut_${LABEL}_${FILE_TAG}" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.DMG_ARTIFACT_NAME }}
+          path: ${{ env.DMG_PATH }}
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: 디스크 여유 (끝)
+        if: always()
+        run: df -h /
