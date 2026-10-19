@@ -21,7 +21,8 @@ make_test_data.py --update-dir이 가짜 공유 설정의 updates/에 꾸러미�
 YC_UPDATE_DIRECT_LAUNCH=1, YC_UPDATE_OK_TIMEOUT_S=60, YC_UPDATE_NO_MESSAGEBOX=1, 업데이트 상태 폴더는 작업 폴더 아래
 (Windows LOCALAPPDATA, Mac HOME). PYTHONUTF8은 뺌 (사용자 PC와 같게 — ci/run_smoke_test.ps1처럼).
 
-단계마다 이름을 찍고, 실패하면 그 단계·트레이스백·도우미 기록(update.log)·앱 기록(Windows %LOCALAPPDATA%\\YesonCheck\\logs,
+전체 제한 시간(--time-limit-min, 워크플로 단계의 timeout-minutes보다 몇 분 짧게)이 지나면 기다리던 단계가 실패해 단계가 끊기기
+전에 진단을 보인다. 단계마다 이름을 찍고, 실패하면 그 단계·트레이스백·도우미 기록(update.log)·앱 기록(Windows %LOCALAPPDATA%\\YesonCheck\\logs,
 Mac은 옛 앱의 stdout·stderr — 도우미가 다시 켠 앱의 출력은 update.log에)·smoke_result.json·설치 폴더 상태를 보이고 종료 코드 1.
 끝낼 때 작업 폴더 아래의 실행 파일로 도는 프로세스(앱·설치 파일)와 작업 폴더의 도우미 스크립트를 실행 중인 프로세스를 모두 끝냄.
 """
@@ -52,12 +53,15 @@ MAC_APP_PREFIX = "YesonCheck_Autocut_"
 MAC_LABELS = ("Intel", "AppleSilicon")
 WINDOWS_MAC_ROOT = "/Volumes/yc_update"  # Windows 경우의 공유 설정에 적는 Mac 경로 (변환표로 UNC가 됨)
 
+# 기다림마다의 한도 — 모두 전체 제한 시간(Deadline) 안에서만
 INSTALL_TIMEOUT_S = 900  # 원래 설치 파일의 조용한 설치
 ISCC_TIMEOUT_S = 1800  # 설치 파일 컴파일 (CI에서 약 7분 — 둘을 함께)
-SMOKE_TIMEOUT_S = 1200  # 옛 앱 실행 시험 (받기·Mac 새 앱 준비 포함)
-HELPER_TIMEOUT_S = 1200  # 도우미가 끝날 때까지 (Windows 조용한 설치 포함)
+SMOKE_TIMEOUT_S = 900  # 옛 앱 실행 시험 (받기·Mac 새 앱 준비 포함)
+HELPER_TIMEOUT_S = 900  # 도우미가 끝날 때까지 (Windows 조용한 설치 포함)
 PENDING_CLEARED_S = 60  # 되돌린 옛 앱이 업데이트 기록을 지울 때까지
 KILL_WAIT_S = 15
+# 전체 제한 시간 기본값 (분) — 워크플로 단계의 timeout-minutes(Windows 45, Mac 30)보다 짧게: 남은 시간에 진단·정리
+DEFAULT_TIME_LIMIT_MIN = {"windows": 38, "mac": 24}
 
 # 옛 앱(그리고 도우미가 물려받아 다시 켜는 앱)의 환경
 APP_ENV = {
@@ -68,6 +72,23 @@ APP_ENV = {
     "YC_UPDATE_NO_MESSAGEBOX": "1",
     "YC_UPDATE_INSTALL_TIMEOUT_S": "900",  # 설치 파일이 멈추면 도우미가 30분이 아니라 15분 뒤 끝내고 되돌림
 }
+
+
+class Deadline:
+    """전체 제한 시간. left(cap): 이번 기다림에 쓸 초 (cap과 남은 시간 중 작은 것) — 다 썼으면 TimeoutError."""
+
+    def __init__(self, minutes):
+        self.minutes = minutes
+        self.end = time.monotonic() + minutes * 60
+
+    def left(self, cap):
+        remaining = self.end - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"전체 제한 시간 {self.minutes:g}분이 지났습니다 (워크플로 단계가 끊기기 전에 멈추고 진단을 보임)")
+        return min(cap, remaining)
+
+
+DEADLINE = Deadline(DEFAULT_TIME_LIMIT_MIN["windows" if WINDOWS else "mac"])  # main이 --time-limit-min으로 다시 정함
 
 
 class StepFailed(Exception):
@@ -93,7 +114,12 @@ def step(case, name, func, *args):
 def run(cmd, timeout, **kwargs):
     """명령 실행 (출력은 그대로 CI 로그로). 종료 코드가 0이 아니면 CalledProcessError."""
     print("$ " + subprocess.list2cmdline([str(c) for c in cmd]), flush=True)
-    return subprocess.run(cmd, check=True, timeout=timeout, **kwargs)
+    limit = DEADLINE.left(timeout)
+    try:
+        return subprocess.run(cmd, check=True, timeout=limit, **kwargs)
+    except subprocess.TimeoutExpired:
+        why = f"전체 제한 시간 {DEADLINE.minutes:g}분에 걸림" if limit < timeout else f"이 명령의 한도 {timeout}초"
+        raise TimeoutError(f"{os.path.basename(str(cmd[0]))}이(가) {limit:.0f}초 안에 끝나지 않았습니다 ({why})")
 
 
 def same_path(a, b):
@@ -263,7 +289,7 @@ def list_processes():
             "Select-Object ProcessId, ExecutablePath, CommandLine)"
         )
         out = subprocess.run([update_install._windows_powershell(), "-NoProfile", "-NonInteractive", "-Command", script],
-                             capture_output=True, check=True, timeout=120).stdout.decode("utf-8")
+                             capture_output=True, check=True, timeout=120).stdout.decode("utf-8-sig")
         return [Proc(int(item["ProcessId"]), item.get("ExecutablePath") or "", item.get("CommandLine") or "")
                 for item in json.loads(out)]
     out = subprocess.run(["ps", "-axww", "-o", "pid=,command="], capture_output=True, text=True, check=True,
@@ -366,12 +392,12 @@ def build_windows_installers(args, cases, work):
                 jobs.append((case, tree, log_path,
                              subprocess.Popen(cmd, cwd=tree, stdout=log, stderr=subprocess.STDOUT)))
         codes = {}
-        deadline = time.monotonic() + ISCC_TIMEOUT_S
+        deadline = time.monotonic() + DEADLINE.left(ISCC_TIMEOUT_S)
         for case, _tree, _log_path, proc in jobs:
             try:
                 codes[case.name] = proc.wait(timeout=max(1, deadline - time.monotonic()))
             except subprocess.TimeoutExpired:
-                codes[case.name] = f"{ISCC_TIMEOUT_S}초 안에 끝나지 않음"
+                codes[case.name] = "제한 시간 안에 끝나지 않음"
     finally:
         for _case, _tree, _log_path, proc in jobs:
             if proc.poll() is None:  # 실패·시간 초과 — 띄운 컴파일러를 남기지 않음
@@ -484,12 +510,13 @@ def run_old_app(case):
     with open(case.stdout_path, "wb") as out, open(case.stderr_path, "wb") as err:
         # Windows: 바로 가기처럼 작업 폴더를 설치 폴더로 (도우미가 그 폴더의 이름을 바꿀 수 있어야 함)
         proc = subprocess.Popen(cmd, env=env, cwd=case.app if WINDOWS else case.root, stdout=out, stderr=err)
+        limit = DEADLINE.left(SMOKE_TIMEOUT_S)
         try:
-            code = proc.wait(timeout=SMOKE_TIMEOUT_S)
+            code = proc.wait(timeout=limit)
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(30)
-            raise TimeoutError(f"옛 앱 실행 시험이 {SMOKE_TIMEOUT_S}초 안에 끝나지 않았습니다 (대화상자에서 멈췄을 수 있음)")
+            raise TimeoutError(f"옛 앱 실행 시험이 {limit:.0f}초 안에 끝나지 않았습니다 (대화상자에서 멈췄을 수 있음)") from None
     print(f"옛 앱이 끝남: 종료 코드 {code} ({time.monotonic() - started:.1f}초)", flush=True)
     result_path = os.path.join(case.smoke_dir, "smoke_result.json")
     assert os.path.isfile(result_path), f"smoke_result.json이 없습니다 (종료 코드 {code})"
@@ -506,12 +533,13 @@ def run_old_app(case):
 def wait_helper(case, files):
     """도우미(state 폴더의 스크립트 복사본을 실행 중인 프로세스)가 끝나기를 기다림 → 업데이트 기록(update.log) 글."""
     started = time.monotonic()
+    limit = DEADLINE.left(HELPER_TIMEOUT_S)
     while True:
         running = our_processes([], [files["helper"]])
         if not running:
             break
-        if time.monotonic() - started > HELPER_TIMEOUT_S:
-            raise TimeoutError(f"도우미가 {HELPER_TIMEOUT_S}초 안에 끝나지 않았습니다: "
+        if time.monotonic() - started > limit:
+            raise TimeoutError(f"도우미가 {limit:.0f}초 안에 끝나지 않았습니다: "
                                + ", ".join(f"pid {p.pid}" for p in running))
         time.sleep(2 if WINDOWS else 1)
     print(f"도우미가 끝남 ({time.monotonic() - started:.1f}초 기다림)", flush=True)
@@ -528,12 +556,58 @@ def leftovers(case):
     return sorted(name for name in os.listdir(parent) if name != os.path.basename(case.app))
 
 
+def helper_lines(log_text):
+    """업데이트 기록에서 도우미가 쓴 줄의 내용 (" 도우미: " 뒤)."""
+    return [line.split(" 도우미: ", 1)[1] for line in log_text.splitlines() if " 도우미: " in line]
+
+
+def assert_helper_sequence(log_text, expected):
+    """도우미 줄에 expected의 글이 이 순서로 (각각 앞의 것보다 뒤의 줄에) 있는지."""
+    lines = helper_lines(log_text)
+    position = 0
+    for part in expected:
+        found = next((i for i in range(position, len(lines)) if part in lines[i]), None)
+        assert found is not None, (f"도우미 기록에 {part!r}이(가) (앞 단계 뒤에) 없습니다\n기대 순서: {expected}\n"
+                                   "도우미 줄:\n" + "\n".join(lines))
+        position = found + 1
+
+
+def one_app_process(case, what):
+    running = app_processes(case)
+    assert len(running) == 1, (f"{what} 프로세스가 하나가 아닙니다 ({len(running)}개): {executable(case.app)}\n"
+                               + "\n".join(f"pid {p.pid}: {p.command[:300]}" for p in running))
+    return running
+
+
+def success_sequence(windows):
+    """성공 경로에서 도우미 기록에 이 순서로 있어야 하는 글 (update_helper_windows.ps1·update_helper_mac.sh의 Write-Log·log)."""
+    if windows:
+        replaced = ["설치 폴더를 백업 이름으로 바꿈", "설치 파일이 끝남 (종료 코드 0)", "새 앱을 켬 (pid"]
+    else:
+        replaced = ["옛 앱을 백업 이름으로 옮김", "새 앱을 앱 자리로 옮김", "새 앱을 켬 (직접 실행, pid"]
+    return [*replaced, f"새 앱이 잘 켜짐 (버전 {NEW_VERSION})", "백업을 지움", f"업데이트 끝: {NEW_VERSION}"]
+
+
+def rollback_sequence(windows):
+    """되돌리기 경로: 되돌린 이유가 '새 앱을 켰는데 잘 켜짐 표시가 없음'이어야 함 — 이름 바꾸기·설치 실패처럼 새 앱을 켜기
+    전의 실패로 되돌린 것은 통과가 아님 (Windows: 98.0.0 앱은 떠 있지만 표시를 쓰지 않아 시간이 지남, Mac: 실행 파일이
+    바로 끝남)."""
+    if windows:
+        launched = ["설치 파일이 끝남 (종료 코드 0)", "새 앱을 켬 (pid",
+                    f"업데이트 실패: {APP_ENV['YC_UPDATE_OK_TIMEOUT_S']}초 안에 '잘 켜짐' 표시가 없음"]
+        relaunched = "옛 앱을 켬 (pid"
+    else:
+        launched = ["새 앱을 켬 (직접 실행, pid", "업데이트 실패: 새 앱이 '잘 켜짐' 표시 없이 끝남"]
+        relaunched = "옛 앱을 켬 (직접 실행, pid"
+    return [*launched, "되돌림 시작", "백업을 제자리로 되돌림", "되돌림: 옛 앱을 다시 켬", relaunched]
+
+
 def check_success(case, files, log_text):
-    assert f" 도우미: 업데이트 끝: {NEW_VERSION}" in log_text, f"도우미 기록에 '업데이트 끝: {NEW_VERSION}'이 없습니다"
+    assert_helper_sequence(log_text, success_sequence(WINDOWS))
+    assert not any(line.startswith("업데이트 실패") for line in helper_lines(log_text)), "도우미가 실패를 기록했습니다"
     version = app_version(case.app)
     assert version == NEW_VERSION, f"설치된 앱의 버전 {version} (기대 {NEW_VERSION})"
-    running = app_processes(case)
-    assert running, f"새 앱 프로세스가 떠 있지 않습니다: {executable(case.app)}"
+    running = one_app_process(case, "새 앱")
     assert not os.path.exists(files["pending"]), f"새 앱이 업데이트 기록을 지우지 않았습니다: {files['pending']}"
     assert not leftovers(case), f"앱 옆에 남은 것: {leftovers(case)}"
     print(f"설치된 앱 {case.app}: 버전 {version}, 새 앱 pid {[p.pid for p in running]}, 백업 없음", flush=True)
@@ -541,27 +615,47 @@ def check_success(case, files, log_text):
 
 
 def check_rollback(case, files, log_text):
-    assert " 도우미: 업데이트 실패: " in log_text, "도우미 기록에 '업데이트 실패'가 없습니다"
-    assert " 도우미: 되돌림: 옛 앱을 다시 켬" in log_text, "도우미 기록에 '되돌림: 옛 앱을 다시 켬'이 없습니다"
-    assert " 도우미: 되돌리기 실패" not in log_text, "도우미가 되돌리지 못했습니다"
+    assert_helper_sequence(log_text, rollback_sequence(WINDOWS))
+    assert not any(line.startswith("되돌리기 실패") for line in helper_lines(log_text)), "도우미가 되돌리지 못했습니다"
     version = app_version(case.app)
     assert version == case.old_version, f"설치된 앱의 버전 {version} (옛 버전 {case.old_version}이어야 함)"
-    deadline = time.monotonic() + PENDING_CLEARED_S
+    deadline = time.monotonic() + DEADLINE.left(PENDING_CLEARED_S)
     while os.path.exists(files["pending"]):
         assert time.monotonic() < deadline, \
             f"되돌린 옛 앱이 {PENDING_CLEARED_S}초 안에 업데이트 기록을 지우지 않았습니다 (실패를 알리지 않음): {files['pending']}"
         time.sleep(1)
-    running = app_processes(case)
-    assert running, f"되돌린 옛 앱 프로세스가 떠 있지 않습니다: {executable(case.app)}"
+    running = one_app_process(case, "되돌린 옛 앱")
     assert not leftovers(case), f"앱 옆에 남은 것: {leftovers(case)}"
     print(f"설치된 앱 {case.app}: 옛 버전 {version}, 업데이트 기록 지워짐, 옛 앱 pid {[p.pid for p in running]}, "
           "백업 없음", flush=True)
     return kill(running)
 
 
+def check_state_free_space(files, platform_key):
+    """업데이트 상태 폴더(작업 폴더 아래로 돌린 곳)의 여유 공간이 앱이 확인하는 크기(update_install.NEEDED_BYTES) 이상인지 —
+    모자라면 앱이 '여유 공간이 모자랍니다' 창을 띄워 실행 시험이 실패하므로 여기서 먼저 분명하게."""
+    needed = update_install.NEEDED_BYTES[platform_key]
+    free = shutil.disk_usage(files["state"]).free
+    print(f"{files['state']}: 남음 {free / 1e9:.2f} GB (앱이 확인하는 크기 {needed / 1e9:.2f} GB)", flush=True)
+    assert free >= needed, f"업데이트 상태 폴더의 여유 공간이 모자랍니다: 남음 {free:,} bytes, 필요 {needed:,} bytes ({files['state']})"
+
+
+def remove_large_files(case):
+    """다음 경우의 여유 공간: 이 경우의 앱(설치 폴더·.app), 꾸러미, 공유 설정의 updates/, 받은 파일을 지움 (기록은 둠).
+    앱 프로세스는 결과 확인에서 끝냈음."""
+    files = state_files(case)
+    for path in (os.path.dirname(case.app), case.package_dir,
+                 os.path.join(case.share_root, ".yesoncheck", "updates"), os.path.join(files["state"], "downloads")):
+        if os.path.exists(path):
+            shutil.rmtree(path)
+            print(f"지움: {path}", flush=True)
+    free_space(case.root)
+
+
 def run_case(args, case, platform_key):
     files = state_files(case)
     step(case, "옛 앱 준비 (원래 빌드)", install_old_app, args, case)
+    step(case, "업데이트 상태 폴더의 여유 공간", check_state_free_space, files, platform_key)
     step(case, f"가짜 공유 설정 + updates/ (latest.json {NEW_VERSION}, 꾸러미 {case.package_version})",
          make_shared_config, case, platform_key)
     step(case, "옛 앱 실행 시험 (update: 알림 → 받기 → 도우미에 넘김)", run_old_app, case)
@@ -635,6 +729,9 @@ def parse_args():
     parser.add_argument("--share-root", help=r"(Windows) 시험용 SMB 공유 안의 폴더 (예: C:\yc_share\yc_update)")
     parser.add_argument("--unc", help=r"(Windows) --share-root의 UNC (예: \\localhost\yc_test\yc_update)")
     parser.add_argument("--work", required=True, help="작업 폴더 (있으면 지우고 새로 만듦)")
+    parser.add_argument("--time-limit-min", type=float,
+                        help="전체 제한 시간 (분) — 워크플로 단계의 timeout-minutes보다 짧게 "
+                             f"(기본 Windows {DEFAULT_TIME_LIMIT_MIN['windows']}, Mac {DEFAULT_TIME_LIMIT_MIN['mac']})")
     args = parser.parse_args()
     if (args.platform == "windows") != WINDOWS:
         parser.error(f"--platform {args.platform}을 이 컴퓨터({sys.platform})에서 돌릴 수 없습니다")
@@ -645,6 +742,10 @@ def parse_args():
             parser.error(f"Windows에는 {', '.join(missing)}이 있어야 합니다")
     elif any(getattr(args, name) for name in windows_only):
         parser.error("--installer·--iscc·--share-root·--unc는 Windows에만 씁니다")
+    if args.time_limit_min is None:
+        args.time_limit_min = DEFAULT_TIME_LIMIT_MIN[args.platform]
+    elif args.time_limit_min <= 0:
+        parser.error("--time-limit-min은 0보다 커야 합니다")
     args.app_dist = os.path.abspath(args.app_dist)
     if args.installer:
         args.installer = os.path.abspath(args.installer)
@@ -652,7 +753,10 @@ def parse_args():
 
 
 def main():
+    global DEADLINE
     args = parse_args()
+    DEADLINE = Deadline(args.time_limit_min)
+    print(f"전체 제한 시간 {args.time_limit_min:g}분", flush=True)
     work = os.path.abspath(args.work)
     cases = make_cases(args, work)
     current = None
@@ -675,9 +779,11 @@ def main():
             for case in cases:
                 what = "실행 파일이 바로 끝남" if case.broken else "잘 켜짐"
                 step(case, f"새 버전 dmg 만들기 ({case.package_version}, {what})", build_mac_dmg, args, case, work)
-        for case in cases:
+        for index, case in enumerate(cases):
             current = case
             run_case(args, case, platform_key)
+            if index + 1 < len(cases):
+                step(case, "큰 파일 지우기 (다음 경우의 여유 공간)", remove_large_files, case)
         current = None
         step(None, "디스크 여유 (끝)", free_space, work)
     except StepFailed as exc:
