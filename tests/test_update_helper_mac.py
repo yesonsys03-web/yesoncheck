@@ -584,6 +584,7 @@ def test_launch_helper_mac_copies_script_and_passes_arguments(tmp_state_dir, mon
         ],
         {
             "start_new_session": True,
+            "env": {**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"},
             "stdin": subprocess.DEVNULL,
             "stdout": subprocess.DEVNULL,
             "stderr": subprocess.DEVNULL,
@@ -604,6 +605,21 @@ def test_launch_helper_mac_uses_bundled_script_when_frozen(tmp_state_dir, tmp_pa
     copy = Path(update_install.state_dir()) / "update_helper_mac.sh"
     assert copy.read_bytes() == b"# bundled copy\n"
     assert _RecordingPopen.calls[0][0][1] == str(copy)
+
+
+def test_launch_helper_mac_resets_pyinstaller_environment_for_relaunched_app(tmp_state_dir, monkeypatch):
+    """도우미가 다시 켜는 앱(직접 실행은 도우미의 환경을 물려받음)이 옛 앱의 하위 작업 프로세스로 켜지지 않게
+    PYINSTALLER_RESET_ENVIRONMENT=1을 넘김 — 나머지 환경(시험이 정한 YC_UPDATE_* 등)은 그대로, 이 앱의 환경은 그대로."""
+    monkeypatch.setenv("YC_UPDATE_DIRECT_LAUNCH", "1")
+    monkeypatch.setenv("_PYI_ARCHIVE_FILE", "/A/X.app/Contents/MacOS/YesonCheck_Autocut")
+    monkeypatch.delenv("PYINSTALLER_RESET_ENVIRONMENT", raising=False)
+    _RecordingPopen.calls = []
+    monkeypatch.setattr(update_install.subprocess, "Popen", _RecordingPopen)
+    update_install.launch_helper_mac("/A/.X.app.update-1.1.1", "/A/X.app", "1.1.1")
+    env = _RecordingPopen.calls[0][1]["env"]
+    assert env["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
+    assert env["YC_UPDATE_DIRECT_LAUNCH"] == "1" and env["_PYI_ARCHIVE_FILE"].endswith("YesonCheck_Autocut")
+    assert "PYINSTALLER_RESET_ENVIRONMENT" not in os.environ
 
 
 def test_launch_helper_mac_does_not_swallow_popen_failure(tmp_state_dir, monkeypatch):

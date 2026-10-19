@@ -5,8 +5,11 @@
 작업 폴더의 smoke_config.json(ci/make_test_data.py가 만듦)에 고를 작품·시즌·job과 기대 파일 수가 있다
 (빌드된 앱 시험이면 기대 버전 expect_version도 — 앱이 읽은 build_info.json의 버전과 창 제목을 확인).
 대화상자는 띄우지 않고 기록하며, 오류·경고 대화상자가 하나라도 나오면 실패로 본다.
+시나리오(smoke_config의 scenario): 없음(기본), "auto_connect"(공유 설정·변환표 자동 설정), "update"(빌드된 앱이 NAS 흉내
+폴더의 새 버전을 받아 업데이트 도우미에 넘김 — ci/update_e2e.py가 그 뒤 도우미·새 앱을 확인).
 """
 
+import dataclasses
 import json
 import os
 import re
@@ -53,6 +56,10 @@ def app_version(expected, window_title):
 THREE_SHOT_STARTS = [0, 30, 60]
 # 애니매틱2 실행 시험의 최대 시간 (빌드된 앱의 첫 TensorFlow·모델 불러오기는 약 12초)
 ANIMATIC2_TIMEOUT_S = 300
+# 업데이트 시나리오: 자동 업데이트 확인(NAS 흉내 폴더 읽기)과, '업데이트'부터 도우미에 넘길 때까지(받기 + Mac은 dmg에서
+# 새 앱 준비 — 약 2 GB를 ditto)의 최대 시간
+UPDATE_CHECK_TIMEOUT_S = 120
+UPDATE_HANDOFF_TIMEOUT_S = 600
 
 
 def write_three_shot_clip(path):
@@ -185,8 +192,8 @@ def run(workdir):
         assert len(files) == config["expected_files"], files
         return files
 
-    def finish(passed):
-        if player is not None:
+    def finish(passed, close_player=True):
+        if player is not None and close_player:
             player.close()
         app.processEvents()
         # 창을 닫으며 놓은 작업이 끝나기를 앱처럼 EXIT_WAIT_S초까지 기다림 (남으면 실패 항목)
@@ -305,6 +312,82 @@ def run(workdir):
         if player is not None:
             check("소리 재생기 (처음 쓸 때 만든 시간)", media_player)
         return finish(bool(listed))
+
+    if config.get("scenario") == "update":
+        # 업데이트 끝까지 시험(ci/update_e2e.py)의 옛 앱: 앱처럼 열고 공유 설정을 불러오면 자동 업데이트 확인이 이어서
+        # 돎 → NAS 흉내 폴더(<공유 설정>/updates)의 새 버전(expect_offer)을 알리는지 → '업데이트' → 받기(Mac은 새 앱 준비까지)
+        # → 도우미에 넘기고 창이 닫힘. 도우미(이 앱이 끝나기를 기다렸다 바꾸고 다시 켬)는 기다리지 않음 — 결과를 쓰고 끝냄
+        from yesoncheck import update_install
+
+        handed = []  # 도우미에 넘긴 인자 — 진짜 도우미를 띄운 뒤에 남김
+
+        def recording(launch):
+            def launch_and_record(*args):
+                launch(*args)
+                handed.append(list(args))
+            return launch_and_record
+
+        update_install.launch_helper_mac = recording(update_install.launch_helper_mac)
+        update_install.launch_helper_windows = recording(update_install.launch_helper_windows)
+
+        def update_log_tail():
+            try:
+                with open(update_install.log_path(), encoding="utf-8") as fh:
+                    return "".join(fh.readlines()[-40:])
+            except FileNotFoundError:
+                return "(업데이트 기록 없음)"
+
+        def window_shown():
+            nonlocal player
+            player, shown_s = show_like_launch(VideoPlayer, app)
+            return {"construct_show_s": round(shown_s, 3)}
+
+        def shared_config_load():
+            load_s = wait_shared_config_load(player, app, timeout_s=120)
+            return {"load_s": round(load_s, 3), "config_dir": shared_config_ok()}
+
+        def update_offer():
+            # 공유 설정을 불러온 뒤 앱이 부른 자동 확인(start_update_check(manual=False))이 끝나기를 기다림
+            started = time.perf_counter()
+            while player.update_check_running:
+                if time.perf_counter() - started > UPDATE_CHECK_TIMEOUT_S:
+                    raise TimeoutError(f"업데이트 확인이 {UPDATE_CHECK_TIMEOUT_S}초 안에 끝나지 않았습니다")
+                app.processEvents()
+                time.sleep(0.01)
+            offer = player.update_offer
+            assert offer is not None, f"새 버전을 알리지 않았습니다 — 업데이트 기록:\n{update_log_tail()}"
+            assert str(offer.manifest.version) == config["expect_offer"], \
+                f"알린 버전 {offer.manifest.version} (기대 {config['expect_offer']})"
+            assert offer.result.source == "NAS", offer.result
+            assert player.update_banner.mode() == "offer", player.update_banner.mode()
+            return {"version": str(offer.manifest.version), "source": offer.result.source,
+                    "file": offer.entry.name, "size": offer.entry.size, "check_s": round(time.perf_counter() - started, 3)}
+
+        def hand_off():
+            # 띠의 '업데이트'와 같은 일 → 받기·준비는 뒤 스레드, 다 되면 업데이트 기록·도우미·창 닫기 (_hand_off)
+            started = time.perf_counter()
+            player.start_update()
+            while not handed:
+                if player.update_banner.mode() != "progress":
+                    raise AssertionError(f"도우미에 넘기지 못했습니다 (띠: {player.update_banner.mode()}) — 대화상자 "
+                                         f"{report['dialogs']}\n업데이트 기록:\n{update_log_tail()}")
+                if time.perf_counter() - started > UPDATE_HANDOFF_TIMEOUT_S:
+                    raise TimeoutError(f"{UPDATE_HANDOFF_TIMEOUT_S}초 안에 도우미에 넘기지 못했습니다 — 업데이트 기록:\n"
+                                       f"{update_log_tail()}")
+                app.processEvents()
+                time.sleep(0.01)
+            pending = update_install.read_pending()
+            assert pending is not None and pending.target == config["expect_offer"], pending
+            assert not player.isVisible(), "도우미에 넘긴 뒤 창이 닫히지 않았습니다"
+            return {"helper": handed[0], "pending": dataclasses.asdict(pending),
+                    "seconds": round(time.perf_counter() - started, 2)}
+
+        passed = (check("창 바로 표시", window_shown)
+                  and check("공유 설정 불러오기 (백그라운드)", shared_config_load)
+                  and check("새 버전 알림 (자동 업데이트 확인)", update_offer)
+                  and check("업데이트 → 도우미에 넘김", hand_off))
+        # 넘겼으면 창은 앱이 닫았음 (다시 닫지 않음)
+        return finish(bool(passed), close_player=not handed)
 
     player = VideoPlayer()  # 기존 실행 시험: 동기 생성자(공유 설정을 여기서 읽음)
     if "expect_version" in config:  # make_test_data.py --expect-version (빌드된 앱)

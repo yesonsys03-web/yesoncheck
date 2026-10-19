@@ -13,6 +13,7 @@ Mac에서는 dmg를 hdiutil로 열고 안의 .app 하나를 ditto로(심볼릭 �
 로그 파일에 쓰지 못함).
 """
 
+import contextlib
 import dataclasses
 import datetime
 import hashlib
@@ -433,13 +434,68 @@ def _copy_helper_to_state_dir(name: str) -> str:
     return dest
 
 
+PYINSTALLER_RESET_ENV = "PYINSTALLER_RESET_ENVIRONMENT"
+
+
+def _helper_env() -> dict:
+    """도우미에 넘길 환경 변수: 이 앱의 것 그대로 + PYINSTALLER_RESET_ENVIRONMENT=1.
+
+    도우미가 다시 켜는 앱(새 버전 또는 되돌린 옛 버전)은 도우미의 환경을 물려받는다 — Windows는 언제나, Mac은 직접
+    실행(YC_UPDATE_DIRECT_LAUNCH=1, 시험)일 때. 빌드된 앱(PyInstaller 6.14)의 부트로더는 _PYI_ARCHIVE_FILE·
+    _PYI_PARENT_PROCESS_LEVEL을 환경에 남기고, 같은 자리의 실행 파일이 그 환경을 물려받으면 자기를 이 앱의 하위 작업
+    프로세스로 본다(6.9부터). 이 변수가 1이면 부트로더가 그 환경을 지우고 새로 시작한 앱으로 켠다(그리고 변수를 지워
+    그 앱의 자식에게는 넘기지 않음) — PyInstaller 문서 "Using sys.executable to spawn subprocesses that outlive the
+    application process". 이 앱의 os.environ은 바꾸지 않음."""
+    return {**os.environ, PYINSTALLER_RESET_ENV: "1"}
+
+
+def _kernel32():
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.SetDllDirectoryW.argtypes = [ctypes.c_wchar_p]
+    kernel32.SetDllDirectoryW.restype = ctypes.c_int
+    return kernel32
+
+
+def _last_windows_error() -> int:
+    import ctypes
+
+    return ctypes.get_last_error()
+
+
+def _set_dll_directory(path: str | None) -> None:
+    if not _kernel32().SetDllDirectoryW(path):
+        raise OSError(f"SetDllDirectoryW({path!r})가 실패했습니다 (Windows 오류 {_last_windows_error()})")
+
+
+@contextlib.contextmanager
+def _default_dll_search_for_children():
+    """(Windows 빌드 앱) 이 안에서 띄우는 프로세스가 앱의 DLL 찾는 곳을 물려받지 않게, 그동안만 기본으로 되돌림.
+
+    PyInstaller 부트로더는 SetDllDirectoryW(<설치 폴더>\\_internal)로 앱의 DLL 찾는 곳을 바꾸고 자식 프로세스가 이것을
+    물려받는다(PyInstaller 문서 "Launching External Programs from the Frozen Application"). 도우미(powershell.exe)가
+    물려받으면 거기 들어온 DLL(백신 등이 넣은 DLL이 찾는 VC++ 런타임 등)을 설치 폴더의 _internal에서 불러와 잡고 있을 수
+    있고, 그러면 도우미가 설치 폴더의 이름을 바꾸지 못한다. 띄운 뒤에는 _internal로 되돌림 (넘기지 못하면 앱은 계속 돎).
+    소스 실행·Mac은 아무것도 하지 않음. 실패는 그대로 올림."""
+    frozen_dir = getattr(sys, "_MEIPASS", None)
+    if not (paths.IS_WINDOWS and frozen_dir):
+        yield
+        return
+    _set_dll_directory(None)
+    try:
+        yield
+    finally:
+        _set_dll_directory(frozen_dir)
+
+
 def launch_helper_mac(staged_app: str, app_path: str, target: str) -> None:
     """앱이 끝나기를 기다렸다가 staged_app을 app_path 자리로 바꾸고 다시 켜는 도우미(update_helper_mac.sh)를 띄움.
 
     부른 쪽은 업데이트 기록(write_pending)을 남긴 뒤 이것을 부르고 앱을 끝낸다. 도우미는 바뀔 앱 번들 밖에서
     돌아야 하므로(번들째 백업 이름으로 옮기고, 되돌릴 때는 지움) 번들 안의 스크립트를 state_dir()로 복사해
     실행한다(_copy_helper_to_state_dir). 새 세션(start_new_session)으로 띄워 앱이 끝나도 같이 끝나지 않게 한다.
-    Popen 실패는 그대로 올린다.
+    환경은 _helper_env (다시 켜는 앱이 새로 시작한 앱이 되게). Popen 실패는 그대로 올린다.
     """
     dest = _copy_helper_to_state_dir(HELPER_MAC_FILE_NAME)
     subprocess.Popen(
@@ -453,6 +509,7 @@ def launch_helper_mac(staged_app: str, app_path: str, target: str) -> None:
             "--log", log_path(),
         ],
         start_new_session=True,
+        env=_helper_env(),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -473,27 +530,31 @@ def launch_helper_windows(installer: str, install_dir: str, target: str) -> None
     부른 쪽은 업데이트 기록(write_pending)을 남긴 뒤 이것을 부르고 앱을 끝낸다. 도우미가 설치 폴더의 이름을 바꾸므로
     설치 폴더 안의 스크립트를 state_dir()로 복사해 실행하고, 작업 폴더도 state_dir()로 둔다 — 앱의 작업 폴더(바로
     가기가 설치 폴더로 정함)를 물려받으면 그 폴더 핸들 때문에 설치 폴더의 이름을 바꿀 수 없음. 콘솔 없이
-    (DETACHED_PROCESS·CREATE_NO_WINDOW), 새 프로세스 그룹으로 띄워 앱이 끝나도 같이 끝나지 않게 한다. Popen 실패는
-    그대로 올린다.
+    (DETACHED_PROCESS·CREATE_NO_WINDOW), 새 프로세스 그룹으로 띄워 앱이 끝나도 같이 끝나지 않게 한다. 환경은
+    _helper_env(다시 켜는 앱이 새로 시작한 앱이 되게), DLL 찾는 곳은 기본(_default_dll_search_for_children). Popen
+    실패는 그대로 올린다.
     """
     script = _copy_helper_to_state_dir(HELPER_WINDOWS_FILE_NAME)
-    subprocess.Popen(
-        [
-            _windows_powershell(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
-            "-File", script,
-            "-AppPid", str(os.getpid()),
-            "-InstallDir", install_dir,
-            "-Installer", installer,
-            "-Target", target,
-            "-OkFile", ok_marker_path(),
-            "-Log", log_path(),
-        ],
-        creationflags=_WINDOWS_HELPER_CREATIONFLAGS,
-        cwd=state_dir(),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    args = [
+        _windows_powershell(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+        "-File", script,
+        "-AppPid", str(os.getpid()),
+        "-InstallDir", install_dir,
+        "-Installer", installer,
+        "-Target", target,
+        "-OkFile", ok_marker_path(),
+        "-Log", log_path(),
+    ]
+    with _default_dll_search_for_children():
+        subprocess.Popen(
+            args,
+            creationflags=_WINDOWS_HELPER_CREATIONFLAGS,
+            cwd=state_dir(),
+            env=_helper_env(),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
 
 # ---- 업데이트 기록 (재시작한 앱이 성공/실패를 판정) ----

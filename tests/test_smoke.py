@@ -174,3 +174,67 @@ def test_make_test_data_rejects_unused_expect_version(tmp_path, extra):
                             capture_output=True, text=True, encoding="utf-8", env=dict(os.environ, PYTHONIOENCODING="utf-8"))
     assert result.returncode == 2 and "--expect-version" in result.stderr, result.stderr
     assert not (tmp_path / "work").exists()
+
+
+def run_make_test_data(tmp_path, *extra):
+    return subprocess.run([sys.executable, os.path.join(ROOT, "ci", "make_test_data.py"), "--share-root",
+                           str(tmp_path / "share"), "--mac-root", str(tmp_path / "share"), "--workdir",
+                           str(tmp_path / "work"), *extra],
+                          capture_output=True, text=True, encoding="utf-8", env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+
+
+def test_make_test_data_publishes_update_like_nas(tmp_path):
+    """업데이트 끝까지 시험(ci/update_e2e.py)의 NAS 흉내: --update-dir의 꾸러미를 공유 설정의 updates/로 복사하고 앱이 읽는
+    latest.json(버전·이 플랫폼 항목의 이름·크기·sha256)을 씀, 실행 시험은 'update' 시나리오로 그 버전을 알리길 기대."""
+    import hashlib
+
+    from yesoncheck import updates
+
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    payload = b"MZ installer bytes" * 1000
+    (package_dir / "YesonCheck_Setup_99.0.0.exe").write_bytes(payload)
+    result = run_make_test_data(tmp_path, "--update-dir", str(package_dir), "--update-version", "99.0.0",
+                                "--update-platform", "windows")
+    assert result.returncode == 0, result.stdout + result.stderr
+    config_dir = str(tmp_path / "share" / ".yesoncheck")
+    read = updates.read_nas(config_dir, "windows")
+    assert read.error is None and read.expected_problem is None, read
+    assert str(read.manifest.version) == "99.0.0"
+    entry = read.manifest.files["windows"]
+    assert (entry.name, entry.size, entry.sha256) == (
+        "YesonCheck_Setup_99.0.0.exe", len(payload), hashlib.sha256(payload).hexdigest())
+    copied = updates.asset_location(read, read.manifest, entry)
+    with open(copied, "rb") as fh:
+        assert fh.read() == payload
+    assert (package_dir / "YesonCheck_Setup_99.0.0.exe").exists()  # 복사 (원본은 그대로)
+    # 다른 플랫폼 항목은 없음 → 그 플랫폼의 앱은 오류로 봄 (조용히 넘기지 않음)
+    assert updates.read_nas(config_dir, "mac-arm64").error
+    smoke_config = json.loads((tmp_path / "work" / "smoke_config.json").read_text(encoding="utf-8"))
+    assert smoke_config["scenario"] == "update" and smoke_config["expect_offer"] == "99.0.0"
+
+
+@pytest.mark.parametrize("extra, message", [
+    (["--update-dir", "PKG"], "--update-version"),
+    (["--update-dir", "PKG", "--update-version", "99.0"], "--update-version"),
+    (["--update-dir", "PKG", "--update-version", "99.0.0", "--auto-connect"], "--auto-connect"),
+    (["--update-dir", "PKG", "--update-version", "99.0.0", "--expect-version", "1.1.0"], "--expect-version"),
+    (["--update-version", "99.0.0"], "--update-dir"),
+    (["--update-platform", "windows"], "--update-dir"),
+])
+def test_make_test_data_rejects_inconsistent_update_options(tmp_path, extra, message):
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    result = run_make_test_data(tmp_path, *[str(package_dir) if arg == "PKG" else arg for arg in extra])
+    assert result.returncode == 2 and message in result.stderr, result.stderr
+    assert not (tmp_path / "work").exists()
+
+
+def test_make_test_data_update_dir_needs_exactly_one_package(tmp_path):
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    (package_dir / "a.dmg").write_bytes(b"a")
+    (package_dir / "b.dmg").write_bytes(b"b")
+    result = run_make_test_data(tmp_path, "--update-dir", str(package_dir), "--update-version", "99.0.0")
+    assert result.returncode != 0 and "정확히 하나" in result.stderr, result.stdout + result.stderr
+    assert not (tmp_path / "share" / ".yesoncheck" / "updates" / "latest.json").exists()

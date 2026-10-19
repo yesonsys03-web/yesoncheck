@@ -220,6 +220,16 @@ jobs:
             throw
           }
 
+      - name: 업데이트 끝까지 시험 — 설치한 앱이 99.0.0으로 업데이트, 잘 켜지지 않는 새 버전은 되돌림 (ci/update_e2e.py)
+        # 새 버전 설치 파일 둘(99.0.0·98.0.0)을 ISCC로 함께 컴파일(약 7분) → 원래 설치 파일로 깐 옛 앱이 시험 공유의
+        # updates/에서 받아 도우미에 넘김 → 도우미가 조용히 설치·새 앱 확인(되돌리기 경로는 되돌림)
+        timeout-minutes: 45
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          # 시험 데이터의 영상은 받아 둔 ffmpeg로 (ci/make_test_data.py)
+          $env:PATH = "$PWD\vendor\ffmpeg\windows;$env:PATH"
+          .venv\Scripts\python.exe ci\update_e2e.py --platform windows --app-dist dist\YesonCheck_Autocut --installer $env:SETUP_EXE --iscc $env:ISCC_PATH --share-root "$env:YC_TEST_SHARE_ROOT\yc_update" --unc "$env:YC_TEST_UNC\yc_update" --work C:\yc_update
+
       - name: 설치 파일 artifact 이름
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
@@ -355,6 +365,15 @@ jobs:
             echo "실행 시험 실패 (종료 코드 $STATUS)"
             exit 1
           fi
+
+      - name: 업데이트 끝까지 시험 — 빌드된 앱이 99.0.0으로 업데이트, 잘 켜지지 않는 새 버전은 되돌림 (ci/update_e2e.py)
+        # 빌드된 앱을 러너 임시 폴더에 ditto한 옛 앱이 가짜 공유 설정의 updates/에서 dmg를 받아 도우미에 넘김 →
+        # 도우미가 바꾸고 새 앱을 직접 켜 확인(되돌리기 경로는 되돌림)
+        timeout-minutes: 30
+        run: |
+          # 시험 데이터의 영상은 받아 둔 정적 ffmpeg로 (ci/make_test_data.py)
+          export PATH="$PWD/vendor/ffmpeg/$ARCH:$PATH"
+          "$VENV/bin/python" ci/update_e2e.py --platform mac --app-dist "dist/YesonCheck_Autocut_${LABEL}.app" --work "$RUNNER_TEMP/yc_update"
 
       - name: dmg 이름 (YesonCheck_Autocut_<라벨>_<파일 이름 꼬리>.dmg)
         run: |
