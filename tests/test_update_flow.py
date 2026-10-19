@@ -8,6 +8,7 @@ NAS는 임시 폴더, GitHub는 시험용 HTTP 서버 — 인터넷에 닿지 �
 
 import hashlib
 import os
+import subprocess
 import threading
 from types import SimpleNamespace
 
@@ -44,12 +45,65 @@ def on_nas(nas_dir, version, key, data=INSTALLER, sha256=None):
     return published("NAS", nas_dir, version, key, data, sha256)
 
 
+# 정책이 PowerShell 스크립트를 막을 때 도우미 출력에 남는 글 (예시)
+HELPER_BLOCKED = ("update_helper_windows.ps1 : File C:\\Users\\studio01\\AppData\\Local\\YesonCheck\\updates\\"
+                  "update_helper_windows.ps1 cannot be loaded because running scripts is disabled on this system.")
+
+
+class FakeHelperProc:
+    """launch_helper_*가 돌려주는 Popen 대신 (도우미 흉내). mode:
+    "start" — 띄우자마자 진짜 도우미처럼 업데이트 기록에 시작 줄(시각 + " 도우미: 시작: …")을 쓰고 계속 돎(앱이 끝나기를 기다림),
+    "late" — poll()이 세 번 불린 뒤에 시작 줄을 씀, "exit" — 시작 줄 없이 곧 끝남(종료 코드 1, 도우미 출력에 HELPER_BLOCKED),
+    "silent" — 시작 줄 없이 계속 돎. unkillable이면 kill()이 듣지 않음 (wait가 시간 초과)."""
+
+    pid = 4242
+
+    def __init__(self, target, mode, unkillable=False):
+        self.target = target
+        self.mode = mode
+        self.unkillable = unkillable
+        self.returncode = None
+        self.killed = False
+        self.polls = 0
+        if mode == "start":
+            self._write_start_line()
+        elif mode == "exit":
+            with open(update_install.helper_console_path(), "w", encoding="utf-8") as fh:
+                fh.write(HELPER_BLOCKED + "\n")
+            self.returncode = 1
+
+    def _write_start_line(self):
+        # 다른 프로세스처럼 기록 파일에 바로 씀 (update_install.log를 바꿔 끼운 시험에서도)
+        with open(update_install.log_path(), "a", encoding="utf-8") as fh:
+            fh.write(f"{update_install.timestamp()} 도우미: 시작: 대상 버전 {self.target}, 설치 폴더 (시험)\n")
+
+    def poll(self):
+        self.polls += 1
+        if self.mode == "late" and self.polls == 3:
+            self._write_start_line()
+        return self.returncode
+
+    def kill(self):
+        self.killed = True
+        if not self.unkillable:
+            self.returncode = -9
+
+    def wait(self, timeout=None):
+        if self.returncode is None:
+            raise subprocess.TimeoutExpired("fake helper", timeout)
+        return self.returncode
+
+
 class FakeHelpers:
-    """launch_helper_mac/windows 대신: 부른 값을 남김 (raises를 정하면 그 예외를 올림)."""
+    """launch_helper_mac/windows 대신: 부른 값을 남기고 FakeHelperProc(mode·unkillable)를 돌려줌 (raises를 정하면 그 예외를
+    올림)."""
 
     def __init__(self):
         self.calls = []
+        self.procs = []
         self.raises = None
+        self.mode = "start"
+        self.unkillable = False
 
     @property
     def called(self):
@@ -60,15 +114,18 @@ class FakeHelpers:
         return self.calls[-1]
 
     def windows(self, installer, install_dir, target):
-        self._record("windows", installer=installer, install_dir=install_dir, target=target)
+        return self._record("windows", installer=installer, install_dir=install_dir, target=target)
 
     def mac(self, staged_app, app_path, target):
-        self._record("mac", staged_app=staged_app, app_path=app_path, target=target)
+        return self._record("mac", staged_app=staged_app, app_path=app_path, target=target)
 
     def _record(self, kind, **kwargs):
         if self.raises is not None:
             raise self.raises
         self.calls.append(SimpleNamespace(kind=kind, **kwargs))
+        proc = FakeHelperProc(kwargs["target"], self.mode, self.unkillable)
+        self.procs.append(proc)
+        return proc
 
 
 class DownloadSpy:
@@ -580,6 +637,77 @@ def test_log_failure_when_auto_check_comes_during_a_check(player_with_build, fak
     fake_check.gate.set()
     wait_until(lambda: len(fake_check.calls) == 2 and not player.update_check_running)
     assert "끝나면 다시 확인" in capsys.readouterr().err
+
+
+# ---- 도우미가 정말 시작했는지 본 뒤에만 끝냄 ----
+
+
+def test_helper_that_exits_at_start_keeps_app_running(player_offer, fake_helpers, dialogs, quits):
+    """띄운 도우미가 시작 기록 없이 바로 끝나면(정책·백신이 PowerShell 스크립트를 막음 등) 앱이 끝난 뒤 다시 켜 줄 것이 없음 →
+    끝나지 않고 실패 창(도우미 출력째), 업데이트 기록을 지우고 띠는 다시 알림."""
+    fake_helpers.mode = "exit"
+    player_offer.start_update()
+    wait_until(lambda: dialogs.criticals)
+    _settle()
+    [(kind, title, text)] = dialogs.messages
+    assert (kind, title) == ("critical", "업데이트 실패")
+    assert "시작 기록 없이 끝났습니다 (종료 코드 1)" in text and HELPER_BLOCKED in text
+    assert quits == [] and player_offer.isVisible() and player_offer.isEnabled()
+    assert read_pending() is None  # 다음에 켤 때 이 기록으로 실패를 다시 알리지 않게
+    assert player_offer.update_banner.mode() == "offer" and player_offer.update_banner.full_text() == OFFER_TEXT
+    assert HELPER_BLOCKED in update_log()  # 도우미 출력 파일은 다음 업데이트에서 새로 쓰므로 기록에도
+
+
+def test_app_quits_only_after_helper_start_line(player_offer, fake_helpers, dialogs, quits):
+    fake_helpers.mode = "late"
+    player_offer.start_update()
+    wait_until(lambda: fake_helpers.called)
+    banner = player_offer.update_banner
+    assert quits == [] and player_offer.isVisible()
+    assert not player_offer.isEnabled()  # 기다리는 동안 새 작업을 시작하지 않게 (넘긴 뒤 창 닫기가 묻지 않고 멈춤)
+    assert banner.mode() == "progress" and banner.full_text() == "업데이트 도우미를 시작하는 중…"
+    assert not banner.cancel_button.isVisible()  # 멈출 수 없는 단계
+    wait_until(lambda: quits)
+    assert player_offer.isHidden() and quits == ["quit"] and dialogs.messages == []
+    assert read_pending().target == "1.1.1" and not fake_helpers.procs[0].killed
+    assert "도우미가 시작함" in update_log()
+
+
+def test_helper_without_start_line_is_stopped_after_timeout(player_offer, fake_helpers, dialogs, quits):
+    fake_helpers.mode = "silent"
+    player_offer.UPDATE_HELPER_START_TIMEOUT_MS = 300
+    player_offer.start_update()
+    wait_until(lambda: dialogs.criticals)
+    _settle()
+    [text] = dialogs.criticals
+    assert "0.3초 안에 시작 기록을 남기지 않았습니다" in text
+    assert fake_helpers.procs[0].killed and quits == [] and read_pending() is None
+    assert player_offer.isVisible() and player_offer.isEnabled() and player_offer.update_banner.mode() == "offer"
+
+
+def test_helper_that_cannot_be_stopped_keeps_the_record(player_offer, fake_helpers, dialogs, quits):
+    """시간이 지나도 시작 기록이 없는데 도우미를 끝내지 못하면 업데이트 기록을 남겨 둠 — 나중에 앱이 끝난 뒤 그 도우미가
+    바꾸면 새 앱이 그 기록으로 '잘 켜짐'을 남겨야 하므로."""
+    fake_helpers.mode = "silent"
+    fake_helpers.unkillable = True
+    player_offer.UPDATE_HELPER_START_TIMEOUT_MS = 300
+    player_offer.start_update()
+    wait_until(lambda: dialogs.criticals)
+    _settle()
+    [text] = dialogs.criticals
+    assert "도우미(pid 4242)를 끝내지 못했습니다" in text and "업데이트 기록은 남겨 둡니다" in text
+    assert read_pending().target == "1.1.1" and quits == [] and player_offer.isEnabled()
+
+
+def test_close_while_waiting_for_helper_leaves_it_to_update(player_offer, fake_helpers, quits):
+    """기다리는 중에 창을 닫으면 기다림만 멈춤 — 도우미는 그대로 (앱이 끝나면 업데이트), 업데이트 기록도 그대로."""
+    fake_helpers.mode = "silent"
+    player_offer.start_update()
+    wait_until(lambda: fake_helpers.called)
+    player_offer.close()
+    assert player_offer._update_helper is None and not player_offer._update_helper_timer.isActive()
+    assert not fake_helpers.procs[0].killed and read_pending().target == "1.1.1"
+    assert "기다리는 중에 창을 닫음" in update_log()
 
 
 def test_new_job_during_download_asks_before_hand_off(player_offer, downloads, dialogs, fake_helpers, quits):

@@ -2,7 +2,7 @@
 
 세 가지 모양:
 - 새 버전 알림 (show_offer): "⬆ 새 버전 1.1.1이 나왔습니다 · 지금 1.1.0" + [바뀐 점] [업데이트] [나중에]
-- 받는 중 (show_progress): 글자 + 진행 막대 + [취소]
+- 받는 중 (show_progress): 글자 + 진행 막대 + [취소] (멈출 수 없는 단계는 [취소] 없이)
 - 잠깐 알림 (show_message): 글자만, 정한 시간 뒤 저절로 숨김 (예: "1.1.1로 업데이트했습니다")
 
 글자는 ElidedLabel(최소 너비 0)이라 창이 좁으면 …로 줄여 그림(툴팁에 전체) — 띠가 보여도 창의 최소 너비가 늘지 않음
@@ -99,14 +99,16 @@ class UpdateBanner(QFrame):
         self._show("offer", OFFER_TEXT.format(new=new, current=current),
                    (self.notes_button, self.update_button, self.later_button))
 
-    def show_progress(self, done: int, total: int, text: str) -> None:
-        """받는 중: text + 진행 막대(done/total, total이 0 이하면 움직이는 막대) + [취소]."""
+    def show_progress(self, done: int, total: int, text: str, cancellable: bool = True) -> None:
+        """받는 중: text + 진행 막대(done/total, total이 0 이하면 움직이는 막대) + [취소] (cancellable이 False면 [취소] 없이 —
+        멈출 수 없는 단계, 예: 도우미가 시작하기를 기다림)."""
         if total > 0:
             self.progress_bar.setRange(0, PROGRESS_STEPS)
             self.progress_bar.setValue(min(PROGRESS_STEPS, max(0, done * PROGRESS_STEPS // total)))
         else:
             self.progress_bar.setRange(0, 0)  # 전체 크기를 모름
-        self._show("progress", text, (self.progress_bar, self.cancel_button))
+        widgets = (self.progress_bar, self.cancel_button) if cancellable else (self.progress_bar,)
+        self._show("progress", text, widgets)
 
     def show_message(self, text: str, hide_after_ms: int = 10000) -> None:
         """잠깐 알림: 글자만 보이고 hide_after_ms 뒤 저절로 숨김."""

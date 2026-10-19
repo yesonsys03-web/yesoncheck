@@ -852,6 +852,8 @@ def test_real_launch_helper_windows_writes_start_line_with_ps7_module_path(tmp_s
     monkeypatch.setenv("PSModulePath", PS7_STYLE_MODULE_PATH)
     monkeypatch.setenv("YC_UPDATE_NO_MESSAGEBOX", "1")
     install_dir = Path(os.path.realpath(tmp_path)) / "Programs" / "YesonCheck"  # 없음
+    update_install.log("업데이트 1.1.1: 업데이트 기록을 남김 (앱의 줄)")
+    offset = update_install.log_size()
     try:
         proc = update_install.launch_helper_windows(str(tmp_path / "YesonCheck_Setup_1.1.1.exe"), str(install_dir), "1.1.1")
     finally:
@@ -861,6 +863,7 @@ def test_real_launch_helper_windows_writes_start_line_with_ps7_module_path(tmp_s
     details = f"종료 코드 {code}\n기록:\n{text}\n도우미 출력:\n{console}"
     assert code == 2, details
     assert " 도우미: 시작: 대상 버전 1.1.1" in text and "설치 폴더에 지금 앱이 없음" in text, details
+    assert update_install.helper_start_logged(offset), details  # 앱이 끝나도 되는지 보는 줄 (player_update._hand_off)
     assert "알림 창은 띄우지 않음" in text, details
     # 정상 실행의 줄은 기록에만 — 실패 창에 '기록에 없는 것'으로 다시 보이지 않음 (5.1은 출력 파일에 코드 페이지로 씀)
     assert update_install.helper_console_extra() == "", details

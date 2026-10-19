@@ -40,6 +40,9 @@ APP_EXECUTABLE_NAME = "YesonCheck_Autocut"
 HELPER_MAC_FILE_NAME = "update_helper_mac.sh"  # Mac 도우미 (빌드된 앱에는 spec이 yesoncheck/ 아래에 넣음)
 HELPER_WINDOWS_FILE_NAME = "update_helper_windows.ps1"  # Windows 도우미 (빌드된 앱에는 spec이 yesoncheck/ 아래에 넣음)
 HELPER_CONSOLE_FILE_NAME = "update_helper_console.txt"  # 도우미의 stdout·stderr (state_dir 안, 띄울 때마다 새로)
+# 두 도우미(update_helper_mac.sh·update_helper_windows.ps1)가 인자를 확인한 뒤 맨 처음 쓰는 기록 줄의 시각 뒤 글
+# ("<시각> 도우미: 시작: 대상 버전 …") — 앱은 이 줄을 본 뒤에만 끝난다 (helper_start_logged)
+HELPER_START_TEXT = " 도우미: 시작: "
 
 # Windows 도우미를 띄우는 플래그: 창 없는 자기 콘솔(CREATE_NO_WINDOW — 창 모드 앱에는 콘솔이 없음), 새 프로세스 그룹.
 # 프로세스는 부모가 끝나도 남으므로 앱이 끝난 뒤에도 돈다. DETACHED_PROCESS는 쓰지 않음: 콘솔이 아예 없으면 Windows
@@ -110,6 +113,28 @@ def log(line: str) -> None:
     with open(log_path(), "a", encoding="utf-8") as fh:
         fh.write(stamped + "\n")
     print(stamped)
+
+
+def log_size() -> int:
+    """업데이트 기록(log_path())의 지금 크기 (bytes, 없으면 0) — helper_start_logged에 넘길 '여기부터'."""
+    try:
+        return os.path.getsize(log_path())
+    except FileNotFoundError:
+        return 0
+
+
+def helper_start_logged(offset: int) -> bool:
+    """업데이트 기록의 offset바이트 뒤에 도우미의 시작 줄(HELPER_START_TEXT — 두 도우미가 맨 처음 쓰는 줄)이 있는지.
+
+    앱은 도우미를 띄우기 바로 전의 log_size()를 offset으로 넘겨, 지난 도우미의 줄이 아닌 이번 도우미의 줄만 본다. 기록이
+    없으면 False. 바이트로 찾음 — 도우미가 쓰는 중인 마지막 줄이 반쪽이어도 읽기가 실패하지 않게. 읽기 오류는 그대로 올림."""
+    try:
+        with open(log_path(), "rb") as fh:
+            fh.seek(offset)
+            data = fh.read()
+    except FileNotFoundError:
+        return False
+    return HELPER_START_TEXT.encode("utf-8") in data
 
 
 def log_tail_since(started: str, max_lines: int = 80) -> str:
@@ -547,8 +572,8 @@ def launch_helper_mac(staged_app: str, app_path: str, target: str) -> subprocess
     돌아야 하므로(번들째 백업 이름으로 옮기고, 되돌릴 때는 지움) 번들 안의 스크립트를 state_dir()로 복사해
     실행한다(_copy_helper_to_state_dir). 새 세션(start_new_session)으로 띄워 앱이 끝나도 같이 끝나지 않게 한다.
     환경은 _helper_env (다시 켜는 앱이 새로 시작한 앱이 되게). stdout·stderr는 helper_console_path(띄울 때마다 새로) —
-    도우미가 기록을 쓰기 전에 실패해도 그 출력이 남음. 띄운 Popen을 돌려줌(앱은 기다리지 않음 — 시험이 종료 코드를 봄).
-    Popen 실패는 그대로 올린다.
+    도우미가 기록을 쓰기 전에 실패해도 그 출력이 남음. 띄운 Popen을 돌려줌 — 앱은 도우미가 시작 기록(HELPER_START_TEXT)을
+    남길 때까지 이것으로 도우미가 살아 있는지 보고, 그 뒤에 끝난다(player_update._hand_off). Popen 실패는 그대로 올린다.
     """
     dest = _copy_helper_to_state_dir(HELPER_MAC_FILE_NAME)
     args = [
@@ -588,8 +613,9 @@ def launch_helper_windows(installer: str, install_dir: str, target: str) -> subp
     새 프로세스 그룹으로 띄움(_WINDOWS_HELPER_CREATIONFLAGS) — 앱이 끝나도 같이 끝나지 않음. 환경은
     _helper_env(다시 켜는 앱이 새로 시작한 앱이 되게, PS7의 PSModulePath 없이), DLL 찾는 곳은 기본
     (_default_dll_search_for_children). stdout·stderr는 helper_console_path(띄울 때마다 새로) — PowerShell이 스크립트를
-    시작하지 못하거나 기록을 쓰기 전에 실패해도 그 출력이 남음. 띄운 Popen을 돌려줌(앱은 기다리지 않음 — 시험이 종료
-    코드를 봄). Popen 실패는 그대로 올린다.
+    시작하지 못하거나 기록을 쓰기 전에 실패해도 그 출력이 남음. 띄운 Popen을 돌려줌 — 앱은 도우미가 시작 기록
+    (HELPER_START_TEXT)을 남길 때까지 이것으로 도우미가 살아 있는지 보고, 그 뒤에 끝난다(player_update._hand_off). Popen
+    실패는 그대로 올린다.
     """
     script = _copy_helper_to_state_dir(HELPER_WINDOWS_FILE_NAME)
     args = [

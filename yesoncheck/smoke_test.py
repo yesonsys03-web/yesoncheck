@@ -316,15 +316,17 @@ def run(workdir):
     if config.get("scenario") == "update":
         # 업데이트 끝까지 시험(ci/update_e2e.py)의 옛 앱: 앱처럼 열고 공유 설정을 불러오면 자동 업데이트 확인이 이어서
         # 돎 → NAS 흉내 폴더(<공유 설정>/updates)의 새 버전(expect_offer)을 알리는지 → '업데이트' → 받기(Mac은 새 앱 준비까지)
-        # → 도우미에 넘기고 창이 닫힘. 도우미(이 앱이 끝나기를 기다렸다 바꾸고 다시 켬)는 기다리지 않음 — 결과를 쓰고 끝냄
+        # → 도우미에 넘김 → 도우미가 시작 기록을 남기면 창이 닫힘. 도우미(이 앱이 끝나기를 기다렸다 바꾸고 다시 켬)가 끝나기는
+        # 기다리지 않음 — 결과를 쓰고 끝냄
         from yesoncheck import update_install
 
         handed = []  # 도우미에 넘긴 인자 — 진짜 도우미를 띄운 뒤에 남김
 
         def recording(launch):
             def launch_and_record(*args):
-                launch(*args)
+                proc = launch(*args)
                 handed.append(list(args))
+                return proc  # 앱이 이것으로 도우미가 살아 있는지 봄 (_hand_off)
             return launch_and_record
 
         update_install.launch_helper_mac = recording(update_install.launch_helper_mac)
@@ -364,10 +366,11 @@ def run(workdir):
                     "file": offer.entry.name, "size": offer.entry.size, "check_s": round(time.perf_counter() - started, 3)}
 
         def hand_off():
-            # 띠의 '업데이트'와 같은 일 → 받기·준비는 뒤 스레드, 다 되면 업데이트 기록·도우미·창 닫기 (_hand_off)
+            # 띠의 '업데이트'와 같은 일 → 받기·준비는 뒤 스레드, 다 되면 업데이트 기록·도우미, 도우미가 시작 기록을 남기면
+            # 창 닫기 (_hand_off). 실패하면 띠가 다시 알림으로 (실패 창은 report["dialogs"]에)
             started = time.perf_counter()
             player.start_update()
-            while not handed:
+            while player.isVisible():
                 if player.update_banner.mode() != "progress":
                     raise AssertionError(f"도우미에 넘기지 못했습니다 (띠: {player.update_banner.mode()}) — 대화상자 "
                                          f"{report['dialogs']}\n업데이트 기록:\n{update_log_tail()}")
@@ -376,9 +379,9 @@ def run(workdir):
                                        f"{update_log_tail()}")
                 app.processEvents()
                 time.sleep(0.01)
+            assert handed, "도우미를 띄우지 않았는데 창이 닫혔습니다"
             pending = update_install.read_pending()
             assert pending is not None and pending.target == config["expect_offer"], pending
-            assert not player.isVisible(), "도우미에 넘긴 뒤 창이 닫히지 않았습니다"
             return {"helper": handed[0], "pending": dataclasses.asdict(pending),
                     "seconds": round(time.perf_counter() - started, 2)}
 
@@ -386,8 +389,8 @@ def run(workdir):
                   and check("공유 설정 불러오기 (백그라운드)", shared_config_load)
                   and check("새 버전 알림 (자동 업데이트 확인)", update_offer)
                   and check("업데이트 → 도우미에 넘김", hand_off))
-        # 넘겼으면 창은 앱이 닫았음 (다시 닫지 않음)
-        return finish(bool(passed), close_player=not handed)
+        # 넘겼으면 창은 앱이 닫았음 (다시 닫지 않음) — 도우미가 시작하지 못했으면 창이 그대로 있음
+        return finish(bool(passed), close_player=player is not None and player.isVisible())
 
     player = VideoPlayer()  # 기존 실행 시험: 동기 생성자(공유 설정을 여기서 읽음)
     if "expect_version" in config:  # make_test_data.py --expect-version (빌드된 앱)

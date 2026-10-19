@@ -21,8 +21,10 @@
    창 닫기가 멈춤 — 받다 실패·취소하면 그대로 이어짐. 받는 동안 새로 시작한 작업은 넘기기 전에 다시 물음.
 3. 여유 공간 확인(update_install.NEEDED_BYTES) → 뒤 스레드(UpdateDownload)가 <state_dir>/downloads에 받기(크기·sha256),
    Mac은 이어서 dmg에서 새 앱을 준비("준비 중…"). 띠에 진행·[취소].
-4. 다 되면 업데이트 기록(write_pending) → 도우미(launch_helper_mac/windows) → 창을 닫고 앱을 끝냄. 도우미를 띄우지
-   못하면 기록을 지우고 실패 창, 앱은 그대로.
+4. 다 되면 업데이트 기록(write_pending) → 도우미(launch_helper_mac/windows) → 도우미가 시작 기록을 남기면 창을 닫고 앱을
+   끝냄 (기다리는 동안 띠에 "업데이트 도우미를 시작하는 중…", 창은 쓰지 못하게). 도우미를 띄우지 못하거나, 띄운 도우미가 시작
+   기록 없이 끝나거나 UPDATE_HELPER_START_TIMEOUT_MS 안에 시작 기록을 남기지 않으면(정책·백신이 PowerShell 스크립트를 막음
+   등 — 앱이 끝나면 다시 켜 줄 것이 없음) 도우미를 끝내고 기록을 지운 뒤 실패 창, 앱은 그대로.
 실패는 "업데이트 실패" 창(출처 NAS/GitHub·위치·이유 — 예상 못 한 예외는 트레이스백) 뒤 띠를 다시 그 알림으로. 다른 곳에서
 저절로 받지 않음 — 다시 누르면 처음부터. 취소·창 닫기는 받던 것을 지우고 넘기지 않음. 단계마다 update_install.log.
 
@@ -36,6 +38,7 @@ import os
 import shutil
 import sys
 import threading
+import time
 import traceback
 from dataclasses import dataclass
 
@@ -60,6 +63,7 @@ UPDATED_MESSAGE = "{version}로 업데이트했습니다"
 DOWNLOAD_TEXT = "{version} 받는 중 ({source})… {done} / {total} MB"
 STAGING_TEXT = "준비 중…"
 CANCELLING_TEXT = "취소하는 중…"
+HELPER_STARTING_TEXT = "업데이트 도우미를 시작하는 중…"
 DOWNLOADS_DIR_NAME = "downloads"  # <update_install.state_dir()>/downloads — 받은 설치 파일·dmg (한 번에 하나만 둠)
 
 
@@ -246,6 +250,35 @@ class _UpdateRun:
         return self.offer.result.source
 
 
+@dataclass
+class _HelperStart:
+    """띄운 도우미가 시작 기록을 남기기를 기다리는 동안의 것 (_hand_off → _poll_update_helper)."""
+
+    run: _UpdateRun
+    prepared: str  # 넘긴 설치 파일·준비한 앱
+    proc: object  # 도우미 프로세스 (subprocess.Popen)
+    pending: update_install.Pending
+    log_offset: int  # 도우미를 띄우기 바로 전의 업데이트 기록 크기 — 이 뒤에서 시작 기록을 찾음
+    deadline: float  # time.monotonic() — 이때까지 시작 기록이 없으면 실패
+
+
+def _update_log_report(started):
+    """실패 창에 보일 기록: 업데이트 기록 중 started 뒤의 줄과, 도우미 출력 중 기록에 없는 것(도우미가 기록을 쓰기 전에
+    실패한 이유 — PowerShell·bash가 스크립트를 시작하지 못함 등) → (기록 글, 도우미 출력 글 — 없으면 빈 글자). 읽다 난
+    오류는 그 자리에 트레이스백째 (삼키지 않음)."""
+    try:
+        tail = update_install.log_tail_since(started) or "(이 업데이트 뒤의 기록이 없습니다)\n"
+    except Exception:
+        tail = f"(업데이트 기록을 읽지 못했습니다)\n{traceback.format_exc()}"
+    try:
+        extra = update_install.helper_console_extra()
+        if extra:
+            extra = f"\n도우미 출력 중 기록에 없는 것 ({update_install.helper_console_path()}):\n{extra}"
+    except Exception:
+        extra = f"\n(도우미 출력을 읽지 못했습니다)\n{traceback.format_exc()}"
+    return tail, extra
+
+
 def _problem_key(text):
     """같은 문제인지 가리는 글: 첫 줄 — 트레이스백이면 마지막 줄(예외 종류와 글)."""
     lines = text.strip().splitlines() or [""]
@@ -276,6 +309,8 @@ class PlayerUpdateMixin:
     """업데이트 확인 일정과 결과 (알림 띠·결과 창). update_offer: 지금 알리는 새 버전 (updates.Offer, 없으면 None)."""
 
     UPDATE_CHECK_INTERVAL_MS = 3 * 60 * 60 * 1000  # 자동 확인 간격 3시간
+    UPDATE_HELPER_START_TIMEOUT_MS = 15000  # 띄운 도우미가 시작 기록을 남기기를 기다리는 한도
+    UPDATE_HELPER_POLL_MS = 200  # 그동안 도우미·기록을 보는 간격 (GUI 스레드는 그 사이 그대로 돎)
 
     def setup_updates(self):
         """(창을 만들 때, 알림 띠를 만든 뒤) 확인 상태·3시간 타이머·띠 버튼. 확인은 아직 시작하지 않음."""
@@ -292,6 +327,10 @@ class PlayerUpdateMixin:
         self._update_check_timer.setInterval(self.UPDATE_CHECK_INTERVAL_MS)
         self._update_check_timer.timeout.connect(functools.partial(self.start_update_check, manual=False))
         self._update_run = None  # 받는 중인 업데이트 (_UpdateRun) — 받기가 끝나 결과를 처리하면 None
+        self._update_helper = None  # 시작 기록을 기다리는 도우미 (_HelperStart)
+        self._update_helper_timer = QTimer(self)
+        self._update_helper_timer.setInterval(self.UPDATE_HELPER_POLL_MS)
+        self._update_helper_timer.timeout.connect(self._poll_update_helper)
         self.update_banner.notes_clicked.connect(self.show_update_notes)
         self.update_banner.update_clicked.connect(self.start_update)
         self.update_banner.later_clicked.connect(self.dismiss_update_offer)
@@ -579,17 +618,26 @@ class PlayerUpdateMixin:
         self._hand_off(run, prepared)
 
     def _hand_off(self, run, prepared):
-        """업데이트 기록(다시 켜진 앱이 결과를 판정) → 도우미(앱이 끝나기를 기다렸다 바꾸고 다시 켬) → 창을 닫고 앱을 끝냄
-        (창 닫기가 진행 중인 작업을 멈춤). 기록·도우미가 실패하면 기록을 지우고 실패 창, 앱은 그대로."""
+        """업데이트 기록(다시 켜진 앱이 결과를 판정) → 도우미(앱이 끝나기를 기다렸다 바꾸고 다시 켬) → 도우미가 시작 기록을
+        남기면 창을 닫고 앱을 끝냄 (_poll_update_helper — 창 닫기가 진행 중인 작업을 멈춤). 기록·도우미가 실패하면 기록을
+        지우고 실패 창, 앱은 그대로.
+
+        도우미가 정말 시작했는지 본 뒤에만 끝냄: 띄운 도우미가 곧 끝나거나(그룹 정책 AllSigned·Constrained Language Mode·
+        백신이 `powershell -ExecutionPolicy Bypass -File …`을 막음 등) 시작 기록을 남기지 않으면, 앱이 끝난 뒤 다시 켜 줄 것이
+        없음. 기다리는 동안(보통 1~3초, 최대 UPDATE_HELPER_START_TIMEOUT_MS) 창은 그대로 돌되 쓰지 못하게 함 — 새로 시작한
+        작업을 넘긴 뒤 창 닫기가 묻지 않고 멈추지 않게."""
         pending = update_install.Pending(target=run.version, previous=run.current, platform_key=run.platform_key,
                                          started=update_install.timestamp())
         try:
             update_install.write_pending(pending)
             _log_update(f"업데이트 {run.version}: 업데이트 기록을 남김 ({pending})")
+            log_offset = update_install.log_size()  # 이 뒤에 이번 도우미의 시작 기록이 있어야 함
             if run.mac:
-                update_install.launch_helper_mac(prepared, run.app_path, run.version)
+                proc = update_install.launch_helper_mac(prepared, run.app_path, run.version)
             else:
-                update_install.launch_helper_windows(prepared, run.app_path, run.version)
+                proc = update_install.launch_helper_windows(prepared, run.app_path, run.version)
+            if proc is None:
+                raise RuntimeError("도우미를 띄우는 함수가 도우미 프로세스를 돌려주지 않았습니다")
         except Exception as exc:
             text = f"업데이트 도우미를 띄우지 못했습니다.\n{_failure_text(exc)}"
             _log_update(f"업데이트 {run.version}: {text}")  # 기록을 지우기 전에 (지우다 실패해도 이유가 남게)
@@ -600,13 +648,89 @@ class PlayerUpdateMixin:
                          + traceback.format_exc())
             self._show_update_failure(run, text, log_text=False)
             return
-        _log_update(f"업데이트 {run.version}: 도우미를 띄움 ({prepared} → {run.app_path}) — 앱을 끝냄 "
-                    "(도우미가 바꾸고 다시 켬)")
+        timeout_s = self.UPDATE_HELPER_START_TIMEOUT_MS / 1000
+        _log_update(f"업데이트 {run.version}: 도우미를 띄움 (pid {proc.pid}, {prepared} → {run.app_path}) — 시작 기록을 "
+                    f"기다림 (최대 {timeout_s:g}초)")
+        self._update_helper = _HelperStart(run, prepared, proc, pending, log_offset, time.monotonic() + timeout_s)
+        self.setEnabled(False)
+        self.update_banner.show_progress(0, 0, HELPER_STARTING_TEXT, cancellable=False)
+        self._update_helper_timer.start()
+        self._poll_update_helper()  # 벌써 남겼으면 바로
+
+    def _end_helper_wait(self):
+        self._update_helper_timer.stop()
+        wait, self._update_helper = self._update_helper, None
+        return wait
+
+    def _poll_update_helper(self):
+        """(타이머 슬롯, GUI 스레드) 기다리는 도우미가 아직 돌고 시작 기록을 남겼으면 앱을 끝냄. 도우미가 끝났거나(시작 기록을
+        남겼어도 — 앱이 끝나기를 기다려야 할 도우미가 끝났음) 시간이 지나면 실패. 슬롯이라 예외를 밖으로 내지 않음 — 확인하다
+        난 예외도 실패로 보임 (트레이스백째)."""
+        wait = self._update_helper
+        if wait is None:
+            return
+        try:
+            code = wait.proc.poll()
+            if code is None:
+                if update_install.helper_start_logged(wait.log_offset):
+                    self._end_helper_wait()
+                    self._quit_for_update(wait)
+                    return
+                if time.monotonic() < wait.deadline:
+                    return  # 계속 기다림
+                why = (f"업데이트 도우미가 {self.UPDATE_HELPER_START_TIMEOUT_MS / 1000:g}초 안에 시작 기록을 남기지 "
+                       "않았습니다.")
+            else:
+                why = f"업데이트 도우미가 시작 기록 없이 끝났습니다 (종료 코드 {code})."
+        except Exception:
+            why = f"업데이트 도우미가 시작했는지 확인하지 못했습니다.\n{traceback.format_exc()}"
+        self._end_helper_wait()
+        self._helper_start_failed(wait, why)
+
+    def _quit_for_update(self, wait):
+        """도우미가 시작함 → 창을 닫고 앱을 끝냄 (도우미는 이 프로세스가 끝나기를 기다렸다 바꾸고 다시 켬)."""
+        run = wait.run
+        _log_update(f"업데이트 {run.version}: 도우미가 시작함 (pid {wait.proc.pid}) — 앱을 끝냄 (도우미가 바꾸고 다시 켬)")
         self.hide()  # 창 닫기가 진행 중인 작업이 멈추기를 기다리는 동안(작업마다 최대 몇 초) 멈춘 창이 보이지 않게
         try:
             self.close()
         finally:
             QApplication.instance().quit()  # 도우미는 이 프로세스가 끝나기를 기다림 — 닫기에서 무슨 일이 있어도 끝냄
+
+    def _stop_helper(self, proc):
+        """시작하지 못한 도우미를 끝냄 → 끝났으면 None, 끝내지 못했으면 그 이유 (트레이스백째)."""
+        try:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=5)  # 강제로 끝냈으므로 곧 끝남
+            return None
+        except Exception:
+            return traceback.format_exc()
+
+    def _helper_start_failed(self, wait, why):
+        """도우미가 시작하지 못함 → 도우미를 끝내고(돌고 있으면) 업데이트 기록을 지운 뒤 "업데이트 실패" 창(그 뒤의 기록과 도우미
+        출력째), 앱은 그대로·띠는 다시 알림. 도우미를 끝내지 못하면 기록은 남겨 둠 — 그 도우미가 나중에(앱이 끝난 뒤) 바꾸면
+        새 앱이 그 기록으로 '잘 켜짐'을 남겨야 함."""
+        run = wait.run
+        not_stopped = self._stop_helper(wait.proc)
+        tail, extra = _update_log_report(wait.pending.started)
+        # 기록에는 이유와 도우미 출력만 (출력 파일은 다음 업데이트에서 새로 쓰므로 그 내용이 남는 곳은 기록뿐)
+        _log_update(f"업데이트 {run.version}: {why} 앱은 끝내지 않음{extra}")
+        text = (f"{why}\n앱을 끝내면 다시 켜 줄 것이 없어 끝내지 않았습니다 (보안 정책·백신이 도우미를 막았을 수 있음).\n\n"
+                f"업데이트 기록 ({update_install.log_path()}, {wait.pending.started}부터):\n{tail}{extra}")
+        if not_stopped is not None:
+            _log_update(f"업데이트 {run.version}: 도우미(pid {wait.proc.pid})를 끝내지 못함 — 업데이트 기록은 남겨 둠\n"
+                        f"{not_stopped}")
+            text += (f"\n\n게다가 도우미(pid {wait.proc.pid})를 끝내지 못했습니다 — 업데이트 기록은 남겨 둡니다 (앱이 끝난 "
+                     f"뒤 그 도우미가 바꿀 수 있음).\n{not_stopped}")
+        else:
+            try:
+                update_install.clear_pending()  # 넘기지 못함 — 다음에 켤 때 이 기록으로 실패를 알리지 않게
+            except Exception:
+                text += ("\n\n게다가 업데이트 기록을 지우지 못했습니다 — 다음에 켤 때 업데이트 실패로 알릴 수 있습니다.\n"
+                         + traceback.format_exc())
+        self.setEnabled(True)  # 실패 창보다 먼저 (쓰지 못하게 한 창의 자식 창도 쓰지 못함)
+        self._show_update_failure(run, text, log_text=False)
 
     def _on_update_download_failed(self, text):
         """(GUI 스레드) 받기·준비 실패 → 실패 창, 띠는 다시 알림."""
@@ -655,7 +779,12 @@ class PlayerUpdateMixin:
 
     def stop_update_download(self):
         """(창을 닫을 때) 받는 중이면 멈추라고 알리고(cancel — 받던 .part·준비하던 앱은 스레드가 지움) 끝날 때까지
-        붙잡아 둠 (release_worker — 결과 신호를 막음: 닫은 뒤에는 업데이트 기록·도우미로 넘어가지 않음)."""
+        붙잡아 둠 (release_worker — 결과 신호를 막음: 닫은 뒤에는 업데이트 기록·도우미로 넘어가지 않음). 도우미의 시작
+        기록을 기다리는 중이면 기다림만 멈춤 — 도우미와 업데이트 기록은 그대로 (앱이 끝나면 도우미가 업데이트함)."""
+        wait = self._end_helper_wait()
+        if wait is not None:
+            _log_update(f"업데이트 {wait.run.version}: 도우미의 시작 기록을 기다리는 중에 창을 닫음 — 도우미(pid "
+                        f"{wait.proc.pid})는 그대로 둠 (앱이 끝나면 업데이트함)")
         run, self._update_run = self._update_run, None
         if run is None:
             return
@@ -702,17 +831,8 @@ class PlayerUpdateMixin:
             _log_update(f"켜짐: {message} (전 버전 {pending.previous})")
             self.update_banner.show_message(message)
             return
-        try:
-            tail = update_install.log_tail_since(pending.started) or "(이 업데이트 뒤의 기록이 없습니다)\n"
-        except Exception:
-            tail = f"(업데이트 기록을 읽지 못했습니다)\n{traceback.format_exc()}"
         # 도우미가 기록을 쓰기 전에 실패했으면(PowerShell·bash가 스크립트를 시작하지 못함 등) 그 이유는 도우미 출력에만 있음
-        try:
-            extra = update_install.helper_console_extra()
-            if extra:
-                extra = f"\n도우미 출력 중 기록에 없는 것 ({update_install.helper_console_path()}):\n{extra}"
-        except Exception:
-            extra = f"\n(도우미 출력을 읽지 못했습니다)\n{traceback.format_exc()}"
+        tail, extra = _update_log_report(pending.started)
         # 기록에도 — 도우미 출력 파일은 다음 업데이트에서 새로 쓰므로 그 내용이 남는 곳은 기록뿐
         _log_update(f"켜짐: {pending.target}로 업데이트하지 못해 {pending.previous}이(가) 켜짐 — 실패 창{extra}")
         QMessageBox.critical(

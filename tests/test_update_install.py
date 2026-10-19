@@ -315,6 +315,23 @@ def test_log_appends_with_timestamp_and_prints(tmp_state_dir, capsys):
     assert "시험 줄 1" in out and "시험 줄 2" in out
 
 
+def test_helper_start_logged_looks_only_after_offset(tmp_state_dir):
+    """앱은 도우미를 띄우기 전의 기록 크기 뒤에서만 도우미의 시작 줄을 찾음 — 지난 도우미의 줄은 보지 않음."""
+    assert update_install.log_size() == 0 and not update_install.helper_start_logged(0)  # 기록 파일 없음
+    log("도우미: 시작: 대상 버전 1.1.0, 지난 업데이트의 도우미")
+    offset = update_install.log_size()
+    assert offset == os.path.getsize(log_path()) > 0
+    assert not update_install.helper_start_logged(offset)
+    log("업데이트 1.1.1: 업데이트 기록을 남김")
+    assert not update_install.helper_start_logged(offset)
+    # 도우미가 쓰는 중인 반쪽 줄 (줄 끝 없음, UTF-8 글자 중간에서 끊김)
+    line = f"{update_install.timestamp()} 도우미: 시작: 대상 버전 1.1.1, 설치 폴더 C:\\YesonCheck".encode("utf-8")
+    with open(log_path(), "ab") as fh:
+        fh.write(line[:-1] + "한".encode("utf-8")[:2])
+    assert update_install.helper_start_logged(offset)
+    assert update_install.HELPER_START_TEXT == " 도우미: 시작: "
+
+
 def test_log_tail_since_missing_file_is_empty(tmp_state_dir):
     assert log_tail_since("2026-10-19T10:00:00") == ""
 

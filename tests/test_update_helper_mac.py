@@ -650,10 +650,13 @@ def test_real_launch_helper_mac_records_console_and_log(tmp_state_dir, tmp_path,
     다시 보이지 않음), 기록도 씀. 일찍 끝나는 길: 이 시험 프로세스(살아 있음)가 끝나기를 0초만 기다림 → 바꾸지 않고 종료 1."""
     monkeypatch.setenv("YC_UPDATE_PID_TIMEOUT_S", "0")
     app = tmp_path / "Applications" / "X.app"
+    update_install.log("업데이트 1.1.1: 업데이트 기록을 남김 (앱의 줄)")
+    offset = update_install.log_size()
     proc = update_install.launch_helper_mac(str(tmp_path / "Applications" / ".X.app.update-1.1.1"), str(app), "1.1.1")
     code, text, console = _wait_real_helper(proc)
     details = f"종료 코드 {code}\n기록:\n{text}\n도우미 출력:\n{console}"
     assert code == 1 and " 도우미: 시작: 대상 버전 1.1.1" in text and "아무것도 바꾸지 않음" in text, details
+    assert update_install.helper_start_logged(offset), details  # 앱이 끝나도 되는지 보는 줄 (player_update._hand_off)
     assert " 도우미: 시작: 대상 버전 1.1.1" in console, details  # Mac 도우미는 기록의 줄을 stdout에도 씀
     assert update_install.helper_console_extra() == "", details
 
