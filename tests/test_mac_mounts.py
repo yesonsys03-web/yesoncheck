@@ -599,9 +599,12 @@ def test_real_config_changes_nothing_here(mac):
     found = startup.with_canonical_roots(PATH_MAP_ROOTS)
     for root in found.forward:
         assert not os.path.lexists(root), root  # 이 Mac에 있는 앞부분은 바꾸지 않음
+    # 이 Mac에 없어서 바꾸는 앞부분(found.forward) 아래 경로는 뺌 — 예: 시험 자료 path_map.json의
+    # /Users/studio01/Desktop/usadata4가 이 Mac에서는 다른 사용자의 Desktop에 붙어 있으면 바뀌는 것이 맞음
     here = [path for path in REFERENCE_BATTERY
             if path.startswith("/") and any(os.path.lexists(r) for r in (path, mac_mounts.first_root(path)) if r)
-            and not any(m.displaced and path.startswith(m.path) for m in found.mounts)]
+            and not any(m.displaced and path.startswith(m.path) for m in found.mounts)
+            and not any(path == root or path.startswith(root + "/") for root in found.forward)]
     assert_unchanged(startup, here)
     assert_unchanged(found, here)
 
