@@ -147,7 +147,7 @@ class PathMap:
             raise PathMapError(
                 f"변환표 파일이 없습니다: {path}\n"
                 "Windows에서 작품 경로를 열려면 공유 설정 폴더에 path_map.json이 있어야 합니다 "
-                "(docs/windows-deploy.md 참고)."
+                "(내부 문서 저장소(yesoncheck-internal)의 docs/windows-deploy.md 참고)."
             )
         try:
             with open(path, encoding="utf-8-sig") as fh:  # 메모장이 붙이는 BOM 허용

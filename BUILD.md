@@ -111,4 +111,4 @@ git 저장소가 아닌 폴더(직접 복사한 폴더)에서 빌드하면 경�
 - 결과: 실행 기록 페이지 아래 **Artifacts**의 `YesonCheck_Setup_Windows_<커밋 7자리>` 하나 (설치 파일 `YesonCheck_Setup_<커밋>.exe`를 담은 zip). 14일 보관. **GitHub Release에는 올리지 않습니다.**
   폴더째 받은 앱(`YesonCheck_Autocut_Windows_<커밋>`)은 2026-10-15부터 올리지 않습니다(사용자 요청 — 설치 파일만 씀).
 - Windows PC에서 직접 빌드하려면: Python 3.10 + uv 설치 → `uv venv .venv --python 3.10 --managed-python` → `uv pip install --python .venv\Scripts\python.exe -r requirements-build-windows.lock --override requirements-build-windows.overrides.txt` → opencv contrib 재설치(워크플로 참고) → `./fetch_ffmpeg_windows.ps1` → `.venv\Scripts\python.exe -m PyInstaller --clean -y YesonCheck_Autocut.spec`.
-- 배포·첫 설정은 `docs/windows-deploy.md`.
+- 배포·첫 설정은 내부 문서 저장소(yesoncheck-internal)의 `docs/windows-deploy.md`.
