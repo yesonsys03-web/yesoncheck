@@ -139,3 +139,8 @@ yesoncheck/
   가상환경이 올바르게 활성화되었는지 확인하세요. 환경이 깨졌다면 `~/coding/p310_tf`를 지우고 `./setup_build_env.sh`로 다시 만드세요.
 - **FFmpeg 관련 오류**  
   개발 모드(`run_app.sh`)는 PATH의 `ffmpeg`·`ffprobe`를 씁니다(`brew install ffmpeg`). 빌드된 앱은 번들 안의 정적 ffmpeg를 씁니다.
+
+## 라이선스
+- YesonCheck는 GNU 일반 공중 사용 허가서 3판(**GPL-3.0**)으로 배포합니다. 전문은 [LICENSE](LICENSE)에 있습니다.
+- 소스는 이 저장소(https://github.com/yesonsys03-web/yesoncheck)입니다. 빌드된 앱(Mac `.app`·`.dmg`, Windows 설치 파일)도 GPL-3.0을 따릅니다 — 앱에 함께 들어가는 PyQt5(GPL-3.0)와 FFmpeg(GPL, libx264 포함) 때문입니다.
+- 앱에 함께 들어가는 제3자 구성 요소(PyQt5·Qt·FFmpeg·OpenCV·PaddleOCR·TensorFlow·TransNetV2 등)의 라이선스와 소스 위치는 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)에 있습니다. 두 파일은 앱에도 들어 있습니다 (Mac `YesonCheck_Autocut_<…>.app/Contents/Resources/`, Windows 설치 폴더).
