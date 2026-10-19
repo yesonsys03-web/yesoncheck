@@ -18,6 +18,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -39,6 +40,7 @@ NEEDED_BYTES = {"windows": 1_500_000_000, "mac-x86_64": 3_000_000_000, "mac-arm6
 
 _CHUNK_BYTES = 1024 * 1024  # NAS 복사·sha256 계산·requests 스트리밍 모두 1 MB 단위
 _DOWNLOAD_TIMEOUT_S = 10  # 연결·읽기 각각
+_LOG_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")  # log()가 줄 앞에 붙이는 시각
 
 
 class UpdateError(Exception):
@@ -52,7 +54,7 @@ class Cancelled(Exception):
 # ---- 상태·로그 폴더 ----
 
 
-def state_dir():
+def state_dir() -> str:
     """업데이트가 쓰는 폴더 (받은 파일·기록·ok 표시). Windows %LOCALAPPDATA%\\YesonCheck\\updates,
     Mac ~/Library/Caches/YesonCheck/updates. 없으면 만든다."""
     if paths.IS_WINDOWS:
@@ -63,7 +65,7 @@ def state_dir():
     return d
 
 
-def log_path():
+def log_path() -> str:
     """업데이트 로그 파일. Windows %LOCALAPPDATA%\\YesonCheck\\logs\\update.log,
     Mac ~/Library/Logs/YesonCheck/update.log. 폴더가 없으면 만든다."""
     if paths.IS_WINDOWS:
@@ -74,37 +76,56 @@ def log_path():
     return os.path.join(d, LOG_FILE_NAME)
 
 
-def log(line):
-    """시각(ISO 8601, 초 단위)을 붙여 log_path()에 한 줄 덧붙이고 stdout에도 보임.
+def timestamp() -> str:
+    """지금 시각을 log()가 줄 앞에 쓰는 형식 그대로: ISO 8601, 초 단위, 시간대 없음.
+
+    Task 6의 Pending.started도 이 형식으로 적어야 log_tail_since의 글자 비교(사전식 = 시간 순서)가
+    맞는다.
+    """
+    return datetime.datetime.now().isoformat(timespec="seconds")
+
+
+def log(line: str) -> None:
+    """시각(timestamp())을 붙여 log_path()에 한 줄 덧붙이고 stdout에도 보임.
 
     매번 열고 닫는다(긴 시간 핸들을 들고 있지 않음) — 업데이트 뒤 다시 켜는 도우미(별도 프로세스)가
     Windows에서 같은 파일에 덧붙여 쓸 수 있어야 하기 때문.
     """
-    stamped = f"{datetime.datetime.now().isoformat(timespec='seconds')} {line}"
+    stamped = f"{timestamp()} {line}"
     with open(log_path(), "a", encoding="utf-8") as fh:
         fh.write(stamped + "\n")
     print(stamped)
 
 
-def log_tail_since(started, max_lines=80):
+def log_tail_since(started: str, max_lines: int = 80) -> str:
     """로그에서 시각이 started 이상인 줄만, 최근 max_lines줄까지. 로그 파일이 없으면 빈 글자.
 
-    줄은 log()가 쓴 "<ISO 시각> …" 형식이라 맨 앞 칸까지만 보고 글자 그대로(사전식) 비교한다
-    (ISO 8601은 시간 순서 = 글자 순서).
+    log()가 쓴 줄은 "<ISO 시각> …"로 시작하지만, 트레이스백처럼 그 뒤에 시각 없이 여러 줄이 이어지는
+    경우가 있다(실패 로그를 통째로 보여 줘야 함 — "업데이트 실패" 창의 자료). 시각으로 시작하는 줄만
+    포함 여부를 다시 정하고, 시각이 없는 줄(들여쓴 트레이스백 줄 등)은 바로 앞의 시각 있는 줄과 같은
+    여부를 따른다. started는 초 단위까지만 비교한다(앞 19자리 "YYYY-MM-DDTHH:MM:SS") — 더 긴(마이크로초·
+    시간대) 값이 들어와도 같은 초의 줄을 빼먹지 않게.
     """
     try:
         with open(log_path(), encoding="utf-8") as fh:
             lines = fh.readlines()
     except FileNotFoundError:
         return ""
-    matched = [line for line in lines if line.split(" ", 1)[0] >= started]
+    cutoff = started[:19]
+    matched = []
+    include = False
+    for line in lines:
+        if _LOG_TIMESTAMP_RE.match(line):
+            include = line[:19] >= cutoff
+        if include:
+            matched.append(line)
     return "".join(matched[-max_lines:])
 
 
 # ---- 빈 공간 ----
 
 
-def check_free_space(directory, needed):
+def check_free_space(directory: str, needed: int) -> None:
     """directory가 있는 디스크의 남은 공간이 needed(bytes)보다 적으면 UpdateError (여유 공간 모자람)."""
     free = shutil.disk_usage(directory).free
     if free < needed:
@@ -128,6 +149,15 @@ def _sha256_of(path):
     return digest.hexdigest()
 
 
+def _check_not_exceeding(downloaded, total, part_path):
+    """받은 바이트가 entry.size를 넘으면 바로 멈춤 (끝까지 받은 뒤 _verify_download에서 걸릴 때까지
+    기다리지 않음 — 소스가 기대보다 훨씬 크면 디스크·시간을 낭비하지 않게)."""
+    if downloaded > total:
+        raise UpdateError(
+            f"받은 바이트가 기대보다 많습니다 (기대 {total:,} bytes, 지금까지 {downloaded:,} bytes): {part_path}"
+        )
+
+
 def _copy_from_nas(location, entry, part_path, progress, cancelled):
     """NAS(로컬 디스크로 보이는 공유) 경로를 1 MB 단위로 복사."""
     total = entry.size
@@ -141,6 +171,7 @@ def _copy_from_nas(location, entry, part_path, progress, cancelled):
                 break
             dst.write(chunk)
             downloaded += len(chunk)
+            _check_not_exceeding(downloaded, total, part_path)
             progress(downloaded, total)
 
 
@@ -159,6 +190,7 @@ def _copy_from_url(location, entry, part_path, progress, cancelled):
                     continue
                 dst.write(chunk)
                 downloaded += len(chunk)
+                _check_not_exceeding(downloaded, total, part_path)
                 progress(downloaded, total)
 
 
@@ -205,10 +237,10 @@ def download(
         else:
             _copy_from_nas(location, entry, part_path, progress, cancelled)
         _verify_download(part_path, entry)
+        os.replace(part_path, final_path)  # 검사까지 통과한 뒤에만 이름을 바꿈
     except Exception:
-        _remove_part(part_path)
+        _remove_part(part_path)  # 취소·크기·sha256 불일치·이름 바꾸기 실패 등 모든 실패에서 .part를 지움
         raise
-    os.replace(part_path, final_path)
     return final_path
 
 
@@ -225,7 +257,7 @@ def running_app_location() -> str:
     return os.path.dirname(os.path.dirname(os.path.dirname(sys.executable)))
 
 
-def refuse_reason_mac(app_path: str):
+def refuse_reason_mac(app_path: str) -> str | None:
     """app_path가 업데이트를 설치할 수 없는 위치면 사용자에게 보여 줄 한국어 안내, 아니면 None.
 
     AppTranslocation(격리 위치에서 실행 — 처음 열 때 응용 프로그램 폴더로 옮기지 않은 경우)과 /Volumes/
@@ -305,8 +337,18 @@ def _verify_staged_app(dest_path, target_version):
             raise UpdateError(
                 f"준비한 앱의 버전이 다릅니다 (기대 {target_version}, 실제 {info.version}): {dest_path}"
             )
-    except Exception:
-        shutil.rmtree(dest_path, ignore_errors=True)
+    except Exception as exc:
+        # 준비한 폴더를 지운다 — 지우다 실패한 것이 있으면 삼키지 않고 원래 오류 메시지에 덧붙인다
+        cleanup_errors = []
+
+        def _on_rmtree_error(func, path, exc_info):
+            cleanup_errors.append(f"{func.__name__}({path}): {exc_info[1]}")
+
+        shutil.rmtree(dest_path, onerror=_on_rmtree_error)
+        if cleanup_errors:
+            raise UpdateError(
+                f"{exc}\n(게다가 준비했던 폴더를 지우지 못함: {'; '.join(cleanup_errors)})"
+            ) from exc
         raise
 
 
@@ -314,22 +356,27 @@ def stage_mac(dmg_path: str, app_path: str, target_version: str) -> str:
     """dmg를 열어 안의 .app을 app_path 옆(또는 못 쓰면 state_dir() 아래) 숨김 이름으로 준비하고 그 경로를 돌려줌.
 
     항상 dmg를 떼어낸다(성공·실패 모두). 떼어내지 못하면 그대로 UpdateError(마운트된 이미지를 남겨 두지
-    않음). 복사한 앱의 build_info.json 버전이 target_version과 다르면(또는 실행 파일이 없으면) 준비한
-    폴더를 지우고 UpdateError.
+    않음) — 아직 마운트된 상태일 수 있으니 임시 마운트 폴더는 떼어내기가 성공했을 때만 지운다(실패를
+    삼키지 않음 — rmdir 실패도 그대로 올림). 복사한 앱의 build_info.json 버전이 target_version과
+    다르면(또는 실행 파일이 없으면) 준비한 폴더를 지우고 UpdateError.
     """
     mount_point = tempfile.mkdtemp(prefix="yesoncheck_update_mount_")
     dest_path = _stage_dest_path(app_path, target_version)
     try:
         _hdiutil_attach(dmg_path, mount_point)
-        try:
-            _copy_app_from_mount(mount_point, dest_path)
-        finally:
-            _hdiutil_detach(mount_point)
-    finally:
-        try:
-            os.rmdir(mount_point)
-        except OSError:
-            pass
+    except Exception:
+        os.rmdir(mount_point)  # 마운트가 안 됐으니(비어 있음) 바로 지움
+        raise
+
+    copy_error = None
+    try:
+        _copy_app_from_mount(mount_point, dest_path)
+    except Exception as exc:
+        copy_error = exc
+    _hdiutil_detach(mount_point)  # 복사 성공·실패 모두 항상 떼어냄; 실패하면 그대로 올림(마운트 안 지움)
+    os.rmdir(mount_point)  # 떼어내기가 성공한 뒤에만 — 비어 있어야 하고, 실패해도 그대로 올림(삼키지 않음)
+    if copy_error is not None:
+        raise copy_error
     _verify_staged_app(dest_path, target_version)
     return dest_path
 
@@ -373,7 +420,7 @@ def write_pending(p: Pending) -> None:
     _write_json_atomic(_pending_path(), dataclasses.asdict(p))
 
 
-def read_pending():
+def read_pending() -> Pending | None:
     """기록이 없으면 None. 있지만 형식이 깨졌으면 UpdateError."""
     path = _pending_path()
     try:
@@ -404,7 +451,7 @@ def write_ok_marker(version: str) -> None:
     _write_json_atomic(ok_marker_path(), {"version": version})
 
 
-def startup_result(current_version: str):
+def startup_result(current_version: str) -> tuple[str, Pending] | None:
     """앱이 시작할 때 부름: 업데이트 기록이 있으면 현재 버전과 비교해 판정하고 기록을 지운다.
 
     기록이 없으면 None. current_version == target이면 ok 표시를 쓰고 기록을 지운 뒤 ("ok", 기록).

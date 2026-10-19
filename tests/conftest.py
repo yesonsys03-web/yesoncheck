@@ -201,12 +201,17 @@ def http_server():
 
 @pytest.fixture
 def tmp_state_dir(monkeypatch, tmp_path):
-    """update_install.state_dir()/log_path()가 읽는 환경 변수(Windows LOCALAPPDATA, Mac HOME)를 tmp_path로
-    돌림 — 시험마다 깨끗한 업데이트 상태 폴더를 씀. 돌려주는 값은 그 결과인 state_dir() 경로."""
-    if sys.platform == "win32":
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
-    else:
-        monkeypatch.setenv("HOME", str(tmp_path))
+    """update_install.state_dir()/log_path()가 읽는 환경 변수(LOCALAPPDATA·HOME·USERPROFILE)를 모두
+    tmp_path로 돌림 — 시험마다 깨끗한 업데이트 상태 폴더를 씀.
+
+    실제 플랫폼과 상관없이 셋 다 돌려 둔다: Windows의 ntpath.expanduser는 HOME을 보지 않고
+    USERPROFILE(또는 HOMEDRIVE+HOMEPATH)을 보므로, 이 fixture 아래서 paths.IS_WINDOWS를 Mac으로
+    바꿔 끼우는 시험(Mac 쪽 state_dir()/log_path() 분기를 Windows CI에서 시험)도 실제 사용자 폴더를
+    건드리지 않고 안전하게 돈다. 돌려주는 값은 그 결과인 state_dir() 경로.
+    """
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     from yesoncheck import update_install
 
     return update_install.state_dir()

@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import requests
 
 from yesoncheck import build_info, update_install
 from yesoncheck.update_install import (
@@ -32,6 +33,7 @@ from yesoncheck.update_install import (
     stage_mac,
     startup_result,
     state_dir,
+    timestamp,
     write_ok_marker,
     write_pending,
 )
@@ -90,6 +92,26 @@ def test_download_http(http_server, tmp_path):
     )
     assert open(out, "rb").read() == src.read_bytes()
     assert seen[-1] == (src.stat().st_size, src.stat().st_size)
+
+
+def test_download_http_404_leaves_no_part(http_server, tmp_path):
+    """등록 안 된 경로(404)는 requests가 HTTPError를 올리고, download()는 그걸 그대로 다시 올리며(삼키지
+    않음) .part를 남기지 않음."""
+    with pytest.raises(requests.exceptions.HTTPError):
+        download(
+            http_server.url + "/missing.exe", FileEntry("missing.exe", 10, "0" * 64),
+            str(tmp_path / "dl"), lambda d, t: None, lambda: False,
+        )
+    assert not list((tmp_path / "dl").iterdir())
+
+
+def test_download_nas_stops_early_when_source_larger_than_expected(tmp_path):
+    """소스가 entry.size보다 훨씬 크면 끝까지 받지 않고 바로 멈춤 (디스크·시간 낭비 방지)."""
+    src = make_file(tmp_path / "big.exe", 5 * 1024 * 1024)
+    entry = FileEntry("big.exe", 1000, hashlib.sha256(b"x").hexdigest())  # 실제보다 훨씬 작은 크기
+    with pytest.raises(UpdateError, match="많습니다"):
+        download(str(src), entry, str(tmp_path / "dl"), lambda d, t: None, lambda: False)
+    assert not list((tmp_path / "dl").iterdir())
 
 
 def test_refuse_reason_mac():
@@ -191,6 +213,24 @@ def test_stage_mac_falls_back_to_state_dir_when_parent_not_writable(tmp_path, tm
     assert os.path.isfile(os.path.join(staged, "Contents", "MacOS", "YesonCheck_Autocut"))
 
 
+def test_verify_staged_app_appends_cleanup_failure_without_masking_main_error(tmp_path, monkeypatch):
+    """_verify_staged_app: 검사 실패 → 지우려다 실패한 것이 있으면, 그 실패를 삼키지 않고 원래(검사 실패)
+    메시지에 덧붙여 올림 (Mac이 아니어도 플랫폼과 상관없는 순수 로직이라 hdiutil 없이 시험)."""
+    dest_path = str(tmp_path / "staged.app")
+    os.makedirs(dest_path)  # 실행 파일이 없어 검사가 실패하도록
+
+    def fake_rmtree(path, onerror=None):
+        if onerror is not None:
+            onerror(os.remove, path, (OSError, OSError("시험용 지우기 실패"), None))
+
+    monkeypatch.setattr(update_install.shutil, "rmtree", fake_rmtree)
+    with pytest.raises(UpdateError) as exc_info:
+        update_install._verify_staged_app(dest_path, "1.0.0")
+    message = str(exc_info.value)
+    assert "실행 파일이 없습니다" in message  # 원래 오류는 그대로
+    assert "지우지 못함" in message and "시험용 지우기 실패" in message  # 덧붙은 정리 실패
+
+
 # ---- 추가 시험: state_dir / log_path ----
 
 
@@ -205,6 +245,9 @@ def test_state_dir_windows(monkeypatch, tmp_path):
 def test_state_dir_mac(monkeypatch, tmp_path):
     monkeypatch.setattr(update_install.paths, "IS_WINDOWS", False)
     monkeypatch.setenv("HOME", str(tmp_path))
+    # ntpath.expanduser(실제 Windows에서 돌 때)는 HOME을 보지 않고 USERPROFILE을 먼저 봄 — 이 시험이
+    # Mac 쪽 분기를 흉내 내느라 실제 사용자 폴더를 건드리지 않도록 둘 다 돌려 둠
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     d = state_dir()
     assert d == os.path.join(str(tmp_path), "Library", "Caches", "YesonCheck", "updates")
     assert os.path.isdir(d)
@@ -221,6 +264,7 @@ def test_log_path_windows(monkeypatch, tmp_path):
 def test_log_path_mac(monkeypatch, tmp_path):
     monkeypatch.setattr(update_install.paths, "IS_WINDOWS", False)
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # test_state_dir_mac과 같은 이유
     p = log_path()
     assert p == os.path.join(str(tmp_path), "Library", "Logs", "YesonCheck", "update.log")
     assert os.path.isdir(os.path.dirname(p))
@@ -260,6 +304,48 @@ def test_log_tail_since_filters_and_limits(tmp_state_dir):
 
     tail2 = log_tail_since("2026-10-19T10:00:00", max_lines=2)
     assert "기준 줄" not in tail2 and "이후 줄1" in tail2 and "이후 줄2" in tail2
+
+
+def test_timestamp_matches_log_format(tmp_state_dir):
+    """timestamp()는 log()가 줄 앞에 쓰는 것과 같은 형식 — Task 6이 Pending.started에 쓸 값."""
+    ts = timestamp()
+    assert len(ts) == 19 and ts[4] == "-" and ts[13] == ":"
+    log("시험 줄")
+    with open(log_path(), encoding="utf-8") as fh:
+        logged_ts = fh.readline().split(" ", 1)[0]
+    assert len(logged_ts) == len(ts)
+
+
+def test_log_tail_since_keeps_traceback_lines_and_drops_stale_run(tmp_state_dir):
+    """실패 로그(트레이스백)는 "업데이트 실패" 창에 통째로 보여야 함 — 시각 없는 줄(들여쓴 트레이스백 줄)도
+    버려지지 않고, 이전 실행의 오래된 트레이스백은 포함되지 않아야 함."""
+    with open(log_path(), "a", encoding="utf-8") as fh:
+        fh.write("2026-10-19T09:00:00 이전 실행 시작\n")
+        fh.write("2026-10-19T09:00:01 오류\n")
+        fh.write("Traceback (most recent call last):\n")
+        fh.write('  File "x.py", line 1, in <module>\n')
+        fh.write('    raise RuntimeError("예전 오류")\n')
+        fh.write("RuntimeError: 예전 오류\n")
+        fh.write("2026-10-19T10:00:00 기준 실행 시작\n")
+        fh.write("2026-10-19T10:00:01 오류\n")
+        fh.write("Traceback (most recent call last):\n")
+        fh.write('  File "y.py", line 2, in <module>\n')
+        fh.write('    raise RuntimeError("새 오류")\n')
+        fh.write("RuntimeError: 새 오류\n")
+
+    tail = log_tail_since("2026-10-19T10:00:00")
+    assert "이전 실행" not in tail and "예전 오류" not in tail
+    assert "기준 실행 시작" in tail
+    assert 'File "y.py"' in tail and "새 오류" in tail
+    assert tail.count("\n") == 6  # 시작·오류·Traceback·File·raise·RuntimeError (들여쓴 줄도 모두 남음)
+
+
+def test_log_tail_since_truncates_started_to_second_precision(tmp_state_dir):
+    """started에 초보다 더 정밀한 값(마이크로초)이 들어와도 같은 초의 줄을 빼먹지 않음."""
+    with open(log_path(), "a", encoding="utf-8") as fh:
+        fh.write("2026-10-19T10:00:00 같은 초\n")
+    tail = log_tail_since("2026-10-19T10:00:00.123456")
+    assert "같은 초" in tail
 
 
 # ---- 추가 시험: Pending / ok 표시 ----
