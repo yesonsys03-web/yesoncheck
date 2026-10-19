@@ -16,7 +16,8 @@
 - 수동 확인: 언제나 결과 창 — 소스마다 찾은 버전·예상된 문제·오류 전부 (오류가 있으면 경고 창).
 
 '업데이트'를 누르면 (start_update, 설계 5-2) — 누른 때의 update_offer를 끝까지 씀 (그 뒤의 확인 결과가 바꾸지 않음):
-1. (Mac) 바꿀 수 없는 위치(dmg 안·격리 위치)에서 켠 앱이면 "업데이트할 수 없음" 안내 창, 받지 않음.
+1. 바꿀 수 없는 앱이면 "업데이트할 수 없음" 안내 창, 받지 않음 — Mac: dmg 안·격리 위치에서 켬 (refuse_reason_mac), Windows:
+   업데이트 상태 폴더가 설치 폴더 안이거나 설치 파일로 설치한 앱이 아님 (refuse_reason_windows).
 2. 진행 중인 작업(running_jobs — 창 닫기가 멈추는 작업)이 있으면 멈추고 업데이트할지 물음. 작업은 넘긴 뒤 앱을 끝낼 때
    창 닫기가 멈춤 — 받다 실패·취소하면 그대로 이어짐. 받는 동안 새로 시작한 작업은 넘기기 전에 다시 물음.
 3. 여유 공간 확인(update_install.NEEDED_BYTES) → 뒤 스레드(UpdateDownload)가 <state_dir>/downloads에 받기(크기·sha256),
@@ -25,11 +26,12 @@
    끝냄 (기다리는 동안 띠에 "업데이트 도우미를 시작하는 중…", 창은 쓰지 못하게). 도우미를 띄우지 못하거나, 띄운 도우미가 시작
    기록 없이 끝나거나 UPDATE_HELPER_START_TIMEOUT_MS 안에 시작 기록을 남기지 않으면(정책·백신이 PowerShell 스크립트를 막음
    등 — 앱이 끝나면 다시 켜 줄 것이 없음) 도우미를 끝내고 기록을 지운 뒤 실패 창, 앱은 그대로.
-실패는 "업데이트 실패" 창(출처 NAS/GitHub·위치·이유 — 예상 못 한 예외는 트레이스백) 뒤 띠를 다시 그 알림으로. 다른 곳에서
-저절로 받지 않음 — 다시 누르면 처음부터. 취소·창 닫기는 받던 것을 지우고 넘기지 않음. 단계마다 update_install.log.
+실패는 "업데이트 실패" 창(본문은 이유 한 줄·출처 NAS/GitHub·위치, 전체 — 예상 못 한 예외는 트레이스백 — 는 자세히) 뒤 띠를
+다시 그 알림으로. 받기 실패면 곧바로 같은 곳들을 다시 확인해 띠가 지금 있는 것을 알림. 다른 곳에서 저절로 받지 않음 — 다시
+누르면 처음부터. 취소·창 닫기는 받던 것을 지우고 넘기지 않음. 단계마다 update_install.log.
 
 다시 켜진 앱 (handle_update_startup — 창을 보인 뒤 한 번, 이 컴퓨터의 파일만): 기록의 목표 버전이면 "잘 켜짐" 표시를
-남기고 띠에 잠깐 "{버전}로 업데이트했습니다", 예전 버전이 켜졌으면(도우미가 되돌림) "업데이트 실패" 창에 그 뒤의 기록
+남기고 띠에 잠깐 "{버전}로 업데이트했습니다", 받아 둔 설치 파일을 지움, 예전 버전이 켜졌으면(도우미가 되돌림) "업데이트 실패" 창에 그 뒤의 기록
 (도우미 출력 중 기록에 없는 것도 — 도우미가 기록을 쓰기 전에 실패한 이유).
 """
 
@@ -64,6 +66,9 @@ DOWNLOAD_TEXT = "{version} 받는 중 ({source})… {done} / {total} MB"
 STAGING_TEXT = "준비 중…"
 CANCELLING_TEXT = "취소하는 중…"
 HELPER_STARTING_TEXT = "업데이트 도우미를 시작하는 중…"
+DETAILS_HINT = "전체 기록은 아래 'Show Details…' 단추를 누르면 보입니다."
+SUMMARY_MAX_CHARS = 300  # 실패 창 본문의 이유 한 줄 (넘으면 줄임 — 전체는 자세히)
+BOX_TITLE_PROPERTY = "ycTitle"  # show_details_box의 창 제목 (macOS는 QMessageBox의 제목을 버리므로 따로)
 DOWNLOADS_DIR_NAME = "downloads"  # <update_install.state_dir()>/downloads — 받은 설치 파일·dmg (한 번에 하나만 둠)
 
 
@@ -124,6 +129,41 @@ def empty_folder(folder):
     os.makedirs(folder, exist_ok=True)
     for name in os.listdir(folder):
         remove_prepared(os.path.join(folder, name))
+
+
+def remove_downloads():
+    """지난 업데이트에서 받은 설치 파일·dmg·남은 .part(<state_dir>/downloads 안)를 지움 — 업데이트가 끝났으니 더 쓰지 않음
+    (Windows 설치 파일 약 410 MB). 못 지운 것은 이유(트레이스백)째 업데이트 기록에만 — 앱은 그대로, 다음 받기가 먼저 비움."""
+    try:
+        folder = os.path.join(update_install.state_dir(), DOWNLOADS_DIR_NAME)
+        names = sorted(os.listdir(folder)) if os.path.isdir(folder) else []
+    except Exception:
+        _log_update(f"켜짐: 받은 것을 지우려다 받기 폴더를 읽지 못함\n{traceback.format_exc()}")
+        return
+    for name in names:
+        path = os.path.join(folder, name)
+        try:
+            remove_prepared(path)
+        except Exception:
+            _log_update(f"켜짐: 지난 업데이트에서 받은 것을 지우지 못함 ({path}) — 다음 받기가 먼저 비움\n{traceback.format_exc()}")
+        else:
+            _log_update(f"켜짐: 지난 업데이트에서 받은 것을 지움 ({path})")
+
+
+def show_details_box(parent, title, text, details, icon=QMessageBox.Critical):
+    """짧은 본문(text)과, 'Show Details…'를 누르면 펼쳐지는 긴 글(details — 스크롤되는 칸)의 창. 업데이트 기록 80줄·설치 파일
+    기록·도우미 출력을 본문에 그대로 넣으면 창이 화면보다 커져 단추를 누를 수 없게 됨. 닫을 때까지 기다림."""
+    box = QMessageBox(icon, title, text, QMessageBox.Ok, parent)
+    # macOS의 QMessageBox는 창 제목을 버림(Mac 안내서) → 무슨 창인지 기록하는 쪽(시험·실행 시험)이 알 수 있게 따로 둠
+    box.setProperty(BOX_TITLE_PROPERTY, title)
+    box.setDetailedText(details)
+    box.exec_()
+
+
+def _summary(text):
+    """실패 창 본문에 보일 이유 한 줄: 첫 줄 (트레이스백이면 마지막 줄 — 예외 종류와 글), 너무 길면 줄임."""
+    line = _problem_key(text)
+    return line if len(line) <= SUMMARY_MAX_CHARS else line[:SUMMARY_MAX_CHARS - 1] + "…"
 
 
 def _log_update(line):
@@ -528,12 +568,18 @@ class PlayerUpdateMixin:
         except Exception as exc:
             self._show_update_failure(run, _failure_text(exc))
             return
-        if run.mac:
-            reason = update_install.refuse_reason_mac(run.app_path)
-            if reason is not None:
-                _log_update(f"업데이트 {version}: 이 자리의 앱은 바꿀 수 없음 ({run.app_path}) — {reason}")
-                QMessageBox.warning(self, CANNOT_UPDATE_TITLE, reason)
-                return
+        try:
+            if run.mac:
+                reason = update_install.refuse_reason_mac(run.app_path)
+            else:
+                reason = update_install.refuse_reason_windows(run.app_path)
+        except Exception as exc:
+            self._show_update_failure(run, _failure_text(exc))
+            return
+        if reason is not None:
+            _log_update(f"업데이트 {version}: 이 자리의 앱은 바꿀 수 없음 ({run.app_path}) — {reason}")
+            QMessageBox.warning(self, CANNOT_UPDATE_TITLE, reason)
+            return
         jobs = self.running_jobs()
         if jobs:
             if not self._confirm_stop_jobs(run, [label for label, _worker in jobs]):
@@ -733,11 +779,15 @@ class PlayerUpdateMixin:
         self._show_update_failure(run, text, log_text=False)
 
     def _on_update_download_failed(self, text):
-        """(GUI 스레드) 받기·준비 실패 → 실패 창, 띠는 다시 알림."""
+        """(GUI 스레드) 받기·준비 실패 → 실패 창, 띠는 다시 알림. 그다음 같은 곳들(NAS·GitHub)을 곧바로 다시 확인 (자동 확인
+        — 알리던 버전이 그새 내려갔거나 바뀌었으면 띠가 지금 있는 것을 알리게: 3시간 뒤의 확인까지 없는 것을 다시 받지 않게).
+        다른 곳에서 저절로 받지는 않음 — 다시 '업데이트'를 누를 때의 알림으로."""
         run = self._end_update_download()
         if run is None:
             return
         self._show_update_failure(run, text, log_text=False)  # 이유는 받기 스레드가 기록함
+        _log_update(f"업데이트 {run.version}: 받기에 실패해 새 버전을 다시 확인함 (알림 띠가 지금 있는 것을 보이게)")
+        self.start_update_check(manual=False)
 
     def _on_update_cancelled(self):
         """(GUI 스레드) 취소로 멈춤 (받던 것은 스레드가 지웠음) → 띠는 다시 알림."""
@@ -766,15 +816,17 @@ class PlayerUpdateMixin:
         self.update_banner.show_offer(run.version, run.current)
 
     def _show_update_failure(self, run, text, log_text=True):
-        """"업데이트 실패" 창: 출처(NAS/GitHub)·위치·이유 전부. 띠는 먼저 알림으로 되돌림 — 다른 곳에서 저절로 받지 않음.
-        log_text: 이유도 업데이트 기록에 (False — 이미 기록함: 받기 스레드·넘기기)."""
+        """"업데이트 실패" 창: 본문은 이유 한 줄·출처(NAS/GitHub)·위치, 이유 전부(트레이스백·기록)는 자세히. 띠는 먼저
+        알림으로 되돌림 — 다른 곳에서 저절로 받지 않음. log_text: 이유도 업데이트 기록에 (False — 이미 기록함: 받기 스레드·
+        넘기기)."""
         reason = f"\n{text}" if log_text else " — 이유는 위의 기록"
         _log_update(f"업데이트 {run.version}: 실패 ({run.source}: {run.location}), 실패 창{reason}")
         self._restore_update_offer(run)
-        QMessageBox.critical(
+        show_details_box(
             self, UPDATE_FAILED_TITLE,
-            f"{run.version}로 업데이트하지 못했습니다.\n\n출처: {run.source}\n위치: {run.location}\n\n{text}\n\n"
-            f"지금 버전({run.current})은 그대로입니다. 다시 '업데이트'를 누르면 처음부터 다시 받습니다.",
+            f"{run.version}로 업데이트하지 못했습니다.\n\n{_summary(text)}\n\n출처: {run.source}\n위치: {run.location}\n\n"
+            f"지금 버전({run.current})은 그대로입니다. 다시 '업데이트'를 누르면 처음부터 다시 받습니다.\n\n{DETAILS_HINT}",
+            text,
         )
 
     def stop_update_download(self):
@@ -798,7 +850,7 @@ class PlayerUpdateMixin:
     def handle_update_startup(self) -> None:
         """(창을 보인 뒤 한 번 — app.launch) 지난 업데이트의 기록(pending_update.json)이 있으면 지금 버전과 비교
         (update_install.startup_result — 목표 버전이면 "잘 켜짐" 표시를 남겨 도우미가 기다림을 끝냄). 성공이면 띠에 잠깐
-        "{버전}로 업데이트했습니다", 실패(예전 버전이 켜짐 — 도우미가 되돌림)면 "업데이트 실패" 창에 그 뒤의 업데이트 기록과
+        "{버전}로 업데이트했습니다"와 받아 둔 설치 파일을 지움(remove_downloads), 실패(예전 버전이 켜짐 — 도우미가 되돌림)면 "업데이트 실패" 창에 그 뒤의 업데이트 기록과
         도우미 출력 중 기록에 없는 것(update_install.helper_console_extra).
         이 컴퓨터의 파일만 읽음 (NAS·인터넷 없음). 소스 실행은 아무것도 하지 않음. 기록이 깨졌으면 창에 보인 뒤 지움
         (켤 때마다 같은 창이 뜨지 않게). 예상 못 한 오류는 트레이스백째 창."""
@@ -814,14 +866,16 @@ class PlayerUpdateMixin:
                 cleared = "기록은 지웠습니다."
             except OSError as clear_exc:
                 cleared = f"기록을 지우지도 못했습니다: {type(clear_exc).__name__}: {clear_exc}"
-            QMessageBox.critical(self, UPDATE_FAILED_TITLE,
-                                 f"지난 업데이트의 결과를 알 수 없습니다 — 업데이트 기록이 깨졌습니다.\n\n{exc}\n\n{cleared}")
+            show_details_box(self, UPDATE_FAILED_TITLE,
+                             f"지난 업데이트의 결과를 알 수 없습니다 — 업데이트 기록이 깨졌습니다.\n\n{cleared}\n\n{DETAILS_HINT}",
+                             str(exc))
             return
         except Exception:
             text = traceback.format_exc()
             _log_update(f"켜짐: 지난 업데이트의 결과를 확인하다 예상치 못한 오류\n{text}")
-            QMessageBox.critical(self, UPDATE_FAILED_TITLE,
-                                 f"지난 업데이트의 결과를 확인하다 예상치 못한 오류가 났습니다.\n\n{text}")
+            show_details_box(self, UPDATE_FAILED_TITLE,
+                             f"지난 업데이트의 결과를 확인하다 예상치 못한 오류가 났습니다.\n\n{_summary(text)}\n\n{DETAILS_HINT}",
+                             text)
             return
         if result is None:
             return
@@ -830,13 +884,15 @@ class PlayerUpdateMixin:
             message = UPDATED_MESSAGE.format(version=pending.target)
             _log_update(f"켜짐: {message} (전 버전 {pending.previous})")
             self.update_banner.show_message(message)
+            remove_downloads()
             return
         # 도우미가 기록을 쓰기 전에 실패했으면(PowerShell·bash가 스크립트를 시작하지 못함 등) 그 이유는 도우미 출력에만 있음
         tail, extra = _update_log_report(pending.started)
         # 기록에도 — 도우미 출력 파일은 다음 업데이트에서 새로 쓰므로 그 내용이 남는 곳은 기록뿐
         _log_update(f"켜짐: {pending.target}로 업데이트하지 못해 {pending.previous}이(가) 켜짐 — 실패 창{extra}")
-        QMessageBox.critical(
+        show_details_box(
             self, UPDATE_FAILED_TITLE,
             f"{pending.target}로 업데이트하지 못했습니다 — 지금 버전 {pending.previous}이(가) 그대로 켜졌습니다.\n\n"
+            f"업데이트 기록: {update_install.log_path()} ({pending.started}부터)\n\n{DETAILS_HINT}",
             f"업데이트 기록 ({update_install.log_path()}, {pending.started}부터):\n{tail}{extra}",
         )

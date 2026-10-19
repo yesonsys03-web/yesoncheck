@@ -8,6 +8,9 @@
 
 NAS: <공유 설정 폴더>/updates/latest.json. GitHub: <base_url>/latest/download/latest.json (기본 base_url은
 GITHUB_RELEASES_URL, 시험은 YESONCHECK_UPDATE_URL로 바꿔 끼움). REST API는 쓰지 않는다.
+
+requests는 read_github 안에서 불러온다 — 앱의 시작(main_window → player_update → 이 모듈)이 requests(약 80 ms, 처음 켤 때
+200 ms 넘게)를 기다리지 않게. 확인은 뒤 스레드에서 돈다.
 """
 
 import json
@@ -16,8 +19,6 @@ import re
 import traceback
 from dataclasses import dataclass
 from functools import total_ordering
-
-import requests
 
 MANIFEST_NAME = "latest.json"
 NAS_DIR_NAME = "updates"
@@ -222,6 +223,8 @@ def read_github(base_url: str | None, platform_key: str, timeout_s: float = GITH
     """
     if base_url is None:
         return SourceResult("GitHub", "", None, "GitHub 확인 안 함 (설정 꺼짐)", None)
+    import requests  # 처음 쓸 때 (모듈 설명)
+
     url = f"{base_url}/latest/download/{MANIFEST_NAME}"
     try:
         response = requests.get(url, timeout=timeout_s)

@@ -460,6 +460,44 @@ def test_refuse_reason_mac_mentions_applications_folder():
     assert "응용 프로그램 폴더" in msg
 
 
+def _windows_state_in(monkeypatch, local_app_data):
+    """Windows처럼: 업데이트 상태·기록 폴더가 local_app_data\\YesonCheck 아래 (state_dir·log_path)."""
+    monkeypatch.setattr(update_install.paths, "IS_WINDOWS", True)
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+
+
+def _installed_by_setup(folder):
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "unins000.exe").write_bytes(b"")  # Inno 설치 파일이 남기는 제거 프로그램
+    return str(folder)
+
+
+def test_refuse_reason_windows_accepts_setup_install(tmp_path, monkeypatch):
+    _windows_state_in(monkeypatch, tmp_path / "LocalAppData")
+    assert update_install.refuse_reason_windows(_installed_by_setup(tmp_path / "YesonCheck")) is None
+
+
+def test_refuse_reason_windows_refuses_copy_not_installed_by_setup(tmp_path, monkeypatch):
+    """설치 파일로 설치하지 않은 폴더(빌드 결과를 풀어 놓은 것 — 제거 프로그램이 없음)를 '업데이트'하면 설치 파일이 그 폴더를
+    설치된 곳으로 등록해 제거 항목·바로 가기를 바꿈 → 거절."""
+    _windows_state_in(monkeypatch, tmp_path / "LocalAppData")
+    folder = tmp_path / "Downloads" / "YesonCheck_Autocut"
+    folder.mkdir(parents=True)
+    msg = update_install.refuse_reason_windows(str(folder))
+    assert msg and "unins000.exe" in msg and str(folder) in msg and "설치 파일" in msg
+
+
+@pytest.mark.parametrize("where", ["parent", "same"])
+def test_refuse_reason_windows_refuses_install_dir_holding_update_state(tmp_path, monkeypatch, where):
+    """업데이트 상태 폴더(%LOCALAPPDATA%\\YesonCheck\\updates — 도우미 스크립트·받은 설치 파일·기록)가 설치 폴더 안이면 도우미가
+    설치 폴더의 이름을 바꿀 수 없음 (예: %LOCALAPPDATA%\\YesonCheck에 설치) → 거절 (도우미의 '다른 YesonCheck 창'은 틀린 안내)."""
+    local = tmp_path / "LocalAppData"
+    _windows_state_in(monkeypatch, local)
+    install = local / "YesonCheck" if where == "parent" else local / "YesonCheck" / "updates"
+    msg = update_install.refuse_reason_windows(_installed_by_setup(install))
+    assert msg and update_install.state_dir() in msg and str(install) in msg and "다른 폴더" in msg
+
+
 # ---- 도우미 출력 (update_helper_console.txt): 기록에 없는 줄 ----
 
 

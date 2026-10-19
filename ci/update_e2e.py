@@ -14,7 +14,7 @@ make_test_data.py --update-dir이 가짜 공유 설정의 updates/에 꾸러미�
 경우 둘 (각각 <work>/<경우> 아래, 업데이트 상태 폴더도 따로):
 - success: 꾸러미 99.0.0 → 옛 앱 --smoke-test(update 시나리오: 알림 → 받기 → 도우미에 넘김) → 도우미 기록 "업데이트 끝: 99.0.0",
   설치된 앱의 버전 99.0.0, 새 앱 프로세스가 떠 있음, 업데이트 기록(pending_update.json)이 지워짐, 백업 없음, (Windows) 다음
-  로그인의 되살림이 남지 않음 → 새 앱을 끝냄.
+  로그인의 되살림이 남지 않음, 받은 설치 파일·dmg를 새 앱이 지움 → 새 앱을 끝냄.
 - rollback: latest.json은 99.0.0인데 새 앱이 '잘 켜짐' 표시를 쓰지 않음 (Windows: 꾸러미 버전 98.0.0, Mac: 꾸러미의
   build_info는 99.0.0이고 실행 파일은 바로 exit 1 하는 스크립트) → 도우미 기록에 되돌림, 설치된 앱의 버전이 옛 것, 다시 켜진
   옛 앱이 60초 안에 업데이트 기록을 지움(실패를 알렸다는 뜻), 백업 없음 → 옛 앱을 끝냄.
@@ -679,7 +679,9 @@ def check_success(case, files, log_text):
     assert not os.path.exists(files["pending"]), f"새 앱이 업데이트 기록을 지우지 않았습니다: {files['pending']}"
     assert not leftovers(case), f"앱 옆에 남은 것: {leftovers(case)}"
     check_recover_cleared(files)
-    print(f"설치된 앱 {case.app}: 버전 {version}, 새 앱 pid {[p.pid for p in running]}, 백업 없음", flush=True)
+    left = os.listdir(files["downloads"]) if os.path.isdir(files["downloads"]) else []
+    assert not left, f"업데이트한 새 앱이 받은 파일을 지우지 않았습니다 ({files['downloads']}): {left}"
+    print(f"설치된 앱 {case.app}: 버전 {version}, 새 앱 pid {[p.pid for p in running]}, 백업 없음, 받은 파일 없음", flush=True)
     return kill(running)
 
 

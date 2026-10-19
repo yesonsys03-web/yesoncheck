@@ -117,7 +117,9 @@ def update_case(tmp_path):
         env.pop("YC_UPDATE_OK_TIMEOUT_S", None)
         env.pop("YC_UPDATE_PID_TIMEOUT_S", None)
         env.pop("YC_UPDATE_OSASCRIPT", None)
-        env.update(YC_UPDATE_DIRECT_LAUNCH="1", YC_TEST_OK_FILE=str(ok_file), YC_TEST_TRACE_DIR=str(trace))
+        # YC_UPDATE_NO_MESSAGEBOX: 종료 코드 2의 알림 창(osascript display alert)을 띄우지 않음 — 시험이 멈추지 않게
+        env.update(YC_UPDATE_DIRECT_LAUNCH="1", YC_TEST_OK_FILE=str(ok_file), YC_TEST_TRACE_DIR=str(trace),
+                   YC_UPDATE_NO_MESSAGEBOX="1")
         case = SimpleNamespace(
             apps_dir=apps_dir,
             app=app,
@@ -504,6 +506,74 @@ def test_helper_partial_move_leaves_app_for_restore(update_case, tmp_path, mode)
     assert len(admin_commands(case)) == (2 if mode == "admin" else 0)
     assert "복사하다 실패" in log_text(case)
     assert wait_until(lambda: trace_pids(case.trace, "old")), log_text(case)
+
+
+FAKE_MV_FAILING_FOR_SOURCE = """#!/bin/sh
+# 이 원본을 옮기는 mv만 실패 (되돌리기의 '백업을 제자리로'를 막음)
+if [ "$1" = "$YC_TEST_FAIL_MV_SOURCE" ]; then
+    echo "mv: $1: 옮기지 못함 (시험)" >&2
+    exit 1
+fi
+exec /bin/mv "$@"
+"""
+
+FAKE_ALERT_OSASCRIPT = '#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a" >> "$YC_TEST_TRACE_DIR/osascript_args"; done\nexit 0\n'
+
+
+def fail_restore(case, tmp_path):
+    """되돌리기의 '백업을 제자리로' mv가 실패하게 (사용자로 부르는 mv를 가짜로)."""
+    fake_bin = tmp_path / "fake_bin"
+    fake_bin.mkdir()
+    (fake_bin / "mv").write_text(FAKE_MV_FAILING_FOR_SOURCE, encoding="utf-8")
+    (fake_bin / "mv").chmod(0o755)
+    case.env["PATH"] = f"{fake_bin}:{case.env['PATH']}"
+    case.env["YC_TEST_FAIL_MV_SOURCE"] = str(case.backup)
+
+
+@darwin_only
+def test_helper_failed_rollback_shows_last_resort_alert(update_case, tmp_path):
+    """되돌리기마저 실패하면(종료 코드 2) 앱 자리에 앱이 없을 수 있어 다음 실행에서 알릴 수 없음 → 마지막으로 알림 창
+    (osascript display alert)에 백업 앱 자리를 (Windows의 메시지 창과 같음)."""
+    case = update_case("crash")
+    fail_restore(case, tmp_path)
+    fake = tmp_path / "fake_alert_osascript"
+    fake.write_text(FAKE_ALERT_OSASCRIPT, encoding="utf-8")
+    fake.chmod(0o755)
+    case.env["YC_UPDATE_OSASCRIPT"] = str(fake)
+    del case.env["YC_UPDATE_NO_MESSAGEBOX"]
+    result = run_helper(case, timeout_s=30)
+    assert result.returncode == 2, failure_details(case, result)
+    args = (case.trace / "osascript_args").read_text(encoding="utf-8")
+    assert "display alert" in args and "as critical" in args, args
+    assert str(case.backup) in args and str(case.app) in args and str(case.log) in args, args
+    assert "되돌리기 실패" in log_text(case) and "옮기지 못함 (시험)" in log_text(case)
+    assert case.backup.exists() and app_kind(case.backup) == "old"  # 손으로 되돌릴 수 있게 남아 있음
+
+
+@darwin_only
+def test_helper_failed_rollback_alert_skipped_in_tests(update_case, tmp_path):
+    case = update_case("crash")
+    fail_restore(case, tmp_path)
+    result = run_helper(case, timeout_s=30)
+    assert result.returncode == 2, failure_details(case, result)
+    assert "알림 창은 띄우지 않음 (YC_UPDATE_NO_MESSAGEBOX=1)" in log_text(case)
+    assert not (case.trace / "osascript_args").exists()
+
+
+@darwin_only
+def test_helper_alerts_when_app_missing_at_start(update_case, tmp_path):
+    case = update_case("new")
+    (case.app / "Contents" / "MacOS" / update_install.APP_EXECUTABLE_NAME).unlink()
+    fake = tmp_path / "fake_alert_osascript"
+    fake.write_text(FAKE_ALERT_OSASCRIPT, encoding="utf-8")
+    fake.chmod(0o755)
+    case.env["YC_UPDATE_OSASCRIPT"] = str(fake)
+    del case.env["YC_UPDATE_NO_MESSAGEBOX"]
+    result = run_helper(case)
+    assert result.returncode == 2, failure_details(case, result)
+    args = (case.trace / "osascript_args").read_text(encoding="utf-8")
+    assert "display alert" in args and str(case.app) in args, args
+    assert case.staged.exists()  # 아무것도 바꾸지 않음
 
 
 @darwin_only

@@ -11,6 +11,8 @@ Mac에서는 dmg를 hdiutil로 열고 안의 .app 하나를 ditto로(심볼릭 �
 판정해 지운다(startup_result). 이 기록·로그(update.log)는 재시작 뒤 앱과, 종료를 기다리다 새 앱을 켜는
 도우미(다른 프로세스)가 함께 쓴다 — log()는 매번 열고 닫는다(핸들을 오래 들고 있으면 Windows에서 도우미가
 로그 파일에 쓰지 못함).
+
+requests는 URL에서 받을 때(_copy_from_url) 불러온다 — 앱의 시작이 requests를 기다리지 않게 (updates와 같음).
 """
 
 import contextlib
@@ -27,8 +29,6 @@ import sys
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
-
-import requests
 
 from yesoncheck import build_info, paths
 from yesoncheck.updates import FileEntry
@@ -217,6 +217,8 @@ def _copy_from_nas(location, entry, part_path, progress, cancelled):
 
 def _copy_from_url(location, entry, part_path, progress, cancelled):
     """requests 스트리밍으로 받기 (연결·읽기 제한 각 10초)."""
+    import requests  # 처음 쓸 때 (모듈 설명)
+
     total = entry.size
     downloaded = 0
     timeout = (_DOWNLOAD_TIMEOUT_S, _DOWNLOAD_TIMEOUT_S)
@@ -313,6 +315,46 @@ def refuse_reason_mac(app_path: str) -> str | None:
         return (
             "이 앱이 설치 디스크 이미지(dmg) 안에서 바로 실행되고 있어 업데이트를 설치할 수 없습니다. "
             "먼저 앱을 응용 프로그램 폴더(Applications)로 끌어다 놓은 뒤, 거기서 다시 열어 주세요."
+        )
+    return None
+
+
+_WINDOWS_UNINSTALLER_RE = re.compile(r"unins\d{3}\.exe", re.IGNORECASE)  # Inno 설치 파일이 남기는 제거 프로그램
+
+
+def _same_or_inside(path, folder):
+    """path가 folder와 같거나 그 안인지 (Windows는 대소문자 무시, 링크·짧은 이름을 푼 뒤)."""
+    path = os.path.normcase(os.path.realpath(path))
+    folder = os.path.normcase(os.path.realpath(folder))
+    return path == folder or path.startswith(folder.rstrip(os.sep) + os.sep)
+
+
+def refuse_reason_windows(install_dir: str) -> str | None:
+    """install_dir(Windows 설치 폴더)를 업데이트할 수 없으면 사용자에게 보여 줄 한국어 안내, 아니면 None.
+
+    - 업데이트 상태 폴더(state_dir — 도우미 스크립트·받은 설치 파일)나 기록 폴더가 설치 폴더 안: 도우미가 그 안에서 돌고 기록을
+      쓰므로 설치 폴더의 이름을 바꿀 수 없음 (예: %LOCALAPPDATA%\\YesonCheck에 설치) — 도우미는 '다른 YesonCheck 창'으로 잘못
+      알렸을 것. 설치 파일로 다른 폴더에 다시 설치해야 함.
+    - 설치 파일로 설치한 앱이 아님 (제거 프로그램 unins000.exe가 없음 — 빌드 결과를 풀어 놓은 폴더 등): 설치 파일이 그 폴더를
+      설치된 곳으로 등록해 제거 항목·바로 가기를 바꿔 버림.
+    state_dir·log_path가 폴더를 만들다 난 오류는 그대로 올림.
+    """
+    for what, folder in (("업데이트 파일을 두는 폴더", state_dir()), ("업데이트 기록 폴더", os.path.dirname(log_path()))):
+        if _same_or_inside(folder, install_dir):
+            return (
+                f"{what}({folder})가 이 앱의 설치 폴더({install_dir}) 안에 있어 업데이트할 수 없습니다 — 업데이트하는 동안 "
+                "설치 폴더의 이름을 바꿔야 하기 때문입니다. 설치 파일(YesonCheck_Setup_….exe)로 다른 폴더(기본 C:\\YesonCheck)에 "
+                "다시 설치한 뒤 그 앱을 쓰세요."
+            )
+    try:
+        names = os.listdir(install_dir)
+    except OSError as exc:
+        raise UpdateError(f"설치 폴더를 읽지 못했습니다: {install_dir}\n{type(exc).__name__}: {exc}") from exc
+    if not any(_WINDOWS_UNINSTALLER_RE.fullmatch(name) for name in names):
+        return (
+            f"이 앱은 설치 파일로 설치한 것이 아니어서(설치 폴더에 제거 프로그램 unins000.exe가 없음: {install_dir}) 업데이트할 수 "
+            "없습니다 — 업데이트하면 이 폴더가 설치된 곳으로 등록되어 제거 항목·바로 가기가 바뀝니다. 설치 파일"
+            "(YesonCheck_Setup_….exe)로 설치한 앱에서 업데이트하세요."
         )
     return None
 

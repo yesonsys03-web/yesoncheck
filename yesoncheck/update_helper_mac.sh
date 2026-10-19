@@ -10,7 +10,8 @@
 # 새 앱이 창을 보인 뒤 쓰는 OKFILE({"version": "VER"})을 --timeout초까지 기다림 → 되면 백업과 OKFILE을 지움.
 # 중간에 실패하거나, 새 앱이 표시 없이 끝나거나, 시간이 지나면 되돌림: 새 앱 프로세스를 끝내고 새 앱을 치운 뒤
 # 백업을 APP으로 되돌려 옛 앱을 켠다. APP 자리에 앱이 없는 채로 끝내지 않는다 — 되돌리기마저 실패하면 두 오류를
-# 모두 기록하고 종료 코드 2.
+# 모두 기록하고, 알림 창(osascript display alert — 백업 앱의 자리)을 띄운 뒤(앱이 없으니 다음 실행에서 알릴 수 없음) 종료
+# 코드 2. 시작할 때 앱 자리에 앱이 없을 때도 같음.
 #
 # 종료 코드: 0 업데이트 성공, 1 바꾸지 않았거나 되돌림(옛 앱을 켬), 2 되돌리기 실패 또는 잘못된 인자.
 #
@@ -23,7 +24,8 @@
 #   YC_UPDATE_PID_TIMEOUT_S  앱이 끝나기를 기다리는 시간 (없으면 300초)
 #   YC_UPDATE_DIRECT_LAUNCH  1이면 open 대신 APP/Contents/MacOS/YesonCheck_Autocut을 직접 백그라운드로 켬
 #                            (환경 변수를 그대로 물려받고, 출력은 LOG에 덧붙임)
-#   YC_UPDATE_OSASCRIPT      관리자 암호 창에 쓸 osascript 대신 부를 명령
+#   YC_UPDATE_OSASCRIPT      관리자 암호 창·종료 코드 2의 알림 창에 쓸 osascript 대신 부를 명령
+#   YC_UPDATE_NO_MESSAGEBOX  1이면 종료 코드 2의 알림 창을 띄우지 않음 (시험이 멈추지 않게)
 
 set -u
 
@@ -51,6 +53,21 @@ log() {
     printf '%s\n' "$line"
     if [ -n "$LOG" ]; then
         printf '%s\n' "$line" >>"$LOG"
+    fi
+}
+
+fatal_alert() {  # $1 = 알림 창의 글. 종료 코드 2 바로 전: 앱 자리에 앱이 없을 수 있어 다음 실행에서 알릴 수 없음 →
+    # 마지막으로 알림 창을 띄우고 닫을 때까지 기다림 (Windows 도우미의 메시지 창과 같음). 글은 인자로 넘김 — AppleScript
+    # 따옴표·줄바꿈 처리가 필요 없게. 띄우지 못하면 기록만
+    local out
+    if [ "${YC_UPDATE_NO_MESSAGEBOX:-}" = 1 ]; then
+        log "알림 창은 띄우지 않음 (YC_UPDATE_NO_MESSAGEBOX=1)"
+        return 0
+    fi
+    if ! out=$("${YC_UPDATE_OSASCRIPT:-osascript}" -e 'on run argv' \
+            -e 'display alert "Yeson Checker 업데이트 실패" message (item 1 of argv) as critical' \
+            -e 'end run' "$1" 2>&1); then
+        log "알림 창을 띄우지 못함: $(first_lines "$out")"
     fi
 }
 
@@ -355,6 +372,15 @@ rollback() {  # FAIL_REASON을 기록하고 옛 앱으로 되돌려 켠 뒤 끝�
     fi
     if [ "$SWAP_TRIED" = 1 ] && { [ -e "$BACKUP" ] || [ -L "$BACKUP" ]; }; then
         if ! restore_backup; then
+            fatal_alert "업데이트에 실패했고, 이전 버전으로 되돌리지도 못했습니다.
+
+이전 버전(백업): $BACKUP
+앱 자리: $APP${FAILED:+
+치운 새 앱: $FAILED}
+
+앱 자리에 남은 것을 지우거나 다른 이름으로 바꾼 뒤, 백업 앱의 이름을 $APP_BASE(으)로 바꾸면 이전 버전을 다시 쓸 수 있습니다.
+
+자세한 기록: $LOG"
             exit 2
         fi
     else
@@ -363,6 +389,11 @@ rollback() {  # FAIL_REASON을 기록하고 옛 앱으로 되돌려 켠 뒤 끝�
     remove_staged
     if [ ! -x "$APP/Contents/MacOS/$EXE_NAME" ]; then
         log "되돌리기 실패 — 앱 자리에 옛 앱이 없음: $APP (처음 실패: $FAIL_REASON)"
+        fatal_alert "업데이트에 실패했고, 앱 자리에 이전 버전이 없습니다: $APP
+
+이전 버전(백업)이 있다면: $BACKUP
+
+자세한 기록: $LOG"
         exit 2
     fi
     log "되돌림: 옛 앱을 다시 켬"
@@ -426,6 +457,10 @@ log "앱이 끝남 (pid $PID)"
 
 if [ ! -x "$APP/Contents/MacOS/$EXE_NAME" ]; then
     log "업데이트 실패 — 앱 자리에 지금 앱이 없음: $APP"
+    fatal_alert "업데이트를 시작하지 못했습니다 — 앱 자리에 Yeson Checker가 없습니다:
+$APP
+
+자세한 기록: $LOG"
     exit 2
 fi
 if [ ! -x "$STAGED/Contents/MacOS/$EXE_NAME" ]; then

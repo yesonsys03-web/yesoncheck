@@ -34,10 +34,12 @@ def dialogs(monkeypatch):
 
     messages: 모든 창의 (종류, 제목, 글). questions·warnings·criticals: 그 종류의 글만 차례로.
     question 창의 대답은 기본 Yes — answer_question(QMessageBox.No)로 그 뒤의 대답을 바꿈.
+    QMessageBox를 만들어 exec_()로 띄운 창(자세한 글 setDetailedText이 있는 창 등)도 같은 목록에 — 글은 "본문\n\n자세한 글",
+    본문과 자세한 글을 따로 보려면 boxes (종류·제목·본문·자세한 글).
     """
     from PyQt5.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
-    rec = SimpleNamespace(messages=[], folders=[], questions=[], warnings=[], criticals=[])
+    rec = SimpleNamespace(messages=[], folders=[], questions=[], warnings=[], criticals=[], boxes=[])
     answers = {"question": QMessageBox.Yes}
     texts = {"question": rec.questions, "warning": rec.warnings, "critical": rec.criticals}
 
@@ -58,6 +60,21 @@ def dialogs(monkeypatch):
     monkeypatch.setattr(QMessageBox, "warning", recorder("warning", QMessageBox.Ok))
     monkeypatch.setattr(QMessageBox, "information", recorder("information", QMessageBox.Ok))
     monkeypatch.setattr(QMessageBox, "question", recorder("question", QMessageBox.Yes))
+    box_kinds = {QMessageBox.Critical: "critical", QMessageBox.Warning: "warning",
+                 QMessageBox.Information: "information", QMessageBox.Question: "question"}
+
+    def box_exec(box):
+        kind = box_kinds.get(box.icon(), "other")
+        title = box.windowTitle() or box.property("ycTitle") or ""  # macOS의 QMessageBox는 창 제목을 버림
+        details = box.detailedText()
+        text = f"{box.text()}\n\n{details}" if details else box.text()
+        rec.messages.append((kind, title, text))
+        rec.boxes.append(SimpleNamespace(kind=kind, title=title, text=box.text(), details=details))
+        if kind in texts:
+            texts[kind].append(text)
+        return QMessageBox.Ok
+
+    monkeypatch.setattr(QMessageBox, "exec_", box_exec)
     monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: rec.folders.pop(0) if rec.folders else "")
 
     def no_input(*args, **kwargs):

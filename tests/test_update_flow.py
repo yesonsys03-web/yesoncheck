@@ -274,8 +274,10 @@ def apps_root(tmp_path):
 
 @pytest.fixture
 def install_dir(tmp_path):
+    """설치 파일로 설치한 Windows 앱의 설치 폴더 (제거 프로그램 unins000.exe가 있음 — refuse_reason_windows)."""
     folder = apps_root(tmp_path) / "YesonCheck"
     folder.mkdir(parents=True)  # exist_ok 없이 — 상태 폴더와 겹치면 바로 드러나게
+    (folder / "unins000.exe").write_bytes(b"")
     return str(folder)
 
 
@@ -459,6 +461,10 @@ def test_download_failure_dialog_keeps_offer(make_offer_player, nas_dir, install
     assert read_pending() is None and not fake_helpers.called and quits == []
     assert not part_files(tmp_state_dir) and downloaded_files() == []
     assert update_log().count(wrong) == 1  # 받기 스레드가 한 번 (창 쪽은 이유를 다시 적지 않음)
+    # 창의 본문은 짧게 (화면을 넘지 않게) — 이유 전부는 '자세히'(setDetailedText)
+    [box] = dialogs.boxes
+    assert "받은 파일의 sha256이 다릅니다" in box.text and "NAS" in box.text and "지금 버전(1.1.0)은 그대로" in box.text
+    assert wrong in box.details and hashlib.sha256(INSTALLER).hexdigest() in box.details
 
 
 def test_unexpected_download_error_shows_traceback(player_offer, downloads, dialogs, fake_helpers):
@@ -489,6 +495,27 @@ def test_github_failure_does_not_switch_to_nas(make_offer_player, nas_dir, insta
     wait_until(lambda: fake_helpers.called)
     assert fake_helpers.args.target == "1.1.2" and read_pending().target == "1.1.2"
     assert downloads.calls == [url, url] and quits == ["quit"]
+
+
+def test_download_failure_checks_again_and_banner_shows_what_is_there(make_offer_player, nas_dir, install_dir,
+                                                                      http_server, fake_check, dialogs, downloads,
+                                                                      fake_helpers, quits):
+    """받기에 실패하면 같은 곳들(NAS·GitHub)을 곧바로 다시 확인 — 알리던 버전이 그새 내려갔으면 띠가 지금 있는 것을 알림
+    (3시간 뒤의 확인까지 없는 것을 계속 다시 받지 않게). 다른 곳에서 저절로 받지는 않음."""
+    github = published("GitHub", http_server.url, "1.1.2", "windows")  # 설치 파일은 없음 (404 — 내려간 배포)
+    nas = on_nas(nas_dir, "1.1.1", "windows")
+    player = make_offer_player("windows", [nas, github], install_dir)
+    checks_before = len(fake_check.calls)
+    fake_check.results = [nas, updates.SourceResult("GitHub", "", None, "GitHub에 아직 배포된 버전이 없음", None)]
+    player.start_update()
+    wait_until(lambda: dialogs.criticals)
+    wait_until(lambda: len(fake_check.calls) == checks_before + 1 and not player.update_check_running)
+    _settle()
+    assert player.update_banner.mode() == "offer" and player.update_banner.full_text() == OFFER_TEXT  # 1.1.1 (NAS)
+    assert player.update_offer.result.source == "NAS"
+    assert downloads.calls == [f"{http_server.url}/download/v1.1.2/YesonCheck_Setup_1.1.2.exe"]  # NAS에서 저절로 받지 않음
+    assert not fake_helpers.called and quits == [] and len(dialogs.messages) == 1
+    assert "다시 확인" in update_log()
 
 
 def test_not_enough_space_shows_failure(player_offer, dialogs, downloads, monkeypatch):
@@ -746,6 +773,16 @@ def test_close_during_download_leaves_no_pending(player_offer, downloads, fake_h
 # ---- Mac ----
 
 
+def test_windows_refuses_copy_not_installed_by_setup(player_offer, install_dir, dialogs, downloads, fake_helpers):
+    os.remove(os.path.join(install_dir, "unins000.exe"))  # 빌드 결과를 풀어 놓은 폴더처럼
+    player_offer.start_update()
+    [(kind, title, text)] = dialogs.messages
+    assert (kind, title) == ("warning", "업데이트할 수 없음") and "unins000.exe" in text
+    assert not download_started(downloads) and not fake_helpers.called
+    assert player_offer.update_banner.mode() == "offer"
+    assert "바꿀 수 없음" in update_log()
+
+
 def test_mac_refuses_translocated(player_offer_mac, dialogs, downloads, monkeypatch):
     monkeypatch.setattr(update_install, "running_app_location", lambda: "/Volumes/X/YesonCheck_Autocut_Intel.app")
     player_offer_mac.start_update()
@@ -808,6 +845,39 @@ def test_startup_ok_shows_message(tmp_state_dir, player_with_build, dialogs):
     assert "1.1.1로 업데이트했습니다" in update_log()
 
 
+def test_startup_ok_removes_downloaded_installer(tmp_state_dir, player_with_build, dialogs):
+    """업데이트가 끝났으면 받아 둔 설치 파일(Windows 약 410 MB)·남은 .part를 지움."""
+    os.makedirs(downloads_dir())
+    for name in ("YesonCheck_Setup_1.1.1.exe", "YesonCheck_Setup_1.1.1.exe.part"):
+        with open(os.path.join(downloads_dir(), name), "wb") as fh:
+            fh.write(b"installer")
+    write_pending(Pending("1.1.1", "1.1.0", "windows", now()))
+    p = player_with_build("1.1.1")
+    p.handle_update_startup()
+    assert downloaded_files() == [] and dialogs.messages == []
+    assert p.update_banner.full_text() == "1.1.1로 업데이트했습니다"
+    assert "받은 것을 지움" in update_log()
+
+
+def test_startup_ok_download_removal_failure_is_logged_only(tmp_state_dir, player_with_build, dialogs, monkeypatch):
+    from yesoncheck import player_update
+
+    os.makedirs(downloads_dir())
+    with open(os.path.join(downloads_dir(), "YesonCheck_Setup_1.1.1.exe"), "wb") as fh:
+        fh.write(b"installer")
+
+    def locked(path):
+        raise PermissionError(f"시험용 지우기 실패: {path}")
+
+    monkeypatch.setattr(player_update, "remove_prepared", locked)
+    write_pending(Pending("1.1.1", "1.1.0", "windows", now()))
+    p = player_with_build("1.1.1")
+    p.handle_update_startup()
+    assert dialogs.messages == [] and p.update_banner.full_text() == "1.1.1로 업데이트했습니다"
+    log = update_log()
+    assert "받은 것을 지우지 못함" in log and "PermissionError: 시험용 지우기 실패" in log
+
+
 def test_startup_failed_shows_log(tmp_state_dir, player_with_build, dialogs):
     write_pending(Pending("1.1.1", "1.1.0", "windows", now()))
     update_install.log("설치 실패: 예시")
@@ -817,6 +887,20 @@ def test_startup_failed_shows_log(tmp_state_dir, player_with_build, dialogs):
     [(kind, title, text)] = dialogs.messages
     assert title == "업데이트 실패" and "1.1.1" in text and update_install.log_path() in text
     assert read_pending() is None and not os.path.exists(ok_marker_path())
+
+
+def test_startup_failed_long_log_goes_to_details(tmp_state_dir, player_with_build, dialogs):
+    """기록 80줄·설치 파일 기록·도우미 출력은 화면을 넘을 수 있음 → 본문은 짧게, 기록은 '자세히'(스크롤)."""
+    write_pending(Pending("1.1.1", "1.1.0", "windows", now()))
+    for i in range(120):
+        update_install.log(f"도우미: 긴 기록 {i:03d}")
+    p = player_with_build("1.1.0")
+    p.handle_update_startup()
+    [box] = dialogs.boxes
+    assert (box.kind, box.title) == ("critical", "업데이트 실패")
+    assert "1.1.1로 업데이트하지 못했습니다" in box.text and update_install.log_path() in box.text
+    assert len(box.text.splitlines()) <= 8 and "긴 기록" not in box.text
+    assert "도우미: 긴 기록 119" in box.details and "도우미: 긴 기록 040" in box.details  # 최근 80줄
 
 
 def test_startup_failed_shows_helper_output_missing_from_log(tmp_state_dir, player_with_build, dialogs):

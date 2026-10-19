@@ -244,7 +244,7 @@ def test_read_github_ssl_error_is_error(monkeypatch):
     def fake_get(url, timeout):
         raise requests.exceptions.SSLError("인증서 문제(시험)")
 
-    monkeypatch.setattr(updates.requests, "get", fake_get)
+    monkeypatch.setattr(requests, "get", fake_get)  # read_github가 처음 쓸 때 불러오는 그 모듈
     r = read_github("https://example.test", "windows")
     assert r.error and "SSL" in r.error or "보안" in r.error
     assert r.manifest is None and r.expected_problem is None
@@ -254,7 +254,7 @@ def test_read_github_unexpected_exception_has_traceback(monkeypatch):
     def fake_get(url, timeout):
         raise RuntimeError("예상 못 한 문제(시험)")
 
-    monkeypatch.setattr(updates.requests, "get", fake_get)
+    monkeypatch.setattr(requests, "get", fake_get)
     r = read_github("https://example.test", "windows")
     assert r.error and "RuntimeError" in r.error and "Traceback" in r.error
 
@@ -300,3 +300,34 @@ def test_check_no_offer_when_up_to_date(tmp_path):
 def test_file_entry_fields():
     entry = FileEntry(name="a.exe", size=1, sha256="a" * 64)
     assert entry.name == "a.exe" and entry.size == 1 and entry.sha256 == "a" * 64
+
+
+# ---- 시작이 느려지지 않게: requests는 처음 쓸 때 불러옴 ----
+
+
+_STARTUP_IMPORTS = r"""
+import sys
+
+sys.path.insert(0, sys.argv[1])
+import yesoncheck.app
+import yesoncheck.main_window
+import yesoncheck.update_install
+import yesoncheck.updates
+
+print("REQUESTS_LOADED", "requests" in sys.modules)
+"""
+
+
+def test_startup_does_not_import_requests():
+    """앱의 시작(main_window → player_update → update_install·updates)에서 requests(약 80 ms, 처음 켤 때 200 ms 넘게)를
+    불러오지 않음 — GitHub 확인·URL 받기가 처음 쓸 때 불러옴. pytest 프로세스는 이미 불렀으므로 새 파이썬 프로세스에서."""
+    import subprocess
+    import sys
+
+    from tests.conftest import ROOT
+
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PYTHONIOENCODING="utf-8")
+    result = subprocess.run([sys.executable, "-c", _STARTUP_IMPORTS, ROOT], cwd=ROOT, env=env, capture_output=True,
+                            text=True, encoding="utf-8", timeout=300)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert "REQUESTS_LOADED False" in result.stdout.splitlines(), result.stdout

@@ -153,6 +153,17 @@ def run(workdir):
     QMessageBox.warning = record("warning", QMessageBox.Ok)
     QMessageBox.information = staticmethod(lambda *a, **k: QMessageBox.Ok)
     QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.No)
+    # QMessageBox를 만들어 exec_()로 띄우는 창(업데이트 실패 창 — 자세한 글 setDetailedText)도 띄우지 않고 기록
+    box_kinds = {QMessageBox.Critical: "critical", QMessageBox.Warning: "warning"}
+
+    def record_box(box):
+        details = box.detailedText()
+        title = box.windowTitle() or box.property("ycTitle") or ""  # macOS의 QMessageBox는 창 제목을 버림
+        report["dialogs"].append({"kind": box_kinds.get(box.icon(), "information"), "title": title,
+                                  "text": f"{box.text()}\n\n{details}" if details else box.text()})
+        return QMessageBox.Ok
+
+    QMessageBox.exec_ = record_box
 
     # 화면이 없으므로 변환표 자동 설정 확인 창은 기본 선택 그대로 승인, 비밀번호 입력에는 시험용 비밀번호
     from yesoncheck.path_map_setup_dialog import PathMapSetupDialog
