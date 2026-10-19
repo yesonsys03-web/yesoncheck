@@ -149,6 +149,39 @@ try:
 except Exception as exc:
     print(f"[spec] Warning: paddle collect_all failed ({exc})")
 
+# arm64용 paddle 3.0.0 휠의 LAPACK 보조 라이브러리(libblas·liblapack과 그 Fortran 런타임 libgfortran·libgcc_s·libquadmath):
+# paddle 본체(libphi·libpaddle)는 링크하지 않고(BLAS는 시스템 Accelerate, liblapack만 LAPACK 연산 때 dlopen — OCR은 안 씀),
+# libblas·liblapack은 macOS 14.0 이상 + 휠을 만든 Mac의 Homebrew(/opt/homebrew)를 가리켜 사용자 Mac에서는 어차피 못 씀
+# → 처음부터 Analysis에 넣지 않음 (Intel 휠의 것은 12.3 이하·외부 참조 없음이라 그대로 둠).
+# Analysis 뒤에 빼면 안 됨: 바이너리 의존성 분석이 이것들을 먼저 보고 맨 위(Frameworks)에 같은 이름의 링크
+# (libquadmath.0.dylib → paddle/libs/…)를 만들고, PyInstaller는 모든 바이너리의 @rpath를 맨 위로 바꾸므로 numpy·scipy의
+# libgfortran·확장 모듈도 그 링크로 찾음 → 빼면 링크가 끊김. 처음부터 없으면 맨 위 링크는 numpy·scipy 자기 것을 가리킴
+PADDLE_DIR = os.path.join(p310_site_packages, 'paddle')
+DROP_PADDLE_LAPACK_HELPERS = sys.platform == 'darwin' and platform.machine() == 'arm64'
+_PADDLE_LAPACK_HELPERS = ('libblas', 'liblapack', 'libgfortran', 'libgcc_s', 'libquadmath')
+
+
+def is_paddle_lapack_helper(path):
+    """paddle/libs/ 바로 아래의 LAPACK 보조 dylib인지 (원본 경로·앱 안 경로 모두)."""
+    parent, name = os.path.split(os.path.normpath(path))
+    return (os.path.basename(parent) == 'libs' and os.path.basename(os.path.dirname(parent)) == 'paddle'
+            and name.endswith('.dylib') and name.startswith(_PADDLE_LAPACK_HELPERS))
+
+
+if DROP_PADDLE_LAPACK_HELPERS:
+    # paddle 폴더를 datas로 통째로 넣던 것을 파일 목록으로 펼쳐서 보조 라이브러리만 뺌 (PyInstaller의 폴더 펼치기와 같은 os.walk)
+    paddle_tree_datas = [(os.path.join(_root, _name), os.path.relpath(_root, p310_site_packages))
+                         for _root, _dirs, _files in os.walk(PADDLE_DIR) for _name in _files
+                         if not is_paddle_lapack_helper(os.path.join(_root, _name))]
+    _dropped = sorted(os.path.relpath(os.path.join(_root, _name), p310_site_packages)
+                      for _root, _dirs, _files in os.walk(PADDLE_DIR) for _name in _files
+                      if is_paddle_lapack_helper(os.path.join(_root, _name)))
+    paddle_binaries = [e for e in paddle_binaries if not is_paddle_lapack_helper(e[0])]
+    paddle_datas = [e for e in paddle_datas if not is_paddle_lapack_helper(e[0])]
+    print(f"[spec] arm64: 앱에 넣지 않는 paddle LAPACK 보조 라이브러리: {_dropped}")
+else:
+    paddle_tree_datas = [(PADDLE_DIR, 'paddle')]
+
 # scikit-image 수집
 try:
     _b, _d, _h = collect_all("skimage")
@@ -213,11 +246,9 @@ a = Analysis(
     datas=[
         # PaddleOCR 전체 패키지를 Tree로 추가
         (os.path.join(p310_site_packages, 'paddleocr'), 'paddleocr'),
-        # Paddle 전체 패키지를 Tree로 추가
-        (os.path.join(p310_site_packages, 'paddle'), 'paddle'),
         # apted 모듈 추가 (PaddleOCR 분석에 필수)
         (os.path.join(project_root, 'apted'), 'apted'),
-    ] + [(BUILD_INFO_PATH, '.')] + cv2_datas + transnet_datas + license_datas + scenedetect_datas + paddleocr_datas + paddle_datas + skimage_datas + imageio_datas + cython_datas + ([] if IS_WINDOWS else [('Info.plist', '.')]),
+    ] + paddle_tree_datas + [(BUILD_INFO_PATH, '.')] + cv2_datas + transnet_datas + license_datas + scenedetect_datas + paddleocr_datas + paddle_datas + skimage_datas + imageio_datas + cython_datas + ([] if IS_WINDOWS else [('Info.plist', '.')]),
     hiddenimports=[
         # apted 모듈 (PaddleOCR이 사용하는 fallback 구현)
         'apted',
@@ -311,23 +342,13 @@ a = Analysis(
     optimize=0,
 )
 
-# arm64용 paddle 3.0.0 휠의 LAPACK 보조 라이브러리(libblas·liblapack과 그 Fortran 런타임 libgfortran·libgcc_s·libquadmath):
-# paddle 본체(libphi·libpaddle)는 링크하지 않고(BLAS는 시스템 Accelerate, liblapack만 LAPACK 연산 때 dlopen — OCR은 안 씀),
-# libblas·liblapack은 macOS 14.0 이상 + 휠을 만든 Mac의 Homebrew(/opt/homebrew)를 가리켜 사용자 Mac에서는 어차피 못 씀
-# → 제외 (check_min_macos.py 12.3 통과). Intel(x86_64) 휠의 것은 12.3 이하·외부 참조 없음이라 그대로 둠
-# (paddle 폴더를 datas로도 통째로 넣으므로 binaries와 datas 양쪽에서 거름)
-if sys.platform == 'darwin' and platform.machine() == 'arm64':
-    _LAPACK_HELPERS = ('libblas', 'liblapack', 'libgfortran', 'libgcc_s', 'libquadmath')
-
-    def _is_lapack_helper(entry):
-        dest = entry[0]
-        return (dest.startswith('paddle/libs/') and dest.endswith('.dylib')
-                and os.path.basename(dest).startswith(_LAPACK_HELPERS))
-
-    _dropped = sorted({e[0] for e in list(a.binaries) + list(a.datas) if _is_lapack_helper(e)})
-    print(f"[spec] arm64: 앱에 넣지 않는 paddle LAPACK 보조 라이브러리: {_dropped}")
-    a.binaries = [e for e in a.binaries if e[0] not in _dropped]
-    a.datas = [e for e in a.datas if e[0] not in _dropped]
+# 위에서 넣지 않은 paddle LAPACK 보조 라이브러리가 다른 길(훅·의존성 분석)로 다시 들어왔으면 빌드를 멈춤 (조용히 넣지 않음).
+# SYMLINK 항목은 두 번째 값이 링크 대상(앱 안 경로)이라 맨 위 링크가 이것들을 가리켜도 잡힘
+if DROP_PADDLE_LAPACK_HELPERS:
+    _back = sorted({f"{e[0]} ← {e[1]}" for e in list(a.binaries) + list(a.datas)
+                    if is_paddle_lapack_helper(e[0]) or is_paddle_lapack_helper(e[1])})
+    if _back:
+        raise SystemExit(f"[spec] arm64: 넣지 않은 paddle LAPACK 보조 라이브러리가 Analysis 결과에 있습니다: {_back}")
 
 # Windows: TensorFlow가 import할 때(self_check.preload_check) msvcp140.dll·msvcp140_1.dll을 이름으로 불러봄.
 # VC++ 재배포 패키지가 없는 PC에서도 되도록 _internal 맨 위에 두 DLL이 있게 함
