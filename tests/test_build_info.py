@@ -1,11 +1,13 @@
 """빌드 정보(build_info.json): 빌드할 때 버전을 정해(tools/write_build_info.py) 앱에 넣고, 앱은 읽어서 창 제목·정보 창에 보임."""
 
 import dataclasses
+import datetime
 import importlib.util
 import json
 import os
 import subprocess
 import sys
+import types
 
 import pytest
 
@@ -199,3 +201,31 @@ def test_about_shows_version_commit_and_build_date(monkeypatch):
     text = about_text(monkeypatch)
     assert "<b>버전:</b> 1.1.0+0f4d3d7 (시험 빌드) · 커밋 0f4d3d7 · 2026-10-20 빌드</p>" in text
     assert "2025.11" not in text
+
+
+class EnglishWindowsDate(datetime.date):
+    """영어 Windows의 strftime처럼: 형식 문자열을 locale 인코딩(cp1252)으로 바꿀 수 없으면 UnicodeEncodeError."""
+
+    @classmethod
+    def today(cls):
+        return cls(2026, 10, 20)
+
+    def strftime(self, fmt):
+        fmt.encode("cp1252")
+        return super().strftime(fmt)
+
+
+@pytest.mark.parametrize("show", ["show_about", "show_help"])
+def test_about_and_help_dates_do_not_depend_on_windows_locale(monkeypatch, qapp, show):
+    """정보·도움말 창의 날짜(…까지 기록)는 한글을 strftime에 넘기지 않음 — 영어 Windows에서 창이 열리지 않던 문제."""
+    from PyQt5.QtWidgets import QMessageBox
+
+    from yesoncheck import player_base
+
+    shown = []
+    monkeypatch.setattr(player_base, "datetime", types.SimpleNamespace(date=EnglishWindowsDate))
+    monkeypatch.setattr(QMessageBox, "about", lambda parent, title, text: shown.append(text))
+    monkeypatch.setattr(QMessageBox, "setText", lambda box, text: shown.append(text))
+    monkeypatch.setattr(QMessageBox, "exec_", lambda box: 0)
+    getattr(player_base.VideoPlayerBase, show)(None)
+    assert len(shown) == 1 and "2026년 10월 20일까지 기록" in shown[0]

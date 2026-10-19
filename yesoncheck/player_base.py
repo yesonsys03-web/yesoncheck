@@ -91,6 +91,12 @@ def _transnetv2_missing():
     return transnetv2_missing()
 
 
+def korean_date(day):
+    """'2026년 10월 20일'. strftime에 한글 형식을 넘기지 않음 — Windows의 strftime은 형식 문자열을 시스템 locale
+    인코딩으로 바꾸므로 한글을 쓸 수 없는 locale(영어 Windows 등)에서는 UnicodeEncodeError로 창이 열리지 않음."""
+    return f"{day.year}년 {day.month:02d}월 {day.day:02d}일"
+
+
 # 실행 중에 놓아 준 QThread 워커 (끝날 때까지 참조를 붙잡아 둠). 실행 중인 QThread의 마지막 참조가 사라지면
 # GC가 실행 중인 스레드를 파괴해 프로세스가 죽음 ("QThread: Destroyed while thread is still running",
 # Windows 0xC0000409). 애니매틱2(TensorFlow 추론)는 중간에 멈출 수 없어 영상을 바꾸거나 창을 닫은 뒤에도 돌 수 있음
@@ -4010,8 +4016,7 @@ QMessageBox {
     
     def show_help(self):
         """도움말을 표시합니다."""
-        today = datetime.date.today()
-        today_str = today.strftime("%Y년 %m월 %d일")
+        today_str = korean_date(datetime.date.today())
         help_text = f"""
 <h2>Yeson Checker 사용법</h2>
 <p><b>애니매틱 자르기 버전</b> - {today_str}까지 기록</p>
@@ -4223,8 +4228,7 @@ QMessageBox {
     
     def show_about(self):
         """프로그램 정보를 표시합니다."""
-        today = datetime.date.today()
-        today_str = today.strftime("%Y년 %m월 %d일")
+        today_str = korean_date(datetime.date.today())
         # 버전: 빌드된 앱은 build_info.json의 버전·커밋 7자리·빌드 날짜, 소스 실행은 "개발(소스)"
         info = build_info.current()
         version_text = build_info.display_version()
