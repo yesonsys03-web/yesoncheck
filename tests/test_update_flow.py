@@ -73,13 +73,15 @@ class FakeHelpers:
 
 class DownloadSpy:
     """update_install.download를 감쌈: 부른 위치를 남기고, gate를 정하면 처음 받은 조각 뒤에 그 Event가 set될 때까지
-    기다림 (받는 중인 상태를 시험). raises를 정하면 받지 않고 그 예외를 올림. finished: 받기가 끝남 (성공·실패 모두)."""
+    기다림 (받는 중인 상태를 시험). raises를 정하면 받지 않고 그 예외를, raises_after_gate는 gate 뒤에 그 예외를 올림.
+    finished: 받기가 끝남 (성공·실패 모두)."""
 
     def __init__(self, real):
         self._real = real
         self.calls = []
         self.gate = None
         self.raises = None
+        self.raises_after_gate = None
         self.entered = threading.Event()
         self.finished = threading.Event()
 
@@ -91,6 +93,8 @@ class DownloadSpy:
             self.entered.set()
             if self.gate is not None:
                 assert self.gate.wait(10), "시험의 gate가 10초 안에 열리지 않음"
+            if self.raises_after_gate is not None:
+                raise self.raises_after_gate
 
         try:
             if self.raises is not None:
@@ -102,11 +106,12 @@ class DownloadSpy:
 
 class FakeStage:
     """update_install.stage_mac 대신 (hdiutil 없이): 앱 옆 숨김 이름의 폴더를 '준비한 앱'으로 만듦. gate를 정하면
-    준비 중에 그 Event를 기다림."""
+    준비 중에 그 Event를 기다림, raises를 정하면 (gate 뒤) 그 예외를 올림."""
 
     def __init__(self):
         self.calls = []
         self.gate = None
+        self.raises = None
         self.entered = threading.Event()
 
     def __call__(self, dmg_path, app_path, target_version):
@@ -115,6 +120,8 @@ class FakeStage:
         self.entered.set()
         if self.gate is not None:
             assert self.gate.wait(10), "시험의 gate가 10초 안에 열리지 않음"
+        if self.raises is not None:
+            raise self.raises
         staged = os.path.join(os.path.dirname(app_path), f".{os.path.basename(app_path)}.update-{target_version}")
         os.makedirs(os.path.join(staged, "Contents"))
         return staged
@@ -126,6 +133,7 @@ class FakeJob:
     def __init__(self):
         self.running = True
         self.stopped = False
+        self.on_stop = None  # 멈출 때 부름 (그때의 창 상태를 시험)
 
     def isRunning(self):
         return self.running
@@ -135,6 +143,8 @@ class FakeJob:
 
     def stop(self):
         self.stopped = True
+        if self.on_stop is not None:
+            self.on_stop()
 
     def wait(self, ms):
         self.running = False
@@ -248,6 +258,29 @@ def update_log():
         return fh.read()
 
 
+class BrokenLog:
+    """update_install.log 대신: match가 들어 있는 줄(None이면 모든 줄)에서 OSError — 업데이트 기록을 쓰지 못함."""
+
+    def __init__(self, real, match=None):
+        self._real = real
+        self.match = match
+
+    def __call__(self, line):
+        if self.match is None or self.match in line:
+            raise OSError("시험용 기록 쓰기 실패")
+        self._real(line)
+
+
+@pytest.fixture
+def broken_log(monkeypatch):
+    def install(match=None):
+        broken = BrokenLog(update_install.log, match)
+        monkeypatch.setattr(update_install, "log", broken)
+        return broken
+
+    return install
+
+
 def wait_offer_again(player):
     wait_until(lambda: player._update_run is None and player.update_banner.mode() == "offer")
     _settle()
@@ -306,11 +339,14 @@ def test_success_hands_off_and_quits(player_offer, fake_helpers, quits, download
 
 def test_busy_jobs_yes_updates_and_close_stops_them(player_offer, dialogs, fake_helpers, quits):
     merge = fake_running_worker(player_offer, "merge_worker")
+    visible_when_stopped = []
+    merge.on_stop = lambda: visible_when_stopped.append(player_offer.isVisible())
     player_offer.start_update()  # 대답은 기본 Yes
     assert len(dialogs.questions) == 1
     wait_until(lambda: fake_helpers.called)
     assert len(dialogs.questions) == 1  # 이미 멈추기로 한 작업은 다시 묻지 않음
     assert merge.stopped and player_offer.isHidden() and quits == ["quit"]
+    assert visible_when_stopped == [False]  # 작업이 멈추기를 기다리는 동안 멈춘 창이 보이지 않게 먼저 숨김
 
 
 def test_progress_shown_and_cancel_restores_offer(player_offer, downloads, fake_helpers, tmp_state_dir, quits):
@@ -359,7 +395,7 @@ def test_download_failure_dialog_keeps_offer(make_offer_player, nas_dir, install
     assert player.update_banner.mode() == "offer" and player.update_banner.full_text() == OFFER_TEXT
     assert read_pending() is None and not fake_helpers.called and quits == []
     assert not part_files(tmp_state_dir) and downloaded_files() == []
-    assert wrong in update_log()
+    assert update_log().count(wrong) == 1  # 받기 스레드가 한 번 (창 쪽은 이유를 다시 적지 않음)
 
 
 def test_unexpected_download_error_shows_traceback(player_offer, downloads, dialogs, fake_helpers):
@@ -410,6 +446,91 @@ def test_helper_launch_failure_keeps_app_running(player_offer, fake_helpers, dia
     assert read_pending() is None  # 넘기지 못했으니 기록을 지움
     assert player_offer.isVisible() and quits == []
     assert player_offer.update_banner.mode() == "offer"
+
+
+def test_helper_failure_and_record_not_cleared_shows_both(player_offer, fake_helpers, dialogs, quits, monkeypatch):
+    """도우미를 못 띄운 데다 기록도 못 지움 → 둘 다 창에 (도우미 오류는 기록을 지우기 전에 업데이트 기록에 남김)."""
+    fake_helpers.raises = OSError("시험용 도우미 실행 실패")
+    logged_before_clear = []
+
+    def broken_clear():
+        logged_before_clear.append("시험용 도우미 실행 실패" in update_log())
+        raise PermissionError("시험용 기록 지우기 실패")
+
+    monkeypatch.setattr(update_install, "clear_pending", broken_clear)
+    player_offer.start_update()
+    wait_until(lambda: dialogs.criticals)
+    _settle()
+    [text] = dialogs.criticals
+    assert "OSError: 시험용 도우미 실행 실패" in text and "PermissionError: 시험용 기록 지우기 실패" in text
+    assert logged_before_clear == [True]
+    assert player_offer.isVisible() and quits == [] and player_offer.update_banner.mode() == "offer"
+
+
+def test_log_failure_at_start_shows_failure_and_does_not_download(player_offer, broken_log, dialogs, downloads,
+                                                                  capsys):
+    """시작할 때 업데이트 기록을 쓸 수 없으면 (도우미·다시 켜진 앱의 실패 창도 같은 기록을 씀) 받지 않고 실패 창."""
+    broken_log()
+    player_offer.start_update()
+    [(kind, title, text)] = dialogs.messages
+    assert (kind, title) == ("critical", "업데이트 실패") and "OSError: 시험용 기록 쓰기 실패" in text
+    assert not download_started(downloads) and player_offer.update_banner.mode() == "offer"
+    assert "시험용 기록 쓰기 실패" in capsys.readouterr().err  # 실패 창의 기록 줄도 못 씀 → stderr에 줄과 이유
+
+
+def test_log_failure_after_helper_still_quits(player_offer, broken_log, fake_helpers, quits, capsys):
+    broken_log(match="도우미를 띄움")
+    player_offer.start_update()
+    wait_until(lambda: fake_helpers.called)
+    assert player_offer.isHidden() and quits == ["quit"]
+    err = capsys.readouterr().err
+    assert "도우미를 띄움" in err and "시험용 기록 쓰기 실패" in err
+
+
+def test_log_failure_when_closing_still_releases_download(player_offer, downloads, broken_log, fake_helpers,
+                                                          tmp_state_dir, quits, capsys):
+    """창을 닫을 때 업데이트 기록을 못 써도 받기 스레드를 놓고(release_worker) 진행 중인 작업도 멈춤."""
+    merge = fake_running_worker(player_offer, "merge_worker")  # 멈추기로 함 (기본 Yes)
+    downloads.gate = threading.Event()
+    player_offer.start_update()
+    wait_until(lambda: downloads.entered.is_set())
+    download = player_offer._update_run.download
+    broken_log()
+    player_offer.close()
+    try:
+        assert download in player_base._RELEASED_WORKERS and download.is_cancelled()
+        assert merge.stopped  # 창 닫기의 뒤쪽 정리도 돎
+    finally:
+        downloads.gate.set()
+    assert player_base.wait_for_released_workers(5) == []
+    assert not part_files(tmp_state_dir) and read_pending() is None and not fake_helpers.called
+    assert "창을 닫음" in capsys.readouterr().err
+
+
+def test_failure_after_close_is_logged(player_offer_mac, fake_stage, tmp_state_dir):
+    """창을 닫은 뒤(결과 신호가 막힘)의 실패도 받기 스레드가 업데이트 기록에 남김."""
+    fake_stage.gate = threading.Event()
+    fake_stage.raises = update_install.UpdateError("시험용 준비 실패")
+    player_offer_mac.start_update()
+    wait_until(lambda: fake_stage.entered.is_set())
+    player_offer_mac.close()
+    fake_stage.gate.set()
+    assert player_base.wait_for_released_workers(5) == []
+    assert "시험용 준비 실패" in update_log()
+
+
+def test_thread_log_failure_prints_both_to_stderr(player_offer, downloads, broken_log, dialogs, capsys):
+    downloads.gate = threading.Event()
+    player_offer.start_update()
+    wait_until(lambda: downloads.entered.is_set())
+    broken_log()
+    downloads.raises_after_gate = update_install.UpdateError("시험용 받기 실패")
+    downloads.gate.set()
+    wait_until(lambda: dialogs.criticals)
+    _settle()
+    assert "시험용 받기 실패" in dialogs.criticals[0]
+    err = capsys.readouterr().err
+    assert "시험용 받기 실패" in err and "OSError: 시험용 기록 쓰기 실패" in err
 
 
 def test_new_job_during_download_asks_before_hand_off(player_offer, downloads, dialogs, fake_helpers, quits):
