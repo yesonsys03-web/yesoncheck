@@ -50,6 +50,7 @@ $ExtraArgs = @($args)  # 모르는 인자 — 함수 안에서 $args를 쓰면 �
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $RetryCount = 5          # 이름 바꾸기·지우기: 잠깐 잡힌 파일(백신 검사 등) 때문이면 1초 간격으로 다시 해 봄
 $RestoreRetryCount = 30  # 되돌리기의 이름 바꾸기는 더 오래(30번 + 남은 프로세스를 다시 끝낸 뒤 30번 — 약 1분)
+$WmiTimeoutS = 30        # 자손 프로세스를 찾는 WMI 질의의 한도 (기본은 끝없이 기다림 — winmgmt가 멈추면 되돌리기도 멈춤)
 
 $script:FailReason = ''
 $script:OkReadError = ''   # 마지막으로 OK를 읽지 못한 이유 (실패 기록용)
@@ -58,6 +59,8 @@ $script:Renamed = $false   # DIR을 백업 이름으로 바꿨음 — 그 뒤로
 $script:Launched = $false  # 새 앱을 켜려고 했음 — 되돌릴 때 새 앱과 그 자손, DIR 아래 프로세스를 끝내야 함
 $script:NewProc = $null    # 켠 새 앱 프로세스
 $script:NewProcStart = [DateTime]::MinValue  # 새 앱을 켜기 바로 전 시각 (자손 프로세스를 가릴 때 씀)
+$script:InstallerProc = $null  # 실행한 설치 파일 프로세스 — 되돌리기의 두 번째 이름 바꾸기 전에 그 자손을 다시 끝냄
+$script:InstallerStart = [DateTime]::MinValue
 
 # ---- 기록 ----
 
@@ -242,7 +245,10 @@ function Start-App([string]$What) {
 function Get-Descendants([int]$RootPid, [DateTime]$RootStart) {
     # RootPid의 자손 프로세스(자식·손자 …)들의 pid — Win32_Process의 ParentProcessId를 따라감. 부모보다 먼저 생긴
     # 프로세스는 넣지 않음(부모 pid가 끝난 뒤 다른 프로세스에 다시 쓰였을 수 있음). 시각 정밀도 차이로 1초 여유
-    $all = @(([wmisearcher]'SELECT ProcessId, ParentProcessId, CreationDate FROM Win32_Process').Get())
+    # 질의에 한도를 둠 — 넘으면 예외(부른 쪽이 기록하고, 루트와 DIR 아래 프로세스만 끝내고 계속)
+    $searcher = [wmisearcher]'SELECT ProcessId, ParentProcessId, CreationDate FROM Win32_Process'
+    $searcher.Options.Timeout = [TimeSpan]::FromSeconds($WmiTimeoutS)
+    $all = @($searcher.Get())
     $created = @{}  # 자손으로 넣은 pid → 생긴 시각
     $created[$RootPid] = $RootStart
     $found = New-Object System.Collections.ArrayList
@@ -252,6 +258,7 @@ function Get-Descendants([int]$RootPid, [DateTime]$RootStart) {
         foreach ($p in $all) {
             $id = [int]$p.ProcessId
             $parent = [int]$p.ParentProcessId
+            if ($id -eq $PID) { continue }  # 이 도우미 자신은 넣지 않음
             if ($created.ContainsKey($id) -or (-not $created.ContainsKey($parent)) -or (-not $p.CreationDate)) { continue }
             $when = [System.Management.ManagementDateTimeConverter]::ToDateTime([string]$p.CreationDate)
             if ($when.AddSeconds(1) -lt $created[$parent]) { continue }
@@ -282,7 +289,7 @@ function Add-ProcessTree($List, $Root, [DateTime]$RootStart) {
         try {
             Add-Target $List ([System.Diagnostics.Process]::GetProcessById($id))
         } catch {
-            # 그 사이에 끝남 — 끝낼 것이 없음
+            Write-Log "자손 프로세스(pid $id)는 그 사이에 끝남"
         }
     }
 }
@@ -331,14 +338,20 @@ function Invoke-Installer {
     $psi.FileName = $Installer
     $psi.Arguments = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="' + $InstallDir + '" /LOG="' + $InnoLog + '"'
     $psi.UseShellExecute = $false
-    $started = [DateTime]::Now
+    $script:InstallerStart = [DateTime]::Now
     $proc = [System.Diagnostics.Process]::Start($psi)
+    $script:InstallerProc = $proc
     if ($proc.WaitForExit($InstallTimeoutS * 1000)) { return $proc.ExitCode }
     Write-Log ('설치 파일이 ' + $InstallTimeoutS + '초 안에 끝나지 않아 설치 파일과 그 자손 프로세스를 끝냄 (pid ' + $proc.Id + ')')
-    $targets = New-Object System.Collections.ArrayList
-    Add-ProcessTree $targets $proc $started
-    Stop-Targets $targets '설치 파일'
+    Stop-InstallerTree
     return $null
+}
+
+function Stop-InstallerTree {
+    # 실행한 설치 파일(아직 돌면)과 그 자손(Inno의 is-*.tmp\Setup.tmp 등)을 끝냄
+    $targets = New-Object System.Collections.ArrayList
+    Add-ProcessTree $targets $script:InstallerProc $script:InstallerStart
+    Stop-Targets $targets '설치 파일'
 }
 
 function Write-InnoLogTail {
@@ -417,6 +430,9 @@ function Move-DirForRestore([string]$From, [string]$To) {
     }
     if ($script:Launched) {
         try { Stop-NewApp } catch { Write-Log ('새 앱 프로세스를 다시 끝내다 오류: ' + (Format-Err $_)) }
+    }
+    if ($null -ne $script:InstallerProc) {
+        try { Stop-InstallerTree } catch { Write-Log ('설치 파일 프로세스를 다시 끝내다 오류: ' + (Format-Err $_)) }
     }
     Move-Dir $From $To $RestoreRetryCount
 }

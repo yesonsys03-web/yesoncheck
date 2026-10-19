@@ -7,7 +7,7 @@ C# 프로그램 하나(FAKE_EXE_SOURCE)를 시험 세션마다 한 번 .NET Fram
 
 - 인자 없이 켜면 가짜 앱. 옆의 kind.txt에 따라 "old"(옛 앱 — 흔적만 남기고 끝남), "new"(시험이 YC_TEST_OK_FILE로 알려 준
   '잘 켜짐' 표시에 {"version": "1.1.1"}을 임시 파일 + 이름 바꾸기로 씀), "silent"(표시 없이 계속 살아 있음),
-  "silent_child"(silent + 작업 폴더가 설치 폴더인 cmd.exe 자식 — 흔적 child_started), "crash"(표시 없이 1초 뒤 종료 코드 3).
+  "silent_child"(silent + 작업 폴더가 설치 폴더인 cmd.exe 자식 — ping으로 약 5분 살아 있음, 흔적 child_started), "crash"(표시 없이 1초 뒤 종료 코드 3).
   켜질 때 흔적 파일(YC_TEST_TRACE_DIR/<old|new>_started, YC_TEST_TRACE_AS로 이름을 바꿀 수 있음)에
   자기 pid를 남기고, YC_TEST_HOLD_S가 있으면 그만큼 살아 있다(끝나기를 기다리는 "지금 앱" 흉내).
 - /DIR=… 같은 인자로 켜면 가짜 설치 파일. 받은 인자를 흔적 폴더의 installer_args.txt에 적고, /LOG=에 가짜 기록을 쓰고,
@@ -145,7 +145,7 @@ static class FakeYesonCheck
     static void StartDirHolder(string cwd, string traceName)
     {
         ProcessStartInfo psi = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"),
-                                                    "/c ping -n 60 127.0.0.1 >nul");
+                                                    "/c ping -n 300 127.0.0.1 >nul");
         psi.WorkingDirectory = cwd;
         psi.UseShellExecute = false;
         psi.CreateNoWindow = true;
@@ -272,6 +272,64 @@ def processes_under(path):
     ]
 
 
+HOLDER_IMAGES = ("cmd.exe", "ping.exe", "conhost.exe")  # 가짜 앱이 띄우는 "설치 폴더를 잡은 자식"과 그 아래
+
+
+def _process_entries():
+    """지금 도는 프로세스들의 (pid, 부모 pid, 실행 파일 이름) — Toolhelp 스냅숏. 부모가 이미 끝났어도 부모 pid는 남아 있음."""
+    import ctypes
+    from ctypes import wintypes
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD),
+            ("szExeFile", ctypes.c_wchar * 260),
+        ]
+
+    kernel32 = _kernel32()
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.CreateToolhelp32Snapshot.argtypes = (wintypes.DWORD, wintypes.DWORD)
+    kernel32.Process32FirstW.argtypes = (wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W))
+    kernel32.Process32NextW.argtypes = (wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W))
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+    if snapshot in (None, wintypes.HANDLE(-1).value):
+        raise ctypes.WinError(ctypes.get_last_error())
+    entries = []
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        ok = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+        while ok:
+            entries.append((entry.th32ProcessID, entry.th32ParentProcessID, entry.szExeFile))
+            ok = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snapshot)
+    return entries
+
+
+def holder_tree_pids(root_pids):
+    """흔적에 남은 cmd.exe(root_pids 중 아직 cmd.exe인 것)와 그 자손 중 HOLDER_IMAGES인 프로세스들의 pid."""
+    entries = _process_entries()
+    roots = set(root_pids)
+    found = {pid for pid, _parent, exe in entries if pid in roots and exe.lower() == "cmd.exe"}
+    frontier = set(roots)
+    while frontier:
+        frontier = {
+            pid for pid, parent, exe in entries
+            if parent in frontier and pid not in found and exe.lower() in HOLDER_IMAGES
+        }
+        found |= frontier
+    return found
+
+
+def kill_line_pids(text, what):
+    """도우미 기록의 "<what> 프로세스를 끝냄: pid A B …" 줄들의 pid (그 줄이 없으면 빈 집합)."""
+    marker = f"{what} 프로세스를 끝냄: pid "
+    return {int(x) for line in text.splitlines() if marker in line for x in line.split(marker, 1)[1].split()}
+
+
 def kill_processes_under(path):
     """실행 파일이 path 아래인 프로세스만 끝냄 — 흔적 파일의 pid는 믿지 않음(다시 쓰여 엉뚱한 프로세스일 수 있음)."""
     for pid in processes_under(path):
@@ -339,14 +397,13 @@ def update_case(tmp_path, fake_exe):
     yield make
     if made:
         kill_processes_under(base)
-        for case in made:  # 설치 폴더를 작업 폴더로 잡은 cmd.exe 자식 (실행 파일은 System32라 위에서 안 잡힘)
-            for name in ("child", "installer_child"):
-                for pid in trace_pids(case, name):
-                    if (process_image(pid) or "").lower().endswith("\\cmd.exe"):
-                        try:
-                            os.kill(pid, signal.SIGTERM)
-                        except OSError:
-                            pass  # 그 사이에 끝남
+        # 설치 폴더를 작업 폴더로 잡은 cmd.exe 자식과 그 아래 ping.exe·conhost.exe (실행 파일이 System32라 위에서 안 잡힘)
+        roots = [pid for case in made for name in ("child", "installer_child") for pid in trace_pids(case, name)]
+        for pid in holder_tree_pids(roots):
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass  # 그 사이에 끝남
 
 
 def helper_cmd(case, pid, timeout_s):
@@ -590,14 +647,23 @@ def test_helper_restores_when_new_app_child_holds_install_dir(update_case):
     # 새 앱이 띄운 cmd.exe(실행 파일은 System32, 작업 폴더는 설치 폴더 — 앱의 powershell.exe 확인 등과 같음)가 설치 폴더를
     # 잡고 있어도, 새 앱의 자손으로 찾아 끝내고 되돌림 (못 끝내면 이름 바꾸기가 끝내 실패해 종료 코드 2)
     case = update_case("silent_child")
+    started = time.monotonic()
     code = run_helper(case, timeout_s=4)
+    elapsed = time.monotonic() - started
     assert code == 1, failure_details(case, code)
     assert app_kind(case.install_dir) == "old" and siblings(case) == ["YesonCheck"]
     child_pids = trace_pids(case, "child")
     assert child_pids, failure_details(case, code)
-    assert not (process_image(child_pids[0]) or "").lower().endswith("\\cmd.exe"), "cmd.exe 자식이 끝나지 않음"
+    assert wait_until(lambda: not holder_tree_pids(child_pids), 10), (
+        "cmd.exe 자식(또는 그 아래 ping.exe·conhost.exe)이 끝나지 않음\n" + failure_details(case, code)
+    )
     assert wait_until(lambda: trace_pids(case, "old")), "옛 앱이 다시 켜지지 않음\n" + failure_details(case, code)
-    assert "되돌림" in log_text(case)
+    text = log_text(case)
+    assert "되돌림" in text
+    # 자식(ping으로 약 5분)이 저절로 끝나기를 기다린 것이 아니라 자손으로 찾아 끝냈음을 확인
+    assert child_pids[0] in kill_line_pids(text, "새 앱"), failure_details(case, code)
+    assert "자손 프로세스를 찾지 못함" not in text and "되돌리기의 이름 바꾸기가" not in text, text
+    assert elapsed < 30, f"{elapsed:.1f}초 — 자식이 끝나기를 기다린 것 같음\n" + failure_details(case, code)
 
 
 @windows_only
@@ -606,19 +672,24 @@ def test_helper_restores_when_installer_hangs(update_case):
     case.env.update(YC_TEST_INSTALLER_HANG="1", YC_UPDATE_INSTALL_TIMEOUT_S="3")
     started = time.monotonic()
     code = run_helper(case)
+    elapsed = time.monotonic() - started
     assert code == 1, failure_details(case, code)
-    assert time.monotonic() - started >= 3  # YC_UPDATE_INSTALL_TIMEOUT_S까지 기다림
+    assert elapsed >= 3  # YC_UPDATE_INSTALL_TIMEOUT_S까지 기다림
     assert app_kind(case.install_dir) == "old"
     assert not (case.install_dir / "_internal" / "new.txt").exists()
     assert siblings(case) == ["YesonCheck"]  # 설치 파일과 그 자식(작업 폴더가 설치 폴더)을 끝내야 치울 수 있음
     assert not processes_under(case.installer.parent), "멈춘 설치 파일이 끝나지 않음"
     child_pids = trace_pids(case, "installer_child")
-    assert child_pids and not (process_image(child_pids[0]) or "").lower().endswith("\\cmd.exe"), (
-        "설치 파일의 자식이 끝나지 않음\n" + failure_details(case, code)
+    assert child_pids and wait_until(lambda: not holder_tree_pids(child_pids), 10), (
+        "설치 파일의 자식(또는 그 아래 ping.exe·conhost.exe)이 끝나지 않음\n" + failure_details(case, code)
     )
     assert wait_until(lambda: trace_pids(case, "old")), "옛 앱이 다시 켜지지 않음\n" + failure_details(case, code)
     text = log_text(case)
     assert "설치 파일이 3초 안에 끝나지 않음" in text and "되돌림" in text
+    # 자식(ping으로 약 5분)이 저절로 끝나기를 기다린 것이 아니라 자손으로 찾아 끝냈음을 확인
+    assert child_pids[0] in kill_line_pids(text, "설치 파일"), failure_details(case, code)
+    assert "자손 프로세스를 찾지 못함" not in text and "되돌리기의 이름 바꾸기가" not in text, text
+    assert elapsed < 30, f"{elapsed:.1f}초 — 자식이 끝나기를 기다린 것 같음\n" + failure_details(case, code)
 
 
 @windows_only
