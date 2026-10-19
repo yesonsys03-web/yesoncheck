@@ -1085,6 +1085,7 @@ def test_list_mode_during_thumbnail_loop_stops_it(new_player, dialogs, work_area
     player, _job = open_job(new_player, work_area, monkeypatch)
     turn_on_thumbnail_mode(player)
     base = settle_thumbnail_times(player)
+    close_open_video(player)  # 앱이 연 FL_001.mov도 다시 씀 — Windows는 열려 있는 파일에 쓰지 못함
     for name in ("FL_001.mov", "FL_002.mov", "FL_003.mov"):
         rerender(listed_path(player, name), base)
     extra = [write_test_video(str(tmp_path / "extra" / f"{name}.mov")) for name in ("e", "f", "g")]
