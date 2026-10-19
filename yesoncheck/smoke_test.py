@@ -103,6 +103,22 @@ def open_like_launch(VideoPlayer, app, timeout_s=120):
     return player, shown_s, load_s
 
 
+def wait_released_workers(report, timeout_s):
+    """창을 닫으며 붙잡아 둔 작업(release_worker — 업데이트 확인, 시간 안에 끝나지 않은 애니매틱2 등)이 끝나기를
+    timeout_s초까지 기다림 → 끝나지 않은 작업 이름 목록 (남으면 report에 실패 항목으로 남김).
+
+    app.launch는 이벤트 루프가 끝난 뒤 finish_released_workers로 기다리지만 실행 시험은 run()에서 바로 끝남: 실행 중인
+    QThread가 남은 채 파이썬이 끝나면 파괴되며 프로세스가 죽음 ("QThread: Destroyed while thread is still running",
+    Windows 0xC0000409)."""
+    from yesoncheck.player_base import wait_for_released_workers
+
+    still_running = wait_for_released_workers(timeout_s)
+    if still_running:
+        report["checks"].append({"name": "창을 닫은 뒤 남은 작업", "ok": False,
+                                 "detail": f"{timeout_s:g}초 안에 끝나지 않음: {', '.join(still_running)}"})
+    return still_running
+
+
 def run(workdir):
     import cv2
     import numpy as np
@@ -111,6 +127,9 @@ def run(workdir):
 
     from yesoncheck import external_tools
 
+    # 업데이트 확인(공유 설정을 불러온 뒤 자동)이 실제 GitHub에 닿지 않게: 실행 시험 결과가 GitHub의 상태(5xx·SSL
+    # 오류면 경고 창 → 실패)에 따라 바뀌지 않도록. 업데이트를 시험하는 쪽이 주소(시험 서버)를 정했으면 그대로 둠
+    os.environ.setdefault("YESONCHECK_UPDATE_URL", "off")
     with open(os.path.join(workdir, "smoke_config.json"), encoding="utf-8") as fh:
         config = json.load(fh)
     out_dir = os.path.join(workdir, "out")
@@ -143,7 +162,7 @@ def run(workdir):
             report["checks"].append({"name": name, "ok": False, "detail": traceback.format_exc()})
             return None
 
-    from yesoncheck.app import create_application, load_mount_map
+    from yesoncheck.app import EXIT_WAIT_S, create_application, load_mount_map
 
     # app.launch와 같은 고해상도 설정 (Windows: 배율 반올림 없이)으로 만듦
     app = QApplication.instance() or create_application([sys.argv[0]])
@@ -170,13 +189,21 @@ def run(workdir):
         if player is not None:
             player.close()
         app.processEvents()
+        # 창을 닫으며 놓은 작업이 끝나기를 앱처럼 EXIT_WAIT_S초까지 기다림 (남으면 실패 항목)
+        still_running = wait_released_workers(report, EXIT_WAIT_S)
         bad_dialogs = [d for d in report["dialogs"] if d["kind"] in ("critical", "warning")]
         ok = all(c["ok"] for c in report["checks"]) and not bad_dialogs and passed
         report["ok"] = ok
         with open(os.path.join(workdir, "smoke_result.json"), "w", encoding="utf-8") as fh:
             json.dump(report, fh, ensure_ascii=False, indent=2)
         print(json.dumps(report, ensure_ascii=False, indent=2))
-        return 0 if ok else 1
+        code = 0 if ok else 1
+        if still_running:
+            # 결과는 위에 씀 — 남은 QThread가 파이썬이 끝나며 파괴되어 죽지 않게 바로 끝냄 (app.finish_released_workers처럼)
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(code)
+        return code
 
     if config.get("scenario") == "auto_connect":
         # 앱처럼 연다: 창을 먼저 보이고(공유 설정 없이) 공유 설정은 백그라운드에서 — 끝나면 resolve가 자동 설정까지 함

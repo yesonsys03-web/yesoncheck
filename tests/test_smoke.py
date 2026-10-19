@@ -86,6 +86,46 @@ def test_failed_run_shows_signal_and_python_stack(code, timeout, expected):
     assert 'File "<string>", line 1' in message, message
 
 
+def test_wait_released_workers_waits_and_reports_leftovers(qapp):
+    """실행 시험이 끝날 때(finish) 창을 닫으며 놓은 작업(업데이트 확인 등)이 끝나기를 기다림 — 시간 안에 안 끝나면 실패
+    항목으로 남김 (실행 중인 QThread가 남은 채 파이썬이 끝나면 프로세스가 죽음)."""
+    import threading
+
+    from PyQt5.QtCore import QThread
+
+    from yesoncheck.player_base import release_worker, wait_for_released_workers
+    from yesoncheck.smoke_test import wait_released_workers
+
+    class Waiting(QThread):
+        def __init__(self, gate):
+            super().__init__()
+            self.gate = gate
+
+        def run(self):
+            self.gate.wait(10)
+
+    soon = threading.Event()
+    finishing = Waiting(soon)
+    finishing.start()
+    release_worker(finishing, "업데이트 확인")
+    threading.Timer(0.2, soon.set).start()
+    report = {"checks": []}
+    assert wait_released_workers(report, 5) == [] and finishing.isFinished()
+    assert report["checks"] == []
+
+    gate = threading.Event()
+    stuck = Waiting(gate)
+    stuck.start()
+    release_worker(stuck, "시험 작업")
+    try:
+        assert wait_released_workers(report, 0.1) == ["시험 작업"]
+        [item] = report["checks"]
+        assert item["name"] == "창을 닫은 뒤 남은 작업" and not item["ok"] and "시험 작업" in item["detail"]
+    finally:
+        gate.set()
+    assert wait_for_released_workers(5) == []
+
+
 def test_manifest_long_path_aware_needs_true():
     from yesoncheck.smoke_test import manifest_long_path_aware
 

@@ -165,14 +165,68 @@ def test_manual_check_shows_dismissed_offer_again(player_with_build, fake_check,
 
 
 def test_check_result_leaves_progress_banner_alone(player_with_build, fake_check, dialogs):
-    """받는 중(띠가 진행을 보임)에 끝난 확인은 띠를 바꾸지 않음 — 새 버전이 있어도, 없어도."""
-    player = player_with_build("1.1.0", [found("NAS", "1.1.2")])
+    """받는 중(띠가 진행을 보임)에 끝난 확인은 띠도, 받고 있는 버전(update_offer)도 바꾸지 않음 — 새 버전이 있어도,
+    없어도 (결과는 기록에만)."""
+    player = player_with_build("1.1.0", [found("NAS", "1.1.1")])
+    check_now(player)
+    receiving = player.update_offer
     player.update_banner.show_progress(1, 4, "1.1.1 받는 중…")
+    fake_check.results = [found("NAS", "1.1.2")]
     check_now(player)
     assert player.update_banner.mode() == "progress" and player.update_banner.full_text() == "1.1.1 받는 중…"
+    assert player.update_offer is receiving
     fake_check.results = [expected("NAS", NAS_NOT_YET)]
     check_now(player)
     assert player.update_banner.mode() == "progress" and player.update_banner.isVisible()
+    assert player.update_offer is receiving
+    assert "1.1.2" in update_log() and "받는 중이라" in update_log()
+    assert dialogs.messages == []
+
+
+def test_offer_buttons_without_offer_raise_clear_error(player_with_build):
+    """'바뀐 점'·'나중에'는 알릴 때만 보임 — 알리는 버전이 없는데 불리면 조용히 넘기지 않고 분명한 오류."""
+    player = player_with_build("1.1.0")
+    with pytest.raises(RuntimeError, match="update_offer"):
+        player.dismiss_update_offer()
+    with pytest.raises(RuntimeError, match="update_offer"):
+        player.show_update_notes()
+
+
+def test_auto_check_requested_while_checking_runs_again(player_with_build, fake_check, dialogs):
+    """공유 설정을 불러오기 전에 누른 수동 확인(공유 설정 폴더 모름 → NAS를 읽지 못함)이 끝나지 않았을 때 온 자동 확인은
+    건너뛰지 않고, 그 확인이 끝난 뒤 그때의 공유 설정 폴더로 한 번 더."""
+    player = player_with_build("1.1.0", [expected("NAS", "공유 설정 폴더를 아직 모름")])
+    config = player.work_paths_config_dir
+    player.work_paths_config_dir = None  # 아직 불러오는 중
+    fake_check.gate = threading.Event()
+    player.start_update_check(manual=True)
+    assert fake_check.entered.wait(5)
+    player.work_paths_config_dir = config  # 불러옴 → _on_shared_config_loaded의 자동 확인
+    player.start_update_check(manual=False)
+    fake_check.gate.set()
+    wait_until(lambda: len(fake_check.calls) == 2 and not player.update_check_running)
+    _settle()
+    assert [call[2] for call in fake_check.calls] == [None, config]
+    assert len(fake_check.calls) == 2  # 다시 한 번만
+    assert player._update_check_timer.isActive()
+    [(kind, title, text)] = dialogs.messages  # 수동 확인의 결과 창만
+    assert (kind, title) == ("information", "업데이트 확인") and "공유 설정 폴더를 아직 모름" in text
+
+
+def test_check_result_outside_gui_thread_raises(player_with_build, fake_check):
+    player = player_with_build("1.1.0")
+    raised = []
+
+    def deliver():
+        try:
+            player._on_update_checked(updates.CheckResult([expected("NAS", NAS_NOT_YET)], None))
+        except RuntimeError as exc:
+            raised.append(str(exc))
+
+    thread = threading.Thread(target=deliver)
+    thread.start()
+    thread.join(5)
+    assert raised and "GUI 스레드" in raised[0]
 
 
 def test_auto_check_expected_problems_are_silent(player_with_build, fake_check, dialogs):
@@ -243,9 +297,8 @@ def test_manual_check_while_running_waits_for_result(player_with_build, fake_che
     player.start_update_check(manual=False)
     assert fake_check.entered.wait(5)
     player.start_update_check(manual=True)  # 실행 중 → 새로 시작하지 않고 결과를 기다렸다가 창
-    player.start_update_check(manual=False)  # 실행 중 → 건너뜀
     _settle()
-    assert dialogs.messages == []
+    assert len(fake_check.calls) == 1 and dialogs.messages == []
     fake_check.gate.set()
     wait_until(lambda: not player.update_check_running)
     _settle()
