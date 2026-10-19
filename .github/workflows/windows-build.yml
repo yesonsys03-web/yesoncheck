@@ -248,6 +248,9 @@ jobs:
       # build_app.sh가 venv Python의 아키텍처로 정하는 앱·dmg 이름의 꼬리 — 아래 빌드 환경 단계에서 맞는지 확인
       LABEL: ${{ matrix.label }}
     steps:
+      - name: 작업 시작 시각 (충돌 보고서를 이 job 것만 고르려고)
+        run: echo "JOB_START_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v7
         with:
           # 버전(tools/write_build_info.py)을 git 태그로 정함 → 전체 기록과 태그를 받음 (기본은 커밋 하나만)
@@ -359,9 +362,10 @@ jobs:
 
       - name: 충돌 보고서 (실패했을 때 — 죽은 스레드의 네이티브 스택)
         # 파이썬 스택(PYTHONFAULTHANDLER)으로는 paddle·TensorFlow 안의 어느 함수에서 죽었는지 모름 → macOS가 남긴 .ips에서 출력.
+        # 러너 이미지에 원래 있던 다른 프로그램의 보고서는 빼고 이 job 동안 생긴 우리 프로세스(소스 실행·빌드된 앱) 것만.
         # 빌드 환경이 없을 때도 돌도록 러너의 python3로 (표준 라이브러리만 씀)
         if: failure()
-        run: python3 ci/print_crash_reports.py
+        run: python3 ci/print_crash_reports.py --since "$JOB_START_EPOCH" --process python3 --process YesonCheck_Autocut
 
       - name: 디스크 여유 (끝)
         if: always()
