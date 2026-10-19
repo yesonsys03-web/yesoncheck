@@ -28,8 +28,10 @@
 # 되살림 (컴퓨터가 꺼지거나 로그아웃되어 이 도우미와 설치 파일이 중간에 끝난 경우): DIR의 이름을 바꾸기 바로 전에
 # HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce에 값 YesonCheckUpdateRecover(= 이 스크립트 -Recover)를 등록하고,
 # 되살림에 쓸 값(DIR·VER·OK·LOG·NAME)을 이 스크립트 옆 update_recover.txt에 적는다(RunOnce 명령 줄은 260자 안으로 — 경로를
-# 다 넣으면 넘음). 끝날 때(성공·되돌림·바꾸지 않음) 둘 다 지운다 — 되돌리기마저 실패한 종료 코드 2만 남겨 둬, 다음 로그인에서
-# 다시 되살려 본다. Windows는 다음 로그인에서 그 값을 지우고 한 번 실행한다. -Recover:
+# 다 넣으면 넘음; 스크립트 경로가 길어 넘으면 짧은(8.3) 경로, 그다음 짧은 옵션 이름으로 줄여 보고, 그래도 넘으면 등록하지 않고
+# 크게 기록한 뒤 업데이트는 계속 — 그때는 설치 중에 꺼지면 손으로 되돌려야 함). 끝날 때(성공·되돌림·바꾸지 않음) 둘 다
+# 지운다 — 되돌리기마저 실패한 종료 코드 2만 남겨 둬, 다음 로그인에서 다시 되살려 본다. Windows는 다음 로그인에서 그 값을
+# 지우고 한 번 실행한다. -Recover:
 #   - DIR.update-backup이 없으면 할 일 없음 (종료 코드 0).
 #   - OK가 VER이고 DIR에 앱이 있으면 업데이트는 성공했던 것 → 백업만 지움 (0).
 #   - 그 밖이면 끝나지 않은 업데이트 → DIR(반쯤 깔린 것)을 옆 이름으로 치우고 백업을 DIR로 되돌림 (1). 앱은 켜지 않는다 —
@@ -48,6 +50,7 @@
 #   YC_UPDATE_NO_MESSAGEBOX      1이면 종료 코드 2의 알림 창을 띄우지 않음 (시험이 멈추지 않게)
 #   YC_UPDATE_RUNONCE_KEY        되살림을 등록할 HKCU 아래 키 (없으면 Software\Microsoft\Windows\CurrentVersion\RunOnce —
 #                                시험은 진짜 RunOnce를 건드리지 않게 다른 키로)
+#   YC_UPDATE_RUNONCE_MAX_CHARS  RunOnce 명령 줄의 한도 (없으면 260 — 시험이 줄이기·등록하지 않기를 일부러 거치게)
 
 param(
     [string]$AppPid = '',
@@ -453,13 +456,64 @@ function Remove-RecoverFile {
     }
 }
 
+function Get-ShortPath([string]$Path) {
+    # 8.3 짧은 경로 (Scripting.FileSystemObject). 그 볼륨에 짧은 이름이 없으면 긴 이름 그대로 돌아옴. 구하지 못하면 기록하고
+    # 원래 경로
+    try {
+        $fso = New-Object -ComObject Scripting.FileSystemObject
+        $short = $fso.GetFile($Path).ShortPath
+        if ($short) { return $short }
+        Write-Log ('짧은(8.3) 경로가 비어 있음 — 긴 경로 그대로: ' + $Path)
+    } catch {
+        Write-Log ('짧은(8.3) 경로를 구하지 못함 — 긴 경로 그대로: ' + $Path + ' (' + (Format-Err $_) + ')')
+    }
+    return $Path
+}
+
+function Get-RecoverCommand {
+    # RunOnce에 넣을 명령 줄 — $RunOnceMaxChars(260)자 안: 긴 경로 그대로 → 짧은(8.3) 경로 → 짧은 경로 + 짧은 옵션 이름
+    # (-NoP·-EP·-W, powershell.exe가 아는 줄임) 순으로 해 봄. 셋 다 넘으면 $null — 마지막에 해 본 것은
+    # $script:RecoverCommandTried (부른 쪽이 기록)
+    $exe = [System.IO.Path]::Combine($PSHOME, 'powershell.exe')
+    $long = '"' + $exe + '" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $PSCommandPath + '" -Recover'
+    $script:RecoverCommandTried = $long
+    if ($long.Length -le $RunOnceMaxChars) { return $long }
+    $shortExe = Get-ShortPath $exe
+    $shortScript = Get-ShortPath $PSCommandPath
+    $candidates = @(
+        ('"' + $shortExe + '" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $shortScript + '" -Recover'),
+        ('"' + $shortExe + '" -NoP -EP Bypass -W Hidden -File "' + $shortScript + '" -Recover')
+    )
+    foreach ($command in $candidates) {
+        $script:RecoverCommandTried = $command
+        if ($command.Length -le $RunOnceMaxChars) {
+            Write-Log ('되살림 명령 줄이 ' + $long.Length + '자로 RunOnce 한도 ' + $RunOnceMaxChars + '자를 넘어 줄여 씀 (' +
+                $command.Length + '자)')
+            return $command
+        }
+    }
+    return $null
+}
+
 function Register-Recover {
-    # DIR의 이름을 바꾸기 바로 전: 되살림 정보 파일을 쓰고 RunOnce에 이 스크립트 -Recover를 등록. 등록하지 못해도 업데이트는
-    # 계속 (되돌리기는 그대로 돎 — 중간에 컴퓨터가 꺼질 때만 손으로 되돌려야 함), 기록만
+    # DIR의 이름을 바꾸기 바로 전: 되살림 정보 파일을 쓰고 RunOnce에 이 스크립트 -Recover를 등록. 등록하지 못해도(명령 줄이
+    # 한도를 넘음 포함) 업데이트는 계속 (되돌리기는 그대로 돎 — 중간에 컴퓨터가 꺼질 때만 손으로 되돌려야 함), 크게 기록만
     $text = ('InstallDir=' + $InstallDir + "`r`n" + 'Target=' + $Target + "`r`n" + 'OkFile=' + $OkFile + "`r`n" +
         'Log=' + $Log + "`r`n" + 'ExeName=' + $ExeName + "`r`n")
-    $command = ('"' + [System.IO.Path]::Combine($PSHOME, 'powershell.exe') +
-        '" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $PSCommandPath + '" -Recover')
+    $command = $null
+    try {
+        $command = Get-RecoverCommand
+    } catch {
+        Write-Log ('다음 로그인의 되살림을 등록하지 않음 — 명령 줄을 만들지 못함: ' + (Format-Err $_) +
+            ' — 업데이트는 계속하지만, 설치 중에 컴퓨터가 꺼지면 손으로 되돌려야 함')
+        return
+    }
+    if ($null -eq $command) {
+        Write-Log ('다음 로그인의 되살림을 등록하지 않음 — RunOnce 명령 줄이 짧은 경로·짧은 옵션으로도 ' +
+            $script:RecoverCommandTried.Length + '자로 한도 ' + $RunOnceMaxChars + '자를 넘음 (스크립트 경로가 너무 김): ' +
+            $script:RecoverCommandTried + ' — 업데이트는 계속하지만, 설치 중에 컴퓨터가 꺼지면 손으로 되돌려야 함')
+        return
+    }
     try {
         [System.IO.File]::WriteAllText($RecoverFile, $text, $Utf8NoBom)
         $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($RunOnceKey)
@@ -476,9 +530,6 @@ function Register-Recover {
     }
     $script:RecoverSet = $true
     Write-Log ('다음 로그인에서 되살리도록 등록함 (HKCU\' + $RunOnceKey + ' 의 ' + $RecoverValueName + ', ' + $command.Length + '자): ' + $command)
-    if ($command.Length -gt 260) {
-        Write-Log ('되살림 명령이 260자를 넘음 — Windows가 실행하지 않을 수 있음 (' + $command.Length + '자)')
-    }
 }
 
 function Clear-Recover {
@@ -725,9 +776,12 @@ $PidTimeoutText = $env:YC_UPDATE_PID_TIMEOUT_S
 if (-not $PidTimeoutText) { $PidTimeoutText = '300' }
 $InstallTimeoutText = $env:YC_UPDATE_INSTALL_TIMEOUT_S
 if (-not $InstallTimeoutText) { $InstallTimeoutText = '1800' }
+$RunOnceMaxText = $env:YC_UPDATE_RUNONCE_MAX_CHARS
+if (-not $RunOnceMaxText) { $RunOnceMaxText = '260' }
 $numbers = [ordered]@{
     '-AppPid' = $AppPid; '-TimeoutSeconds(YC_UPDATE_OK_TIMEOUT_S)' = $TimeoutSeconds
     'YC_UPDATE_PID_TIMEOUT_S' = $PidTimeoutText; 'YC_UPDATE_INSTALL_TIMEOUT_S' = $InstallTimeoutText
+    'YC_UPDATE_RUNONCE_MAX_CHARS' = $RunOnceMaxText
 }
 foreach ($name in $numbers.Keys) {
     if ($numbers[$name] -notmatch '^[0-9]{1,9}$') { Exit-Usage ($name + ' 값은 숫자여야 함: ' + $numbers[$name]) }
@@ -736,6 +790,7 @@ $AppPidNum = [int]$AppPid
 $TimeoutS = [int]$TimeoutSeconds
 $PidTimeoutS = [int]$PidTimeoutText
 $InstallTimeoutS = [int]$InstallTimeoutText
+$RunOnceMaxChars = [int]$RunOnceMaxText  # RunOnce 명령 줄 한도 (Microsoft 문서: 260자)
 # 밀리초로 바꿔 WaitForExit(int)에 넘기므로 하루까지만
 if ($PidTimeoutS -gt 86400) { Exit-Usage ('YC_UPDATE_PID_TIMEOUT_S 값이 너무 큼: ' + $PidTimeoutS) }
 if ($InstallTimeoutS -gt 86400) { Exit-Usage ('YC_UPDATE_INSTALL_TIMEOUT_S 값이 너무 큼: ' + $InstallTimeoutS) }

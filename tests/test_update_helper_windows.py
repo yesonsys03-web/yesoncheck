@@ -197,6 +197,40 @@ def recover_file(case):
     return case.script.parent / RECOVER_FILE_NAME
 
 
+@pytest.fixture
+def production_like_state_dir():
+    """앱의 업데이트 상태 폴더(%LOCALAPPDATA%\\YesonCheck\\updates — 도우미 스크립트 복사본이 있는 곳)와 길이가 비슷한 짧은
+    폴더: <시스템 드라이브>\\yc_t\\<8자>\\AppData\\Local\\YesonCheck\\updates (C:\\Users\\<8자 이름>\\AppData\\… 꼴).
+    pytest의 tmp_path는 RunOnce 명령 줄을 260자 넘게 만들어, 보통 PC에서 줄이지 않고 들어가는지 볼 수 없음. 끝나면 지움."""
+    import uuid
+
+    root = Path(os.environ.get("SystemDrive", "C:") + "\\") / "yc_t"
+    top = root / uuid.uuid4().hex[:8]
+    folder = top / "AppData" / "Local" / "YesonCheck" / "updates"
+    folder.mkdir(parents=True)
+    yield folder
+    shutil.rmtree(top)
+    try:
+        root.rmdir()
+    except OSError:
+        pass  # 다른 시험의 폴더가 아직 있음
+
+
+def long_recover_command(case):
+    """줄이지 않은 되살림 명령 줄 (도우미의 Get-RecoverCommand 첫째)."""
+    return (f'"{POWERSHELL}" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{case.script}" -Recover')
+
+
+def short_path(path):
+    """8.3 짧은 경로 (그 볼륨에 짧은 이름이 없으면 그대로) — Win32 GetShortPathNameW."""
+    import ctypes
+
+    buf = ctypes.create_unicode_buffer(32768)
+    if not ctypes.windll.kernel32.GetShortPathNameW(str(path), buf, len(buf)):
+        raise ctypes.WinError()
+    return buf.value
+
+
 @pytest.fixture(scope="session")
 def fake_exe(tmp_path_factory):
     """FAKE_EXE_SOURCE를 .NET Framework 4의 csc.exe로 만든 가짜 exe (창 없는 프로그램)의 경로."""
@@ -387,7 +421,7 @@ def update_case(tmp_path, fake_exe):
     base = Path(os.path.realpath(tmp_path))
     made = []
 
-    def make(new_kind="new", installer_exit=0, parent_name="Programs"):
+    def make(new_kind="new", installer_exit=0, parent_name="Programs", script_dir=None):
         parent = base / parent_name
         install_dir = parent / "YesonCheck"
         make_fake_install(install_dir, fake_exe, "old")
@@ -401,7 +435,8 @@ def update_case(tmp_path, fake_exe):
         logs.mkdir()
         state = base / "state"
         state.mkdir()
-        script = state / HELPER.name  # 앱처럼 상태 폴더의 복사본을 실행 (되살림 정보 파일이 그 옆에 생김)
+        # 앱처럼 상태 폴더의 복사본을 실행 (되살림 정보 파일이 그 옆에 생김) — script_dir: 그 폴더를 따로 (짧은 경로)
+        script = (script_dir or state) / HELPER.name
         shutil.copyfile(HELPER, script)
         ok_file = state / "update_ok.json"
         ok_file.write_text('{"version": "0.0.1"}', encoding="utf-8")  # 지난번 표시 — 도우미가 켜기 전에 지워야 함
@@ -782,9 +817,9 @@ def recover_cmd(case):
     return [POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(case.script), "-Recover"]
 
 
-def interrupt_during_install(case):
+def interrupt_during_install(case, limit=260):
     """설치 파일이 도는 중에 컴퓨터가 꺼진 것처럼: 멈춘 설치 파일이 설치 폴더를 반쯤 채우고 자식까지 띄운 뒤 도우미·설치
-    파일·그 자식을 모두 끝냄 → 그때 RunOnce(시험 키)에 등록돼 있던 명령."""
+    파일·그 자식을 모두 끝냄 → 그때 RunOnce(시험 키)에 등록돼 있던 명령 (limit자 안 — RunOnce 명령 줄 한도)."""
     case.env.update(YC_TEST_INSTALLER_HANG="1", YC_UPDATE_INSTALL_TIMEOUT_S="600")
     helper = start_helper(case, helper_cmd(case, os.getpid(), 4))
     command = None
@@ -802,8 +837,8 @@ def interrupt_during_install(case):
             except OSError:
                 pass  # 그 사이에 끝남
     assert command is not None, "설치하는 동안 되살림이 등록돼 있지 않음\n" + failure_details(case, None)
-    assert command.startswith('"') and command.endswith(f'-File "{case.script}" -Recover'), command
-    assert len(command) <= 260, command  # RunOnce 명령 줄 한도
+    assert command.startswith('"') and command.endswith(' -Recover'), command
+    assert len(command) <= limit, (len(command), command)  # RunOnce 명령 줄 한도
     assert info.splitlines() == [f"InstallDir={case.install_dir}", f"Target={TARGET}", f"OkFile={case.ok_file}",
                                  f"Log={case.log}", f"ExeName={EXE_NAME}"], info
     assert app_kind(case.install_dir) == "new" and app_kind(case.backup) == "old"  # 반쯤 깔린 채, 옛 앱은 백업 이름
@@ -811,9 +846,12 @@ def interrupt_during_install(case):
 
 
 @windows_only
-def test_helper_recover_restores_half_installed_dir_at_next_logon(update_case):
-    case = update_case("new")
+def test_helper_recover_restores_half_installed_dir_at_next_logon(update_case, production_like_state_dir):
+    case = update_case("new", script_dir=production_like_state_dir)
     command = interrupt_during_install(case)
+    # 보통 PC의 경로 길이면 줄이지 않고 긴 경로 그대로 260자 안
+    assert command.lower() == long_recover_command(case).lower(), command
+    assert "줄여 씀" not in log_text(case)
     code = run_helper(case, cmd=command)  # 다음 로그인: Windows가 RunOnce의 명령 줄 그대로 실행
     assert code == 1, failure_details(case, code)
     assert app_kind(case.install_dir) == "old" and (case.install_dir / "_internal" / "old.txt").exists()
@@ -828,14 +866,51 @@ def test_helper_recover_restores_half_installed_dir_at_next_logon(update_case):
 
 
 @windows_only
-def test_helper_recover_keeps_new_version_that_started_fine(update_case):
-    case = update_case("new")
+def test_helper_recover_keeps_new_version_that_started_fine(update_case, production_like_state_dir):
+    case = update_case("new", script_dir=production_like_state_dir)
     command = interrupt_during_install(case)
     case.ok_file.write_text(f'{{"version": "{TARGET}"}}', encoding="utf-8")  # 새 앱이 '잘 켜짐'을 남긴 뒤 꺼진 것처럼
     code = run_helper(case, cmd=command)
     assert code == 0, failure_details(case, code)
     assert app_kind(case.install_dir) == "new" and siblings(case) == ["YesonCheck"]  # 백업만 지움
     assert "남은 백업만 지움" in log_text(case) and not recover_file(case).exists()
+
+
+@windows_only
+@pytest.mark.parametrize("shortened", ["short_paths", "short_options"])
+def test_helper_shortens_recover_command_over_the_limit(update_case, shortened):
+    """스크립트 경로가 길어 명령 줄이 RunOnce 한도를 넘으면 짧은(8.3) 경로로, 그래도 넘으면 짧은 옵션 이름으로 줄여 등록 —
+    그 명령 줄 그대로 실행한 되살림이 됨. 한도는 YC_UPDATE_RUNONCE_MAX_CHARS로 낮춰 단계를 정함 (8.3 이름이 없는 볼륨이면
+    둘 다 짧은 옵션 단계)."""
+    case = update_case("new")
+    long_command = long_recover_command(case)
+    short_paths = (f'"{short_path(POWERSHELL)}" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden '
+                   f'-File "{short_path(case.script)}" -Recover')
+    limit = len(long_command) - 1 if shortened == "short_paths" else len(short_paths) - 1
+    case.env["YC_UPDATE_RUNONCE_MAX_CHARS"] = str(limit)
+    command = interrupt_during_install(case, limit=limit)
+    assert command.lower() != long_command.lower()
+    if shortened == "short_options" or len(short_paths) > limit:
+        assert " -NoP -EP Bypass -W Hidden -File " in command, command
+    assert f"{len(long_command)}자로 RunOnce 한도 {limit}자를 넘어 줄여 씀 ({len(command)}자)" in log_text(case)
+    code = run_helper(case, cmd=command)  # 줄인 명령 줄 그대로 실행 (다음 로그인)
+    assert code == 1, failure_details(case, code)
+    assert app_kind(case.install_dir) == "old" and siblings(case) == ["YesonCheck"]
+    assert "다음 로그인에서 되살림" in log_text(case) and not recover_file(case).exists()
+
+
+@windows_only
+def test_helper_updates_without_recover_when_command_cannot_fit(update_case):
+    """짧은 경로·짧은 옵션으로도 한도를 넘으면 되살림을 등록하지 않고 크게 기록한 뒤 업데이트는 계속 (막지 않음)."""
+    case = update_case("new")
+    case.env["YC_UPDATE_RUNONCE_MAX_CHARS"] = "40"
+    code = run_helper(case)
+    assert code == 0, failure_details(case, code)
+    assert app_kind(case.install_dir) == "new" and siblings(case) == ["YesonCheck"]
+    text = log_text(case)
+    assert "다음 로그인의 되살림을 등록하지 않음" in text and "한도 40자를 넘음" in text, text
+    assert "설치 중에 컴퓨터가 꺼지면 손으로 되돌려야 함" in text and "다음 로그인에서 되살리도록 등록함" not in text
+    assert runonce_value(case) is None and not recover_file(case).exists()
 
 
 @windows_only
@@ -1122,6 +1197,24 @@ def test_helper_registers_recover_after_stale_backup_and_before_rename():
     assert "$RunOnceKey = 'Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce'" in code
     assert "$RunOnceKey = $env:YC_UPDATE_RUNONCE_KEY" in code
     assert "[switch]$Recover" in code
+
+
+def test_helper_recover_command_fits_runonce_limit_or_is_not_registered():
+    """RunOnce 명령 줄은 260자 안(Microsoft 문서): 긴 경로 → 짧은(8.3) 경로 → 짧은 옵션 이름 순으로 해 보고, 다 넘으면
+    등록하지 않음(업데이트는 계속). 한도는 시험만 YC_UPDATE_RUNONCE_MAX_CHARS로 바꿈."""
+    code = helper_code()
+    assert "if (-not $RunOnceMaxText) { $RunOnceMaxText = '260' }" in code
+    assert "$RunOnceMaxText = $env:YC_UPDATE_RUNONCE_MAX_CHARS" in code
+    body = code[code.index("function Get-RecoverCommand"):code.index("function Register-Recover")]
+    order = [body.index(part) for part in (
+        "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"' + $PSCommandPath",
+        "Get-ShortPath $PSCommandPath",
+        "-NoP -EP Bypass -W Hidden -File \"' + $shortScript",
+    )]
+    assert order == sorted(order), order
+    assert body.count("-le $RunOnceMaxChars") == 2 and "return $null" in body
+    register = code[code.index("function Register-Recover"):code.index("function Clear-Recover")]
+    assert "if ($null -eq $command) {" in register and "-gt 260" not in register
 
 
 def test_spec_bundles_windows_helper_only_on_windows():
