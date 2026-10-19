@@ -209,10 +209,16 @@ def make_offer_player(player_with_build, fake_helpers, downloads, quits, tmp_sta
     return make
 
 
+def apps_root(tmp_path):
+    """가짜 설치 폴더·Mac 앱을 둘 곳. tmp_state_dir가 tmp_path를 LOCALAPPDATA·HOME으로 쓰므로 업데이트 상태·기록 폴더
+    (Windows tmp_path/YesonCheck/…, Mac tmp_path/Library/…)와 겹치지 않는 따로 된 폴더 아래에."""
+    return tmp_path / "apps"
+
+
 @pytest.fixture
 def install_dir(tmp_path):
-    folder = tmp_path / "YesonCheck"
-    folder.mkdir()
+    folder = apps_root(tmp_path) / "YesonCheck"
+    folder.mkdir(parents=True)  # exist_ok 없이 — 상태 폴더와 겹치면 바로 드러나게
     return str(folder)
 
 
@@ -224,7 +230,7 @@ def player_offer(make_offer_player, nas_dir, install_dir):
 
 @pytest.fixture
 def mac_app(tmp_path):
-    app = tmp_path / "Applications" / "YesonCheck_Autocut_Intel.app"
+    app = apps_root(tmp_path) / "Applications" / "YesonCheck_Autocut_Intel.app"
     app.mkdir(parents=True)
     return str(app)
 
