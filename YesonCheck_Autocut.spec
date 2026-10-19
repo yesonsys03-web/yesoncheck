@@ -249,9 +249,11 @@ a = Analysis(
         # apted 모듈 추가 (PaddleOCR 분석에 필수)
         (os.path.join(project_root, 'apted'), 'apted'),
     ] + paddle_tree_datas + [(BUILD_INFO_PATH, '.')] + cv2_datas + transnet_datas + license_datas + scenedetect_datas + paddleocr_datas + paddle_datas + skimage_datas + imageio_datas + cython_datas + ([] if IS_WINDOWS else [('Info.plist', '.')])
-    # Mac 업데이트 도우미: 앱이 끝난 뒤 새 앱으로 바꾸고 다시 켬. 소스와 같은 상대 위치(<맨 위>/yesoncheck/)에 넣음
+    # 업데이트 도우미 (플랫폼마다 하나): 앱이 끝난 뒤 새 버전으로 바꾸고 다시 켬 — Mac은 새 앱으로 바꾸기(sh),
+    # Windows는 설치 폴더를 백업 이름으로 바꾼 뒤 조용히 설치(ps1). 소스와 같은 상대 위치(<맨 위>/yesoncheck/)에 넣음
     # — update_install._bundled_file이 sys._MEIPASS/yesoncheck/에서 찾아 업데이트 상태 폴더로 복사해 실행
-    + ([] if IS_WINDOWS else [(os.path.join(project_root, 'yesoncheck', 'update_helper_mac.sh'), 'yesoncheck')]),
+    + ([(os.path.join(project_root, 'yesoncheck', 'update_helper_windows.ps1'), 'yesoncheck')] if IS_WINDOWS
+       else [(os.path.join(project_root, 'yesoncheck', 'update_helper_mac.sh'), 'yesoncheck')]),
     hiddenimports=[
         # apted 모듈 (PaddleOCR이 사용하는 fallback 구현)
         'apted',

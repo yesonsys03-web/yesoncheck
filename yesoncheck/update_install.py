@@ -36,6 +36,15 @@ OK_MARKER_FILE_NAME = "update_ok.json"
 LOG_FILE_NAME = "update.log"
 APP_EXECUTABLE_NAME = "YesonCheck_Autocut"
 HELPER_MAC_FILE_NAME = "update_helper_mac.sh"  # Mac 도우미 (빌드된 앱에는 spec이 yesoncheck/ 아래에 넣음)
+HELPER_WINDOWS_FILE_NAME = "update_helper_windows.ps1"  # Windows 도우미 (빌드된 앱에는 spec이 yesoncheck/ 아래에 넣음)
+
+# Windows 도우미를 앱과 떨어진 프로세스로(콘솔 없이, 새 프로세스 그룹) 띄우는 플래그. Mac의 subprocess에는 이 상수들이
+# 없으므로 Win32 문서의 값으로 대신한다 — 모듈을 Mac에서도 불러오고 launch_helper_windows 시험을 모든 플랫폼에서 돌리려고
+_WINDOWS_HELPER_CREATIONFLAGS = (
+    getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+    | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+)
 
 NEEDED_BYTES = {"windows": 1_500_000_000, "mac-x86_64": 3_000_000_000, "mac-arm64": 3_000_000_000}
 
@@ -393,7 +402,7 @@ def stage_mac(dmg_path: str, app_path: str, target_version: str) -> str:
     return dest_path
 
 
-# ---- Mac: 앱이 끝난 뒤 바꾸고 다시 켜는 도우미 ----
+# ---- 앱이 끝난 뒤 바꾸고 다시 켜는 도우미 (Mac·Windows) ----
 
 
 def _bundled_file(name: str) -> str:
@@ -403,19 +412,17 @@ def _bundled_file(name: str) -> str:
     return os.path.join(top, "yesoncheck", name)
 
 
-def launch_helper_mac(staged_app: str, app_path: str, target: str) -> None:
-    """앱이 끝나기를 기다렸다가 staged_app을 app_path 자리로 바꾸고 다시 켜는 도우미(update_helper_mac.sh)를 띄움.
+def _copy_helper_to_state_dir(name: str) -> str:
+    """번들 안의 도우미 스크립트 name을 state_dir()/name으로 복사하고 그 경로를 돌려줌.
 
-    부른 쪽은 업데이트 기록(write_pending)을 남긴 뒤 이것을 부르고 앱을 끝낸다. 도우미는 바뀔 앱 번들 밖에서
-    돌아야 하므로(번들째 백업 이름으로 옮기고, 되돌릴 때는 지움) 번들 안의 스크립트를 state_dir()로 복사해
-    실행한다 — 임시 파일 + os.replace(bash는 스크립트를 조금씩 읽으므로 돌고 있는 파일을 덮어쓰지 않음).
-    새 세션(start_new_session)으로 띄워 앱이 끝나도 같이 끝나지 않게 한다. Popen 실패는 그대로 올린다.
+    도우미는 바뀔 앱(Mac 번들·Windows 설치 폴더) 밖에서 돌아야 하므로 복사본을 실행한다. 임시 파일 + os.replace —
+    돌고 있는 이전 도우미의 파일을 그 자리에서 덮어쓰지 않음(bash는 스크립트를 조금씩 읽음).
     """
-    dest = os.path.join(state_dir(), HELPER_MAC_FILE_NAME)
+    dest = os.path.join(state_dir(), name)
     fd, tmp_path = tempfile.mkstemp(dir=state_dir(), prefix=".tmp-")
     os.close(fd)
     try:
-        shutil.copyfile(_bundled_file(HELPER_MAC_FILE_NAME), tmp_path)
+        shutil.copyfile(_bundled_file(name), tmp_path)
         os.replace(tmp_path, dest)
     except Exception:
         try:
@@ -423,6 +430,18 @@ def launch_helper_mac(staged_app: str, app_path: str, target: str) -> None:
         except FileNotFoundError:
             pass
         raise
+    return dest
+
+
+def launch_helper_mac(staged_app: str, app_path: str, target: str) -> None:
+    """앱이 끝나기를 기다렸다가 staged_app을 app_path 자리로 바꾸고 다시 켜는 도우미(update_helper_mac.sh)를 띄움.
+
+    부른 쪽은 업데이트 기록(write_pending)을 남긴 뒤 이것을 부르고 앱을 끝낸다. 도우미는 바뀔 앱 번들 밖에서
+    돌아야 하므로(번들째 백업 이름으로 옮기고, 되돌릴 때는 지움) 번들 안의 스크립트를 state_dir()로 복사해
+    실행한다(_copy_helper_to_state_dir). 새 세션(start_new_session)으로 띄워 앱이 끝나도 같이 끝나지 않게 한다.
+    Popen 실패는 그대로 올린다.
+    """
+    dest = _copy_helper_to_state_dir(HELPER_MAC_FILE_NAME)
     subprocess.Popen(
         [
             "/bin/bash", dest,
@@ -434,6 +453,43 @@ def launch_helper_mac(staged_app: str, app_path: str, target: str) -> None:
             "--log", log_path(),
         ],
         start_new_session=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def _windows_powershell() -> str:
+    """Windows PowerShell 5.1 실행 파일 — path_map_setup._powershell과 같은 방식(System32 아래, 없으면 PATH의 powershell)."""
+    exe = os.path.join(os.environ.get("SystemRoot") or "C:\\Windows", "System32", "WindowsPowerShell", "v1.0",
+                       "powershell.exe")
+    return exe if os.path.isfile(exe) else "powershell"
+
+
+def launch_helper_windows(installer: str, install_dir: str, target: str) -> None:
+    """앱이 끝나기를 기다렸다가 install_dir을 백업 이름으로 바꾸고 installer를 조용히 실행해 새 버전을 켜는 도우미
+    (update_helper_windows.ps1)를 띄움. 새 버전이 잘 켜지지 않으면 도우미가 백업을 되돌리고 옛 앱을 켠다.
+
+    부른 쪽은 업데이트 기록(write_pending)을 남긴 뒤 이것을 부르고 앱을 끝낸다. 도우미가 설치 폴더의 이름을 바꾸므로
+    설치 폴더 안의 스크립트를 state_dir()로 복사해 실행하고, 작업 폴더도 state_dir()로 둔다 — 앱의 작업 폴더(바로
+    가기가 설치 폴더로 정함)를 물려받으면 그 폴더 핸들 때문에 설치 폴더의 이름을 바꿀 수 없음. 콘솔 없이
+    (DETACHED_PROCESS·CREATE_NO_WINDOW), 새 프로세스 그룹으로 띄워 앱이 끝나도 같이 끝나지 않게 한다. Popen 실패는
+    그대로 올린다.
+    """
+    script = _copy_helper_to_state_dir(HELPER_WINDOWS_FILE_NAME)
+    subprocess.Popen(
+        [
+            _windows_powershell(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+            "-File", script,
+            "-AppPid", str(os.getpid()),
+            "-InstallDir", install_dir,
+            "-Installer", installer,
+            "-Target", target,
+            "-OkFile", ok_marker_path(),
+            "-Log", log_path(),
+        ],
+        creationflags=_WINDOWS_HELPER_CREATIONFLAGS,
+        cwd=state_dir(),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
