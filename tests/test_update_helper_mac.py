@@ -164,12 +164,12 @@ def lock(path):
     Path(path).chmod(0o555)
 
 
-def helper_cmd(case, pid, timeout_s):
+def helper_cmd(case, pid, timeout_s, staged=None):
     return [
         "/bin/bash", str(HELPER),
         "--pid", str(pid),
         "--app", str(case.app),
-        "--staged", str(case.staged),
+        "--staged", str(case.staged) if staged is None else staged,
         "--target", TARGET,
         "--ok", str(case.ok_file),
         "--log", str(case.log),
@@ -177,10 +177,10 @@ def helper_cmd(case, pid, timeout_s):
     ]
 
 
-def run_helper(case, pid=None, timeout_s=4):
+def run_helper(case, pid=None, timeout_s=4, staged=None):
     """도우미를 끝까지 돌림 (넉넉히 60초 안에)."""
     return subprocess.run(
-        helper_cmd(case, ended_pid() if pid is None else pid, timeout_s),
+        helper_cmd(case, ended_pid() if pid is None else pid, timeout_s, staged),
         env=case.env, capture_output=True, text=True, timeout=60,
     )
 
@@ -306,7 +306,9 @@ FAKE_ADMIN_OSASCRIPT = r'''#!{python}
 """관리자 암호 창 흉내: 받은 AppleScript에서 셸 명령을 꺼내 기록하고, 잠긴 폴더들을 잠깐 열어 그대로 실행한다.
 
 YC_TEST_LOCKED_DIRS(줄마다 하나) = root 권한이면 바꿀 수 있는, 시험이 잠근 폴더들. YC_TEST_ADMIN_REFUSE가 명령에
-들어 있으면 사용자가 암호 창에서 '취소'를 누른 것처럼 실행하지 않고 끝난다.
+들어 있으면 사용자가 암호 창에서 '취소'를 누른 것처럼 실행하지 않고 끝난다. 명령은 진짜 do shell script처럼
+PATH=/usr/bin:/bin:/usr/sbin:/sbin으로 돌리고(YC_TEST_ADMIN_PATH가 있으면 그 폴더를 앞에 — 가짜 mv 등), 실패하면
+진짜 osascript처럼 stderr의 여러 줄을 \r로 이어 "execution error: … (종료 코드)"로 보인다.
 """
 import json
 import os
@@ -335,14 +337,18 @@ locked = [d for d in os.environ.get("YC_TEST_LOCKED_DIRS", "").split("\n") if d]
 for d in locked:
     if os.path.isdir(d):
         os.chmod(d, 0o755)
+env = dict(os.environ, PATH="/usr/bin:/bin:/usr/sbin:/sbin")
+if os.environ.get("YC_TEST_ADMIN_PATH"):
+    env["PATH"] = os.environ["YC_TEST_ADMIN_PATH"] + ":" + env["PATH"]
 try:
-    done = subprocess.run(["/bin/sh", "-c", command], capture_output=True, text=True)
+    done = subprocess.run(["/bin/sh", "-c", command], capture_output=True, text=True, env=env)
 finally:
     for d in locked:
         if os.path.isdir(d):
             os.chmod(d, 0o555)
 if done.returncode != 0:
-    sys.stderr.write(f"execution error: {{done.stderr}} ({{done.returncode}})\n")
+    message = done.stderr.rstrip("\n").replace("\n", "\r")
+    sys.stderr.write(f"execution error: {{message}} ({{done.returncode}})\n")
     sys.exit(1)
 '''
 
@@ -458,6 +464,97 @@ def test_helper_restore_ignores_undeletable_leftover_from_earlier_run(update_cas
     assert app_kind(case.app) == "old" and not case.backup.exists()
     assert sorted(p.name for p in case.apps_dir.iterdir()) == sorted([case.app.name, leftover.name])
     assert wait_until(lambda: trace_pids(case.trace, "old")), log_text(case)
+
+
+FAKE_FAILING_MV = """#!/bin/sh
+# 다른 볼륨에서 옮기다(복사 뒤 지우기) 중간에 실패한 mv 흉내: 대상에 반쯤 복사된 앱을 남기고 실패
+if [ "$1" = "$YC_TEST_FAIL_MV_SOURCE" ]; then
+    mkdir -p "$2/Contents" && echo partial > "$2/Contents/partial.txt"
+    echo "mv: $2: 복사하다 실패 (시험)" >&2
+    exit 1
+fi
+exec /bin/mv "$@"
+"""
+
+
+@darwin_only
+@pytest.mark.parametrize("mode", ["admin", "user"])
+def test_helper_partial_move_leaves_app_for_restore(update_case, tmp_path, mode):
+    # 준비한 새 앱이 다른 볼륨(state_dir)에 있으면 mv는 복사+지우기 — 중간에 실패하면 앱 자리에 반쪽이 남는다.
+    # 그때 'mv 백업 앱'을 하면 백업이 반쪽 앱 *안으로* 들어가 옛 앱을 잃음 (관리자·사용자 방식 둘 다 확인)
+    case = update_case("new", apps_dir_name="응용 프로그램", staged_in_apps_dir=False)
+    fake_bin = tmp_path / "fake_bin"
+    fake_bin.mkdir()
+    (fake_bin / "mv").write_text(FAKE_FAILING_MV, encoding="utf-8")
+    (fake_bin / "mv").chmod(0o755)
+    case.env["YC_TEST_FAIL_MV_SOURCE"] = str(case.staged)
+    if mode == "admin":
+        use_fake_admin(case, tmp_path, [case.apps_dir])
+        case.env["YC_TEST_ADMIN_PATH"] = str(fake_bin)
+        lock(case.apps_dir)
+    else:
+        case.env["PATH"] = f"{fake_bin}:{case.env['PATH']}"  # 도우미가 사용자로 부르는 mv
+    result = run_helper(case)
+    unlock_tree(tmp_path)
+    assert result.returncode == 1, failure_details(case, result)
+    assert app_kind(case.app) == "old" and not case.backup.exists()
+    assert not (case.app / case.backup.name).exists() and not (case.app / "Contents" / "partial.txt").exists()
+    assert [p.name for p in case.apps_dir.iterdir()] == [case.app.name]
+    # 관리자: 바꾸기(실패) + 되돌리기(반쪽 앱을 치우고 백업을 제자리로)
+    assert len(admin_commands(case)) == (2 if mode == "admin" else 0)
+    assert "복사하다 실패" in log_text(case)
+    assert wait_until(lambda: trace_pids(case.trace, "old")), log_text(case)
+
+
+@darwin_only
+@pytest.mark.parametrize("how", ["same", "trailing_slash", "symlink", "inside"])
+def test_helper_refuses_staged_that_is_the_app(update_case, tmp_path, how):
+    # --staged가 --app과 같은 곳이면 바꾸기가 실패해 되돌린 뒤 '준비한 새 앱 지우기'가 되돌린 앱을 지움 → 시작 전에 거절
+    case = update_case("new")
+    if how == "symlink":
+        alias = tmp_path / "alias.app"
+        alias.symlink_to(case.app)
+        staged = str(alias)
+    else:
+        staged = {"same": str(case.app), "trailing_slash": str(case.app) + "/",
+                  "inside": str(case.app / "Contents")}[how]
+    result = run_helper(case, staged=staged)
+    assert result.returncode == 2, failure_details(case, result)
+    assert app_kind(case.app) == "old" and (case.app / "Contents" / "MacOS" / "YesonCheck_Autocut").exists()
+    assert not case.backup.exists() and case.staged.exists()
+    assert "잘못된 인자" in log_text(case)
+    assert not trace_pids(case.trace, "old") and not trace_pids(case.trace, "new")
+
+
+@darwin_only
+def test_helper_cancelled_admin_swap_deletes_staged_without_second_prompt(update_case, tmp_path):
+    # 바꾸기 암호 창을 취소한 사용자에게, 사용자로 지울 수 있는 준비한 새 앱 때문에 암호 창을 또 띄우지 않음
+    case = update_case("new", apps_dir_name="응용 프로그램", staged_in_apps_dir=False)
+    use_fake_admin(case, tmp_path, [case.apps_dir], refuse="mv ")
+    lock(case.apps_dir)
+    result = run_helper(case)
+    unlock_tree(tmp_path)
+    assert result.returncode == 1, failure_details(case, result)
+    assert app_kind(case.app) == "old" and not case.staged.exists()
+    assert len(admin_commands(case)) == 1, admin_commands(case)
+
+
+@darwin_only
+def test_helper_log_truncates_admin_output_joined_with_cr(update_case, tmp_path):
+    # 진짜 osascript는 오류 여러 줄을 \r로 이어 한 줄로 냄 — 그래도 로그에는 앞 몇 줄만
+    case = update_case("new")
+    make_fake_app(case.backup, "old")
+    resources = case.backup / "Contents" / "Resources"
+    for i in range(30):
+        (resources / f"f{i:02d}").write_text("x", encoding="utf-8")
+    use_fake_admin(case, tmp_path, [])  # '관리자'도 못 지움
+    lock(resources)
+    result = run_helper(case)
+    unlock_tree(tmp_path)
+    assert result.returncode == 1, failure_details(case, result)  # 남은 백업을 못 지워 바꾸지 않음
+    log = log_text(case)
+    assert "\r" not in case.log.read_bytes().decode("utf-8")
+    assert log.count("Permission denied") <= 10 and log.count("줄 더") == 2, log
 
 
 # ---- launch_helper_mac (모든 플랫폼) ----

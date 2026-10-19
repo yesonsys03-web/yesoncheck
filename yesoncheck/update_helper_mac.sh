@@ -176,24 +176,36 @@ exists() {
     [ -e "$1" ] || [ -L "$1" ]
 }
 
+paths_overlap() {  # $1·$2가 같은 곳(별칭·심볼릭 링크 포함)이거나 한쪽이 다른 쪽 안에 있음
+    if [ "$1" -ef "$2" ]; then
+        return 0
+    fi
+    case "$1/" in "$2"/*) return 0 ;; esac
+    case "$2/" in "$1"/*) return 0 ;; esac
+    return 1
+}
+
 first_lines() {  # $1 = 명령 출력 → 앞 5줄만 (rm -rf는 못 지운 파일마다 한 줄 — 앱 번들이면 수천 줄이 로그에 쌓임)
-    local total
-    total=$(printf '%s\n' "$1" | wc -l | tr -d ' ')
+    # osascript(do shell script)는 오류의 여러 줄을 \r로 이어 한 줄로 내므로 먼저 줄바꿈으로 바꿈
+    local text total
+    text=$(printf '%s' "$1" | LC_ALL=C tr '\r' '\n')
+    total=$(printf '%s\n' "$text" | wc -l | tr -d ' ')
     if [ "$total" -le 5 ]; then
-        printf '%s' "$1"
+        printf '%s' "$text"
         return
     fi
-    printf '%s\n… (%s줄 더)' "$(printf '%s\n' "$1" | head -n 5)" "$((total - 5))"
+    printf '%s\n… (%s줄 더)' "$(printf '%s\n' "$text" | head -n 5)" "$((total - 5))"
 }
 
 delete_path() {  # $1 = 지울 경로. 끝난 뒤 남아 있으면 실패 (출력은 FS_OUT에)
     # 다른 계정·root 것(관리자 계정이 둘이거나 sudo로 설치한 앱)이라 사용자로 못 지우면 관리자 암호 창으로 지운다
-    # — 그대로 두면 남은 백업이 다음 업데이트를 모두 막음
+    # — 그대로 두면 남은 백업이 다음 업데이트를 모두 막음. 관리자 방식(ADMIN=1)이어도 늘 사용자로 먼저 해 본다:
+    # 바꾸기 암호 창을 취소한 사용자에게, 사용자로 지울 수 있는 것 때문에 암호 창을 또 띄우지 않게
     local q rc
     q=$(sh_quote "$1")
-    fs_run "rm -rf $q"
+    FS_OUT=$(/bin/sh -c "rm -rf $q" 2>&1)
     rc=$?
-    if exists "$1" && [ "$ADMIN" = 0 ] && is_permission_error "$FS_OUT"; then
+    if exists "$1" && is_permission_error "$FS_OUT"; then
         log "권한이 없어 지우지 못함 — 관리자 암호 창으로 지움: $1 ($(first_lines "$FS_OUT"))"
         FS_OUT=$(run_admin "rm -rf $q" 2>&1)
         rc=$?
@@ -251,8 +263,9 @@ swap() {
     log "앱 폴더에 쓸 수 없어 관리자 암호 창으로 바꿈 ($FS_OUT)"
     ADMIN=1
     # 두 번째 mv가 실패하면 같은 명령 안에서 옛 앱을 되돌려 놓음 — 되돌리려고 암호 창을 또 띄우지 않음
-    # (그 창에서 취소하면 앱 자리가 빈 채로 남음)
-    if ! fs_run "mv $q_app $q_backup && { mv $q_staged $q_app || { mv $q_backup $q_app; exit 1; }; }"; then
+    # (그 창에서 취소하면 앱 자리가 빈 채로 남음). 단, 앱 자리에 무엇이 남아 있으면(다른 볼륨에서 복사하다 멈춘
+    # 반쪽 앱) 손대지 않음 — 그대로 mv하면 백업이 그 *안으로* 들어감; 그때는 restore_backup이 먼저 치우고 되돌림
+    if ! fs_run "mv $q_app $q_backup && { mv $q_staged $q_app || { [ -e $q_app ] || [ -L $q_app ] || mv $q_backup $q_app; exit 1; }; }"; then
         FAIL_REASON="관리자 권한으로 바꾸지 못함: $FS_OUT"
         return 1
     fi
@@ -398,6 +411,10 @@ APP_BASE=$(basename "$APP")
 BACKUP="$APP_DIR/${APP_BASE%.app}.update-backup.app"
 FAILED=""  # 되돌릴 때 restore_backup이 정함
 PATTERN=$(regex_escape "$APP/Contents/MacOS/")
+# 준비한 새 앱이 앱(또는 백업) 자리와 겹치면 바꾸기가 실패한 뒤 '준비한 새 앱 지우기'가 되돌린 앱을 지움 — 손대기 전에 거절
+if paths_overlap "$STAGED" "$APP" || paths_overlap "$STAGED" "$BACKUP"; then
+    usage_error "--staged가 --app(또는 그 백업 자리)과 같거나 겹침: --staged $STAGED, --app $APP"
+fi
 
 log "시작: 대상 버전 $TARGET, 앱 $APP, 준비한 새 앱 $STAGED"
 
