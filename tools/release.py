@@ -54,8 +54,9 @@ VERSION_FILE = "tools/write_build_info.py"  # 이 파일이 든 커밋(1.1.0 이
 MAIN_REF = "origin/main"
 FILE_MODE = 0o644  # Windows PC의 NAS 계정은 이 Mac과 달라 모두 읽을 수 있어야 함 (쓰기는 이 Mac만)
 DIR_MODE = 0o755
-RUN_POLL_TRIES = 12  # 태그를 푸시한 뒤 CI 실행이 보일 때까지 약 1분
+RUN_POLL_TRIES = 13  # 태그를 푸시한 뒤 CI 실행이 보일 때까지 (13-1)×5 = 60초
 RUN_POLL_S = 5
+FIRST_RELEASE = (1, 1, 0)  # 자동 업데이트가 들어간 첫 배포
 RELEASE_LIST_LIMIT = "100"
 
 _RELEASE_TAG = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
@@ -108,13 +109,18 @@ def _check_release_version(version):
         raise ValueError(f"배포 버전은 X.Y.Z 모양이어야 합니다: {version!r}")
 
 
+def _highest_release(tags):
+    """vX.Y.Z 모양 태그 중 가장 큰 (X, Y, Z) — 숫자로 비교 (1.1.10 > 1.1.9), 다른 모양은 버림. 없으면 None."""
+    return max((tuple(int(n) for n in m.groups()) for m in map(_RELEASE_TAG.fullmatch, tags) if m), default=None)
+
+
 def next_version(tags: list[str], minor: bool) -> str:
-    """다음 배포 번호: 가장 큰 vX.Y.Z 태그에서 끝자리 +1 (minor면 가운데 +1·끝 0). 배포 태그가 없으면 1.1.0.
-    크기는 숫자로 비교 (1.1.10 > 1.1.9), vX.Y.Z 모양이 아닌 태그는 버림."""
-    numbers = [tuple(int(n) for n in m.groups()) for m in map(_RELEASE_TAG.fullmatch, tags) if m]
-    if not numbers:
-        return "1.1.0"
-    major, middle, last = max(numbers)
+    """다음 배포 번호: 가장 큰 vX.Y.Z 태그에서 끝자리 +1 (minor면 가운데 +1·끝 0). 배포 태그가 없거나 가장 큰 것이
+    1.1.0보다 작으면(지우지 못한 예행연습 태그 v0.9.0 등) 1.1.0."""
+    highest = _highest_release(tags)
+    if highest is None or highest < FIRST_RELEASE:
+        return "%d.%d.%d" % FIRST_RELEASE
+    major, middle, last = highest
     return f"{major}.{middle + 1}.0" if minor else f"{major}.{middle}.{last + 1}"
 
 
@@ -329,6 +335,8 @@ def find_release(tag):
 def check_arm64_omittable():
     """--without-arm64: 공개된 마지막 Release의 latest.json에 mac-arm64가 있으면 거부 (실리콘이 한 번 배포된 뒤로는
     세 빌드 모두 있어야 함 — 설계 10장 15). 공개된 Release가 없으면 허용."""
+    # 마지막 공개 Release만 보면 충분: mac-arm64가 든 Release가 한 번 공개되면 그 뒤의 공개는 모두 이 검사 때문에
+    # mac-arm64를 넣어야 하고, 공개는 늘 이 도구가 --latest로 함 → 마지막 것에 없으면 그 전 어느 공개에도 없었음
     rows = json.loads(gh("release", "list", "--exclude-drafts", "--json", "tagName,isLatest",
                          "--limit", RELEASE_LIST_LIMIT))
     if not rows:
@@ -383,9 +391,10 @@ def print_result(result):
 
 
 def cmd_prepare(args):
-    with open(args.notes_file, encoding="utf-8") as fh:
+    notes_file = os.path.abspath(args.notes_file)  # git tag -F는 저장소 폴더에서 실행 → 지금 폴더 기준 경로로 고정
+    with open(notes_file, encoding="utf-8") as fh:
         if not fh.read().strip():
-            raise ReleaseError(f"바뀐 점 파일이 비어 있습니다: {args.notes_file}")
+            raise ReleaseError(f"바뀐 점 파일이 비어 있습니다: {notes_file}")
     nas_dir = args.nas_dir or default_nas_dir()
     ref = args.commit or ("HEAD" if args.allow_branch else MAIN_REF)
 
@@ -413,8 +422,15 @@ def cmd_prepare(args):
     tag = f"v{version}"
     if tag in tags:
         raise ReleaseError(f"origin에 이미 {tag} 태그가 있습니다")
+    highest = _highest_release(tags)
+    if args.version and not args.allow_branch and highest is not None \
+            and tuple(int(n) for n in version.split(".")) <= highest:
+        raise ReleaseError(
+            f"--version {version}이 origin의 가장 큰 배포 태그 v{'%d.%d.%d' % highest}보다 크지 않습니다 — 공개하면 더 작은 "
+            "번호가 'latest'가 되고 앱은 알리지 않음 (버리는 번호의 예행연습은 --allow-branch와 함께)"
+        )
     before = {r["databaseId"] for r in tag_runs(tag)}  # 같은 번호를 지우고 다시 쓴 경우의 옛 실행은 빼려고
-    git("tag", "-a", tag, "-F", args.notes_file, "--cleanup=whitespace", commit)
+    git("tag", "-a", tag, "-F", notes_file, "--cleanup=whitespace", commit)
     try:
         git("push", "origin", f"refs/tags/{tag}:refs/tags/{tag}")
     except CommandError as exc:
@@ -429,7 +445,7 @@ def cmd_prepare(args):
         if attempt + 1 < RUN_POLL_TRIES:
             time.sleep(RUN_POLL_S)
     raise ReleaseError(
-        f"태그 {tag}를 푸시했지만 {RUN_POLL_TRIES * RUN_POLL_S}초 안에 {WORKFLOW} 실행이 보이지 않습니다 — Actions 화면을 "
+        f"태그 {tag}를 푸시했지만 {(RUN_POLL_TRIES - 1) * RUN_POLL_S}초 안에 {WORKFLOW} 실행이 보이지 않습니다 — Actions 화면을 "
         f"확인하고, 그만두려면 abort {tag}"
     )
 
@@ -478,14 +494,20 @@ def cmd_publish(args):
             gh("release", "delete", tag, "--yes")
         gh("release", "create", tag, "--draft", "--verify-tag", "--title", tag, "--notes-file", notes_path,
            *(files[k] for k in keys), manifest_path)
-        if not args.draft_only:
-            gh("release", "edit", tag, "--draft=false", "--latest")
+        # 공개하기 전에 초안에 올라간 파일(이름·크기)을 확인 — 확인 안 된 Release가 공개·latest가 되지 않게
         view = json.loads(gh("release", "view", tag, "--json", "isDraft,url,assets"))
         uploaded = {asset["name"]: asset["size"] for asset in view["assets"]}
         expected = {os.path.basename(p): os.path.getsize(p) for p in [*files.values(), manifest_path]}
-        if uploaded != expected or view["isDraft"] != args.draft_only:
-            raise ReleaseError(f"{tag} Release가 예상과 다릅니다: 올라간 파일 {uploaded}, 예상 {expected}, "
-                               f"초안 {view['isDraft']} (예상 {args.draft_only})")
+        if uploaded != expected or view["isDraft"] is not True:
+            raise ReleaseError(
+                f"{tag} 초안 Release가 예상과 달라 공개하지 않았습니다: 올라간 파일 {uploaded}, 예상 {expected}, "
+                f"초안 {view['isDraft']} — 다시 하려면 publish {tag}, 그만두려면 abort {tag}"
+            )
+        if not args.draft_only:
+            gh("release", "edit", tag, "--draft=false", "--latest")
+            view = json.loads(gh("release", "view", tag, "--json", "isDraft,url"))
+            if view["isDraft"] is not False:
+                raise ReleaseError(f"{tag} Release를 공개했는데 아직 초안으로 보입니다: {view}")
         state = "초안" if args.draft_only else "공개"
         log(f"{tag} Release {state}: {view['url']}")
         try:

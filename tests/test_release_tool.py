@@ -94,6 +94,14 @@ def test_next_version():
     assert next_version(["v1.1.3"], True) == "1.2.0"
 
 
+def test_next_version_floor_is_first_release():
+    """1.1.0보다 작은 태그만 남아 있어도(지우지 못한 예행연습 v0.9.0 등) 첫 배포 번호 1.1.0."""
+    assert next_version(["v0.9.0"], False) == "1.1.0"
+    assert next_version(["v0.9.0"], True) == "1.1.0"
+    assert next_version(["v1.0.7", "v0.9.0"], False) == "1.1.0"
+    assert next_version(["v1.1.0", "v0.9.0"], False) == "1.1.1"
+
+
 def test_next_version_ignores_non_release_tags():
     assert next_version(["v1.2", "release-1", "v1.1.0-rc1", "1.5.0"], False) == "1.1.0"
     assert next_version(["v2.0.0", "v1.9.9"], True) == "2.1.0"
@@ -401,9 +409,33 @@ def test_prepare_minor_and_explicit_version(monkeypatch, tmp_path, notes_file, c
     assert fake.find("git", "tag", "-a")[0][3] == "v1.2.0"
     capsys.readouterr()
     fake = install(monkeypatch, prepare_responses())
-    release.main(["prepare", "--notes-file", notes_file, "--version", "0.9.0", "--nas-dir", str(tmp_path)])
-    assert fake.find("git", "tag", "-a")[0][3] == "v0.9.0"
-    assert json.loads(capsys.readouterr().out)["version"] == "0.9.0"
+    release.main(["prepare", "--notes-file", notes_file, "--version", "1.3.0", "--nas-dir", str(tmp_path)])
+    assert fake.find("git", "tag", "-a")[0][3] == "v1.3.0"
+    assert json.loads(capsys.readouterr().out)["version"] == "1.3.0"
+
+
+def test_prepare_refuses_version_not_above_highest_tag(monkeypatch, tmp_path, notes_file, capsys):
+    """공개하면 더 작은 번호가 'latest'가 됨 → 거부. 버리는 번호의 예행연습(--allow-branch)만 허용."""
+    fake = install(monkeypatch, prepare_responses())
+    with pytest.raises(release.ReleaseError, match="v1.1.9") as info:
+        release.main(["prepare", "--notes-file", notes_file, "--version", "1.1.5", "--nas-dir", str(tmp_path)])
+    assert "--allow-branch" in str(info.value)
+    assert not fake.find("git", "tag") and not fake.find("git", "push")
+    fake = install(monkeypatch, prepare_responses())
+    release.main(["prepare", "--notes-file", notes_file, "--version", "1.1.5", "--allow-branch",
+                  "--nas-dir", str(tmp_path)])
+    assert fake.find("git", "tag", "-a")[0][3] == "v1.1.5"
+    assert json.loads(capsys.readouterr().out)["version"] == "1.1.5"
+
+
+def test_prepare_relative_notes_file_is_made_absolute(monkeypatch, tmp_path, capsys):
+    """git tag -F는 저장소 폴더에서 실행 → 지금 폴더 기준의 상대 경로를 절대 경로로 넘김."""
+    (tmp_path / "notes.txt").write_text(NOTES + "\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    fake = install(monkeypatch, prepare_responses())
+    release.main(["prepare", "--notes-file", "notes.txt", "--nas-dir", str(tmp_path)])
+    tag_cmd = fake.find("git", "tag", "-a")[0]
+    assert tag_cmd[tag_cmd.index("-F") + 1] == os.path.join(str(tmp_path), "notes.txt")
 
 
 def test_prepare_refuses_existing_version(monkeypatch, tmp_path, notes_file):
@@ -465,8 +497,12 @@ def test_prepare_refuses_empty_notes(monkeypatch, tmp_path):
 def test_prepare_errors_when_run_never_appears(monkeypatch, tmp_path, notes_file):
     old_only = [runs_json((5, SHA))] * (1 + release.RUN_POLL_TRIES)  # 같은 커밋의 옛 실행은 그 태그의 실행이 아님
     install(monkeypatch, prepare_responses({("gh", "run", "list"): old_only}))
-    with pytest.raises(release.ReleaseError, match="abort v1.1.10"):
+    monkeypatch.setattr(release, "RUN_POLL_S", 5)
+    slept = []
+    monkeypatch.setattr(release.time, "sleep", slept.append)
+    with pytest.raises(release.ReleaseError, match="abort v1.1.10") as info:
         release.main(["prepare", "--notes-file", notes_file, "--nas-dir", str(tmp_path)])
+    assert sum(slept) == 60 and "60초" in str(info.value)  # 메시지의 시간 = 실제로 기다린 시간
 
 
 def test_prepare_stops_when_push_fails(monkeypatch, tmp_path, notes_file):
@@ -634,10 +670,38 @@ def test_publish_publishes_before_nas_copy(monkeypatch, tmp_path, capsys):
     record_sync(monkeypatch, fake)
     nas = tmp_path / "nas"
     release.main(["publish", "v1.1.2", "--nas-dir", str(nas)])
-    assert fake.kinds()[-4:] == ["gh release create", "gh release edit", "gh release view", "<sync_to_nas> " + str(nas)]
+    # 초안의 파일을 확인한 뒤에 공개하고, 공개됐는지 다시 확인
+    assert fake.kinds()[-5:] == ["gh release create", "gh release view", "gh release edit", "gh release view",
+                                 "<sync_to_nas> " + str(nas)]
     assert fake.find("gh", "release", "edit")[0][3:6] == ["v1.1.2", "--draft=false", "--latest"]
     assert releases.release["isDraft"] is False
     assert json.loads(capsys.readouterr().out)["draft"] is False
+
+
+def test_publish_does_not_publish_unexpected_draft(monkeypatch, tmp_path):
+    """초안에 올라간 파일이 예상과 다르면 공개(edit)하지 않고 멈춤 — 확인 안 된 Release가 latest가 되지 않게."""
+    releases = FakeReleases()
+
+    def wrong_view(cmd):
+        data = json.loads(releases.view(cmd))
+        data["assets"][0]["size"] += 1  # 잘린 업로드
+        return json.dumps(data)
+
+    fake = install(monkeypatch, publish_responses(releases, {("gh", "release", "view"): wrong_view}))
+    with pytest.raises(release.ReleaseError, match="공개하지 않았습니다") as info:
+        release.main(["publish", "v1.1.2", "--nas-dir", str(tmp_path / "nas")])
+    assert "abort v1.1.2" in str(info.value)
+    assert not fake.find("gh", "release", "edit") and releases.release["isDraft"] is True
+    assert not (tmp_path / "nas").exists()
+
+
+def test_publish_stops_when_release_still_draft_after_edit(monkeypatch, tmp_path):
+    releases = FakeReleases()
+    fake = install(monkeypatch, publish_responses(releases, {("gh", "release", "edit"): ""}))  # 공개가 안 됨
+    with pytest.raises(release.ReleaseError, match="초안"):
+        release.main(["publish", "v1.1.2", "--nas-dir", str(tmp_path / "nas")])
+    assert fake.kinds()[-3:] == ["gh release view", "gh release edit", "gh release view"]
+    assert not (tmp_path / "nas").exists()
 
 
 def test_publish_default_nas_dir_is_shared_config_updates(monkeypatch, tmp_path, capsys):
@@ -674,6 +738,33 @@ def test_publish_refuses_unsuccessful_job(monkeypatch, tmp_path, conclusions):
         release.main(["publish", "v1.1.2", "--nas-dir", str(tmp_path / "nas")])
     assert not fake.find("gh", "run", "download") and releases.created is None
     assert not (tmp_path / "nas").exists()
+
+
+def test_publish_refuses_run_without_required_job(monkeypatch, tmp_path):
+    view = json.loads(jobs_json())
+    view["jobs"] = [job for job in view["jobs"] if job["name"] != "mac (Intel)"]
+    releases = FakeReleases()
+    fake = install(monkeypatch, publish_responses(releases, {("gh", "run", "view"): json.dumps(view)}))
+    with pytest.raises(release.ReleaseError, match=re.escape("mac (Intel)")):
+        release.main(["publish", "v1.1.2", "--nas-dir", str(tmp_path / "nas")])
+    assert not fake.find("gh", "run", "download") and releases.created is None
+
+
+def test_publish_refuses_artifact_with_other_file_name(monkeypatch, tmp_path):
+    def other_name(cmd):
+        fake_run_download(cmd)
+        folder = cmd[cmd.index("-D") + 1]
+        for name in os.listdir(folder):
+            if name.startswith("YesonCheck_Autocut_Intel_"):
+                os.rename(os.path.join(folder, name), os.path.join(folder, "YesonCheck_Autocut_Intel.dmg"))
+        return ""
+
+    releases = FakeReleases()
+    install(monkeypatch, publish_responses(releases, {("gh", "run", "download"): other_name}))
+    with pytest.raises(release.ReleaseError, match="YesonCheck_Autocut_Intel_1.1.2.dmg") as info:
+        release.main(["publish", "v1.1.2", "--nas-dir", str(tmp_path / "nas")])
+    assert "YesonCheck_Autocut_Intel.dmg" in str(info.value)  # 받은 것을 보여 줌
+    assert releases.created is None and not (tmp_path / "nas").exists()
 
 
 def test_publish_refuses_missing_run(monkeypatch, tmp_path):
@@ -728,6 +819,21 @@ def test_publish_without_arm64_allowed_when_previous_had_none(monkeypatch, tmp_p
     release.main(["publish", "v1.1.2", "--without-arm64", "--nas-dir", str(tmp_path / "nas")])
     assert fake.find("gh", "release", "download")[0][3] == "v1.1.0"
     assert sorted(parse_manifest(releases.created["manifest"]).files) == ["mac-x86_64", "windows"]
+
+
+@pytest.mark.parametrize("latest_flags", [[False, False], [True, True]])
+def test_publish_without_arm64_needs_exactly_one_latest(monkeypatch, tmp_path, latest_flags):
+    rows = [{"tagName": f"v1.1.{i}", "isLatest": flag} for i, flag in enumerate(latest_flags)]
+
+    def listing(cmd):
+        return json.dumps(rows if "--exclude-drafts" in cmd else [])
+
+    releases = FakeReleases()
+    fake = install(monkeypatch, publish_responses(releases, {("gh", "release", "list"): listing}))
+    with pytest.raises(release.ReleaseError, match="latest"):
+        release.main(["publish", "v1.1.2", "--without-arm64", "--nas-dir", str(tmp_path / "nas")])
+    assert not fake.find("gh", "release", "download") and not fake.find("gh", "run", "download")
+    assert releases.created is None
 
 
 def test_publish_without_arm64_refused_after_arm64_was_released(monkeypatch, tmp_path):
