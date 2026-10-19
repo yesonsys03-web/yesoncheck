@@ -15,12 +15,17 @@ import time
 
 import pytest
 from PyQt5.QtCore import QEvent, QPoint, Qt
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QIcon, QPixmap
 from PyQt5.QtMultimedia import QMediaContent
 from PyQt5.QtWidgets import QAbstractItemView, QApplication, QDialog, QMessageBox, QShortcut
 
 from yesoncheck import paths, thumbnails, video_list
-from yesoncheck.player_sidebar import THUMBNAIL_CONTEXT_ROLE, ThumbnailContext
+from yesoncheck.player_sidebar import (
+    LIST_READ_FAILED,
+    THUMBNAIL_CONTEXT_ROLE,
+    THUMBNAIL_FOLDER_PROBLEM,
+    ThumbnailContext,
+)
 from tests.conftest import ROOT, write_test_video
 from tests.test_thumbnails import (
     drop_folder,
@@ -634,6 +639,675 @@ def test_refresh_waits_for_running_thumbnail_pass(new_player, dialogs, work_area
     assert all(not item.icon().isNull() for item in items_by_name(player).values())
     for name in ("FL_001.mov", "FL_002.mov", "FL_003.mov", "FL_004.mov"):
         assert os.path.isfile(thumbnails.thumbnail_path(player.current_thumbnail_folder, listed_path(player, name)))
+
+
+# ---- 새로고침 버튼·F5: 같은 이름으로 다시 렌더링한 영상의 썸네일도 다시 만듦 ----
+
+THUMBNAIL_CHECK_LOG = "새로고침: 썸네일 확인"
+
+
+def press_refresh(player, how="button"):
+    """사용자의 새로고침: 새로고침 버튼 또는 F5 단축키."""
+    if how == "button":
+        player.refreshListButton.click()
+    else:
+        [shortcut] = [s for s in player.findChildren(QShortcut) if s.key().toString() == "F5"]
+        shortcut.activated.emit()
+
+
+def settle_thumbnail_times(player):
+    """목록의 모든 썸네일을 영상보다 새것으로 (os.utime으로 시각을 정해 둠 — 파일 시스템 시각의 정밀도와 상관없이)
+    → 그 썸네일의 시각. 그 뒤 다시 만든 썸네일(지금 시각)은 rerender의 영상보다도 새것."""
+    base = time.time() - 100
+    for i in range(player.sidebar.count()):
+        item = player.sidebar.item(i)
+        video = item.data(Qt.UserRole)
+        os.utime(video, (base - 10, base - 10))
+        os.utime(thumbnails.thumbnail_path(item.data(THUMBNAIL_CONTEXT_ROLE).folder, video), (base, base))
+    return base
+
+
+def rerender(video, base):
+    """같은 이름으로 다시 렌더링한 영상: 다른 크기로 다시 써서(썸네일 120×60 — 처음은 120×90) 썸네일보다 새 시각."""
+    write_test_video(video, size=(320, 160))
+    os.utime(video, (base + 10, base + 10))
+
+
+def icon_size(item):
+    """항목 아이콘의 크기 (아이콘이 없으면 None) — 다시 렌더링한 영상의 새 썸네일이 붙었는지."""
+    sizes = item.icon().availableSizes()
+    return (sizes[0].width(), sizes[0].height()) if sizes else None
+
+
+def wait_thumbnails(player):
+    wait_until(lambda: not player.thumbnail_workers)
+    QApplication.processEvents()
+
+
+def thumbnail_mode_with_rerendered_video(new_player, work_area, monkeypatch):
+    """job_01을 썸네일 모드로 보고(썸네일 모두 영상보다 새것) FL_002를 같은 이름으로 다시 렌더링함
+    → (창, job 폴더, 다시 렌더링한 영상의 앱 경로, 그 썸네일 파일)."""
+    player, job = open_job(new_player, work_area, monkeypatch)
+    turn_on_thumbnail_mode(player)
+    base = settle_thumbnail_times(player)
+    changed = listed_path(player, "FL_002.mov")
+    rerender(changed, base)
+    return player, job, changed, thumbnails.thumbnail_path(player.current_thumbnail_folder, changed)
+
+
+@pytest.mark.parametrize("how", ["button", "f5"])
+def test_manual_refresh_remakes_rerendered_thumbnail(new_player, dialogs, work_area, monkeypatch, capsys, how):
+    """새로고침 버튼·F5: 다시 읽은 뒤(목록이 바뀌지 않아도) 모든 영상의 썸네일을 썸네일 버튼처럼 확인 — 같은 이름으로 다시
+    렌더링한(썸네일보다 새) 영상만 다시 만들어 아이콘을 바꾸고 나머지는 저장된 썸네일을 씀. 방금 읽었어도(앱이 다시
+    활성될 때는 건너뛰는 간격 안) 읽음."""
+    player, _job, changed, thumb = thumbnail_mode_with_rerendered_video(new_player, work_area, monkeypatch)
+    started = record_worker_starts(monkeypatch)
+    reads = count_reads(monkeypatch)
+    generation = player._sidebar_generation
+    player._sidebar_scan_seconds = 1.0
+    player._sidebar_refreshed_at = time.monotonic()
+    capsys.readouterr()
+
+    press_refresh(player, how)
+    wait_refreshed(player)
+    wait_thumbnails(player)
+
+    assert len(reads) == 1
+    assert started == [changed]
+    after = items_by_name(player)
+    assert icon_size(after["FL_002.mov"]) == (120, 60)
+    assert [icon_size(after[name]) for name in ("FL_001.mov", "FL_003.mov")] == [(120, 90), (120, 90)]
+    assert QPixmap(thumb).size().width() == 120 and QPixmap(thumb).size().height() == 60  # 새 썸네일 파일
+    assert thumbnails.is_fresh(thumb, changed)
+    assert player._sidebar_generation == generation  # 목록은 그대로 (바뀐 것 없음)
+    out = capsys.readouterr().out
+    assert out.count(THUMBNAIL_CHECK_LOG) == 1
+    assert "새로고침: 썸네일 확인 3개, 다시 만듦 1개" in out
+    assert list_warnings(dialogs) == []
+
+
+def test_manual_refresh_new_and_rerendered_video_each_once(new_player, dialogs, work_area, monkeypatch, capsys):
+    """한 번의 새로고침에 새 영상과 다시 렌더링한 영상이 함께 있으면 둘 다 한 번씩만 만듦 (새 영상을 두 번 보지 않음)."""
+    player, job, changed, _thumb = thumbnail_mode_with_rerendered_video(new_player, work_area, monkeypatch)
+    add_scene(job, "004")
+    started = record_worker_starts(monkeypatch)
+    capsys.readouterr()
+
+    press_refresh(player)
+    wait_refreshed(player)
+    wait_thumbnails(player)
+
+    assert listed(player) == ["FL_001.mov", "FL_002.mov", "FL_003.mov", "FL_004.mov"]
+    assert started == [changed, listed_path(player, "FL_004.mov")]
+    after = items_by_name(player)
+    assert icon_size(after["FL_002.mov"]) == (120, 60)
+    assert icon_size(after["FL_004.mov"]) == (120, 90)
+    out = capsys.readouterr().out
+    assert out.count(THUMBNAIL_CHECK_LOG) == 1
+    assert "새로고침: 썸네일 확인 4개, 다시 만듦 2개" in out
+    assert list_warnings(dialogs) == []
+
+
+def test_manual_refresh_updates_every_item_of_rerendered_video(new_player, dialogs, tmp_path, monkeypatch):
+    """같은 영상이 목록에 두 번 있으면 한 번만 다시 만들고 두 항목 모두 새 아이콘."""
+    video = write_test_video(str(tmp_path / "job" / "a.mov"))
+    player = new_player(make_config(str(tmp_path), {}))
+    player.add_files_to_sidebar([video])
+    player.add_files_to_sidebar([video])
+    turn_on_thumbnail_mode(player)
+    rerender(video, settle_thumbnail_times(player))
+    started = record_worker_starts(monkeypatch)
+
+    press_refresh(player)
+    wait_refreshed(player)
+    wait_thumbnails(player)
+
+    assert started == [video]
+    assert [icon_size(player.sidebar.item(i)) for i in range(player.sidebar.count())] == [(120, 60), (120, 60)]
+    assert dialogs.errors() == []
+
+
+@pytest.mark.parametrize("how", ["activation", "reselect_job", "missing_video"])
+def test_automatic_refresh_makes_only_new_thumbnails(shown_job, dialogs, monkeypatch, capsys, how):
+    """저절로 다시 읽을 때(다른 앱에서 돌아옴·같은 job을 다시 고름·없는 영상을 엶)는 예전처럼 새 영상의 썸네일만 — 다시
+    렌더링한 영상은 그대로 (앱을 오갈 때마다 모든 영상을 NAS에서 확인하지 않게. 새로고침 버튼·F5를 누르면 다시 만듦)."""
+    player, job = shown_job
+    turn_on_thumbnail_mode(player)
+    changed = listed_path(player, "FL_002.mov")
+    rerender(changed, settle_thumbnail_times(player))
+    missing = listed_path(player, "FL_003.mov")
+    add_scene(job, "004")
+    started = record_worker_starts(monkeypatch)
+    reads = count_reads(monkeypatch)
+    capsys.readouterr()
+
+    if how == "activation":
+        player._sidebar_refreshed_at = None
+        QApplication.instance().applicationStateChanged.emit(Qt.ApplicationActive)
+    elif how == "reselect_job":
+        choose(player, "job_01")
+    else:
+        shutil.rmtree(os.path.join(job, "scene-003"))
+        assert player.open_file("B", missing) is False  # '영상 없음' 창 → 목록 다시 읽기
+    wait_until(lambda: len(reads) == 1)
+    wait_refreshed(player)
+    wait_thumbnails(player)
+
+    assert "FL_004.mov" in listed(player)
+    assert started == [listed_path(player, "FL_004.mov")]
+    assert icon_size(items_by_name(player)["FL_002.mov"]) == (120, 90)
+    assert THUMBNAIL_CHECK_LOG not in capsys.readouterr().out
+
+
+def test_manual_refresh_in_list_mode_makes_no_thumbnails(new_player, dialogs, work_area, monkeypatch, capsys):
+    """목록 모드에서는 새로고침 버튼·F5도 예전처럼 목록만 다시 읽음 (다시 렌더링한 영상·새 영상의 썸네일을 만들지 않음)."""
+    player, job, changed, thumb = thumbnail_mode_with_rerendered_video(new_player, work_area, monkeypatch)
+    player.switch_to_list_mode()
+    add_scene(job, "004")
+    started = record_worker_starts(monkeypatch)
+    capsys.readouterr()
+
+    press_refresh(player)
+    wait_refreshed(player)
+    press_refresh(player, "f5")
+    wait_refreshed(player)
+    wait_thumbnails(player)
+
+    assert "FL_004.mov" in listed(player)
+    assert started == []
+    assert all(item.icon().isNull() for item in items_by_name(player).values())
+    assert not thumbnails.is_fresh(thumb, changed)
+    assert THUMBNAIL_CHECK_LOG not in capsys.readouterr().out
+    # 목록 모드에서 누른 새로고침은 남지 않음: 그 뒤 저절로 다시 읽어도 모든 영상을 확인하지 않음
+    turn_on_thumbnail_mode(player)
+    started.clear()
+    capsys.readouterr()
+    refresh(player)
+    wait_thumbnails(player)
+    assert started == []
+    assert THUMBNAIL_CHECK_LOG not in capsys.readouterr().out
+
+
+def test_manual_refresh_then_list_mode_makes_no_thumbnails(new_player, dialogs, work_area, monkeypatch, capsys):
+    """썸네일 모드에서 새로고침을 누른 뒤 결과를 넣기 전에 목록 모드로 바꾸면 썸네일을 만들지 않음."""
+    player, _job, changed, thumb = thumbnail_mode_with_rerendered_video(new_player, work_area, monkeypatch)
+    started = record_worker_starts(monkeypatch)
+    release, calls = block_reads(monkeypatch)
+    capsys.readouterr()
+
+    press_refresh(player)
+    wait_until(lambda: len(calls) == 1)
+    player.switch_to_list_mode()
+    release.set()
+    wait_refreshed(player)
+    wait_thumbnails(player)
+
+    assert started == []
+    assert all(item.icon().isNull() for item in items_by_name(player).values())
+    assert not thumbnails.is_fresh(thumb, changed)
+    assert THUMBNAIL_CHECK_LOG not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("how", ["in_flight", "hold", "result_under_hold", "folder_appended"])
+def test_manual_refresh_request_survives_coalescing(new_player, dialogs, work_area, tmp_path, monkeypatch, capsys, how):
+    """새로고침을 누를 때 읽는 중이거나(끝난 뒤 한 번 더로 모음 — 몇 번 눌러도), 목록을 쓰는 중이라 미루거나, 결과를 버리고
+    다시 읽어도(목록을 쓰는 중·읽는 동안 폴더를 덧붙임) 썸네일 확인은 결과를 넣을 때 꼭 한 번 (잃지 않고 두 번 하지도 않음)."""
+    player, _job, changed, _thumb = thumbnail_mode_with_rerendered_video(new_player, work_area, monkeypatch)
+    started = record_worker_starts(monkeypatch)
+    release, calls = block_reads(monkeypatch)
+    capsys.readouterr()
+
+    if how == "in_flight":
+        player.refresh_sidebar()  # 예: 앱이 다시 활성 — 읽는 동안 새로고침 버튼과 F5를 누름
+        wait_until(lambda: len(calls) == 1)
+        press_refresh(player)
+        press_refresh(player, "f5")
+        assert player._sidebar_rescan_queued
+        release.set()
+    elif how == "hold":
+        release.set()
+        with player._hold_sidebar_refresh():  # 예: 오른쪽 클릭 메뉴가 떠 있음
+            press_refresh(player)
+            assert player._sidebar_refresh_deferred and calls == []
+    elif how == "result_under_hold":
+        press_refresh(player)
+        wait_until(lambda: len(calls) == 1)
+        with player._hold_sidebar_refresh():
+            release.set()
+            wait_until(lambda: player._sidebar_scan is None)  # 결과를 버리고 끝난 뒤 다시 읽기로 미룸
+            assert player._sidebar_refresh_deferred
+    else:
+        dropped = tmp_path / "other"
+        extra = write_test_video(str(dropped / "x.mov"))
+        os.utime(extra, (time.time() - 100, time.time() - 100))
+        press_refresh(player)
+        wait_until(lambda: len(calls) == 1)
+        drop_folder(player, "sidebar", dropped)  # 읽는 동안 폴더를 덧붙임 → 그 결과는 버리고 다시 읽음
+        release.set()
+    wait_refreshed(player)
+    wait_thumbnails(player)
+
+    assert len(calls) == (1 if how == "hold" else 2)
+    if how == "folder_appended":
+        assert started == [listed_path(player, "x.mov"), changed]  # 덧붙인 영상은 넣을 때 만듦
+    else:
+        assert started == [changed]
+    assert icon_size(items_by_name(player)["FL_002.mov"]) == (120, 60)
+    assert capsys.readouterr().out.count(THUMBNAIL_CHECK_LOG) == 1
+    assert list_warnings(dialogs) == []
+
+
+@pytest.mark.parametrize("how", ["in_flight", "hold"])
+def test_manual_refresh_request_dropped_when_list_reset(new_player, dialogs, work_area, monkeypatch, capsys, how):
+    """새로고침을 누른 뒤 결과를 넣기 전에 다른 job을 고르면(목록을 새로 불러옴) 썸네일 확인 요청은 버림 — 새 목록은 처음
+    불러올 때의 흐름대로 (job_02의 영상은 썸네일이 없지만 새로고침 요청으로 만들지 않음, 그 뒤 저절로 다시 읽어도)."""
+    player, _job, _changed, _thumb = thumbnail_mode_with_rerendered_video(new_player, work_area, monkeypatch)
+    started = record_worker_starts(monkeypatch)
+    release, calls = block_reads(monkeypatch)
+    capsys.readouterr()
+
+    if how == "in_flight":
+        press_refresh(player)
+        wait_until(lambda: len(calls) == 1)
+        player.jobComboBox.setCurrentText("job_02")
+        release.set()
+    else:
+        release.set()
+        with player._hold_sidebar_refresh():
+            press_refresh(player)
+            player.jobComboBox.setCurrentText("job_02")
+    assert listed(player) == ["other.mov"]
+    wait_refreshed(player)
+    refresh(player)  # 저절로 다시 읽기 (예: 앱이 다시 활성)
+    wait_thumbnails(player)
+
+    assert started == []
+    assert listed(player) == ["other.mov"]
+    assert THUMBNAIL_CHECK_LOG not in capsys.readouterr().out
+    assert list_warnings(dialogs) == []
+
+
+def test_manual_refresh_on_empty_list_leaves_no_request(new_player, dialogs, tmp_path, monkeypatch, capsys):
+    """빈 목록(읽을 곳도 영상도 없음)에서 누른 새로고침은 할 일이 없음 — 그 뒤 파일을 넣고 저절로 다시 읽어도 모든 영상을
+    확인하지 않음 (요청이 남아 있지 않음)."""
+    video = write_test_video(str(tmp_path / "job" / "a.mov"))
+    player = new_player(make_config(str(tmp_path), {}))
+    turn_on_thumbnail_mode(player)
+    press_refresh(player)
+    wait_refreshed(player)
+    player.add_files_to_sidebar([video])
+    wait_thumbnails(player)
+    rerender(video, settle_thumbnail_times(player))
+    started = record_worker_starts(monkeypatch)
+    capsys.readouterr()
+
+    refresh(player)  # 저절로 다시 읽기 (예: 앱이 다시 활성)
+    wait_thumbnails(player)
+
+    assert started == []
+    assert THUMBNAIL_CHECK_LOG not in capsys.readouterr().out
+    assert dialogs.errors() == []
+
+
+@pytest.mark.parametrize("how", ["error_alone", "pressed_again_during_read"])
+def test_manual_refresh_request_dropped_with_failed_read(new_player, dialogs, work_area, monkeypatch, capsys, how):
+    """새로고침으로 시작한 읽기가 예상 못 한 오류로 끝나면(오류 창) 그 썸네일 확인은 버림 — 몇 시간 뒤 저절로 다시 읽을 때
+    모든 영상을 확인하지 않음. 그 읽기 중에 또 누른 새로고침은 뒤이은 읽기에서 한 번."""
+    player, _job, changed, _thumb = thumbnail_mode_with_rerendered_video(new_player, work_area, monkeypatch)
+    started = record_worker_starts(monkeypatch)
+    release = threading.Event()
+    real_read = video_list.read_sources
+    reads = []
+
+    def first_read_fails(sources, files):
+        reads.append(sources)
+        if len(reads) == 1:
+            assert release.wait(10), "시험이 읽기를 풀어 주지 않음"
+            raise RuntimeError("synthetic read failure")
+        return real_read(sources, files)
+
+    monkeypatch.setattr(video_list, "read_sources", first_read_fails)
+    capsys.readouterr()
+
+    press_refresh(player)
+    wait_until(lambda: len(reads) == 1)
+    if how == "pressed_again_during_read":
+        press_refresh(player, "f5")
+    release.set()
+    wait_refreshed(player)
+    wait_thumbnails(player)
+    assert [title for kind, title, _text in dialogs.messages if kind == "critical"] == ["목록 다시 읽기 오류"]
+    if how == "error_alone":
+        refresh(player)  # 저절로 다시 읽기 (예: 몇 시간 뒤 앱이 다시 활성)
+        wait_thumbnails(player)
+        assert started == []
+        assert THUMBNAIL_CHECK_LOG not in capsys.readouterr().out
+    else:
+        assert started == [changed]
+        assert capsys.readouterr().out.count(THUMBNAIL_CHECK_LOG) == 1
+    assert len(reads) == 2
+
+
+def test_manual_refresh_without_changes_keeps_list_rows(new_player, dialogs, work_area, monkeypatch, capsys):
+    """바뀐 것이 없는 새로고침(썸네일 모드)은 목록의 줄을 건드리지 않음 (넣기·빼기·초기화·배치 없음, 세대 그대로) — 썸네일
+    확인은 저장된 썸네일을 붙이기만 하고 다시 만들지 않음."""
+    player, _job = open_job(new_player, work_area, monkeypatch)
+    turn_on_thumbnail_mode(player)
+    settle_thumbnail_times(player)
+    model = player.sidebar.model()
+    changes = []
+    for signal in (model.rowsInserted, model.rowsRemoved, model.modelReset, model.layoutChanged):
+        signal.connect(lambda *args, _s=signal: changes.append(_s))
+    generation = player._sidebar_generation
+    started = record_worker_starts(monkeypatch)
+    capsys.readouterr()
+
+    press_refresh(player)
+    wait_refreshed(player)
+    wait_thumbnails(player)
+
+    assert changes == []
+    assert player._sidebar_generation == generation
+    assert started == []
+    assert "새로고침: 썸네일 확인 3개, 다시 만듦 0개" in capsys.readouterr().out
+
+
+def test_manual_refresh_during_thumb_button_pass_runs_after_it(new_player, dialogs, work_area, monkeypatch, capsys):
+    """썸네일 버튼으로 만드는 중에 누른 F5는 끝난 뒤로 미루고 그 뒤 썸네일을 한 번 확인 — 방금 만든 썸네일은 다시 만들지 않음."""
+    from PyQt5.QtCore import QTimer
+
+    player, _job, changed, _thumb = thumbnail_mode_with_rerendered_video(new_player, work_area, monkeypatch)
+    started = record_worker_starts(monkeypatch)
+    real_generate = player.generate_thumbnail
+    calls = []
+
+    def generate_then_f5(*args, **kwargs):
+        if not calls:
+            QTimer.singleShot(0, lambda: press_refresh(player, "f5"))
+        calls.append(args[0])
+        return real_generate(*args, **kwargs)
+
+    monkeypatch.setattr(player, "generate_thumbnail", generate_then_f5)
+    capsys.readouterr()
+
+    player.thumbnailModeButton.click()  # 썸네일 버튼 다시 (FL_002가 썸네일보다 새것)
+    wait_thumbnails(player)
+    wait_refreshed(player)
+    wait_thumbnails(player)
+
+    assert calls == [changed] and started == [changed]
+    assert capsys.readouterr().out.count("새로고침: 썸네일 확인 3개, 다시 만듦 0개") == 1
+    assert icon_size(items_by_name(player)["FL_002.mov"]) == (120, 60)
+
+
+def test_manual_refresh_survives_list_and_thumbnail_round_trip(new_player, dialogs, work_area, monkeypatch, capsys):
+    """F5로 읽는 중에 목록 모드로 갔다 썸네일 모드로 돌아오면(썸네일 버튼이 다시 렌더링한 영상을 만듦) 결과를 넣을 때
+    확인은 한 번 — 이미 만든 썸네일을 또 만들지 않음."""
+    player, _job, changed, _thumb = thumbnail_mode_with_rerendered_video(new_player, work_area, monkeypatch)
+    started = record_worker_starts(monkeypatch)
+    release, calls = block_reads(monkeypatch)
+    capsys.readouterr()
+
+    press_refresh(player)
+    wait_until(lambda: len(calls) == 1)
+    player.switch_to_list_mode()
+    player.switch_to_thumbnail_mode()  # 썸네일 버튼: FL_002를 여기서 다시 만듦
+    wait_thumbnails(player)
+    release.set()
+    wait_refreshed(player)
+    wait_thumbnails(player)
+
+    assert len(calls) == 1
+    assert started == [changed]
+    assert capsys.readouterr().out.count(THUMBNAIL_CHECK_LOG) == 1
+    assert icon_size(items_by_name(player)["FL_002.mov"]) == (120, 60)
+
+
+class BusyWorker:
+    """썸네일 워커 자리 (목록 모드로 바뀔 때까지 실행 중) — generate_thumbnail이 다른 워커를 기다리게."""
+
+    def __init__(self, player):
+        self.player = player
+
+    def isRunning(self):
+        return self.player.is_thumbnail_mode
+
+    def stop(self):
+        pass
+
+
+@pytest.mark.parametrize("how", ["f5", "f5_during_check", "thumb_button", "add_files"])
+def test_list_mode_during_thumbnail_loop_stops_it(new_player, dialogs, work_area, tmp_path, monkeypatch, capsys, how):
+    """썸네일을 만드는 반복(새로고침·썸네일 버튼·파일 넣기 — 이벤트를 처리함) 중에 목록 모드로 바꾸면 나머지는 만들지 않음
+    (워커를 더 띄우지 않고 목록 모드에 아이콘을 붙이지 않음). 새로고침 로그는 실제로 확인·만든 수."""
+    from PyQt5.QtCore import QTimer
+
+    player, _job = open_job(new_player, work_area, monkeypatch)
+    turn_on_thumbnail_mode(player)
+    base = settle_thumbnail_times(player)
+    for name in ("FL_001.mov", "FL_002.mov", "FL_003.mov"):
+        rerender(listed_path(player, name), base)
+    extra = [write_test_video(str(tmp_path / "extra" / f"{name}.mov")) for name in ("e", "f", "g")]
+    started = record_worker_starts(monkeypatch)
+    calls = []
+    if how == "f5_during_check":
+        real_update = player.update_sidebar_item_thumbnail
+
+        def update_then_list_mode(*args):
+            if not calls:  # 저장된 썸네일을 붙이는 중(첫 영상)에 사용자가 목록 모드를 누름
+                calls.append(args[0])
+                QTimer.singleShot(0, player.listModeButton.click)
+            return real_update(*args)
+
+        monkeypatch.setattr(player, "update_sidebar_item_thumbnail", update_then_list_mode)
+        settle_thumbnail_times(player)  # 모두 저장된 썸네일을 씀 — 첫 영상 뒤로는 확인하지 않음
+    else:
+        real_generate = player.generate_thumbnail
+
+        def generate_then_list_mode(*args, **kwargs):
+            if not calls:  # 첫 썸네일을 만드는 중에 사용자가 목록 모드를 누름
+                QTimer.singleShot(0, player.listModeButton.click)
+            calls.append(args[0])
+            return real_generate(*args, **kwargs)
+
+        monkeypatch.setattr(player, "generate_thumbnail", generate_then_list_mode)
+    before = len(dialogs.messages)
+    capsys.readouterr()
+
+    if how in ("f5", "f5_during_check"):
+        press_refresh(player)
+        wait_refreshed(player)
+    elif how == "thumb_button":
+        player.thumbnailModeButton.click()
+    else:
+        player.add_files_to_sidebar(extra)
+    wait_thumbnails(player)
+    pump(300)
+
+    assert not player.is_thumbnail_mode
+    # 목록 모드로 바꾸기 전에 띄운 첫 워커만 (파일 넣기는 다음 영상이 그 워커를 기다리다 바뀐 것을 보고 띄우지 않음)
+    assert started == ([] if how == "f5_during_check" else calls[:1])
+    not_started = [item for item in items_by_name(player).values()
+                   if not any(paths.same_path(item.data(Qt.UserRole), path) for path in started)]
+    assert len(not_started) == player.sidebar.count() - len(started)
+    assert all(item.icon().isNull() for item in not_started)
+    out = capsys.readouterr().out
+    if how == "f5":
+        assert "새로고침: 썸네일 확인 3개, 다시 만듦 1개" in out
+    elif how == "f5_during_check":
+        assert "새로고침: 썸네일 확인 1개, 다시 만듦 0개" in out
+    elif how == "thumb_button":
+        assert player.thumbnailProgressBar.format() == "썸네일 생성 멈춤 (목록 모드로 바꿈)"
+        assert [m for m in dialogs.messages[before:] if m[1] == "썸네일 생성 완료"] == []  # 멈추면 완료 창 없음
+    assert dialogs.errors() == []
+
+
+def test_generate_thumbnail_not_started_after_list_mode_while_waiting(new_player, dialogs, tmp_path, monkeypatch):
+    """다른 썸네일 워커를 기다리는 동안(이벤트 처리) 목록 모드로 바꾸면 그 영상의 워커는 띄우지 않음. 목록 모드에서
+    부른 것(썸네일 재생성 R)은 예전처럼 만듦."""
+    from PyQt5.QtCore import QTimer
+
+    video = write_test_video(str(tmp_path / "job" / "a.mov"))
+    player = new_player(make_config(str(tmp_path), {}))
+    player.add_files_to_sidebar([video])
+    turn_on_thumbnail_mode(player)
+    started = record_worker_starts(monkeypatch)
+    os.utime(video, (time.time() + 100, time.time() + 100))  # 썸네일보다 새 영상 → 다시 만들 차례
+    player.thumbnail_workers.append(BusyWorker(player))
+    QTimer.singleShot(50, player.listModeButton.click)
+
+    assert player.generate_thumbnail(video) is False
+    assert started == []
+    assert player.thumbnail_workers == []  # 목록 모드로 바꾸며 워커를 멈추고 비움
+    assert player.generate_thumbnail(video) is True  # 목록 모드에서 부름
+    wait_thumbnails(player)
+    assert started == [video]
+
+
+def test_manual_refresh_skips_screen_only_items_with_icons(new_player, dialogs, tmp_path, monkeypatch, capsys):
+    """썸네일 폴더를 만들지 못해 화면에만 보이는 영상은 저장된 썸네일이 없으므로, 아이콘이 이미 있으면 새로고침마다 다시
+    만들지 않음 (아이콘이 없는 것만 만듦)."""
+    videos = [write_test_video(str(tmp_path / "job" / f"{name}.mov")) for name in ("a", "b", "c")]
+    player = new_player(make_config(str(tmp_path), {}))
+    player.add_files_to_sidebar(videos)
+
+    def cannot_create(parent_dir):
+        raise PermissionError(errno.EACCES, "Permission denied", os.path.join(parent_dir, thumbnails.FOLDER_NAME))
+
+    monkeypatch.setattr(thumbnails, "ensure_folder", cannot_create)
+    turn_on_thumbnail_mode(player)
+    assert all(player.sidebar.item(i).data(THUMBNAIL_CONTEXT_ROLE).folder is None for i in range(3))
+    assert all(not player.sidebar.item(i).icon().isNull() for i in range(3))
+    started = record_worker_starts(monkeypatch)
+    capsys.readouterr()
+
+    for _ in range(2):
+        press_refresh(player)
+        wait_refreshed(player)
+        wait_thumbnails(player)
+    assert started == []
+    out = capsys.readouterr().out
+    assert out.count("새로고침: 썸네일 확인 0개, 다시 만듦 0개") == 2
+    assert "화면에만 보이는 영상 3개" in out
+
+    player.sidebar.item(1).setIcon(QIcon())
+    press_refresh(player)
+    wait_refreshed(player)
+    wait_thumbnails(player)
+    assert started == [videos[1]]
+    assert not player.sidebar.item(1).icon().isNull()
+    assert [title for title, _text in list_warnings(dialogs)] == [THUMBNAIL_FOLDER_PROBLEM]  # 썸네일 모드를 켤 때 한 번
+
+
+def count_gui_stats_failing(monkeypatch, failing):
+    """GUI 스레드에서 영상(.mov)을 os.stat한 경로 목록. failing(경로)이면 그 영상은 PermissionError (권한·끊긴 공유처럼 —
+    GUI 밖 스레드의 읽기도 같음)."""
+    real_stat = os.stat
+    main = threading.main_thread()
+    gui_stats = []
+
+    def stat_(path, *args, **kwargs):
+        name = os.fspath(path) if not isinstance(path, int) else ""
+        if name.endswith(".mov"):
+            if threading.current_thread() is main:
+                gui_stats.append(name)
+            if failing(name):
+                raise PermissionError(errno.EACCES, "Permission denied", name)
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", stat_)
+    return gui_stats
+
+
+@pytest.mark.parametrize("how", ["job_folder", "scene_folder", "loose_file"])
+def test_manual_refresh_skips_videos_the_read_could_not_confirm(new_player, dialogs, work_area, tmp_path, monkeypatch,
+                                                                 capsys, how):
+    """이번 읽기에서 확인하지 못한 영상(읽지 못한 목록 폴더·하위 폴더 아래, 있는지 확인하지 못한 따로 넣은 파일)은 새로고침의
+    썸네일 확인에서 건너뜀 — 목록 창 하나만 뜨고, GUI 스레드에서 그 영상을 하나씩 확인하지 않음 (NAS가 끊겼으면 영상마다
+    기다림) "영상 확인 실패" 창도 없음."""
+    player, job = open_job(new_player, work_area, monkeypatch)
+    loose = write_test_video(str(tmp_path / "loose" / "x.mov"))
+    player.add_files_to_sidebar([loose])
+    turn_on_thumbnail_mode(player)
+    settle_thumbnail_times(player)
+    if how == "job_folder":
+        fail_scandir_of(monkeypatch, player.current_job_path,
+                        TimeoutError(errno.ETIMEDOUT, "Operation timed out", player.current_job_path))
+        skipped = [listed_path(player, name) for name in ("FL_001.mov", "FL_002.mov", "FL_003.mov")]
+    elif how == "scene_folder":
+        frames = os.path.join(player.current_job_path, "scene-002", "frames")
+        fail_scandir_of(monkeypatch, frames, PermissionError(errno.EACCES, "Permission denied", frames))
+        skipped = [listed_path(player, "FL_002.mov")]
+    else:
+        skipped = [listed_path(player, "x.mov")]
+    gui_stats = count_gui_stats_failing(monkeypatch, lambda name: any(paths.same_path(name, p) for p in skipped))
+    started = record_worker_starts(monkeypatch)
+    before = len(dialogs.messages)
+    capsys.readouterr()
+
+    press_refresh(player)
+    wait_refreshed(player)
+    wait_thumbnails(player)
+
+    assert [title for kind, title, _text in dialogs.messages[before:]] == [LIST_READ_FAILED]
+    assert not any(paths.same_path(name, p) for name in gui_stats for p in skipped)
+    assert started == []
+    out = capsys.readouterr().out
+    assert f"새로고침: 이번에 읽지 못한 곳의 영상 {len(skipped)}개는 썸네일을 확인하지 않음" in out
+    assert f"새로고침: 썸네일 확인 {4 - len(skipped)}개, 다시 만듦 0개" in out
+
+
+def test_manual_refresh_counts_only_started_thumbnails(new_player, dialogs, work_area, monkeypatch, capsys):
+    """로그의 '다시 만듦'은 워커를 띄운 수: 확인한 뒤 만들기 전에 없어진 영상은 세지 않음."""
+    player, job, changed, _thumb = thumbnail_mode_with_rerendered_video(new_player, work_area, monkeypatch)
+    vanishing = listed_path(player, "FL_003.mov")
+    rerender(vanishing, time.time() - 100)
+    real_generate = player.generate_thumbnail
+
+    def remove_then_generate(file_path, *args, **kwargs):
+        if paths.same_path(file_path, vanishing):
+            os.remove(vanishing)  # 다른 PC에서 지움
+        return real_generate(file_path, *args, **kwargs)
+
+    monkeypatch.setattr(player, "generate_thumbnail", remove_then_generate)
+    started = record_worker_starts(monkeypatch)
+    capsys.readouterr()
+
+    press_refresh(player)
+    wait_refreshed(player)
+    wait_thumbnails(player)
+
+    assert started == [changed]
+    assert "새로고침: 썸네일 확인 3개, 다시 만듦 1개" in capsys.readouterr().out
+    assert player.thumbnailProgressBar.format() == "썸네일 생성 완료"
+    assert list_warnings(dialogs) == []
+
+
+@pytest.mark.parametrize("rerendered", [True, False], ids=["one_rerendered", "none"])
+def test_manual_refresh_shows_progress(new_player, dialogs, work_area, monkeypatch, rerendered):
+    """새로고침의 썸네일 확인도 썸네일 버튼처럼 진행바에 (예전 진행바 글자가 남지 않음)."""
+    player, _job = open_job(new_player, work_area, monkeypatch)
+    turn_on_thumbnail_mode(player)
+    base = settle_thumbnail_times(player)
+    if rerendered:
+        rerender(listed_path(player, "FL_002.mov"), base)
+    bar = player.thumbnailProgressBar
+    bar.setFormat("썸네일 생성 멈춤 (목록이 바뀜)")  # 전에 멈춘 반복의 글자
+    values = []
+    bar.valueChanged.connect(values.append)
+    before = len(dialogs.messages)
+
+    press_refresh(player)
+    wait_refreshed(player)
+    wait_thumbnails(player)
+
+    if rerendered:
+        assert (bar.format(), bar.maximum(), bar.value()) == ("썸네일 생성 완료", 1, 1)
+        assert 0 in values
+    else:
+        assert (bar.format(), bar.value()) == ("썸네일 모두 디스크에 저장됨", bar.maximum())
+    assert bar.isVisibleTo(player)
+    assert [m for m in dialogs.messages[before:] if m[1] == "썸네일 생성 완료"] == []  # 새로고침은 완료 창을 띄우지 않음
 
 
 def test_refresh_folder_source(new_player, dialogs, tmp_path):

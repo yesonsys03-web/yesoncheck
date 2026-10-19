@@ -376,6 +376,7 @@ def test_loader_emits_only_fresh_thumbnails(qapp, tmp_path):
 SAVE_FAILED = "썸네일 저장 실패"
 FOLDER_PROBLEM = "썸네일 폴더 문제"
 VIDEO_PROBLEM = "영상 확인 실패"
+MAKE_FAILED = "썸네일 만들기 실패"
 
 
 def thumbnail_warnings(dialogs, title=None):
@@ -572,6 +573,147 @@ def test_unreadable_fresh_thumbnail_is_regenerated(new_player, dialogs, tmp_path
     assert QPixmap(thumb).width() == 120
     assert not player.sidebar.item(0).icon().isNull()
     assert dialogs.errors() == []
+
+
+def test_corrupt_thumbnail_that_cannot_be_removed_is_reported_once(new_player, dialogs, tmp_path, monkeypatch):
+    """깨진(읽을 수 없는) 썸네일을 지우지 못하면(권한 등) 조용히 넘기지 않고 창으로 ((폴더, 제목)마다 한 번) — 새 썸네일은
+    그 자리에 바꿔 저장 (임시 파일 + os.replace)."""
+    from PyQt5.QtGui import QPixmap
+
+    videos = [write_test_video(str(tmp_path / "job" / f"{name}.mov")) for name in ("a", "b")]
+    player = new_player(make_config(str(tmp_path), {}))
+    player.add_files_to_sidebar(videos)
+    folder = thumbnails.ensure_folder(str(tmp_path / "job"))
+    thumbs = [thumbnails.thumbnail_path(folder, video) for video in videos]
+    for video, thumb in zip(videos, thumbs):
+        with open(thumb, "wb") as fh:
+            fh.write(b"not a jpeg")
+        newer = os.path.getmtime(video) + 10
+        os.utime(thumb, (newer, newer))
+    real_remove = os.remove
+
+    def cannot_remove(path, *args, **kwargs):
+        if any(paths.same_path(os.fspath(path), thumb) for thumb in thumbs):
+            raise PermissionError(errno.EACCES, "Permission denied", os.fspath(path))
+        return real_remove(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "remove", cannot_remove)
+    player.generate_thumbnails_for_all_items()
+    wait_until(lambda: not player.thumbnail_workers)
+    QApplication.processEvents()
+
+    warnings = thumbnail_warnings(dialogs)
+    assert [title for title, _text in warnings] == [FOLDER_PROBLEM]
+    assert thumbs[0] in warnings[0][1] and "Permission denied" in warnings[0][1]
+    assert [QPixmap(thumb).width() for thumb in thumbs] == [120, 120]
+    assert all(not player.sidebar.item(i).icon().isNull() for i in range(2))
+
+
+def test_unopenable_video_reported_once_per_folder(new_player, dialogs, tmp_path, capsys):
+    """OpenCV가 열지 못하는 영상(손상·지원하지 않는 형식)의 썸네일: 로그에만 남기지 않고 창으로 — (폴더, 제목)마다 한 번
+    (영상마다가 아니라). 다른 영상의 썸네일은 그대로 만듦."""
+    job = tmp_path / "job"
+    job.mkdir()
+    broken = []
+    for name in ("a", "b"):
+        (job / f"{name}.mov").write_bytes(b"not a video")
+        broken.append(str(job / f"{name}.mov"))
+    good = write_test_video(str(job / "c.mov"))
+    player = new_player(make_config(str(tmp_path), {}))
+    player.add_files_to_sidebar(broken + [good])
+    capsys.readouterr()
+
+    turn_on_thumbnail_mode(player)
+
+    warnings = thumbnail_warnings(dialogs, MAKE_FAILED)
+    assert len(warnings) == 1
+    assert broken[0] in warnings[0][1] and "OpenCV가 영상을 열지 못함" in warnings[0][1]
+    assert thumbnail_warnings(dialogs) == []  # 다른 썸네일 문제 창은 없음
+    err = capsys.readouterr().err
+    assert all(f"썸네일을 만들지 못함: {path}" in err for path in broken)
+    assert [player.sidebar.item(i).icon().isNull() for i in range(3)] == [True, True, False]
+
+
+def test_thumbnail_worker_unexpected_error_reported_with_traceback(new_player, dialogs, tmp_path, monkeypatch, capsys):
+    """썸네일 워커의 예상 못 한 오류: 로그에 스택 트레이스째 남기고 창으로 (예전에는 오류 한 줄만 로그에)."""
+    import yesoncheck.workers as workers_module
+
+    video = write_test_video(str(tmp_path / "job" / "a.mov"))
+    player = new_player(make_config(str(tmp_path), {}))
+    player.add_files_to_sidebar([video])
+    monkeypatch.setattr(workers_module, "QImage", BrokenQImage)
+    capsys.readouterr()
+
+    turn_on_thumbnail_mode(player)
+
+    warnings = thumbnail_warnings(dialogs, MAKE_FAILED)
+    assert len(warnings) == 1
+    assert video in warnings[0][1]
+    assert "Traceback" in warnings[0][1] and "RuntimeError: synthetic image failure" in warnings[0][1]
+    err = capsys.readouterr().err
+    assert "Traceback" in err and "RuntimeError: synthetic image failure" in err
+    assert player.sidebar.item(0).icon().isNull()
+
+
+class BrokenQImage:
+    """썸네일 워커의 QImage 대신: 만들면 예상 못 한 오류."""
+
+    Format_RGB888 = None
+
+    def __init__(self, *args):
+        raise RuntimeError("synthetic image failure")
+
+
+@pytest.mark.parametrize("how", ["made", "failed"])
+def test_worker_finished_before_cleanup_still_delivers(new_player, dialogs, tmp_path, monkeypatch, how):
+    """썸네일 워커가 반복의 정리(cleanup_thumbnail_workers — 3개마다 0.2초 쉰 뒤) 전에 끝나도 그 신호를 잃지 않음: 아이콘이
+    붙고 실패는 창으로. 예전에는 끝난 워커를 GUI 스레드가 신호를 받기 전에 놓아 partial·람다로 이은 신호가 QThread와 함께
+    사라졌음 (빠른 실패에서 실패 창이 뜨지 않음 — 'failed'가 그 경우를 잡음. 메서드로 이은 아이콘 신호는 예전에도 전달돼
+    'made'는 아이콘이 붙는지만 확인)."""
+    import yesoncheck.workers as workers_module
+
+    video = write_test_video(str(tmp_path / "job" / "a.mov"))
+    player = new_player(make_config(str(tmp_path), {}))
+    player.add_files_to_sidebar([video])
+    if how == "failed":
+        monkeypatch.setattr(workers_module, "QImage", BrokenQImage)
+    real_cleanup = player.cleanup_thumbnail_workers
+
+    def cleanup_after_workers_end():
+        for worker in list(player.thumbnail_workers):
+            assert worker.wait(10000)  # 끝남 — 그 신호는 아직 GUI 스레드가 받지 않음
+        real_cleanup()
+
+    monkeypatch.setattr(player, "cleanup_thumbnail_workers", cleanup_after_workers_end)
+    turn_on_thumbnail_mode(player)
+
+    if how == "made":
+        assert not player.sidebar.item(0).icon().isNull()
+        assert dialogs.errors() == []
+    else:
+        assert player.sidebar.item(0).icon().isNull()
+        assert len(thumbnail_warnings(dialogs, MAKE_FAILED)) == 1
+
+
+def test_icon_update_errors_are_not_swallowed(new_player, dialogs, tmp_path):
+    """아이콘을 붙이다 난 예외는 잡아서 로그에만 남기지 않음 — 그대로 올라가 앱의 sys.excepthook이 스택 트레이스째 로그와
+    창으로 (워커의 thumbnail_ready 슬롯에서도)."""
+
+    class NotAPixmap:
+        def isNull(self):
+            return False
+
+        def size(self):
+            return None
+
+    video = write_test_video(str(tmp_path / "job" / "a.mov"))
+    player = new_player(make_config(str(tmp_path), {}))
+    player.add_files_to_sidebar([video])
+
+    with pytest.raises(TypeError):
+        player.update_sidebar_item_thumbnail(video, NotAPixmap())
+    with pytest.raises(TypeError):
+        player.on_thumbnail_ready(video, NotAPixmap())
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX 권한 (Mac에서만 chmod)")

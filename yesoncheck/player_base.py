@@ -998,6 +998,8 @@ QSlider::add-page:horizontal {
         self._sidebar_refresh_deferred = False  # 목록을 다 쓰면 다시 읽음
         self._sidebar_scan = None  # 실행 중인 목록 다시 읽기 (SidebarScan — 디스크 읽기는 GUI 밖 스레드)
         self._sidebar_rescan_queued = False  # 읽는 동안 다시 읽어 달라는 요청이 옴 → 끝나면 한 번 더
+        # 새로고침 버튼·F5(썸네일 모드): 다시 읽은 결과를 넣을 때 모든 영상의 썸네일도 확인 (한 번 쓰면 지움, 목록을 비우면 버림)
+        self._sidebar_thumbnail_check_requested = False
         self._sidebar_scan_closed = False  # 창이 닫힘 → 늦게 온 다시 읽기 결과는 버림
         self._sidebar_refreshed_at = None  # 마지막으로 목록을 디스크에서 읽은 때 (처음 불러오기·다시 읽기, time.monotonic)
         self._sidebar_scan_seconds = 0.0  # 마지막으로 목록을 읽는 데 걸린 초 (앱이 다시 활성될 때 다시 읽기 간격)
@@ -1145,7 +1147,7 @@ QPushButton:checked {
         # 목록 다시 읽기: 다른 PC·Finder에서 NAS의 영상을 지우거나 넣었을 때 (창이 다시 활성될 때도 저절로 읽음)
         self.refreshListButton = QPushButton('새로고침')
         self.refreshListButton.setToolTip('목록 다시 읽기 (F5)')
-        self.refreshListButton.clicked.connect(self.refresh_sidebar)
+        self.refreshListButton.clicked.connect(self._refresh_sidebar_by_user)
         self.refreshListButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.refreshListButton.setStyleSheet("""
 QPushButton {
@@ -1166,7 +1168,7 @@ QPushButton:pressed {
 }
 """)
         refresh_shortcut = QShortcut(QKeySequence(Qt.Key_F5), self)
-        refresh_shortcut.activated.connect(self.refresh_sidebar)
+        refresh_shortcut.activated.connect(self._refresh_sidebar_by_user)
 
         viewModeLayout.addWidget(self.listModeButton)
         viewModeLayout.addWidget(self.thumbnailModeButton)
@@ -4127,7 +4129,7 @@ QMessageBox {
 <li><b>←/→</b>: 이전/다음 프레임</li>
 <li><b>F11</b>: 전체화면</li>
 <li><b>F1</b>: 도움말</li>
-<li><b>F5</b>: 사이드바 목록 다시 읽기 (새로고침 — 창으로 돌아올 때도 저절로)</li>
+<li><b>F5</b>: 사이드바 목록 다시 읽기 (새로고침 — 창으로 돌아올 때도 저절로). 썸네일 모드면 다시 렌더링한 영상의 썸네일도 다시 만듦</li>
 <li><b>D (ㅇ)</b>: 선택 구간 병합 (OCR 결과 검토 창)</li>
 <li><b>R (ㄱ)</b>: 전체 내보내기 (OCR 결과 검토 창)</li>
 </ul>

@@ -49,6 +49,7 @@ NO_SEASON_WORKS = ("The_Johnsons", "TJS_Animatic")  # 시즌이 없는 작품: �
 THUMBNAIL_SAVE_FAILED = "썸네일 저장 실패"  # 썸네일 파일을 쓰지 못함 (창 제목)
 THUMBNAIL_FOLDER_PROBLEM = "썸네일 폴더 문제"  # 썸네일 폴더를 만들지 못함 등 (창 제목)
 THUMBNAIL_VIDEO_PROBLEM = "영상 확인 실패"  # 썸네일을 만들 영상을 확인하지 못함 (창 제목)
+THUMBNAIL_MAKE_FAILED = "썸네일 만들기 실패"  # 영상은 있지만 썸네일을 만들지 못함 — OpenCV가 열지 못함 등 (창 제목)
 THUMBNAIL_CONTEXT_ROLE = Qt.UserRole + 1  # 사이드바 항목 데이터: 그 영상의 썸네일 자리 (ThumbnailContext)
 SIDEBAR_SOURCE_ROLE = Qt.UserRole + 2  # 사이드바 항목 데이터: 그 영상이 들어온 곳 (video_list.ListSource, 따로 넣은 파일은 None)
 LIST_READ_FAILED = "목록 폴더를 읽지 못함"  # 영상 목록을 만들거나 다시 읽을 폴더를 읽지 못함 (창 제목)
@@ -366,11 +367,13 @@ class SidebarScan(QThread):
 
     scanned = pyqtSignal(object)  # 이 SidebarScan (read·elapsed·unexpected를 채움)
 
-    def __init__(self, sources, files, generation):
+    def __init__(self, sources, files, generation, check_thumbnails=False):
         super().__init__()
         self.sources = sources  # 읽을 곳 (video_list.ListSource)
         self.files = files  # 있는지 확인할 따로 넣은 파일
         self.generation = generation  # 읽기 시작할 때의 사이드바 세대 번호 (결과를 넣을 때 목록이 그대로인지)
+        # 이 읽기를 시작할 때까지 누른 새로고침 버튼·F5의 썸네일 확인 요청 (결과를 넣을 때 씀 — _on_sidebar_scanned)
+        self.check_thumbnails = check_thumbnails
         self.read = None  # video_list.SourcesRead
         self.elapsed = None
         self.unexpected = None  # 예상 못 한 오류의 스택 트레이스 (GUI 스레드가 창으로)
@@ -507,14 +510,15 @@ class PlayerSidebarMixin:
         # (job·폴더를 바꿈) 항목이 지워짐 → 그때는 멈춤. 그동안 목록 다시 읽기는 끝난 뒤로 미룸
         if self.is_thumbnail_mode:
             with self._hold_sidebar_refresh():
-                generation = self._sidebar_generation
+                state = self._thumbnail_pass_state()  # 목록 모드로 바꾸거나 창을 닫아도 멈춤
                 jobs = {}  # 같은 영상을 한 번에 여러 번 넣었으면 한 번만 (아이콘은 경로가 같은 모든 항목에)
                 for item in items:
                     jobs.setdefault(paths.path_key(item.data(Qt.UserRole)),
                                     (item.data(Qt.UserRole), item.data(THUMBNAIL_CONTEXT_ROLE)))
                 for file_path, context in jobs.values():
-                    if self._sidebar_generation != generation:
-                        print("사이드바 목록이 바뀌어(job·폴더를 바꿈) 넣은 영상의 썸네일 만들기를 멈춤")
+                    stopped = self._thumbnail_pass_stopped(state)
+                    if stopped:
+                        print(f"넣은 영상의 썸네일 만들기를 멈춤 ({stopped})")
                         break
                     self.generate_thumbnail(file_path, context=context)
         self._sidebar_read_done(None)  # 끌어다 놓은 폴더·파일을 방금 읽음 (앱이 다시 활성돼도 곧바로 또 읽지 않게)
@@ -2159,50 +2163,17 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         """모든 사이드바 아이템에 대해 썸네일을 생성합니다."""
         print(f"모든 아이템 썸네일 생성 시작: {self.sidebar.count()}개 아이템")
         self.cleanup_thumbnail_workers()
-        # 이벤트를 처리하며 만드는 동안 목록이 바뀌면(job·폴더를 바꿈) 예전 목록의 나머지는 만들지 않고 멈춤
-        generation = self._sidebar_generation
+        # 이벤트를 처리하며 만드는 동안 목록이 바뀌거나(job·폴더를 바꿈) 목록 모드로 바꾸거나 창을 닫으면 나머지는 만들지
+        # 않고 멈춤
+        state = self._thumbnail_pass_state()
         # 첫 번째 단계에서 새로 만들 영상(과 그 자리)을 정해 두고 두 번째 단계는 그 목록만 (NAS에서 다시 확인하지 않고,
         # 지워졌을 수 있는 항목도 쓰지 않음)
-        to_generate = self._apply_disk_thumbnails()
+        to_generate, _checked = self._apply_disk_thumbnails()
         new_generation_count = len(to_generate)
         print(f"썸네일 처리 완료: 캐시 사용 {self.sidebar.count() - new_generation_count}개, 새 생성 {new_generation_count}개")
-        # 진행바 설정
-        if new_generation_count > 0:
-            self.thumbnailProgressBar.setMaximum(new_generation_count)
-            self.thumbnailProgressBar.setValue(0)
-            self.thumbnailProgressBar.setFormat('썸네일 생성 중: %v/%m')
-            self.thumbnailProgressBar.setVisible(True)
-        else:
-            self.thumbnailProgressBar.setMaximum(100)
-            self.thumbnailProgressBar.setValue(100)
-            self.thumbnailProgressBar.setFormat('썸네일 모두 캐시됨')
-            self.thumbnailProgressBar.setVisible(True)
-        if new_generation_count > 0:
-            batch_size = 3
-            generated_count = 0
-            for batch_start in range(0, new_generation_count, batch_size):
-                batch = to_generate[batch_start:batch_start + batch_size]
-                print(f"배치 처리: {batch_start+1}-{batch_start + len(batch)}/{new_generation_count}")
-                for file_path, context in batch:
-                    if self._sidebar_generation != generation:
-                        break
-                    self.generate_thumbnail(file_path, context=context)
-                    generated_count += 1
-                    self.thumbnailProgressBar.setValue(generated_count)
-                    QApplication.processEvents()
-                if self._sidebar_generation != generation:
-                    print(f"사이드바 목록이 바뀌어(job·폴더를 바꿈) 예전 목록의 썸네일 만들기를 멈춤 "
-                          f"({generated_count}/{new_generation_count}개에서)")
-                    self.thumbnailProgressBar.setFormat('썸네일 생성 멈춤 (목록이 바뀜)')
-                    return
-                QApplication.processEvents()
-                import time
-                time.sleep(0.2)
-                self.cleanup_thumbnail_workers()
-                import gc
-                gc.collect()
-            self.thumbnailProgressBar.setValue(new_generation_count)
-            self.thumbnailProgressBar.setFormat('썸네일 생성 완료')
+        _started, stopped = self._make_thumbnails(to_generate, state)
+        if stopped:
+            return
         # 새로운 썸네일이 생성된 경우에만 팝업창 띄우기
         if new_generation_count > 0:
             total_files = self.sidebar.count()
@@ -2215,17 +2186,86 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             
         else:
             print("모든 썸네일이 캐시에 있어서 새로 생성할 필요가 없습니다.")
-            self.thumbnailProgressBar.setFormat('썸네일 모두 디스크에 저장됨')
-            self.thumbnailProgressBar.setValue(self.thumbnailProgressBar.maximum())
+
+    def _thumbnail_pass_state(self):
+        """썸네일 반복을 시작할 때의 상태 (세대 번호, 썸네일 모드) — _thumbnail_pass_stopped가 지금과 비교."""
+        return (self._sidebar_generation, self.is_thumbnail_mode)
+
+    def _thumbnail_pass_stopped(self, state):
+        """썸네일을 확인·만드는 반복(이벤트를 처리함)을 멈출 까닭 → 짧은 문구 (계속하면 None).
+
+        창을 닫음, 목록이 바뀜 (job·폴더를 바꿈 — 지워진 항목·예전 목록의 영상을 쓰지 않게), 썸네일 모드에서 시작했는데
+        목록 모드로 바꿈 (목록 모드에 아이콘을 붙이거나 워커를 띄우지 않게 — 목록 모드에서 시작한 썸네일 재생성은 그대로).
+        """
+        generation, thumbnail_mode = state
+        if self._sidebar_scan_closed:
+            return "창을 닫음"
+        if self._sidebar_generation != generation:
+            return "목록이 바뀜"
+        if thumbnail_mode and not self.is_thumbnail_mode:
+            return "목록 모드로 바꿈"
+        return None
+
+    def _make_thumbnails(self, to_generate, state):
+        """정해 둔 영상들의 썸네일을 3개씩 만들며 진행바(thumbnailProgressBar)에 보임 → (워커를 띄운 수, 멈춘 까닭 — 끝까지
+        했으면 None). 썸네일 버튼과 새로고침 버튼·F5가 같은 반복.
+
+        to_generate: [(영상, 그 항목의 자리)] (_apply_disk_thumbnails가 정함 — NAS에서 다시 확인하지 않고, 지워졌을 수 있는
+        항목도 쓰지 않음). state: 반복을 시작할 때의 상태 (_thumbnail_pass_state) — 만드는 동안(이벤트를 처리함) 목록이
+        바뀌거나 목록 모드로 바꾸거나 창을 닫으면 나머지는 만들지 않고 멈춤 (그 전 확인에서 멈췄어도).
+        """
+        import gc
+        total = len(to_generate)
+        bar = self.thumbnailProgressBar
+        if total > 0:
+            bar.setMaximum(total)
+            bar.setValue(0)
+            bar.setFormat('썸네일 생성 중: %v/%m')
+        else:
+            bar.setMaximum(100)
+            bar.setValue(100)
+            bar.setFormat('썸네일 모두 디스크에 저장됨')
+        bar.setVisible(True)
+        batch_size = 3
+        started = 0
+        done = 0
+        stopped = self._thumbnail_pass_stopped(state)
+        for batch_start in range(0, total, batch_size):
+            if stopped:
+                break
+            batch = to_generate[batch_start:batch_start + batch_size]
+            print(f"배치 처리: {batch_start+1}-{batch_start + len(batch)}/{total}")
+            for file_path, context in batch:
+                stopped = self._thumbnail_pass_stopped(state)
+                if stopped:
+                    break
+                if self.generate_thumbnail(file_path, context=context):
+                    started += 1
+                done += 1
+                bar.setValue(done)
+                QApplication.processEvents()
+            stopped = stopped or self._thumbnail_pass_stopped(state)
+            if stopped:
+                break
+            QApplication.processEvents()
+            time.sleep(0.2)
+            self.cleanup_thumbnail_workers()
+            gc.collect()
+        if stopped:
+            print(f"썸네일 만들기를 멈춤 ({stopped}, {done}/{total}개에서)")
+            bar.setFormat(f'썸네일 생성 멈춤 ({stopped})')
+            return started, stopped
+        if total > 0:
+            bar.setValue(total)
+            bar.setFormat('썸네일 생성 완료')
+        return started, None
 
     def cleanup_thumbnail_workers(self):
-        """완료된 워커들을 정리합니다."""
-        try:
-            # 완료된 워커들 제거
-            self.thumbnail_workers = [w for w in self.thumbnail_workers if w.isRunning()]
-            print(f"워커 정리 완료: 현재 워커 수 {len(self.thumbnail_workers)}")
-        except Exception as e:
-            print(f"워커 정리 중 오류: {e}")
+        """완료된 워커들을 정리합니다: 목록에서 빼는 것은 그 워커의 finished를 GUI 스레드가 받을 때(generate_thumbnail의
+        safe_remove_worker — 멈춘 워커는 멈춘 쪽이 목록을 비움). 끝났다고(isRunning) 여기서 먼저 놓으면 GUI 스레드가 아직 받지
+        않은 신호 중 partial·람다로 이은 것(failed → 실패 창, finished → safe_remove_worker)이 QThread와 함께 사라져 실패 창이
+        뜨지 않았음 (3개마다 0.2초 쉬는 동안 끝난 빠른 실패. 메서드로 이은 thumbnail_ready·save_failed는 전달됐음)."""
+        print(f"워커 정리 완료: 현재 워커 수 {len(self.thumbnail_workers)}")
 
     def cleanup_background_threads(self):
         """모든 백그라운드 스레드를 안전하게 정리합니다."""
@@ -2365,9 +2405,11 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
 
     def _forget_sidebar_sources(self):
         """사이드바 목록을 비움(clear → 모델 초기화): 목록에 영상을 넣은 곳도 잊음 (새 목록을 넣는 쪽이 다시 기억).
-        방금 job 목록을 읽었다는 표시도 지움 (목록이 바뀌었으므로 그 job을 다시 고르면 다시 불러옴)."""
+        방금 job 목록을 읽었다는 표시도 지움 (목록이 바뀌었으므로 그 job을 다시 고르면 다시 불러옴). 예전 목록에서 누른
+        새로고침의 썸네일 확인 요청도 버림 (새 목록은 처음 불러올 때의 흐름대로)."""
         self._sidebar_sources.clear()
         self._job_list_loaded_for = None
+        self._sidebar_thumbnail_check_requested = False
 
     @contextlib.contextmanager
     def _hold_sidebar_refresh(self):
@@ -2445,6 +2487,23 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             return
         self.refresh_sidebar()
 
+    def _refresh_sidebar_by_user(self):
+        """새로고침 버튼·F5: 목록 다시 읽기. 썸네일 모드면 다시 읽은 결과를 넣은 뒤 모든 영상의 썸네일도 썸네일 버튼처럼
+        확인 — 저장된 썸네일(영상보다 새것)은 그대로 쓰고, 같은 이름으로 다시 렌더링해 썸네일보다 새 영상·썸네일이 없거나
+        읽을 수 없는 영상만 다시 만듦 (목록이 바뀌지 않아도). 저절로 다시 읽을 때(앱이 다시 활성·같은 job을 다시 고름·없는
+        영상을 엶·선택 재생)는 예전처럼 새 영상만 — 앱을 오갈 때마다 모든 영상을 NAS에서 확인하지 않게. 앱이 다시 활성될
+        때의 간격(ACTIVATION_REFRESH_GAP_S)은 보지 않고 바로 읽음.
+
+        요청(_sidebar_thumbnail_check_requested)은 다음에 시작하는 읽기에 실려(SidebarScan.check_thumbnails) 그 결과를 넣을 때
+        (_apply_sidebar_read) 한 번 씀. 읽는 중에 누르면 그 읽기에는 싣지 않고 남겨 뒤이은 읽기에서, 목록을 쓰는 중이라 미루면
+        미룬 읽기에서. 결과를 버리고 다시 읽으면(목록을 쓰는 중·폴더를 덧붙임) 요청으로 되돌려 다시 읽을 때. 목록을 비우면
+        (job을 바꿈·폴더를 불러옴 — _forget_sidebar_sources, 읽는 중이면 그 결과도 버림) 버림. 읽기가 예상 못 한 오류로 끝나면
+        (오류 창) 버림. 목록 모드에서 누르면 요청하지 않음 (예전처럼 목록만).
+        """
+        if self.is_thumbnail_mode:
+            self._sidebar_thumbnail_check_requested = True
+        self.refresh_sidebar()
+
     def _sidebar_read_done(self, seconds):
         """목록을 디스크에서 읽음 (처음 불러오기·다시 읽기): 앱이 다시 활성될 때 곧바로 또 읽지 않게 때·걸린 시간을 남김."""
         self._sidebar_refreshed_at = time.monotonic()
@@ -2473,6 +2532,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             self._sidebar_rescan_queued = True
             return
         if not self._sidebar_sources and not self.sidebar.count():
+            self._sidebar_thumbnail_check_requested = False  # 읽을 것도, 썸네일을 확인할 영상도 없음
             return
         files = []
         for i in range(self.sidebar.count()):
@@ -2480,7 +2540,10 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             if item.data(SIDEBAR_SOURCE_ROLE) is None and item.data(Qt.UserRole):
                 files.append(item.data(Qt.UserRole))
         self._sidebar_refreshed_at = time.monotonic()
-        scan = SidebarScan(tuple(self._sidebar_sources), files, self._sidebar_generation)
+        # 지금까지의 썸네일 확인 요청은 이 읽기에 실음 (읽는 동안 누른 새로고침은 다시 요청해 뒤이은 읽기에서)
+        scan = SidebarScan(tuple(self._sidebar_sources), files, self._sidebar_generation,
+                           self._sidebar_thumbnail_check_requested)
+        self._sidebar_thumbnail_check_requested = False
         scan.scanned.connect(self._on_sidebar_scanned)  # 창은 GUI 스레드 → 대기열을 거쳐 GUI 스레드에서 실행
         self._sidebar_scan = scan
         scan.start()
@@ -2490,6 +2553,9 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
 
         읽는 동안 목록이 바뀌었으면(세대 번호·목록에 영상을 넣은 곳이 다름 — job을 바꿈·폴더를 불러옴·끌어다 놓음) 결과를
         버리고 다시 읽음. 목록을 쓰는 중이면 버리고 끝난 뒤 다시 읽음. 창이 닫힌 뒤에 온 결과는 버림.
+        이 읽기에 실린 새로고침의 썸네일 확인(scan.check_thumbnails)은 결과를 넣을 때 씀. 버리고 다시 읽으면(폴더를 덧붙임·
+        목록을 쓰는 중) 요청으로 되돌려 다시 읽을 때, 목록을 새로 불러왔거나(새 목록은 처음 불러올 때의 흐름대로) 예상 못 한
+        오류(창으로 알림 — 몇 시간 뒤 저절로 다시 읽을 때 모든 영상을 확인하지 않게)면 버림.
         """
         if scan is not self._sidebar_scan or self._sidebar_scan_closed:
             return  # 창을 닫으며 놓은 읽기 (release_worker가 신호를 막지만 이미 대기열에 들어간 결과)
@@ -2497,23 +2563,27 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         scan.wait()  # 결과를 보낸 뒤 곧 끝남
         try:
             if scan.unexpected is not None:
+                # 이 읽기에 실린 썸네일 확인도 버림 (오류 창을 봄 — 나중에 저절로 다시 읽을 때 모든 영상을 확인하지 않게)
                 QMessageBox.critical(self, "목록 다시 읽기 오류",
                                      f"사이드바 목록을 다시 읽다 예상치 못한 오류가 났습니다.\n\n{scan.unexpected}")
                 return
             if scan.generation != self._sidebar_generation:
                 # 읽는 동안 목록을 비우고 새로 불러옴(job을 바꿈·폴더를 불러옴): 새 목록은 방금 디스크에서 읽었으므로 버리기만 —
-                # 읽는 동안 다시 읽어 달라는 요청이 왔으면(_sidebar_rescan_queued) 아래에서 한 번 더
+                # 읽는 동안 다시 읽어 달라는 요청이 왔으면(_sidebar_rescan_queued) 아래에서 한 번 더. 이 읽기에 실린 썸네일
+                # 확인도 버림 (새 목록은 처음 불러올 때의 흐름대로)
                 print("목록 다시 읽기: 읽는 동안 목록을 새로 불러와 결과를 버림")
                 return
             if set(scan.sources) != set(self._sidebar_sources):
                 print("목록 다시 읽기: 읽는 동안 목록에 폴더를 덧붙여 결과를 버리고 다시 읽음")
                 self._sidebar_rescan_queued = True
+                self._sidebar_thumbnail_check_requested |= scan.check_thumbnails  # 다시 읽을 때 씀
                 return
             if self._sidebar_refresh_holds:
                 print("목록 다시 읽기: 목록을 쓰는 중이라 결과를 버리고 끝난 뒤 다시 읽음")
                 self._sidebar_refresh_deferred = True
+                self._sidebar_thumbnail_check_requested |= scan.check_thumbnails  # 다시 읽을 때 씀
                 return
-            self._apply_sidebar_read(scan.read, scan.elapsed)
+            self._apply_sidebar_read(scan.read, scan.elapsed, scan.check_thumbnails)
         finally:
             # 예외가 나도 남김: 오류 창 → 앱이 다시 활성 → 다시 읽기 → 오류 창이 되풀이되지 않게
             self._sidebar_read_done(scan.elapsed)
@@ -2521,12 +2591,14 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 self._sidebar_rescan_queued = False
                 self.refresh_sidebar()
 
-    def _apply_sidebar_read(self, read, elapsed):
+    def _apply_sidebar_read(self, read, elapsed, check_thumbnails=False):
         """(GUI 스레드) 다시 읽은 결과(video_list.SourcesRead)로 목록을 맞춤. 바뀐 것이 없으면 목록을 건드리지 않음
         (깜빡임 없음, 세대 번호 그대로). 남는 항목은 그대로 둠: 썸네일 자리·아이콘·선택·현재 항목·재생 중 표시(빨간 글자),
         맨 위에 보이던 영상도 그 자리에. 읽지 못한 폴더(NAS 연결 끊김·권한)의 영상은 빼지 않고 실제 오류를 창으로
         ((제목, 폴더, 오류)마다 한 번 — 그 폴더를 다시 읽으면 기록을 지워 다음에 또 끊기면 다시 알림). 폴더가 지워졌으면
-        그 영상을 빼고 알림. 썸네일 모드면 새 영상의 썸네일만 붙이거나 만듦.
+        그 영상을 빼고 알림. 썸네일 모드면 새 영상의 썸네일만 붙이거나 만듦 — check_thumbnails(이 읽기에 실린 새로고침
+        버튼·F5의 요청 — _refresh_sidebar_by_user)면 모든 영상의 썸네일 (다시 렌더링한 영상도, _check_thumbnails_after_refresh).
+        그사이 목록 모드로 바꿨으면 요청은 버리기만.
         """
         rows = [(self.sidebar.item(i).data(Qt.UserRole), self.sidebar.item(i).data(SIDEBAR_SOURCE_ROLE))
                 for i in range(self.sidebar.count())]
@@ -2545,15 +2617,65 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 self._report_list_source_problem(source.folder, read.errors[source],
                                                  gone=result is video_list.FOLDER_GONE, note=read.notes[source])
         self._report_unverified_files(read.unverified)
-        if self.is_thumbnail_mode and added:
-            # 새 영상만: 저장된 썸네일을 바로 붙이고 없는 것만 만듦 (남은 영상의 썸네일은 다시 만들지 않음)
+        if self.is_thumbnail_mode and (added or check_thumbnails):
             with self._hold_sidebar_refresh():
-                generation = self._sidebar_generation
-                for file_path, context in self._apply_disk_thumbnails(added):
-                    if self._sidebar_generation != generation:
-                        print("사이드바 목록이 바뀌어(job·폴더를 바꿈) 새 영상의 썸네일 만들기를 멈춤")
-                        break
-                    self.generate_thumbnail(file_path, context=context)
+                if check_thumbnails:
+                    self._check_thumbnails_after_refresh(read)  # 새 영상도 여기서 한 번
+                else:
+                    # 저절로 다시 읽음: 새 영상만 — 저장된 썸네일을 바로 붙이고 없는 것만 만듦 (남은 영상의 썸네일은 다시
+                    # 보지 않음 — 앱을 오갈 때마다 모든 영상을 NAS에서 확인하지 않게)
+                    state = self._thumbnail_pass_state()
+                    to_generate, _checked = self._apply_disk_thumbnails(added)
+                    for file_path, context in to_generate:
+                        stopped = self._thumbnail_pass_stopped(state)
+                        if stopped:
+                            print(f"새 영상의 썸네일 만들기를 멈춤 ({stopped})")
+                            break
+                        self.generate_thumbnail(file_path, context=context)
+
+    def _check_thumbnails_after_refresh(self, read):
+        """새로고침 버튼·F5로 다시 읽은 결과(read)를 넣은 뒤 (썸네일 모드, 목록 다시 읽기는 미룬 채 — _apply_sidebar_read):
+        모든 영상의 썸네일을 썸네일 버튼처럼 확인 — 저장된 썸네일(영상보다 새것)은 바로 붙이고, 같은 이름으로 다시 렌더링해
+        썸네일보다 새 영상·썸네일이 없거나 읽을 수 없는 영상만 진행바와 함께 다시 만듦 (_make_thumbnails).
+
+        건너뜀 (로그에 몇 개·왜): 이번 읽기에서 확인하지 못한 영상 — 읽지 못한 목록 폴더·하위 폴더 아래, 있는지 확인하지 못한
+        따로 넣은 파일 (그 문제는 목록 창으로 이미 알림. NAS가 끊겼으면 영상마다 GUI 스레드에서 기다리고 "영상 확인 실패"
+        창이 또 뜸). 썸네일 폴더를 만들지 못해 화면에만 보이는 영상 중 아이콘이 이미 있는 것 (저장된 썸네일이 없어
+        새로고침마다 다시 만들게 됨 — 아이콘이 없는 것만 만듦).
+        """
+        confirmed = {source: {paths.path_key(path) for _name, path in result.videos}
+                     for source, result in read.results.items() if isinstance(result, video_list.ScanResult)}
+        unverified = {paths.path_key(path) for path, _error, _note in read.unverified}
+        items = []
+        unread = 0
+        shown = 0
+        for i in range(self.sidebar.count()):
+            item = self.sidebar.item(i)
+            file_path = item.data(Qt.UserRole)
+            if not file_path:
+                continue
+            key = paths.path_key(file_path)
+            source = item.data(SIDEBAR_SOURCE_ROLE)
+            if source is None:
+                unconfirmed = key in unverified  # 따로 넣은 파일: 있는 것은 읽기에서 확인함
+            else:
+                unconfirmed = key not in confirmed.get(source, ())  # 그 출처를 다시 읽어 나온 영상만 확인함
+            context = item.data(THUMBNAIL_CONTEXT_ROLE)
+            if unconfirmed:
+                unread += 1
+            elif context is not None and context.problem is not None and not item.icon().isNull():
+                shown += 1
+            else:
+                items.append(item)
+        if unread:
+            print(f"새로고침: 이번에 읽지 못한 곳의 영상 {unread}개는 썸네일을 확인하지 않음 "
+                  f"(목록 폴더·그 안의 폴더를 읽지 못했거나 따로 넣은 파일을 확인하지 못함 — 창으로 알림)")
+        if shown:
+            print(f"새로고침: 썸네일 폴더가 없어 화면에만 보이는 영상 {shown}개는 아이콘이 있어 다시 만들지 않음")
+        state = self._thumbnail_pass_state()
+        to_generate, checked = self._apply_disk_thumbnails(items)
+        started, _stopped = self._make_thumbnails(to_generate, state)
+        print(f"새로고침: 썸네일 확인 {checked}개, 다시 만듦 {started}개")
 
     def _apply_sidebar_plan(self, plan):
         """video_list.plan_refresh의 계획대로 사이드바를 바꿈 → 새로 넣은 항목 목록. 남는 항목은 건드리지 않음.
@@ -2693,22 +2815,24 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         return resolved
 
     def _apply_disk_thumbnails(self, items=None):
-        """사이드바 영상마다 그 항목의 썸네일 폴더에 있는 썸네일(영상보다 새것)을 바로 적용하고, 새로 만들어야 할
-        [(영상, 그 항목의 자리)]를 돌려줌. 항목 자리의 미뤄 둔 썸네일 폴더 문제는 여기서 창으로 ((폴더, 제목)마다 한 번).
-        items: 그 항목만 (목록 다시 읽기로 새로 넣은 항목 — 남은 항목의 썸네일은 다시 보지 않음). 없으면 모든 항목.
+        """사이드바 영상마다 그 항목의 썸네일 폴더에 있는 썸네일(영상보다 새것)을 바로 적용하고, (새로 만들어야 할
+        [(영상, 그 항목의 자리)], 확인한 영상 수)를 돌려줌. 항목 자리의 미뤄 둔 썸네일 폴더 문제는 여기서 창으로
+        ((폴더, 제목)마다 한 번). items: 그 항목만 (목록 다시 읽기로 새로 넣은 항목 — 남은 항목의 썸네일은 다시 보지 않음,
+        새로고침이 고른 항목). 없으면 모든 항목.
 
         새로 만들 것: 썸네일이 없거나, 영상보다 오래됐거나, 영상보다 새것이지만 읽을 수 없는(깨진) 썸네일, 화면에만인 항목.
-        캐시 적용이 이벤트를 처리하는 동안 목록이 바뀌면(job·폴더를 바꿈) 거기서 멈춤. 같은 영상이 여러 번 있으면 한 번만
-        (아이콘은 경로가 같은 모든 항목에 붙음).
+        캐시 적용이 이벤트를 처리하는 동안 목록이 바뀌거나(job·폴더를 바꿈) 목록 모드로 바꾸거나 창을 닫으면 거기서 멈춤
+        (_thumbnail_pass_stopped). 같은 영상이 여러 번 있으면 한 번만 (아이콘은 경로가 같은 모든 항목에 붙음).
         """
-        generation = self._sidebar_generation
+        state = self._thumbnail_pass_state()
         to_generate = []
         seen = set()
         if items is None:
             items = (self.sidebar.item(i) for i in range(self.sidebar.count()))
         for item in items:
-            if self._sidebar_generation != generation:
-                print("사이드바 목록이 바뀌어(job·폴더를 바꿈) 썸네일 확인을 멈춤")
+            stopped = self._thumbnail_pass_stopped(state)
+            if stopped:
+                print(f"썸네일 확인을 멈춤 ({stopped})")
                 break
             if item is None:
                 continue  # None인 경우 건너뛰기
@@ -2718,7 +2842,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             key = paths.path_key(file_path)
             if key in seen:
                 continue  # 같은 영상의 다른 항목 (같은 자리 — 이미 처리함)
-            seen.add(key)
+            seen.add(key)  # 확인한 영상 (그 수를 돌려줌)
             context = self._item_thumbnail_context(item, file_path)
             if not self._video_is_available(file_path, context):
                 continue
@@ -2738,7 +2862,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             else:
                 print(f"새 썸네일 생성 예정: {file_path}")
             to_generate.append((file_path, context))
-        return to_generate
+        return to_generate, len(seen)
 
     def _video_is_available(self, file_path, context):
         """썸네일을 만들 영상 파일이 있는지 os.stat으로 확인 (os.path.isfile은 오류를 숨기고 False를 돌려줌).
@@ -2808,11 +2932,13 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
 
         context: 미리 꺼내 둔 그 항목의 자리 (반복에서 — 이벤트를 처리하는 동안 항목이 지워질 수 있음). 없으면 item의 자리,
         item도 없으면 경로로 찾고, 사이드바에 없는 영상이면 지금 상태의 자리. 아이콘은 경로로 찾아 붙임.
-        다른 썸네일을 기다리는 동안 목록이 바뀌면(job·폴더를 바꿈) 만들지 않음.
+        다른 썸네일을 기다리는 동안 목록이 바뀌거나(job·폴더를 바꿈) 썸네일 모드에서 목록 모드로 바꾸거나 창을 닫으면 만들지
+        않음 (_thumbnail_pass_stopped). → 워커를 띄웠으면 True, 아니면 False (저장된 썸네일을 붙임·영상을 확인하지 못함·멈춤).
+        워커가 썸네일을 만들지 못하면(failed) 창으로 ((폴더, 제목)마다 한 번 — _on_thumbnail_failed).
         """
         import time
         print(f"썸네일 생성 시작: {file_path}")
-        generation = self._sidebar_generation
+        state = self._thumbnail_pass_state()
         
         if context is None:
             if item is None:
@@ -2842,27 +2968,40 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 if not pixmap.isNull():
                     # UI 업데이트
                     self.update_sidebar_item_thumbnail(file_path, pixmap)
-                    return
+                    return False
                 else:
                     print(f"디스크 썸네일이 손상됨, 재생성: {thumbnail_path}")
                     try:
                         os.remove(thumbnail_path)
-                    except:
-                        pass
+                    except FileNotFoundError:
+                        pass  # 그사이 다른 PC가 지움 — 새로 만들면 됨
+                    except OSError as e:
+                        # 지우지 못해도 워커가 새 썸네일로 바꿔 저장함 (임시 파일 + os.replace — 그것도 못 하면 저장 실패 창)
+                        self._report_thumbnail_problem(
+                            thumbnail_folder,
+                            THUMBNAIL_FOLDER_PROBLEM,
+                            "읽을 수 없는(깨진) 썸네일 파일을 지우지 못했습니다. 새로 만든 썸네일로 바꿔 저장해 봅니다.\n"
+                            f"썸네일 파일: {thumbnail_path}\n이유: {type(e).__name__}: {e}",
+                        )
         max_workers = 1
         while len(self.thumbnail_workers) >= max_workers:
             QApplication.processEvents()
             time.sleep(0.2)  # 대기 시간을 늘려서 메모리 부하 감소
             # 완료된 워커들 정리
             self.cleanup_thumbnail_workers()
-        if self._sidebar_generation != generation:
-            print(f"사이드바 목록이 바뀌어(job·폴더를 바꿈) 이 영상의 썸네일은 만들지 않음: {file_path}")
+        stopped = self._thumbnail_pass_stopped(state)
+        if stopped:
+            print(f"이 영상의 썸네일은 만들지 않음 ({stopped}): {file_path}")
             return False
 
         # 워커 생성 (썸네일 폴더가 없으면 저장하지 않고 화면에만)
         worker = ThumbnailWorker(file_path, self.thumbnail_size, thumbnail_folder)
         worker.thumbnail_ready.connect(self.on_thumbnail_ready)
         worker.save_failed.connect(self._on_thumbnail_save_failed)
+        # 만들지 못함 → 그 항목 자리의 폴더(화면에만인 자리는 만들지 못한 폴더)마다 한 번 창으로
+        worker.failed.connect(functools.partial(
+            self._on_thumbnail_failed,
+            context.folder or (context.problem[0] if context.problem else None) or context.pending_base))
         
         # 안전한 워커 제거 함수
         def safe_remove_worker():
@@ -2885,6 +3024,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         self.thumbnail_workers.append(worker)
         worker.start()
         print(f"썸네일 워커 시작: {file_path}, 현재 워커 수: {len(self.thumbnail_workers)}")
+        return True
 
     def _use_dropped_folder_for_thumbnails(self, folder_path):
         """끌어다 놓은 폴더(여러 개면 첫 폴더)의 썸네일은 그 폴더의 썸네일 폴더에 (전에 고른 job·폴더가 아니라).
@@ -2949,11 +3089,22 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             f"이번에는 화면에만 보이고, 다음에 썸네일 모드를 켜면 다시 만듭니다.\n{detail}",
         )
 
+    def _on_thumbnail_failed(self, folder, detail):
+        """ThumbnailWorker.failed: 영상의 썸네일을 만들지 못함 (OpenCV가 열지 못함·첫 프레임을 읽지 못함·예상 못 한 오류) →
+        창 ((폴더, 제목)마다 한 번 — 영상마다 뜨지 않게, 로그에는 매번). folder: 그 항목 자리의 썸네일 폴더."""
+        self._report_thumbnail_problem(
+            folder,
+            THUMBNAIL_MAKE_FAILED,
+            "영상의 썸네일을 만들지 못해 이 영상은 아이콘 없이 둡니다 (영상이 손상되었거나 지원하지 않는 형식이거나 "
+            f"읽을 수 없음).\n{detail}",
+        )
+
     def _report_thumbnail_problem(self, folder, title, text):
         """썸네일 문제를 알림: 로그에는 매번, 창은 이번 실행에서 (폴더, 제목)마다 한 번
         ("썸네일 폴더 문제"를 알린 폴더라도 나중의 "썸네일 저장 실패"는 따로 알림).
 
-        title: THUMBNAIL_SAVE_FAILED 또는 THUMBNAIL_FOLDER_PROBLEM. text: 무슨 일이 있었고 썸네일이 어떻게 되는지와 이유.
+        title: THUMBNAIL_SAVE_FAILED·THUMBNAIL_FOLDER_PROBLEM·THUMBNAIL_VIDEO_PROBLEM·THUMBNAIL_MAKE_FAILED.
+        text: 무슨 일이 있었고 썸네일이 어떻게 되는지와 이유.
         창에는 NAS 권한 확인 안내와 폴더 경로를 덧붙임.
         """
         print(f"{title}: {folder}\n{text}")
@@ -2970,7 +3121,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         )
 
     def on_thumbnail_ready(self, file_path, pixmap):
-        """썸네일 생성이 완료되었을 때 호출됩니다."""
+        """썸네일 생성이 완료되었을 때 호출됩니다. 예외는 잡지 않음 (앱의 sys.excepthook이 스택 트레이스째 로그와 창으로)."""
         try:
             print(f"썸네일 생성 완료: {file_path}, pixmap isNull: {pixmap.isNull()}, size: {pixmap.size()}")
             
@@ -2981,16 +3132,14 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             
             # 사이드바 아이템 업데이트
             self.update_sidebar_item_thumbnail(file_path, pixmap)
-            
-        except Exception as e:
-            print(f"썸네일 준비 완료 처리 중 오류: {file_path}, 오류: {e}")
         finally:
             # 메모리 정리
             import gc
             gc.collect()
 
     def update_sidebar_item_thumbnail(self, file_path, pixmap):
-        """사이드바 아이템의 썸네일을 업데이트합니다."""
+        """사이드바 아이템의 썸네일을 업데이트합니다. 예외는 잡지 않음 (앱의 sys.excepthook이 스택 트레이스째 로그와 창으로 —
+        예전에는 로그에만 남기고 아이콘 없이 지나감)."""
         try:
             print(f"썸네일 아이템 업데이트 시작: {file_path}")
             
@@ -3006,9 +3155,6 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                     # 아이콘 설정
                     item.setIcon(QIcon(pixmap))
                     print(f"썸네일 아이템 업데이트 완료: {file_path}")
-                    
-        except Exception as e:
-            print(f"썸네일 아이템 업데이트 중 오류: {file_path}, 오류: {e}")
         finally:
             # 메모리 정리
             QApplication.processEvents()

@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+import traceback
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
@@ -89,6 +90,8 @@ class FFmpegWorker(QThread):
 class ThumbnailWorker(QThread):
     thumbnail_ready = pyqtSignal(str, QPixmap)
     save_failed = pyqtSignal(str, str)  # 썸네일 폴더, 내용 (썸네일 파일 경로·오류)
+    # 썸네일을 만들지 못함: 내용 (영상·까닭 — 예상 못 한 오류는 스택 트레이스). 사이드바가 (폴더, 제목)마다 한 번 창으로
+    failed = pyqtSignal(str)
     finished = pyqtSignal()
 
     def __init__(self, file_path, thumbnail_size=120, thumbnail_folder=None):
@@ -105,6 +108,12 @@ class ThumbnailWorker(QThread):
         if self.isRunning():
             self.terminate()
             self.wait(2000)  # 2초 대기
+
+    def _fail(self, reason):
+        """썸네일을 만들지 못함 → 로그(stderr)와 failed 신호 (멈춘 워커는 알리지 않음 — 목록이 바뀌었거나 창을 닫음)."""
+        print(f"썸네일을 만들지 못함: {self.file_path}\n{reason}", file=sys.stderr, flush=True)
+        if self._is_running:
+            self.failed.emit(f"영상: {self.file_path}\n{reason}")
 
     def run(self):
         cap = None
@@ -136,20 +145,25 @@ class ThumbnailWorker(QThread):
                         print(f"기존 썸네일이 손상됨, 재생성: {thumbnail_path}")
                         try:
                             os.remove(thumbnail_path)
-                        except Exception:
-                            pass
+                        except FileNotFoundError:
+                            pass  # 그사이 다른 PC가 지움
+                        except OSError as exc:
+                            # 사이드바가 먼저 지워 보고 못 지우면 창으로 알림. 새 썸네일은 아래에서 바꿔 저장함 (못 하면 저장 실패)
+                            print(f"깨진 썸네일을 지우지 못함 (바꿔 저장해 봄): {thumbnail_path}\n{type(exc).__name__}: {exc}")
 
             # OpenCV로 비디오 파일 열기
             cap = cv2.VideoCapture(self.file_path)
             if not cap.isOpened():
-                print(f"비디오 파일을 열 수 없음: {self.file_path}")
+                self._fail("OpenCV가 영상을 열지 못함 (손상되었거나 지원하지 않는 형식·읽기 권한 없음)")
                 return
 
             try:
                 # 첫 번째 프레임 읽기
                 ret, frame = cap.read()
-                if not ret or not self._is_running:
-                    print(f"첫 번째 프레임을 읽을 수 없음: {self.file_path}")
+                if not self._is_running:
+                    return
+                if not ret:
+                    self._fail("영상의 첫 프레임을 읽지 못함 (손상되었거나 프레임이 없는 영상)")
                     return
 
                 print(f"프레임 읽기 성공: {self.file_path}, frame shape: {frame.shape}")
@@ -181,7 +195,7 @@ class ThumbnailWorker(QThread):
 
                 # QImage 유효성 검사
                 if q_image.isNull():
-                    print(f"QImage 생성 실패: {self.file_path}")
+                    self._fail(f"썸네일 이미지(QImage)를 만들지 못함 ({width}x{height})")
                     return
 
                 # QPixmap 생성
@@ -189,7 +203,7 @@ class ThumbnailWorker(QThread):
 
                 # QPixmap 유효성 검사
                 if pixmap.isNull():
-                    print(f"QPixmap 생성 실패: {self.file_path}")
+                    self._fail(f"썸네일 이미지(QPixmap)를 만들지 못함 ({width}x{height})")
                     return
 
                 print(
@@ -221,11 +235,11 @@ class ThumbnailWorker(QThread):
                         f"썸네일 생성 완료: {self.file_path}, pixmap isNull: {pixmap.isNull()}, size: {pixmap.size()}"
                     )
 
-            except Exception as e:
-                print(f"썸네일 생성 중 오류: {self.file_path}, 오류: {e}")
+            except Exception:
+                self._fail(f"썸네일을 만들다 예상치 못한 오류:\n{traceback.format_exc()}")
 
-        except Exception as e:
-            print(f"ThumbnailWorker 실행 중 오류: {self.file_path}, 오류: {e}")
+        except Exception:
+            self._fail(f"썸네일 워커에서 예상치 못한 오류:\n{traceback.format_exc()}")
 
         finally:
             # 리소스 정리

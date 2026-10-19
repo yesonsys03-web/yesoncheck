@@ -188,7 +188,9 @@ def test_find_config_dirs_probes_shares_concurrently_in_share_order():
     ]
     assert len(calls) == 6  # a 2번, b 1번, c 2번, d 1번 → 차례로 하면 1.8초
     assert active["max"] >= 2  # 실제로 겹쳐 실행됨
-    assert elapsed < 1.2, f"{elapsed:.2f}초 (차례로 하면 1.8초, 동시에 하면 약 0.6초)"
+    # 차례로 한 시간(0.3초 × 확인 수)의 80%보다 짧음 — 동시에 하면 약 0.6초. 고정 한계(1.2초)는 바쁜 시험 기계에서 넘었음
+    sequential = 0.3 * len(calls)
+    assert elapsed < 0.8 * sequential, f"{elapsed:.2f}초 (차례로 하면 {sequential:.1f}초, 동시에 하면 약 0.6초)"
 
 
 def test_find_config_dirs_uses_daemon_threads():
