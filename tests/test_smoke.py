@@ -1,11 +1,52 @@
 import json
 import os
+import signal
 import subprocess
 import sys
 
 import pytest
 
 from tests.conftest import ROOT
+
+SMOKE_TIMEOUT_S = 900
+SIGNAL_NAMES = {s.value: s.name for s in signal.Signals}
+
+
+def run_capturing(cmd, env, timeout):
+    """cmd를 실행 → (종료 코드, stdout, stderr, 시간 초과했는지).
+
+    시간이 지나면 SIGABRT를 보냄: PYTHONFAULTHANDLER=1이면 멈춘 곳(모든 스레드의 파이썬 스택)을 stderr에 남기고 끝남.
+    """
+    proc = subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, encoding="utf-8", errors="replace")
+    try:
+        out, err = proc.communicate(timeout=timeout)
+        return proc.returncode, out, err, False
+    except subprocess.TimeoutExpired:
+        proc.send_signal(signal.SIGABRT)
+        try:
+            out, err = proc.communicate(timeout=60)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            out, err = proc.communicate()
+        return proc.returncode, out, err, True
+
+
+def tail(text, count):
+    lines = text.replace("\r", "\n").splitlines()  # 내려받기 진행 표시(\r)도 줄로
+    return "\n".join(lines[-count:])
+
+
+def describe_run(returncode, out, err, timed_out, timeout):
+    """실패 메시지: 종료 코드(음수면 신호 이름)와 출력 끝부분. faulthandler가 남긴 스택이 있으면 그 앞부터 끝까지."""
+    how = f"종료 코드 {returncode}"
+    if returncode < 0:
+        how += f" (신호 {SIGNAL_NAMES.get(-returncode, '알 수 없는 신호')})"
+    if timed_out:
+        how = f"{timeout}초 안에 끝나지 않아 SIGABRT로 멈춤 — {how}"
+    fatal = err.rfind("Fatal Python error")
+    err_tail = tail(err[:fatal], 15) + "\n" + err[fatal:] if fatal >= 0 else tail(err, 60)
+    return f"{how}\n----- stdout 끝 -----\n{tail(out, 40)}\n----- stderr 끝 -----\n{err_tail}"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows는 CI가 빌드된 exe로 실행 (ci/run_smoke_test.ps1)")
@@ -14,12 +55,35 @@ def test_smoke_from_source(tmp_path):
     workdir = tmp_path / "work"
     subprocess.run([sys.executable, os.path.join(ROOT, "ci", "make_test_data.py"),
                     "--share-root", str(share), "--mac-root", str(share), "--workdir", str(workdir)], check=True)
-    env = dict(os.environ, YESONCHECK_CONFIG_DIR=str(share / ".yesoncheck"), QT_QPA_PLATFORM="offscreen")
-    result = subprocess.run([sys.executable, "-m", "yesoncheck.app", "--smoke-test", str(workdir)],
-                            cwd=ROOT, env=env, timeout=900)
-    report = json.loads((workdir / "smoke_result.json").read_text(encoding="utf-8"))
+    # PYTHONFAULTHANDLER: 앱이 네이티브 코드에서 죽으면(SIGSEGV 등) 그때의 파이썬 스택을 stderr에 남김
+    env = dict(os.environ, YESONCHECK_CONFIG_DIR=str(share / ".yesoncheck"), QT_QPA_PLATFORM="offscreen",
+               PYTHONFAULTHANDLER="1")
+    returncode, out, err, timed_out = run_capturing(
+        [sys.executable, "-m", "yesoncheck.app", "--smoke-test", str(workdir)], env, SMOKE_TIMEOUT_S)
+    sys.stdout.write(out)  # 예전처럼 실패하면 pytest가 앱 출력 전체를 보여 줌
+    sys.stderr.write(err)
+    result_path = workdir / "smoke_result.json"
+    assert not timed_out and result_path.exists(), (
+        "앱이 smoke_result.json을 남기지 않고 끝남 — " + describe_run(returncode, out, err, timed_out, SMOKE_TIMEOUT_S))
+    report = json.loads(result_path.read_text(encoding="utf-8"))
     failed = [c for c in report["checks"] if not c["ok"]]
-    assert result.returncode == 0 and not failed and not report["dialogs"], json.dumps(report, ensure_ascii=False, indent=2)
+    assert returncode == 0 and not failed and not report["dialogs"], (
+        f"종료 코드 {returncode}\n" + json.dumps(report, ensure_ascii=False, indent=2))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX 신호 (Windows에는 SIGABRT를 보낼 수 없음) — 소스 실행 시험도 Mac만")
+@pytest.mark.parametrize("code, timeout, expected", [
+    ("import faulthandler; faulthandler._sigsegv()", 60, ["종료 코드 -11 (신호 SIGSEGV)", "Fatal Python error: Segmentation fault"]),
+    ("import time; print('멈춤 흉내', flush=True); time.sleep(60)", 2,
+     ["2초 안에 끝나지 않아 SIGABRT로 멈춤 — 종료 코드 -6 (신호 SIGABRT)", "Fatal Python error: Aborted", "멈춤 흉내"]),
+])
+def test_failed_run_shows_signal_and_python_stack(code, timeout, expected):
+    """소스 실행 시험이 결과 없이 끝나면 실패 메시지에 종료 코드·신호와 faulthandler의 파이썬 스택이 보임 (CI 진단용)."""
+    env = dict(os.environ, PYTHONFAULTHANDLER="1")
+    returncode, out, err, timed_out = run_capturing([sys.executable, "-c", code], env, timeout)
+    message = describe_run(returncode, out, err, timed_out, timeout)
+    assert all(text in message for text in expected), message
+    assert 'File "<string>", line 1' in message, message
 
 
 def test_manifest_long_path_aware_needs_true():

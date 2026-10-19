@@ -357,6 +357,12 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+      - name: 충돌 보고서 (실패했을 때 — 죽은 스레드의 네이티브 스택)
+        # 파이썬 스택(PYTHONFAULTHANDLER)으로는 paddle·TensorFlow 안의 어느 함수에서 죽었는지 모름 → macOS가 남긴 .ips에서 출력.
+        # 빌드 환경이 없을 때도 돌도록 러너의 python3로 (표준 라이브러리만 씀)
+        if: failure()
+        run: python3 ci/print_crash_reports.py
+
       - name: 디스크 여유 (끝)
         if: always()
         run: df -h /
