@@ -131,3 +131,69 @@ def _fresh_shortcut_cache():
     if hasattr(path_map_setup, "clear_shortcut_cache"):
         path_map_setup.clear_shortcut_cache()
     yield
+
+
+import http.server
+import threading
+
+
+class _TestHTTPServer:
+    """GitHub 대신 127.0.0.1 임의 포트에서 응답을 흉내 내는 시험용 HTTP 서버 (http_server 픽스처)."""
+
+    def __init__(self):
+        self._routes = {}  # 경로 → (status, body)
+        handler = self._make_handler()
+        self._httpd = http.server.HTTPServer(("127.0.0.1", 0), handler)
+        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        self._thread.start()
+
+    @property
+    def url(self):
+        """서버의 바탕 주소 (끝에 "/" 없음)."""
+        host, port = self._httpd.server_address[:2]
+        return f"http://{host}:{port}"
+
+    def serve(self, path, body, status=200):
+        """path로 들어오는 요청에 status·body(bytes)로 응답하게 등록."""
+        self._routes[path] = (status, body)
+
+    def serve_file(self, path, file_path):
+        """file_path의 내용을 path 요청에 그대로 응답하게 등록. file_path를 그대로 돌려준다."""
+        with open(file_path, "rb") as fh:
+            data = fh.read()
+        self.serve(path, data)
+        return file_path
+
+    def shutdown(self):
+        self._httpd.shutdown()
+        self._httpd.server_close()
+        self._thread.join()
+
+    def _make_handler(self):
+        routes = self._routes
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802 (BaseHTTPRequestHandler가 정한 이름)
+                entry = routes.get(self.path)
+                if entry is None:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                status, body = entry
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format, *args):  # noqa: A002 (부모 시그니처)
+                pass  # 시험 중 요청마다 stderr에 찍지 않음
+
+        return Handler
+
+
+@pytest.fixture
+def http_server():
+    """등록 안 된 경로는 404. 등록은 .serve(path, body, status=200)·.serve_file(path, file_path). 시험이 끝나면 멈춤."""
+    server = _TestHTTPServer()
+    yield server
+    server.shutdown()
