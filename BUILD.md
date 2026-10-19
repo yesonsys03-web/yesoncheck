@@ -49,15 +49,17 @@ Intel 앱도 Apple Silicon에서 Rosetta로 실행되지만, macOS 26.4부터 �
 
 같은 순서입니다 (`./fetch_ffmpeg.sh` → `./setup_build_env.sh` → `./build_app.sh`). 스크립트가 venv Python의 아키텍처를 보고
 `requirements-build-arm64.lock`을 고릅니다: paddle 3.0.0, TensorFlow 2.15.1(`macosx_12_0_arm64` 휠, 최소 macOS 12.0),
-tensorflow-io-gcs-filesystem 0.34.0(앱에는 넣지 않음).
+tensorflow-io-gcs-filesystem 0.34.0(앱에는 넣지 않음). Rosetta 터미널에서 만든 x86_64 Python이 아닌지 확인하세요
+(`~/coding/p310_tf/bin/python -c 'import platform; print(platform.machine())'` → `arm64`).
+TensorFlow를 넣은 Apple Silicon 빌드는 GitHub Actions의 `mac (AppleSilicon)` job(5절)이 만들고, 두 검사
+(`check_min_macos.py`·`check_frozen_imports.py`)와 2절의 실행 시험(`애니매틱2 (TransNetV2)`가 `[0, 30, 60]`)까지 통과합니다.
+Apple Silicon Mac에서 직접 빌드해도 같은 결과(두 검사 `통과`, 실행 시험 `"ok": true`)가 나와야 합니다.
+
 - paddle 3.0.0 본체(최소 macOS 11.4)는 BLAS를 시스템 Accelerate로 씁니다. 휠에 함께 든 LAPACK 보조 라이브러리
   (libblas·liblapack — macOS 14.0 이상 + 휠을 만든 Mac의 Homebrew를 가리킴, 그 Fortran 런타임 libgfortran·libgcc_s·libquadmath)는
-  spec이 앱에서 뺍니다 (본체가 링크하지 않고 LAPACK 연산 때만 불러옴 — OCR은 쓰지 않음).
+  spec이 앱에 넣지 않습니다 (본체가 링크하지 않고 LAPACK 연산 때만 불러옴 — OCR은 쓰지 않음).
 - paddle 2.6.2는 쓰지 않습니다: 안에 정적으로 든 OpenBLAS(0.3.18 이전)의 `sgemm_itcopy`가 macOS가 예약한 x18 레지스터를
-  반복 횟수로 써서, Apple Silicon에서는 OCR 추론 중에 프로세스가 죽습니다 (GitHub Actions 실행 시험에서 첫 OCR에서 끝남). Rosetta 터미널에서 만든 x86_64 Python이 아닌지 확인하세요
-(`~/coding/p310_tf/bin/python -c 'import platform; print(platform.machine())'` → `arm64`).
-TensorFlow를 넣은 Apple Silicon 빌드는 아직 실제로 만들어 보지 않았습니다 — 첫 빌드에서 두 검사가 `통과`인지,
-아래 2절의 실행 시험에서 `애니매틱2 (TransNetV2)`가 `[0, 30, 60]`을 찾는지 꼭 확인하세요.
+  반복 횟수로 써서, Apple Silicon에서는 OCR 추론 중에 프로세스가 죽습니다 (GitHub Actions 실행 시험에서 첫 OCR에서 끝남).
 
 ## 2. 빌드
 

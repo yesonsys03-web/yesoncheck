@@ -16,9 +16,10 @@ def run_capturing(cmd, env, timeout):
     """cmd를 실행 → (종료 코드, stdout, stderr, 시간 초과했는지).
 
     시간이 지나면 SIGABRT를 보냄: PYTHONFAULTHANDLER=1이면 멈춘 곳(모든 스레드의 파이썬 스택)을 stderr에 남기고 끝남.
+    새 세션(프로세스 그룹)으로 실행: 그래도 안 끝나거나 앱이 띄운 ffmpeg 등이 같은 파이프를 쥐고 있으면 그룹 전체를 끝냄.
     """
     proc = subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, encoding="utf-8", errors="replace")
+                            text=True, encoding="utf-8", errors="replace", start_new_session=True)
     try:
         out, err = proc.communicate(timeout=timeout)
         return proc.returncode, out, err, False
@@ -27,8 +28,8 @@ def run_capturing(cmd, env, timeout):
         try:
             out, err = proc.communicate(timeout=60)
         except subprocess.TimeoutExpired:
-            proc.kill()
-            out, err = proc.communicate()
+            os.killpg(proc.pid, signal.SIGKILL)
+            out, err = proc.communicate(timeout=60)
         return proc.returncode, out, err, True
 
 
@@ -74,8 +75,9 @@ def test_smoke_from_source(tmp_path):
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX 신호 (Windows에는 SIGABRT를 보낼 수 없음) — 소스 실행 시험도 Mac만")
 @pytest.mark.parametrize("code, timeout, expected", [
     ("import faulthandler; faulthandler._sigsegv()", 60, ["종료 코드 -11 (신호 SIGSEGV)", "Fatal Python error: Segmentation fault"]),
-    ("import time; print('멈춤 흉내', flush=True); time.sleep(60)", 2,
-     ["2초 안에 끝나지 않아 SIGABRT로 멈춤 — 종료 코드 -6 (신호 SIGABRT)", "Fatal Python error: Aborted", "멈춤 흉내"]),
+    # 10초: 막 켠 CI 러너에서도 파이썬이 시작해 '멈춤 흉내'를 찍은 뒤에 SIGABRT가 가도록
+    ("import time; print('멈춤 흉내', flush=True); time.sleep(120)", 10,
+     ["10초 안에 끝나지 않아 SIGABRT로 멈춤 — 종료 코드 -6 (신호 SIGABRT)", "Fatal Python error: Aborted", "멈춤 흉내"]),
 ])
 def test_failed_run_shows_signal_and_python_stack(code, timeout, expected):
     """소스 실행 시험이 결과 없이 끝나면 실패 메시지에 종료 코드·신호와 faulthandler의 파이썬 스택이 보임 (CI 진단용)."""

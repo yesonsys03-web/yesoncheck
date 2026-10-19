@@ -60,6 +60,12 @@ jobs:
           }
           $version = (Get-Content build\build_info.json -Raw -Encoding utf8 | ConvertFrom-Json).version
           if (-not $version) { throw "build\build_info.json에 version이 없습니다" }
+          # 커밋 안 된 변경이 있으면 버전 끝에 .dirty가 붙고 file_tag가 커밋 7자리가 됨 → vX.Y.Z 태그 빌드도 이름이
+          # 조용히 커밋으로 바뀌므로 멈춤 (CI는 저장소 파일을 바꾸지 않음 — 무엇이 바뀌었는지 보여 줌)
+          if ($version.EndsWith(".dirty")) {
+            git status --porcelain | Write-Host
+            throw "커밋 안 된 변경이 있는 채로 빌드 정보를 만들었습니다: $version"
+          }
           "INSTALLER_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "INSTALLER_FILE_TAG=$fileTag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "빌드 버전: $version (파일 이름 꼬리 $fileTag)"
@@ -302,6 +308,11 @@ jobs:
           BUILD_VERSION="$("$VENV/bin/python" -c 'import json; print(json.load(open("build/build_info.json", encoding="utf-8"))["version"])')"
           # 파일 이름 꼬리는 write_build_info.py의 file_tag와 같은 규칙 (배포판이면 X.Y.Z, 아니면 커밋 7자리)
           FILE_TAG="$("$VENV/bin/python" -c 'import json, sys; sys.path.insert(0, "tools"); from write_build_info import file_tag; info = json.load(open("build/build_info.json", encoding="utf-8")); print(file_tag(info["version"], info["commit"]))')"
+          # 커밋 안 된 변경이 있는 채로 만든 빌드(.dirty)는 file_tag가 커밋 7자리가 됨 → vX.Y.Z 태그 빌드도 이름이 조용히
+          # 커밋으로 바뀌므로 멈춤 (앞 단계의 '작업 폴더가 깨끗한지' 확인 뒤에 바뀐 것 — 무엇인지 보여 줌)
+          case "$BUILD_VERSION" in
+            *.dirty) echo "커밋 안 된 변경이 있는 채로 빌드됐습니다: $BUILD_VERSION"; git status --porcelain; exit 1 ;;
+          esac
           TAG_RE='^([0-9]+\.[0-9]+\.[0-9]+|[0-9a-f]{7})$'
           if ! [[ "$FILE_TAG" =~ $TAG_RE ]]; then
             echo "파일 이름 꼬리가 X.Y.Z나 커밋 7자리가 아닙니다: $FILE_TAG"
