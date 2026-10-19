@@ -116,7 +116,9 @@ git 저장소가 아닌 폴더(직접 복사한 폴더)에서는 버전을 정�
   실행 시 `Fatal Python error ... No module named 'encodings'`로 멈춥니다. `.dmg`는 파일 하나라 안전합니다.
 - 받은 Mac에서 `.dmg`를 열고 앱을 `Applications` 폴더로 끌어다 놓으면 설치됩니다.
 - 배포할 때 같은 이름의 `.commit.txt`도 함께 보관하세요 (어느 커밋으로 만든 앱인지 확인용, `tree: clean`이어야 함).
-- 메신저·브라우저로 받은 앱은 격리 속성 때문에 처음 열 때 차단될 수 있습니다. Finder에서 우클릭 → **열기**로 한 번 열거나 `xattr -dr com.apple.quarantine YesonCheck_Autocut_*.app`을 실행하세요.
+- 메신저·브라우저로 받은 앱은 격리 속성 때문에 처음 열 때 차단될 수 있습니다(서명·공증 없음). 한 번 열어 막힌 뒤
+  **시스템 설정 → 개인정보 보호 및 보안** 아래쪽의 **그래도 열기**를 누르거나, `xattr -dr com.apple.quarantine
+  /Applications/YesonCheck_Autocut_*.app`을 실행한 뒤 여세요. (macOS 15부터는 Finder의 우클릭 → 열기로는 넘어가지 않습니다.)
 - 작품 경로 설정(`/USA_DB/test_jn/.yesoncheck/work_paths.json`)은 모든 Mac이 같이 씁니다.
 
 ## 4. Windows 빌드 (GitHub Actions)
@@ -225,8 +227,10 @@ git 저장소가 아닌 폴더(직접 복사한 폴더)에서는 버전을 정�
 
 - **Windows**: `YesonCheck_Setup_1.1.0.exe`를 실행 — 지금 설치된 자리에 그대로 덮어 설치됩니다.
 - **Mac**: `YesonCheck_Autocut_<Intel|AppleSilicon>_1.1.0.dmg`를 열고 앱을 **Applications** 폴더로 끌어다
-  놓습니다(3절과 같음). 브라우저로 받은 dmg는 처음 열 때 Gatekeeper가 막을 수 있습니다 — Finder에서 앱을
-  우클릭 → **열기**로 한 번 열어 주세요.
+  놓습니다(3절과 같음). 브라우저로 받은 dmg의 앱은 처음 열 때 Gatekeeper가 막을 수 있습니다 — 한 번 열어 막힌 뒤
+  **시스템 설정 → 개인정보 보호 및 보안** 아래쪽의 **그래도 열기**를 누르거나, 터미널에서
+  `xattr -dr com.apple.quarantine /Applications/YesonCheck_Autocut_<Intel|AppleSilicon>.app`을 실행한 뒤 여세요
+  (macOS 15부터는 Finder의 우클릭 → 열기로는 넘어가지 않습니다).
 
 ### 7-5. Apple Silicon·Intel 러너가 없어지면
 

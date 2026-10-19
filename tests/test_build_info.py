@@ -229,3 +229,17 @@ def test_about_and_help_dates_do_not_depend_on_windows_locale(monkeypatch, qapp,
     monkeypatch.setattr(QMessageBox, "exec_", lambda box: 0)
     getattr(player_base.VideoPlayerBase, show)(None)
     assert len(shown) == 1 and "2026년 10월 20일까지 기록" in shown[0]
+
+
+def test_ci_tag_build_must_have_the_tag_version():
+    """태그(vX.Y.Z)로 돈 빌드는 앱에 넣은 build_info의 버전이 X.Y.Z여야 함 — Windows·Mac job 둘 다 확인하고 다르면 실패
+    (태그가 가리키는 커밋과 빌드한 것이 다르면 배포판 이름·버전이 조용히 틀어짐)."""
+    import re
+
+    with open(os.path.join(ROOT, ".github", "workflows", "windows-build.yml"), encoding="utf-8") as fh:
+        text = fh.read()
+    windows, mac = text.split("\n  mac:\n", 1)
+    assert re.search(r"\$env:GITHUB_REF -match '\^refs/tags/v\(\\d\+\\\.\\d\+\\\.\\d\+\)\$'", windows), windows
+    assert "if ($version -ne $tagVersion) { throw" in windows
+    assert "REF_RE='^refs/tags/v([0-9]+\\.[0-9]+\\.[0-9]+)$'" in mac
+    assert 'if [ "$BUILD_VERSION" != "$TAG_VERSION" ]; then' in mac
