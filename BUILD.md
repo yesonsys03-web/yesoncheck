@@ -130,10 +130,10 @@ git 저장소가 아닌 폴더(직접 복사한 폴더)에서는 버전을 정�
 - TensorFlow는 import할 때 msvcp140.dll·msvcp140_1.dll을 찾습니다. spec이 두 DLL을 `_internal` 맨 위에 넣고(의존성 분석에 없으면 빌드 PC의 System32에서), 워크플로가 있는지 확인합니다.
 - 버전: Mac과 같이 `tools/write_build_info.py`가 git 태그로 정합니다 (체크아웃은 `fetch-depth: 0` — 태그까지 받음). 설치 파일 이름 꼬리
   `<file_tag>`는 배포판(`vX.Y.Z` 태그)이면 `X.Y.Z`, 아니면 커밋 7자리. 두 실행 시험(빌드된 exe·설치된 exe)이 `--expect-version`으로 앱의 버전도 확인합니다.
-- 결과: 실행 기록 페이지 아래 **Artifacts**의 `YesonCheck_Setup_Windows_<file_tag>` 하나 (설치 파일 `YesonCheck_Setup_<file_tag>.exe`를 담은 zip). 14일 보관. **GitHub Release에는 올리지 않습니다.**
+- 결과: 실행 기록 페이지 아래 **Artifacts**의 `YesonCheck_Setup_Windows_<file_tag>` 하나 (설치 파일 `YesonCheck_Setup_<file_tag>.exe`를 담은 zip). 14일 보관. **이 워크플로는 수동 실행이든 `v*` 태그 푸시든 빌드·시험만 합니다 — GitHub Release를 스스로 만들지 않습니다.** Release를 만들고 NAS에 올리는 일은 6·7절을 보세요.
   폴더째 받은 앱(`YesonCheck_Autocut_Windows_<커밋>`)은 2026-10-15부터 올리지 않습니다(사용자 요청 — 설치 파일만 씀).
 - Windows PC에서 직접 빌드하려면: Python 3.10 + uv 설치 → `uv venv .venv --python 3.10 --managed-python` → `uv pip install --python .venv\Scripts\python.exe -r requirements-build-windows.lock --override requirements-build-windows.overrides.txt` → opencv contrib 재설치(워크플로 참고) → `./fetch_ffmpeg_windows.ps1` → `.venv\Scripts\python.exe tools\write_build_info.py --out build\build_info.json` → `.venv\Scripts\python.exe -m PyInstaller --clean -y YesonCheck_Autocut.spec`.
-- 배포·첫 설정은 내부 문서 저장소(yesoncheck-internal)의 `docs/windows-deploy.md`.
+- 배포·첫 설정의 더 자세한 내용은 내부 문서를 참고하세요.
 
 ## 5. Mac 빌드 (GitHub Actions — Apple Silicon·Intel)
 
@@ -152,3 +152,83 @@ git 저장소가 아닌 폴더(직접 복사한 폴더)에서는 버전을 정�
   (배포판 `vX.Y.Z` 태그면 `X.Y.Z`, 아니면 커밋 7자리). 받은 dmg는 3절처럼 씁니다.
 - 로컬 `./build_app.sh`(1·2절)는 바뀌지 않았습니다. GitHub의 Intel Mac 러너는 언젠가 없어질 수 있습니다 —
   그때 Intel 앱은 다시 Intel Mac에서 `./build_app.sh`로 만듭니다.
+
+## 6. 버전
+
+- 보이는 곳: 창 제목(`Yeson Checker 1.1.0`), Help → 정보(버전·커밋·빌드 날짜), 업데이트 알림 띠.
+- 기준은 git 태그 `vX.Y.Z`(배포한 커밋에 붙임). 빌드가 버전을 앱 안에 넣습니다(2절의 `build/build_info.json` →
+  Mac 번들 `Info.plist`의 `CFBundleShortVersionString`/Windows 파일 버전 정보/Inno Setup `AppVersion`에도 같은 값).
+  - **배포판**: 태그가 붙은 커밋을 깨끗한 작업 폴더에서 빌드 — `X.Y.Z`.
+  - **배포가 아닌 빌드**(수동으로 돌린 CI, 이 Mac의 `./build_app.sh`): `<마지막 배포 버전>+<커밋 7자리>`
+    (태그가 없으면 `0.0.0+…`, 커밋 안 된 변경이 있으면 끝에 `.dirty`) — Help → 정보에 "(시험 빌드)"로 표시.
+    버전을 비교할 때 `+` 뒤는 무시합니다(같은 번호의 배포판과 같은 것으로 보아 알리지 않고, 다음 배포가 나오면 알립니다).
+  - **소스에서 실행**(`python -m yesoncheck.app`, `run_app.sh`): "개발(소스)" — 업데이트를 확인하지 않습니다
+    (바꿀 앱이 없음).
+- 배포 번호는 늘 커지기만 합니다: 자동 업데이트가 들어간 첫 배포가 `1.1.0`, 그 뒤로는 배포마다 끝자리 +1
+  (`1.1.1`, `1.1.2` …), 큰 변경이면 가운데 +1·끝 0(`1.2.0`). 배포 절차는 7절.
+
+## 7. 배포 (자동 업데이트)
+
+1.1.0부터 앱이 스스로 새 버전을 알리고 설치합니다: 창 위 알림 띠로 "새 버전이 나왔습니다"를 보이고,
+[업데이트]를 누르면 받아서 앱이 닫히고 설치된 뒤 다시 켜집니다. 빌드는 지금처럼 자주 돌지만(결과는 artifact만),
+사용자가 Claude에게 **"배포해줘"**라고 할 때만 새 버전이 되어 알립니다.
+
+### 7-1. "배포해줘" (유지보수자가 이 Mac에서)
+
+배포 도구 `tools/release.py`가 합니다(`~/coding/p310_tf/bin/python tools/release.py <명령>`):
+
+1. **`prepare`**: `main`에 있는 커밋인지·작업 폴더가 깨끗한지·NAS에 쓸 수 있는지·`gh` 로그인을 확인 → 다음 배포
+   번호를 정함(가장 큰 `v*` 태그의 끝자리 +1, 큰 변경이면 `--minor`로 가운데 +1·끝 0) → 바뀐 점을 메시지로 담은
+   주석 태그 `vX.Y.Z`를 푸시 → 이 태그로 CI(4·5절의 세 빌드: Windows, Mac Intel, Mac Apple Silicon)가 시작됩니다.
+2. CI가 끝나기를 기다립니다 — 세 빌드 모두 성공해야 합니다(Windows 빌드가 가장 오래 걸려 약 1시간 안팎).
+   Actions 화면에서 진행을 볼 수 있습니다.
+3. **`publish`**: 세 job이 모두 성공했는지 확인 → 빌드 결과(artifact)를 받아 `latest.json`을 만듦 → GitHub
+   Release를 초안으로 올리고 올라간 파일이 맞는지 확인한 뒤 공개(최신판으로 표시) → NAS `updates/` 폴더에 복사
+   (설치 파일을 먼저, `latest.json`은 맨 마지막) → 오래된 설치 파일 정리(지금 버전과 바로 전 버전만 남김).
+4. 버전·Release 주소·NAS 위치·걸린 시간을 보고합니다.
+
+**중요**: GitHub Release는 이 CI 워크플로가 스스로 만들지 않습니다(4절). Actions 화면에서 태그를 눌러 직접
+실행해도 빌드만 됩니다 — Release를 만들고 NAS에 복사하는 일은 반드시 이 Mac에서 `tools/release.py publish`를
+실행해야 일어납니다.
+
+그 밖의 명령:
+- **`nas-sync`**: GitHub에는 이미 공개됐는데 NAS 복사만 실패했을 때, Release 파일을 받아 NAS에 다시 복사합니다.
+- **`abort`**: CI가 실패했을 때 태그와 초안 Release를 지웁니다(공개된 Release는 거부 — 번호는 다음 배포가
+  다시 씁니다).
+- **되돌리기**: "1.1.1로 되돌려줘"처럼 말하면, 그때의 커밋을 `--commit`으로 가리켜 새 번호(예: `1.1.3`)로 다시
+  배포합니다. 버전 번호는 늘 커지기만 하므로 앱은 "지금보다 큰 번호가 있으면 알림" 한 가지 규칙만 씁니다.
+
+### 7-2. 어디에 올라가나
+
+- **GitHub Releases**(이 저장소의 Releases 탭): 설치 파일 3개(Windows·Mac Intel·Mac Apple Silicon)와
+  `latest.json`.
+- **NAS**: 공유 설정 폴더(작품 경로 설정 `work_paths.json`이 있는 그 공유 설정 폴더) 아래 `updates/` 폴더에
+  같은 파일들. 인터넷이 안 되는 컴퓨터는 여기서 받습니다. 지금 버전과 바로 전 버전만 남습니다(그보다 오래된
+  설치 파일은 지워지고, GitHub Release는 지우지 않습니다).
+
+### 7-3. 사용자 컴퓨터에서
+
+- 앱을 켤 때, 그리고 켜 둔 동안 3시간마다, Help → **업데이트 확인…**을 눌렀을 때 NAS와 GitHub를 확인합니다.
+- 새 버전이 있으면 창 위 알림 띠: "⬆ 새 버전 1.1.1이 나왔습니다 · 지금 1.1.0" + [바뀐 점] [업데이트] [나중에].
+  누르기 전에는 아무것도 바뀌지 않습니다.
+- [업데이트]를 누르면: 받기(진행 표시, 취소 가능) → 앱이 닫힘 → 설치 → 다시 켜짐 → 띠에
+  "1.1.1로 업데이트했습니다"가 잠깐 보입니다.
+- 실패하면 지금 버전이 그대로 켜지고 "업데이트 실패" 창에 이유가 보입니다 — 다른 곳으로 저절로 바꿔 받지
+  않습니다. 다시 [업데이트]를 누르면 처음부터 받습니다.
+- 업데이트 기록(로그): Windows `%LOCALAPPDATA%\YesonCheck\logs\update.log`,
+  Mac `~/Library/Logs/YesonCheck/update.log`.
+
+### 7-4. 처음 한 번 (1.1.0 설치)
+
+자동 업데이트가 들어간 1.1.0은 각 컴퓨터에 마지막으로 손으로 설치합니다. GitHub Release 페이지 또는 NAS
+`updates/` 폴더에서 받으세요.
+
+- **Windows**: `YesonCheck_Setup_1.1.0.exe`를 실행 — 지금 설치된 자리에 그대로 덮어 설치됩니다.
+- **Mac**: `YesonCheck_Autocut_<Intel|AppleSilicon>_1.1.0.dmg`를 열고 앱을 **Applications** 폴더로 끌어다
+  놓습니다(3절과 같음). 브라우저로 받은 dmg는 처음 열 때 Gatekeeper가 막을 수 있습니다 — Finder에서 앱을
+  우클릭 → **열기**로 한 번 열어 주세요.
+
+### 7-5. Apple Silicon·Intel 러너가 없어지면
+
+GitHub의 Intel Mac 러너(`macos-15-intel`)는 언젠가 없어질 수 있습니다(5절) — 그때는 Intel 빌드를 이 Mac에서
+`./build_app.sh`로 만든 뒤 배포 도구에 넘기는 방식으로 돌아갑니다.

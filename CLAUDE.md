@@ -83,10 +83,10 @@ which ffmpeg ffprobe
 
 ### 모듈형 믹스인 디자인
 
-애플리케이션은 `VideoPlayer`가 세 가지 전문화된 믹스인으로 구성되는 믹스인 기반 아키텍처를 사용합니다:
+애플리케이션은 `VideoPlayer`가 여러 전문화된 믹스인으로 구성되는 믹스인 기반 아키텍처를 사용합니다:
 
 ```python
-class VideoPlayer(PlayerSidebarMixin, PlayerPlaybackMixin, VideoPlayerBase):
+class VideoPlayer(PlayerUpdateMixin, PlayerAnnotationsMixin, PlayerSidebarMixin, PlayerPlaybackMixin, VideoPlayerBase):
     pass
 ```
 
@@ -98,6 +98,8 @@ class VideoPlayer(PlayerSidebarMixin, PlayerPlaybackMixin, VideoPlayerBase):
 - `yesoncheck/player_sidebar.py` (1,831줄): 사이드바 UI, 썸네일 및 북마크
 - `yesoncheck/player_review.py` (7,106줄): 3패널 레이아웃 및 세그먼트 편집 기능이 있는 OCR 리뷰 대화상자
 - `yesoncheck/player_timeline.py` (840줄): 접을 수 있는 컨트롤이 있는 OCR 타임라인 위젯
+- `yesoncheck/player_update.py` (711줄): 자동 업데이트 믹스인(`PlayerUpdateMixin`) — 확인 일정(켤 때 + 3시간마다
+  + Help → 업데이트 확인…), 알림 띠 처리, '업데이트'를 누른 뒤 받기·도우미에 넘기기, 다시 켜진 앱의 성공/실패 판정
 - `yesoncheck/video_widget.py` (~584줄): 줌, 팬, ROI 선택 기능이 있는 커스텀 비디오 뷰포트
 - `yesoncheck/video_list.py` (~420줄): 사이드바 영상 목록 규칙 (job·폴더 읽기, 정렬, 다시 읽기 계획, 없어진 영상 판정 `check_gone`) — Qt 없음
 - `yesoncheck/mac_mounts.py`: (Mac) 이 Mac에서 공유가 붙은 곳 — 자동 연결(autofs) 설정(`/etc/auto_master`와 간접 맵)과
@@ -111,6 +113,16 @@ class VideoPlayer(PlayerSidebarMixin, PlayerPlaybackMixin, VideoPlayerBase):
 - `yesoncheck/web_info.py` (~330줄): OCR 분석 결과를 웹 페이지로 내보내기
 - `yesoncheck/frame_utils.py` (~21줄): 영화 산업 표준 프레임 계산 (feet.frames 형식)
 - `yesoncheck/styles.py` (~22줄): 커스텀 UI 스타일
+- `yesoncheck/build_info.py` (89줄): 빌드가 앱에 넣은 `build_info.json`(버전·커밋·빌드 시각·플랫폼)을 읽어 창
+  제목·Help → 정보에 보임 — 소스 실행이면 버전 "개발(소스)" — Qt 없음
+- `yesoncheck/updates.py` (305줄): 업데이트 확인 핵심 — NAS·GitHub의 `latest.json`을 읽고 더 새 버전을 고름
+  (예상된 실패와 오류를 구분, REST API는 쓰지 않음) — Qt 없음
+- `yesoncheck/update_banner.py` (127줄): 창 맨 위 전체 너비 알림 띠(`UpdateBanner`) — 새 버전 알림·받는 중
+  진행 막대·잠깐 메시지 세 가지 모양
+- `yesoncheck/update_install.py` (647줄): 업데이트 설치 준비 — 받기(다운로드 + sha256 검사)·Mac dmg 준비
+  (`hdiutil`+`ditto`)·업데이트 기록(`pending_update.json`)·도우미(아래) 띄우기 — Qt 없음
+- `yesoncheck/update_helper_mac.sh` (463줄) / `yesoncheck/update_helper_windows.ps1` (681줄): 앱이 끝난 뒤
+  별도 프로세스로 떠서 새 버전으로 바꾸고 다시 켜며, 잘 켜지지 않으면 옛 버전으로 되돌리는 도우미 스크립트
 
 **외부 의존성**:
 - `apted/`: OCR 텍스트 비교를 위한 트리 편집 거리 라이브러리
@@ -392,6 +404,10 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 - `Info.plist`: macOS 앱 번들 메타데이터
 - `icon.icns`: 애플리케이션 아이콘
 - `pyi_rth_paddle_fixed.py`, `pyi_rth_paddleocr_fixed.py`: PaddleOCR 런타임 훅
+- `tools/write_build_info.py` (96줄): PyInstaller 앞에서 `build/build_info.json`(버전·커밋·빌드 시각·플랫폼)을
+  만듦 — 버전은 git 태그 `vX.Y.Z` 기준 (BUILD.md 6절)
+- `tools/release.py` (604줄): 배포 도구 — `prepare`(번호 정하기 → 주석 태그 푸시) · `publish`(CI 확인 → GitHub
+  Release → NAS 복사) · `nas-sync` · `abort` (BUILD.md 7절)
 
 ### 문서
 - `README.md`: 사용자 가이드 및 설정 지침

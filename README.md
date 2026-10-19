@@ -100,6 +100,11 @@ YesonCheck는 PyQt5 기반의 영상 비교/검토 툴입니다. 이번 리팩�
 - 앱에는 `vendor/ffmpeg/<아키텍처>/`의 정적 ffmpeg·ffprobe가 들어갑니다 (Homebrew ffmpeg는 사용하지 않음).
 - 수동 빌드 시: `source ~/coding/p310_tf/bin/activate` 후 `python -m PyInstaller --clean -y YesonCheck_Autocut.spec`, 이어서 `python check_min_macos.py dist/YesonCheck_Autocut.app $(uname -m)`로 번들을 검사하세요.
 
+## 버전과 자동 업데이트
+창 제목과 Help → 정보에서 지금 버전을 볼 수 있습니다(예: `1.1.0`, 소스에서 바로 실행하면 "개발(소스)").
+1.1.0부터는 새 버전이 나오면 창 위 알림 띠로 알리고 [업데이트]를 누르면 받아서 설치한 뒤 다시 켜집니다 —
+실패하면 지금 버전이 그대로 유지됩니다. 배포 절차와 손으로 설치하는 방법은 [BUILD.md](BUILD.md)를 참고하세요.
+
 ## 주요 기능
 - **OCR 분석**: PaddleOCR을 사용한 텍스트 인식 및 구간 추출
 - **애니매틱 모드**: PySceneDetect를 사용한 자동 씬 컷 감지
