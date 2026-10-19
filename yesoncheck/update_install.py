@@ -357,8 +357,11 @@ def stage_mac(dmg_path: str, app_path: str, target_version: str) -> str:
 
     항상 dmg를 떼어낸다(성공·실패 모두). 떼어내지 못하면 그대로 UpdateError(마운트된 이미지를 남겨 두지
     않음) — 아직 마운트된 상태일 수 있으니 임시 마운트 폴더는 떼어내기가 성공했을 때만 지운다(실패를
-    삼키지 않음 — rmdir 실패도 그대로 올림). 복사한 앱의 build_info.json 버전이 target_version과
-    다르면(또는 실행 파일이 없으면) 준비한 폴더를 지우고 UpdateError.
+    삼키지 않음 — rmdir 실패도 그대로 올림). 복사가 실패한 데다 떼어내기도 실패하면(흔치 않지만) 둘
+    다 사용자에게 보여야 하므로 두 오류 글을 모두 담은 UpdateError 하나로 올린다(복사 오류만 있으면
+    복사 오류, 떼어내기 오류만 있으면 떼어내기 오류 — 하나만 있을 때는 그대로). 복사한 앱의
+    build_info.json 버전이 target_version과 다르면(또는 실행 파일이 없으면) 준비한 폴더를 지우고
+    UpdateError.
     """
     mount_point = tempfile.mkdtemp(prefix="yesoncheck_update_mount_")
     dest_path = _stage_dest_path(app_path, target_version)
@@ -373,7 +376,15 @@ def stage_mac(dmg_path: str, app_path: str, target_version: str) -> str:
         _copy_app_from_mount(mount_point, dest_path)
     except Exception as exc:
         copy_error = exc
-    _hdiutil_detach(mount_point)  # 복사 성공·실패 모두 항상 떼어냄; 실패하면 그대로 올림(마운트 안 지움)
+    try:
+        _hdiutil_detach(mount_point)  # 복사 성공·실패 모두 항상 떼어냄
+    except Exception as detach_exc:
+        if copy_error is not None:
+            # 둘 다 실패 — 어느 쪽도 가리지 않고 둘 다 사용자에게 보임 (마운트는 못 지웠으니 그대로 둠)
+            raise UpdateError(
+                f"{copy_error}\n(게다가 업데이트 디스크 이미지도 떼어내지 못함: {detach_exc})"
+            ) from detach_exc
+        raise  # 떼어내기만 실패 — 그대로 올림(마운트된 채 남기지 않음을 알리는 오류)
     os.rmdir(mount_point)  # 떼어내기가 성공한 뒤에만 — 비어 있어야 하고, 실패해도 그대로 올림(삼키지 않음)
     if copy_error is not None:
         raise copy_error

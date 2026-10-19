@@ -231,6 +231,35 @@ def test_verify_staged_app_appends_cleanup_failure_without_masking_main_error(tm
     assert "지우지 못함" in message and "시험용 지우기 실패" in message  # 덧붙은 정리 실패
 
 
+def test_stage_mac_combines_copy_and_detach_errors(tmp_path, monkeypatch):
+    """복사도 떼어내기도 둘 다 실패하면 — 흔치 않지만 — 어느 쪽도 가려지지 않고 둘 다 사용자에게 보임.
+    hdiutil 없이 _hdiutil_attach·_copy_app_from_mount·_hdiutil_detach를 모두 흉내 내 플랫폼과 상관없이 시험."""
+    def fake_copy(mp, dest_path):
+        raise UpdateError("복사 실패(시험)")
+
+    def fake_detach(mp):
+        raise UpdateError("떼어내기 실패(시험)")
+
+    mount_point = str(tmp_path / "mount")
+    os.makedirs(mount_point)
+    monkeypatch.setattr(update_install.tempfile, "mkdtemp", lambda prefix=None: mount_point)
+    monkeypatch.setattr(update_install, "_hdiutil_attach", lambda dmg_path, mp: None)
+    monkeypatch.setattr(update_install, "_copy_app_from_mount", fake_copy)
+    monkeypatch.setattr(update_install, "_hdiutil_detach", fake_detach)
+
+    install_dir = str(tmp_path / "install_dir")
+    os.makedirs(install_dir)
+    app_path = os.path.join(install_dir, "YesonCheck_Autocut_Intel.app")
+
+    with pytest.raises(UpdateError) as exc_info:
+        stage_mac("fake.dmg", app_path, "1.0.0")
+    message = str(exc_info.value)
+    assert "복사 실패(시험)" in message and "떼어내기 실패(시험)" in message
+
+    assert os.path.isdir(mount_point)  # 떼어내기가 (흉내로) 실패했으니 안 지워짐
+    os.rmdir(mount_point)  # 시험 뒤 정리
+
+
 # ---- 추가 시험: state_dir / log_path ----
 
 
