@@ -574,6 +574,8 @@ def test_launch_helper_mac_copies_script_and_passes_arguments(tmp_state_dir, mon
     copy = os.path.join(update_install.state_dir(), "update_helper_mac.sh")
     console = _RecordingPopen.calls[0][1].pop("stdout")  # 도우미 출력 파일 (아래에서 따로 확인)
     assert console.name == update_install.helper_console_path() and console.closed
+    # _helper_env의 규칙 — Windows(이 시험은 모든 플랫폼에서 돎)에서는 PSModulePath를 뺌
+    expected_env = {k: v for k, v in os.environ.items() if not (sys.platform == "win32" and k.upper() == "PSMODULEPATH")}
     assert _RecordingPopen.calls == [(
         [
             "/bin/bash", copy,
@@ -586,7 +588,7 @@ def test_launch_helper_mac_copies_script_and_passes_arguments(tmp_state_dir, mon
         ],
         {
             "start_new_session": True,
-            "env": {**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"},
+            "env": {**expected_env, "PYINSTALLER_RESET_ENVIRONMENT": "1"},
             "stdin": subprocess.DEVNULL,
             "stderr": subprocess.STDOUT,  # stdout과 같은 파일로
         },
@@ -623,14 +625,20 @@ def test_launch_helper_mac_resets_pyinstaller_environment_for_relaunched_app(tmp
     assert "PYINSTALLER_RESET_ENVIRONMENT" not in os.environ
 
 
-def _wait_for_text(path, text, timeout_s=30):
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        if os.path.exists(path) and text in Path(path).read_text(encoding="utf-8", errors="replace"):
-            return Path(path).read_text(encoding="utf-8", errors="replace")
-        time.sleep(0.1)
-    content = Path(path).read_text(encoding="utf-8", errors="replace") if os.path.exists(path) else "(없음)"
-    raise AssertionError(f"{timeout_s}초 안에 {text!r}이(가) {path}에 없음:\n{content}")
+def _read_or_none(path):
+    return Path(path).read_text(encoding="utf-8", errors="replace") if os.path.exists(path) else "(없음)"
+
+
+def _wait_real_helper(proc, timeout_s=30):
+    """진짜로 띄운 도우미가 끝나기를 기다림 → (종료 코드, 기록, 도우미 출력)."""
+    try:
+        code = proc.wait(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(30)
+        raise AssertionError(f"도우미가 {timeout_s}초 안에 끝나지 않음\n기록:\n{_read_or_none(update_install.log_path())}\n"
+                             f"도우미 출력:\n{_read_or_none(update_install.helper_console_path())}") from None
+    return code, _read_or_none(update_install.log_path()), _read_or_none(update_install.helper_console_path())
 
 
 real_launch = pytest.mark.skipif(sys.platform == "win32", reason="/bin/bash 도우미 (Mac)")
@@ -642,12 +650,12 @@ def test_real_launch_helper_mac_records_console_and_log(tmp_state_dir, tmp_path,
     다시 보이지 않음), 기록도 씀. 일찍 끝나는 길: 이 시험 프로세스(살아 있음)가 끝나기를 0초만 기다림 → 바꾸지 않고 종료 1."""
     monkeypatch.setenv("YC_UPDATE_PID_TIMEOUT_S", "0")
     app = tmp_path / "Applications" / "X.app"
-    update_install.launch_helper_mac(str(tmp_path / "Applications" / ".X.app.update-1.1.1"), str(app), "1.1.1")
-    text = _wait_for_text(update_install.log_path(), "아무것도 바꾸지 않음")
-    assert " 도우미: 시작: 대상 버전 1.1.1" in text, text
-    console = _wait_for_text(update_install.helper_console_path(), "아무것도 바꾸지 않음")
-    assert " 도우미: 시작: 대상 버전 1.1.1" in console, console
-    assert update_install.helper_console_extra() == ""
+    proc = update_install.launch_helper_mac(str(tmp_path / "Applications" / ".X.app.update-1.1.1"), str(app), "1.1.1")
+    code, text, console = _wait_real_helper(proc)
+    details = f"종료 코드 {code}\n기록:\n{text}\n도우미 출력:\n{console}"
+    assert code == 1 and " 도우미: 시작: 대상 버전 1.1.1" in text and "아무것도 바꾸지 않음" in text, details
+    assert " 도우미: 시작: 대상 버전 1.1.1" in console, details  # Mac 도우미는 기록의 줄을 stdout에도 씀
+    assert update_install.helper_console_extra() == "", details
 
 
 @real_launch
@@ -656,8 +664,9 @@ def test_real_launch_helper_mac_records_early_failure(tmp_state_dir, tmp_path, m
     broken = tmp_path / "broken_helper.sh"
     broken.write_text("echo yc-early-failure-marker >&2\nexit 3\n", encoding="utf-8")
     monkeypatch.setattr(update_install, "_bundled_file", lambda name: str(broken))
-    update_install.launch_helper_mac(str(tmp_path / ".X.app.update-1.1.1"), str(tmp_path / "X.app"), "1.1.1")
-    _wait_for_text(update_install.helper_console_path(), "yc-early-failure-marker")
+    proc = update_install.launch_helper_mac(str(tmp_path / ".X.app.update-1.1.1"), str(tmp_path / "X.app"), "1.1.1")
+    code, text, console = _wait_real_helper(proc)
+    assert code == 3 and console == "yc-early-failure-marker\n", (code, text, console)
     assert update_install.helper_console_extra() == "yc-early-failure-marker\n"
     assert not os.path.exists(update_install.log_path())
 

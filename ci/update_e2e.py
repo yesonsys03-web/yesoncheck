@@ -634,21 +634,6 @@ def check_rollback(case, files, log_text):
     return kill(running)
 
 
-def probe_windows_powershell():
-    """(Windows, 진단만 — 실패하지 않음) 이 단계의 환경(pwsh 단계라 PS7의 PSModulePath가 들어 있음)과 PSModulePath를 뺀
-    환경에서 Windows PowerShell 5.1이 New-Object(도우미가 맨 처음 쓰는 cmdlet)를 실행하는지 — 앱은 도우미를 띄울 때
-    PSModulePath를 뺌(update_install._helper_env). 두 결과를 그대로 보임."""
-    script = "$ErrorActionPreference = 'Stop'; $null = New-Object System.Text.UTF8Encoding($false); 'New-Object OK'"
-    module_path = next((v for k, v in os.environ.items() if k.upper() == "PSMODULEPATH"), None)
-    print(f"이 단계의 PSModulePath: {module_path!r}", flush=True)
-    without = {k: v for k, v in os.environ.items() if k.upper() != "PSMODULEPATH"}
-    for label, env in (("이 단계의 환경 그대로", dict(os.environ)), ("PSModulePath를 뺌 (앱이 도우미를 띄우는 환경)", without)):
-        done = subprocess.run([update_install._windows_powershell(), "-NoProfile", "-NonInteractive", "-Command", script],
-                              env=env, capture_output=True, timeout=DEADLINE.left(120))
-        output = (done.stdout + done.stderr).decode("utf-8", errors="replace").strip()
-        print(f"[{label}] 종료 코드 {done.returncode}\n{output}", flush=True)
-
-
 def check_state_free_space(files, platform_key):
     """업데이트 상태 폴더(작업 폴더 아래로 돌린 곳)의 여유 공간이 앱이 확인하는 크기(update_install.NEEDED_BYTES) 이상인지 —
     모자라면 앱이 '여유 공간이 모자랍니다' 창을 띄워 실행 시험이 실패하므로 여기서 먼저 분명하게."""
@@ -791,9 +776,6 @@ def main():
                 step(case, "지난 공유 폴더 지우기", shutil.rmtree, case.share_root)
             os.makedirs(case.share_root)
         step(None, "디스크 여유 (시작)", free_space, work, cases[0].share_root)
-        if WINDOWS:
-            step(None, "환경 확인 (진단만): Windows PowerShell 5.1이 PSModulePath에 따라 New-Object를 실행하는지",
-                 probe_windows_powershell)
         if WINDOWS:
             step(None, f"새 버전 설치 파일 만들기 ({NEW_VERSION}·{BROKEN_WINDOWS_VERSION}, ISCC 둘을 함께)",
                  build_windows_installers, args, cases, work)

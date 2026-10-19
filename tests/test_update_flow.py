@@ -663,6 +663,7 @@ def test_startup_failed_shows_helper_output_missing_from_log(tmp_state_dir, play
     [(kind, title, text)] = dialogs.messages
     assert (kind, title) == ("critical", "업데이트 실패")
     assert error in text and update_install.helper_console_path() in text and text.count(logged) == 1
+    assert error in update_log()  # 출력 파일은 다음 업데이트에서 새로 쓰므로 기록에도 남김
 
 
 def test_startup_corrupt_record_shows_dialog(tmp_state_dir, player_with_build, dialogs):

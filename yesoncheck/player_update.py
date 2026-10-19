@@ -712,7 +712,8 @@ class PlayerUpdateMixin:
                 extra = f"\n도우미 출력 중 기록에 없는 것 ({update_install.helper_console_path()}):\n{extra}"
         except Exception:
             extra = f"\n(도우미 출력을 읽지 못했습니다)\n{traceback.format_exc()}"
-        _log_update(f"켜짐: {pending.target}로 업데이트하지 못해 {pending.previous}이(가) 켜짐 — 실패 창")
+        # 기록에도 — 도우미 출력 파일은 다음 업데이트에서 새로 쓰므로 그 내용이 남는 곳은 기록뿐
+        _log_update(f"켜짐: {pending.target}로 업데이트하지 못해 {pending.previous}이(가) 켜짐 — 실패 창{extra}")
         QMessageBox.critical(
             self, UPDATE_FAILED_TITLE,
             f"{pending.target}로 업데이트하지 못했습니다 — 지금 버전 {pending.previous}이(가) 그대로 켜졌습니다.\n\n"

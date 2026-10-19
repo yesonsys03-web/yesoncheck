@@ -41,11 +41,13 @@ HELPER_MAC_FILE_NAME = "update_helper_mac.sh"  # Mac 도우미 (빌드된 앱에
 HELPER_WINDOWS_FILE_NAME = "update_helper_windows.ps1"  # Windows 도우미 (빌드된 앱에는 spec이 yesoncheck/ 아래에 넣음)
 HELPER_CONSOLE_FILE_NAME = "update_helper_console.txt"  # 도우미의 stdout·stderr (state_dir 안, 띄울 때마다 새로)
 
-# Windows 도우미를 앱과 떨어진 프로세스로(콘솔 없이, 새 프로세스 그룹) 띄우는 플래그. Mac의 subprocess에는 이 상수들이
-# 없으므로 Win32 문서의 값으로 대신한다 — 모듈을 Mac에서도 불러오고 launch_helper_windows 시험을 모든 플랫폼에서 돌리려고
+# Windows 도우미를 띄우는 플래그: 창 없는 자기 콘솔(CREATE_NO_WINDOW — 창 모드 앱에는 콘솔이 없음), 새 프로세스 그룹.
+# 프로세스는 부모가 끝나도 남으므로 앱이 끝난 뒤에도 돈다. DETACHED_PROCESS는 쓰지 않음: 콘솔이 아예 없으면 Windows
+# PowerShell 5.1(ConsoleHost)이 스크립트를 시작하지 못하고 아무 출력 없이 끝난다(CI에서 봄; 그 플래그와 함께면
+# CREATE_NO_WINDOW는 무시됨 — Win32 문서). Mac의 subprocess에는 이 상수들이 없으므로 Win32 문서의 값으로 대신한다 —
+# 모듈을 Mac에서도 불러오고 launch_helper_windows 시험을 모든 플랫폼에서 돌리려고
 _WINDOWS_HELPER_CREATIONFLAGS = (
-    getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
-    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+    getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
     | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 )
 
@@ -450,9 +452,10 @@ def _helper_env() -> dict:
     application process".
 
     PSModulePath (Windows): 앱을 PowerShell 7(pwsh)에서 켰으면(CI의 단계, pwsh 터미널) PS7의 모듈 폴더가 앞에 든 값을
-    물려받는다. 도우미는 Windows PowerShell 5.1이라 그 값으로는 맨 처음 쓰는 New-Object(Microsoft.PowerShell.Utility)를
-    PS7의 모듈에서 불러오다 실패해, 기록 한 줄 없이 끝난다(CI 업데이트 끝까지 시험에서 봄). 빼면 5.1이 자기 기본 모듈
-    경로를 만든다 — 탐색기에서 켠 앱과 같은 상태. 이 앱의 os.environ은 바꾸지 않음."""
+    물려받는다. 도우미는 Windows PowerShell 5.1 — 빼서 5.1이 자기 기본 모듈 경로를 만들게 함(탐색기에서 켠 앱과 같은
+    상태, 도우미 시험도 같게 함). 안전장치: CI의 같은 러너에서 5.1이 그 값을 가진 채 New-Object를 실행했음
+    (path_map_setup.resolve_shortcuts) — 도우미가 출력 없이 끝나던 원인은 DETACHED_PROCESS(_WINDOWS_HELPER_CREATIONFLAGS).
+    이 앱의 os.environ은 바꾸지 않음."""
     env = {**os.environ, PYINSTALLER_RESET_ENV: "1"}
     if paths.IS_WINDOWS:
         for key in [k for k in env if k.upper() == "PSMODULEPATH"]:  # Windows의 os.environ 키는 대문자
@@ -477,8 +480,8 @@ def _decode_console(data: bytes) -> tuple[str, str | None]:
 
 def helper_console_extra() -> str:
     """도우미 출력(helper_console_path) 중 업데이트 기록(log_path)에 없는 줄 — 도우미가 기록을 쓰기 전에 실패한 이유
-    (PowerShell이 모듈을 불러오지 못함, bash 오류 등)가 여기에만 남는다. 도우미는 기록의 줄을 stdout에도 쓰므로 그 줄은
-    뺌. 파일이 없거나 남는 줄이 없으면 빈 글자. 읽기 오류는 그대로 올림."""
+    (PowerShell·bash가 스크립트를 시작하지 못함, 기록 파일을 쓰지 못함 등)가 여기에만 남는다. Mac 도우미는 기록의 줄을
+    stdout에도 쓰므로 그 줄은 뺌 (Windows 도우미는 기록 파일이 있으면 stdout에 쓰지 않음). 파일이 없거나 남는 줄이 없으면 빈 글자. 읽기 오류는 그대로 올림."""
     try:
         with open(helper_console_path(), "rb") as fh:
             data = fh.read()
@@ -537,14 +540,15 @@ def _default_dll_search_for_children():
         _set_dll_directory(frozen_dir)
 
 
-def launch_helper_mac(staged_app: str, app_path: str, target: str) -> None:
+def launch_helper_mac(staged_app: str, app_path: str, target: str) -> subprocess.Popen:
     """앱이 끝나기를 기다렸다가 staged_app을 app_path 자리로 바꾸고 다시 켜는 도우미(update_helper_mac.sh)를 띄움.
 
     부른 쪽은 업데이트 기록(write_pending)을 남긴 뒤 이것을 부르고 앱을 끝낸다. 도우미는 바뀔 앱 번들 밖에서
     돌아야 하므로(번들째 백업 이름으로 옮기고, 되돌릴 때는 지움) 번들 안의 스크립트를 state_dir()로 복사해
     실행한다(_copy_helper_to_state_dir). 새 세션(start_new_session)으로 띄워 앱이 끝나도 같이 끝나지 않게 한다.
     환경은 _helper_env (다시 켜는 앱이 새로 시작한 앱이 되게). stdout·stderr는 helper_console_path(띄울 때마다 새로) —
-    도우미가 기록을 쓰기 전에 실패해도 그 출력이 남음. Popen 실패는 그대로 올린다.
+    도우미가 기록을 쓰기 전에 실패해도 그 출력이 남음. 띄운 Popen을 돌려줌(앱은 기다리지 않음 — 시험이 종료 코드를 봄).
+    Popen 실패는 그대로 올린다.
     """
     dest = _copy_helper_to_state_dir(HELPER_MAC_FILE_NAME)
     args = [
@@ -557,7 +561,7 @@ def launch_helper_mac(staged_app: str, app_path: str, target: str) -> None:
         "--log", log_path(),
     ]
     with open(helper_console_path(), "wb") as console:
-        subprocess.Popen(
+        return subprocess.Popen(
             args,
             start_new_session=True,
             env=_helper_env(),
@@ -574,17 +578,18 @@ def _windows_powershell() -> str:
     return exe if os.path.isfile(exe) else "powershell"
 
 
-def launch_helper_windows(installer: str, install_dir: str, target: str) -> None:
+def launch_helper_windows(installer: str, install_dir: str, target: str) -> subprocess.Popen:
     """앱이 끝나기를 기다렸다가 install_dir을 백업 이름으로 바꾸고 installer를 조용히 실행해 새 버전을 켜는 도우미
     (update_helper_windows.ps1)를 띄움. 새 버전이 잘 켜지지 않으면 도우미가 백업을 되돌리고 옛 앱을 켠다.
 
     부른 쪽은 업데이트 기록(write_pending)을 남긴 뒤 이것을 부르고 앱을 끝낸다. 도우미가 설치 폴더의 이름을 바꾸므로
     설치 폴더 안의 스크립트를 state_dir()로 복사해 실행하고, 작업 폴더도 state_dir()로 둔다 — 앱의 작업 폴더(바로
-    가기가 설치 폴더로 정함)를 물려받으면 그 폴더 핸들 때문에 설치 폴더의 이름을 바꿀 수 없음. 콘솔 없이
-    (DETACHED_PROCESS·CREATE_NO_WINDOW), 새 프로세스 그룹으로 띄워 앱이 끝나도 같이 끝나지 않게 한다. 환경은
+    가기가 설치 폴더로 정함)를 물려받으면 그 폴더 핸들 때문에 설치 폴더의 이름을 바꿀 수 없음. 창 없는 자기 콘솔로,
+    새 프로세스 그룹으로 띄움(_WINDOWS_HELPER_CREATIONFLAGS) — 앱이 끝나도 같이 끝나지 않음. 환경은
     _helper_env(다시 켜는 앱이 새로 시작한 앱이 되게, PS7의 PSModulePath 없이), DLL 찾는 곳은 기본
     (_default_dll_search_for_children). stdout·stderr는 helper_console_path(띄울 때마다 새로) — PowerShell이 스크립트를
-    시작하지 못하거나 기록을 쓰기 전에 실패해도 그 출력이 남음. Popen 실패는 그대로 올린다.
+    시작하지 못하거나 기록을 쓰기 전에 실패해도 그 출력이 남음. 띄운 Popen을 돌려줌(앱은 기다리지 않음 — 시험이 종료
+    코드를 봄). Popen 실패는 그대로 올린다.
     """
     script = _copy_helper_to_state_dir(HELPER_WINDOWS_FILE_NAME)
     args = [
@@ -598,7 +603,7 @@ def launch_helper_windows(installer: str, install_dir: str, target: str) -> None
         "-Log", log_path(),
     ]
     with open(helper_console_path(), "wb") as console, _default_dll_search_for_children():
-        subprocess.Popen(
+        return subprocess.Popen(
             args,
             creationflags=_WINDOWS_HELPER_CREATIONFLAGS,
             cwd=state_dir(),

@@ -759,8 +759,9 @@ def test_launch_helper_windows_copies_script_and_passes_arguments(tmp_state_dir,
             "-Log", update_install.log_path(),
         ],
         {
-            # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW (Win32 값 — Mac의 subprocess에는 없음)
-            "creationflags": 0x00000008 | 0x00000200 | 0x08000000,
+            # CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW (Win32 값 — Mac의 subprocess에는 없음). DETACHED_PROCESS(0x8)는
+            # 안 됨: 콘솔이 없으면 Windows PowerShell 5.1이 스크립트를 시작하지 못하고 출력 없이 끝남
+            "creationflags": 0x00000200 | 0x08000000,
             "cwd": update_install.state_dir(),  # 설치 폴더를 작업 폴더로 물려받으면 그 이름을 바꿀 수 없음
             "env": {**expected_env, "PYINSTALLER_RESET_ENVIRONMENT": "1"},
             "stdin": subprocess.DEVNULL,
@@ -774,7 +775,7 @@ def test_launch_helper_windows_copies_script_and_passes_arguments(tmp_state_dir,
     for flag in args[args.index(copy) + 1::2]:
         assert f"[string]${flag[1:]} = " in script, flag
     if sys.platform == "win32":
-        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+        flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
         assert _RecordingPopen.calls[0][1]["creationflags"] == flags
         assert os.path.isfile(args[0]) and args[0].lower().endswith("\\windowspowershell\\v1.0\\powershell.exe")
 
@@ -825,38 +826,44 @@ def test_launch_helper_windows_starts_a_fresh_console_file(tmp_state_dir, monkey
     assert Path(update_install.helper_console_path()).read_bytes() == b""
 
 
-def _wait_for_text(path, text, timeout_s=60):
-    """path(UTF-8)에 text가 나타날 때까지 → 그 내용 (시간 안에 없으면 AssertionError, 그때까지의 내용과 도우미 출력)."""
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        if os.path.exists(path) and text in Path(path).read_bytes().decode("utf-8", "replace"):
-            return Path(path).read_bytes().decode("utf-8", "replace")
-        time.sleep(0.2)
-    content = Path(path).read_bytes().decode("utf-8", "replace") if os.path.exists(path) else "(없음)"
-    console = Path(update_install.helper_console_path())
-    raise AssertionError(f"{timeout_s}초 안에 {text!r}이(가) {path}에 없음:\n{content}\n도우미 출력:\n"
-                         + (console.read_bytes().decode("utf-8", "replace") if console.exists() else "(없음)"))
+def _read_or_none(path):
+    return Path(path).read_bytes().decode("utf-8", "replace") if os.path.exists(path) else "(없음)"
+
+
+def _wait_real_helper(proc, timeout_s=60):
+    """진짜로 띄운 도우미가 끝나기를 기다림 → (종료 코드, 기록, 도우미 출력). 시간 안에 끝나지 않으면 끝내고 AssertionError."""
+    try:
+        code = proc.wait(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(30)
+        raise AssertionError(f"도우미가 {timeout_s}초 안에 끝나지 않음\n기록:\n{_read_or_none(update_install.log_path())}\n"
+                             f"도우미 출력:\n{_read_or_none(update_install.helper_console_path())}") from None
+    return code, _read_or_none(update_install.log_path()), _read_or_none(update_install.helper_console_path())
 
 
 @windows_only
 def test_real_launch_helper_windows_writes_start_line_with_ps7_module_path(tmp_state_dir, tmp_path, monkeypatch):
-    """진짜 launch_helper_windows (Popen·DETACHED 플래그·DLL 찾는 곳 되돌리기·_helper_env 그대로)로 빌드된 앱처럼 띄움 —
-    앱이 PS7의 PSModulePath를 물려받았어도 도우미가 시작 기록을 남기는지 (CI 업데이트 끝까지 시험에서 기록 한 줄 없이
-    끝나던 것). 일찍 끝나는 길: 설치 폴더에 앱이 없음 → 기록하고 종료 코드 2 (알림 창 없이)."""
+    """진짜 launch_helper_windows (Popen·창 없는 콘솔 플래그·DLL 찾는 곳 되돌리기·_helper_env 그대로)로 빌드된 앱처럼
+    띄움 — 도우미가 스크립트를 실행해 시작 기록을 남기는지 (CI 업데이트 끝까지 시험에서 DETACHED_PROCESS로 띄운 도우미가
+    기록 한 줄 없이 끝나던 것). 앱이 PS7의 PSModulePath를 물려받은 경우로. 일찍 끝나는 길: 설치 폴더에 앱이 없음 → 기록하고
+    종료 코드 2 (알림 창 없이)."""
     _frozen_windows_app(monkeypatch, tmp_path)  # 번들 안 스크립트 = 저장소의 도우미, DLL 찾는 곳 되돌리기도 진짜로
     monkeypatch.setenv("PSModulePath", PS7_STYLE_MODULE_PATH)
     monkeypatch.setenv("YC_UPDATE_NO_MESSAGEBOX", "1")
     install_dir = Path(os.path.realpath(tmp_path)) / "Programs" / "YesonCheck"  # 없음
     try:
-        update_install.launch_helper_windows(str(tmp_path / "YesonCheck_Setup_1.1.1.exe"), str(install_dir), "1.1.1")
+        proc = update_install.launch_helper_windows(str(tmp_path / "YesonCheck_Setup_1.1.1.exe"), str(install_dir), "1.1.1")
     finally:
         # launch는 띄운 뒤 DLL 찾는 곳을 (가짜) _MEIPASS로 되돌림 — 이 시험 프로세스(빌드된 앱이 아님)는 원래대로 기본
         update_install._set_dll_directory(None)
-    text = _wait_for_text(update_install.log_path(), "알림 창은 띄우지 않음")
-    assert " 도우미: 시작: 대상 버전 1.1.1" in text and "설치 폴더에 지금 앱이 없음" in text, text
-    # 도우미의 stdout(기록과 같은 줄)이 출력 파일에 — 콘솔 없이(DETACHED) 띄워도 남음. 한글은 코드 페이지라 ASCII만 봄
-    console = Path(update_install.helper_console_path()).read_bytes()
-    assert b"1.1.1" in console and str(install_dir).encode("ascii") in console, console
+    code, text, console = _wait_real_helper(proc)
+    details = f"종료 코드 {code}\n기록:\n{text}\n도우미 출력:\n{console}"
+    assert code == 2, details
+    assert " 도우미: 시작: 대상 버전 1.1.1" in text and "설치 폴더에 지금 앱이 없음" in text, details
+    assert "알림 창은 띄우지 않음" in text, details
+    # 정상 실행의 줄은 기록에만 — 실패 창에 '기록에 없는 것'으로 다시 보이지 않음 (5.1은 출력 파일에 코드 페이지로 씀)
+    assert update_install.helper_console_extra() == "", details
 
 
 @windows_only
@@ -867,10 +874,13 @@ def test_real_launch_helper_windows_records_early_powershell_failure(tmp_state_d
     broken.write_text("throw 'yc-early-failure-marker'\r\n", encoding="utf-8-sig")
     monkeypatch.setattr(update_install, "_bundled_file", lambda name: str(broken))
     monkeypatch.setenv("YC_UPDATE_NO_MESSAGEBOX", "1")
-    update_install.launch_helper_windows(str(tmp_path / "Setup.exe"), str(tmp_path / "Programs" / "YesonCheck"), "1.1.1")
-    _wait_for_text(update_install.helper_console_path(), "yc-early-failure-marker")
-    assert "yc-early-failure-marker" in update_install.helper_console_extra()
-    assert not os.path.exists(update_install.log_path())  # 도우미는 기록을 한 줄도 쓰지 못함
+    proc = update_install.launch_helper_windows(str(tmp_path / "Setup.exe"), str(tmp_path / "Programs" / "YesonCheck"),
+                                                "1.1.1")
+    code, text, console = _wait_real_helper(proc)
+    details = f"종료 코드 {code}\n기록:\n{text}\n도우미 출력:\n{console}"
+    assert code != 0 and "yc-early-failure-marker" in console, details
+    assert "yc-early-failure-marker" in update_install.helper_console_extra(), details
+    assert not os.path.exists(update_install.log_path()), details  # 도우미는 기록을 한 줄도 쓰지 못함
 
 
 class _FakeKernel32:

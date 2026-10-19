@@ -4,7 +4,7 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File update_helper_windows.ps1
 #       -AppPid PID -InstallDir DIR -Installer EXE -Target VER -OkFile OK -Log LOG [-TimeoutSeconds S] [-ExeName NAME]
 #
-# 앱(update_install.launch_helper_windows)이 이 파일을 업데이트 상태 폴더로 복사해 콘솔 없이 띄운 뒤 끝난다.
+# 앱(update_install.launch_helper_windows)이 이 파일을 업데이트 상태 폴더로 복사해 창 없는 콘솔로 띄운 뒤 끝난다.
 # 순서:
 #   1. PID가 끝나기를 기다림(300초 — 넘으면 아무것도 바꾸지 않음). pid는 끝난 뒤 다른 프로세스에 다시 쓰일 수 있으므로
 #      그 pid의 실행 파일이 DIR\ExeName일 때만 기다린다.
@@ -68,8 +68,12 @@ function Write-Log([string]$Message) {
     # update_install.timestamp()와 같은 형식 (지역 설정과 상관없이 - 와 : 를 그대로)
     $stamp = [DateTime]::Now.ToString("yyyy-MM-dd'T'HH':'mm':'ss", [System.Globalization.CultureInfo]::InvariantCulture)
     $line = $stamp + ' 도우미: ' + $Message
-    [Console]::Out.WriteLine($line)
-    if (-not $Log) { return }
+    if (-not $Log) {
+        # 기록 파일이 없을 때(잘못된 인자)만 stdout으로 — 있으면 기록에만: 앱은 stdout을 파일로 받아 기록에 없는 줄을 실패 창에
+        # 보이는데, 5.1은 그 파일에 이 컴퓨터의 코드 페이지로 써서 한글이 깨진 같은 줄이 '기록에 없는 줄'이 됨
+        [Console]::Out.WriteLine($line)
+        return
+    }
     # UTF-8(BOM 없이)로 직접 덧붙임 — 5.1의 Add-Content·Out-File은 ANSI·UTF-16이 기본. 앱의 log()(파이썬)와 같은 파일을
     # 함께 쓰므로 FileShare.ReadWrite로 열고, 그래도 잠깐 막히면 몇 번 다시 해 봄. 끝내 못 쓰면 stderr에 남기고 계속한다
     # (기록을 못 했다고 되돌리기를 멈추면 안 됨)
