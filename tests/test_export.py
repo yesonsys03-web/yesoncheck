@@ -159,6 +159,48 @@ def test_merge_worker_stop_before_process_starts(qapp):
     assert proc.wait(10) not in (None, 0)
 
 
+def test_merge_worker_unexpected_error_shows_traceback(qapp):
+    """예상 못 한 오류(RuntimeError가 아님)는 repr + 스택 트레이스 (첫 줄은 무엇인지, 창의 자세한 글에 전체).
+    RuntimeError·ToolNotFoundError(ffmpeg·ffprobe가 없음 — 메시지가 곧 설명)는 메시지 그대로."""
+    from PyQt5.QtCore import Qt
+
+    from yesoncheck.workers import FFmpegWorker
+
+    def broken(worker):
+        return {}["nb_frames"]
+
+    def failed(worker):
+        raise RuntimeError("병합 결과가 잘못되었습니다 — 시험\n자세히")
+
+    def no_tool(worker):
+        raise external_tools.ToolNotFoundError("ffprobe을(를) PATH에서 찾지 못했습니다. ffmpeg를 설치했는지 확인하세요.")
+
+    messages = []
+    for function in (broken, failed, no_tool):
+        worker = FFmpegWorker(function)
+        worker.error.connect(messages.append, Qt.DirectConnection)
+        worker.run()
+    assert messages[0].startswith("KeyError('nb_frames')\n\nTraceback"), messages[0]
+    assert "in broken" in messages[0]
+    assert messages[1] == "병합 결과가 잘못되었습니다 — 시험\n자세히"
+    assert messages[2] == "ffprobe을(를) PATH에서 찾지 못했습니다. ffmpeg를 설치했는지 확인하세요."
+
+
+def test_merge_error_dialog_summary_with_details(qapp, dialogs):
+    """병합 오류 창: 첫 줄(무엇이 틀렸는지)만 본문에, 전체(입력·ffmpeg 로그)는 자세한 글에 그대로."""
+    from types import SimpleNamespace
+
+    from yesoncheck.player_playback import PlayerPlaybackMixin
+
+    closed = []
+    owner = SimpleNamespace(progress_dialog=SimpleNamespace(close=lambda: closed.append(True)))
+    message = "병합 결과가 잘못되었습니다 — 시험\n입력 2개 (영상 길이):\nffmpeg 로그 " + "x" * 5000
+    PlayerPlaybackMixin.on_merge_error(owner, message)
+    assert closed == [True]
+    [box] = dialogs.boxes
+    assert (box.kind, box.text, box.details) == ("critical", "오류가 발생했습니다: 병합 결과가 잘못되었습니다 — 시험", message)
+
+
 def test_close_window_stops_exports_and_merge(qapp, dialogs, monkeypatch, tmp_path, capsys):
     """창을 닫으면 실행 중인 OCR 구간 내보내기·주석 내보내기·병합을 멈추고 기다림 (ffmpeg가 남지 않게).
     시간 안에 끝나지 않은 작업은 실행 중에 파괴되지 않게 끝날 때까지 붙잡아 둠 (player_base.release_worker)."""

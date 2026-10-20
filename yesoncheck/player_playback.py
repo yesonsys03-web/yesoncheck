@@ -110,7 +110,9 @@ class PlayerPlaybackMixin:
         self.progress_dialog.close()
         msg_box = QMessageBox()
         msg_box.setIcon(QMessageBox.Critical)
-        msg_box.setText(f"오류가 발생했습니다: {error_message}")
+        summary = error_message.partition("\n")[0]  # 무엇이 틀렸는지 (첫 줄)
+        msg_box.setText(f"오류가 발생했습니다: {summary}")
+        msg_box.setDetailedText(error_message)  # 입력별 길이·ffmpeg 로그 등 전체
         msg_box.setWindowTitle("오류")
         msg_box.setStandardButtons(QMessageBox.Ok)
         msg_box.exec_()

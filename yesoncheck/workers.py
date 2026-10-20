@@ -75,7 +75,10 @@ class FFmpegWorker(QThread):
             self.merge_function(self)
         except Exception as e:
             if not self._stopped:
-                self.error.emit(str(e))
+                # 병합이 만든 설명(RuntimeError)·ffmpeg가 없음(ToolNotFoundError)은 메시지 그대로,
+                # 예상 못 한 오류는 무엇인지 + 스택 트레이스 (창의 자세한 글에)
+                expected = isinstance(e, (RuntimeError, external_tools.ToolNotFoundError))
+                self.error.emit(str(e) if expected else f"{e!r}\n\n{traceback.format_exc()}")
                 return
             print(f"병합을 멈췄습니다 (창 닫기): {e}")
             if self.partial_output and os.path.exists(self.partial_output):
