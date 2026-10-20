@@ -24,6 +24,7 @@
 #   YC_UPDATE_PID_TIMEOUT_S  앱이 끝나기를 기다리는 시간 (없으면 300초)
 #   YC_UPDATE_DIRECT_LAUNCH  1이면 open 대신 APP/Contents/MacOS/YesonCheck_Autocut을 직접 백그라운드로 켬
 #                            (환경 변수를 그대로 물려받고, 출력은 LOG에 덧붙임)
+#   YC_UPDATE_OPEN           open 대신 부를 명령 (시험의 가짜 open)
 #   YC_UPDATE_OSASCRIPT      관리자 암호 창·종료 코드 2의 알림 창에 쓸 osascript 대신 부를 명령
 #   YC_UPDATE_NO_MESSAGEBOX  1이면 종료 코드 2의 알림 창을 띄우지 않음 (시험이 멈추지 않게)
 
@@ -43,6 +44,8 @@ ADMIN=0          # 1: 앱 폴더에 쓸 수 없어 파일 작업을 관리자 �
 SWAP_TRIED=0     # 1: APP을 백업 이름으로 옮기기 시작함 (그 뒤로는 백업이 있으면 우리가 옮긴 것)
 NEW_LAUNCHED=0   # 1: 새 앱을 켰음 (되돌릴 때 그 프로세스를 끝내야 함)
 LAUNCHED_PID=""  # 직접 실행(YC_UPDATE_DIRECT_LAUNCH=1)으로 켠 프로세스의 pid
+OPEN_W_PID=""    # open 방식: 새 앱을 켜고 그 앱이 끝날 때까지 기다리는 백그라운드 `open -n -W`의 pid
+OPEN_CMD="${YC_UPDATE_OPEN:-open}"
 FS_OUT=""        # fs_run이 남긴 출력(오류)
 FAIL_REASON=""
 MY_UID=$(id -u)  # pgrep/pkill은 이 사용자의 프로세스만 (다른 사용자가 같은 자리의 앱을 켜 두었어도 건드리지 않음)
@@ -150,6 +153,21 @@ kill_new_app() {
     fi
 }
 
+stop_open_w() {  # 되돌릴 때: 새 앱을 기다리던 open -n -W도 끝냄 (새 앱을 끝냈으면 보통 스스로 끝나 있음)
+    if open_w_running; then
+        log "새 앱을 기다리던 open -n -W를 끝냄 (pid $OPEN_W_PID)"
+        kill "$OPEN_W_PID"
+    fi
+}
+
+open_w_running() {  # 백그라운드 open -n -W가 아직 도는지 (이 셸의 작업 목록으로 봄 — 끝난 pid를 다른 프로세스로 착각하지 않게)
+    [ -n "$OPEN_W_PID" ] || return 1
+    case " $(jobs -rp | tr '\n' ' ') " in
+        *" $OPEN_W_PID "*) return 0 ;;
+    esac
+    return 1
+}
+
 launch_app() {  # $1 = 무엇을 켜는지 (로그용: "새 앱"·"옛 앱")
     local out
     if [ "${YC_UPDATE_DIRECT_LAUNCH:-}" = 1 ]; then
@@ -158,12 +176,28 @@ launch_app() {  # $1 = 무엇을 켜는지 (로그용: "새 앱"·"옛 앱")
         log "$1을 켬 (직접 실행, pid $LAUNCHED_PID): $APP"
         return 0
     fi
-    if out=$(open -n "$APP" 2>&1); then
+    if out=$("$OPEN_CMD" -n "$APP" 2>&1); then
         log "$1을 켬 (open -n): $APP"
         return 0
     fi
     log "$1을 켜지 못함 (open -n): $out"
     return 1
+}
+
+launch_new_app() {
+    # open 방식은 `open -n -W`를 백그라운드로: 켠 새 앱이 끝나면 이것도 끝남 → 표시 없이 끝난 새 앱을 바로 알아챔.
+    # (그냥 open -n은 곧바로 끝나고, 몇 ms 만에 죽는 새 앱은 pgrep으로도 못 봐 '잘 켜짐' 제한 시간을 다 기다렸음 — 실제
+    # /Applications 시험.) 진짜 open -W는 앱이 끝나면 앱의 종료 코드와 상관없이 0, 켜지 못하면 곧바로 0이 아닌 값.
+    # nohup·</dev/null: 성공 뒤 새 앱이 도는 동안 이것도 살아 있어야 하고, 도우미가 끝날 때 같이 끝나거나 도우미를
+    # 붙잡지 않게 (출력은 LOG에 — "Unable to block on application …" 같은 open의 글도 기록에 남음)
+    if [ "${YC_UPDATE_DIRECT_LAUNCH:-}" = 1 ]; then
+        launch_app "새 앱"
+        return
+    fi
+    nohup "$OPEN_CMD" -n -W "$APP" >>"$LOG" 2>&1 </dev/null &
+    OPEN_W_PID=$!
+    log "새 앱을 켬 (open -n -W, pid $OPEN_W_PID — 새 앱이 끝나면 끝남): $APP"
+    return 0
 }
 
 # ---- 파일 작업 (보통은 사용자로, 앱 폴더에 쓸 수 없으면 관리자 암호 창으로) ----
@@ -309,7 +343,7 @@ new_app_running() {
 }
 
 wait_ok() {
-    local deadline seen version
+    local deadline seen version open_status
     deadline=$((SECONDS + TIMEOUT))
     seen=0
     log "새 앱의 '잘 켜짐' 표시를 기다림 (최대 ${TIMEOUT}초): $OKFILE"
@@ -317,6 +351,25 @@ wait_ok() {
         version=$(ok_version)
         if [ "$version" = "$TARGET" ]; then
             return 0
+        fi
+        if [ -n "$OPEN_W_PID" ] && ! open_w_running; then
+            wait "$OPEN_W_PID"
+            open_status=$?
+            OPEN_W_PID=""
+            if [ "$open_status" != 0 ]; then
+                FAIL_REASON="새 앱을 켜지 못함 (open -n -W 종료 코드 $open_status — open의 글은 위 기록에)"
+                return 1
+            fi
+            if [ -z "$(app_pids)" ]; then
+                version=$(ok_version)  # 표시를 쓰고 바로 끝났을 수 있음
+                if [ "$version" = "$TARGET" ]; then
+                    return 0
+                fi
+                FAIL_REASON="새 앱이 '잘 켜짐' 표시 없이 끝남 (open -n -W가 끝남, 종료 코드 0; 표시 버전: ${version:-없음})"
+                return 1
+            fi
+            log "open -n -W는 끝났지만 새 앱 프로세스가 보임 — 계속 기다림"
+            seen=1
         fi
         if new_app_running; then
             seen=1
@@ -369,6 +422,7 @@ rollback() {  # FAIL_REASON을 기록하고 옛 앱으로 되돌려 켠 뒤 끝�
     log "되돌림 시작"
     if [ "$NEW_LAUNCHED" = 1 ]; then
         kill_new_app
+        stop_open_w
     fi
     if [ "$SWAP_TRIED" = 1 ] && { [ -e "$BACKUP" ] || [ -L "$BACKUP" ]; }; then
         if ! restore_backup; then
@@ -478,7 +532,7 @@ if ! out=$(rm -f "$OKFILE" 2>&1); then
     rollback
 fi
 NEW_LAUNCHED=1
-if ! launch_app "새 앱"; then
+if ! launch_new_app; then
     FAIL_REASON="새 앱을 켜지 못함"
     rollback
 fi
@@ -486,6 +540,9 @@ if ! wait_ok; then
     rollback
 fi
 log "새 앱이 잘 켜짐 (버전 $TARGET)"
+if open_w_running; then
+    disown "$OPEN_W_PID"  # 새 앱이 도는 동안 살아 있음 — 기다리지도 끝내지도 않음
+fi
 if delete_path "$BACKUP"; then
     log "백업을 지움: $BACKUP"
 else

@@ -5,7 +5,7 @@ Contents/MacOS/YesonCheck_Autocut이 작은 셸 스크립트다: "new"는 시험
 '잘 켜짐' 표시 파일에 {"version": "1.1.1"}을 쓰고, "silent"는 아무것도 쓰지 않고 계속 살아 있고, "crash"는 표시
 없이 곧 끝난다. 모든 가짜 앱은 켜질 때 흔적 파일(YC_TEST_TRACE_DIR/<old|new>_started)에 자기 pid를 남긴다 —
 옛 앱이 다시 켜졌는지·새 앱이 끝났는지를 그것으로 본다. YC_UPDATE_DIRECT_LAUNCH=1(open 대신 실행 파일을 직접
-켬)과 짧은 --timeout으로 빠르게 돈다.
+켬)과 짧은 --timeout으로 빠르게 돈다. 실제 배포 경로(open -n -W)는 가짜 open(YC_UPDATE_OPEN=FAKE_OPEN)으로 시험한다.
 
 launch_helper_mac 시험(subprocess.Popen을 바꿔 끼움)은 모든 플랫폼에서 돈다.
 """
@@ -37,6 +37,12 @@ FAKE_APP_SCRIPTS = {
     + f"printf '{{\"version\": \"{TARGET}\"}}' > \"$YC_TEST_OK_FILE.tmp\" && mv \"$YC_TEST_OK_FILE.tmp\" \"$YC_TEST_OK_FILE\"\n",
     "silent": _TRACE_START.format(name="new") + "while :; do sleep 1; done\n",
     "crash": _TRACE_START.format(name="new") + "sleep 1\nexit 3\n",
+    # 실제 /Applications 시험에서 본 것: 새 앱이 켜지자마자(몇 ms) 표시 없이 죽음
+    "exit_now": _TRACE_START.format(name="new") + "exit 1\n",
+    # 표시를 쓰고 계속 돎 (open -W가 끝나지 않음)
+    "new_stays": _TRACE_START.format(name="new")
+    + f"printf '{{\"version\": \"{TARGET}\"}}' > \"$YC_TEST_OK_FILE.tmp\" && mv \"$YC_TEST_OK_FILE.tmp\" \"$YC_TEST_OK_FILE\"\n"
+    + "while :; do sleep 1; done\n",
 }
 
 
@@ -625,6 +631,113 @@ def test_helper_log_truncates_admin_output_joined_with_cr(update_case, tmp_path)
     log = log_text(case)
     assert "\r" not in case.log.read_bytes().decode("utf-8")
     assert log.count("Permission denied") <= 10 and log.count("줄 더") == 2, log
+
+
+# ---- open 방식 (실제 배포 경로: YC_UPDATE_DIRECT_LAUNCH 없이) — 가짜 open으로 ----
+
+FAKE_OPEN = """#!/bin/sh
+# open 흉내: open [-n] [-W] <앱>. -W면 켠 앱이 끝날 때까지 기다렸다가 0으로 끝남 (진짜 open -W와 같음 — 앱의 종료 코드와
+# 상관없이 0). YC_TEST_OPEN_FAILS=<n>: 처음 n번은 진짜 open이 켜지 못할 때처럼 오류 글과 종료 코드 1
+printf '%s\\n' "$*" >> "$YC_TEST_TRACE_DIR/open_calls"
+wait_app=0
+while [ $# -gt 1 ]; do
+    case "$1" in
+        -W) wait_app=1 ;;
+        -n) ;;
+        *) echo "가짜 open: 모르는 옵션 $1" >&2; exit 2 ;;
+    esac
+    shift
+done
+app=$1
+calls=$(wc -l < "$YC_TEST_TRACE_DIR/open_calls" | tr -d ' ')
+if [ "$calls" -le "${YC_TEST_OPEN_FAILS:-0}" ]; then
+    echo "LSOpenURLsWithRole() failed with error -10810 for the file $app." >&2
+    exit 1
+fi
+if [ "$wait_app" = 1 ]; then
+    printf '%s\\n' "$$" > "$YC_TEST_TRACE_DIR/open_w_pid"
+    "$app/Contents/MacOS/YesonCheck_Autocut" </dev/null >/dev/null 2>&1
+    exit 0
+fi
+"$app/Contents/MacOS/YesonCheck_Autocut" </dev/null >/dev/null 2>&1 &
+exit 0
+"""
+
+
+def use_fake_open(case, tmp_path, fails=0):
+    """직접 실행 대신 open 방식으로 — open 명령은 FAKE_OPEN (YC_UPDATE_OPEN)."""
+    fake = tmp_path / "fake_open"
+    fake.write_text(FAKE_OPEN, encoding="utf-8")
+    fake.chmod(0o755)
+    case.env.pop("YC_UPDATE_DIRECT_LAUNCH")
+    case.env.update(YC_UPDATE_OPEN=str(fake), YC_TEST_OPEN_FAILS=str(fails))
+
+
+def open_calls(case):
+    path = case.trace / "open_calls"
+    return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+
+
+def open_w_pid(case):
+    path = case.trace / "open_w_pid"
+    return int(path.read_text(encoding="utf-8")) if path.exists() else None
+
+
+@darwin_only
+def test_helper_open_mode_rolls_back_quickly_when_new_app_dies_at_once(update_case, tmp_path):
+    # 실제 /Applications 시험: 새 앱이 몇 ms 만에 죽자 pgrep은 그것을 못 보고 180초를 다 기다림 → open -n -W가 끝나면 바로 실패
+    case = update_case("exit_now")
+    use_fake_open(case, tmp_path)
+    started = time.monotonic()
+    result = run_helper(case, timeout_s=30)
+    elapsed = time.monotonic() - started
+    assert result.returncode == 1, failure_details(case, result)
+    assert elapsed < 10, f"{elapsed:.1f}초 — '잘 켜짐' 제한 시간(30초)을 기다림\n" + log_text(case)
+    assert app_kind(case.app) == "old" and not case.backup.exists()
+    assert "표시 없이 끝남" in log_text(case) and "되돌림" in log_text(case)
+    assert open_calls(case) == [f"-n -W {case.app}", f"-n {case.app}"]  # 옛 앱은 그냥 open -n
+    assert wait_until(lambda: trace_pids(case.trace, "old")), log_text(case)
+
+
+@darwin_only
+def test_helper_open_mode_success_leaves_open_w_running(update_case, tmp_path):
+    # 성공 뒤 새 앱이 도는 동안 open -W도 살아 있음 — 도우미는 그것을 기다리지 않고 끝나며, 끝날 때 그것을 끝내지도 않음
+    case = update_case("new_stays")
+    use_fake_open(case, tmp_path)
+    result = run_helper(case, timeout_s=30)
+    assert result.returncode == 0, failure_details(case, result)
+    assert app_kind(case.app) == "new_stays" and not case.backup.exists()
+    waiter = open_w_pid(case)
+    assert waiter is not None and not pid_gone(waiter), log_text(case)
+    assert not pid_gone(trace_pids(case.trace, "new")[0])
+    assert open_calls(case) == [f"-n -W {case.app}"]
+
+
+@darwin_only
+def test_helper_open_mode_launch_failure_rolls_back(update_case, tmp_path):
+    case = update_case("new")
+    use_fake_open(case, tmp_path, fails=1)  # 새 앱을 켜는 open만 실패, 옛 앱은 켜짐
+    started = time.monotonic()
+    result = run_helper(case, timeout_s=30)
+    assert result.returncode == 1, failure_details(case, result)
+    assert time.monotonic() - started < 10
+    assert app_kind(case.app) == "old" and not case.backup.exists()
+    assert "새 앱을 켜지 못함" in log_text(case) and "-10810" in log_text(case)
+    assert not trace_pids(case.trace, "new")
+    assert wait_until(lambda: trace_pids(case.trace, "old")), log_text(case)
+
+
+@darwin_only
+def test_helper_open_mode_rollback_ends_open_w_with_the_app(update_case, tmp_path):
+    case = update_case("silent")
+    use_fake_open(case, tmp_path)
+    result = run_helper(case, timeout_s=3)
+    assert result.returncode == 1, failure_details(case, result)
+    assert app_kind(case.app) == "old"
+    waiter = open_w_pid(case)
+    assert waiter is not None and wait_until(lambda: pid_gone(waiter)), log_text(case)
+    assert wait_until(lambda: pid_gone(trace_pids(case.trace, "new")[0])), log_text(case)
+    assert wait_until(lambda: trace_pids(case.trace, "old")), log_text(case)
 
 
 # ---- launch_helper_mac (모든 플랫폼) ----
