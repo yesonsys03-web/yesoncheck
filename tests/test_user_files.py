@@ -8,6 +8,7 @@ import errno
 import json
 import multiprocessing
 import os
+import stat
 import sys
 import types
 
@@ -109,7 +110,7 @@ def test_write_json_atomic_gives_up_after_20_retries_on_windows(tmp_path, monkey
     with pytest.raises(PermissionError) as info:  # 감싸지 않고 그대로
         write_json_atomic(path, {"new": True})
 
-    assert path in str(info.value)
+    assert info.value.filename == path  # str()은 filename을 repr로 보여 Windows 경로의 \가 두 배가 됨
     assert len(calls) == 21  # 처음 한 번 + 다시 20번
     assert sleeps == [0.1] * 20
     assert read_json(path, None) == {"old": True}
@@ -150,6 +151,65 @@ def test_write_json_atomic_does_not_retry_other_errors_on_windows(tmp_path, monk
     assert len(calls) == 1
     assert sleeps == []
     assert _list_dir(tmp_path) == []
+
+
+# ---------- write_json_atomic: 파일 권한 ----------
+# mkstemp는 0600으로 만들므로 그대로 os.replace하면 NAS를 함께 쓰는 다른 계정이 못 읽음 — 권한을 맞춰 둔다.
+# Windows의 os.chmod는 읽기 전용 표시만 바꾸므로 권한 비트 시험은 Mac에서만 한다.
+
+posix_only = pytest.mark.skipif(sys.platform == "win32", reason="Windows의 chmod는 읽기 전용 표시만 바꿈")
+
+
+def _umask():
+    old = os.umask(0)
+    os.umask(old)
+    return old
+
+
+@posix_only
+@pytest.mark.parametrize("mode", [0o664, 0o666, 0o600])
+def test_write_json_atomic_keeps_mode_of_existing_file(tmp_path, mode):
+    path = str(tmp_path / "data.json")
+    write_json_atomic(path, {"old": True})
+    os.chmod(path, mode)
+
+    write_json_atomic(path, {"new": True})
+
+    assert stat.S_IMODE(os.stat(path).st_mode) == mode
+    assert read_json(path, None) == {"new": True}
+
+
+@posix_only
+def test_write_json_atomic_new_file_gets_default_open_mode(tmp_path):
+    path = str(tmp_path / "새 폴더" / "data.json")
+    write_json_atomic(path, {"a": 1})
+    expected = 0o666 & ~_umask()
+    assert stat.S_IMODE(os.stat(path).st_mode) == expected
+    # open()으로 만든 파일과 같음
+    plain = str(tmp_path / "plain.json")
+    with open(plain, "w", encoding="utf-8") as fh:
+        fh.write("{}")
+    assert stat.S_IMODE(os.stat(path).st_mode) == stat.S_IMODE(os.stat(plain).st_mode)
+
+
+@posix_only
+def test_write_json_atomic_failed_write_keeps_mode_and_content_of_existing_file(tmp_path):
+    path = str(tmp_path / "data.json")
+    write_json_atomic(path, {"old": True})
+    os.chmod(path, 0o664)
+    with pytest.raises(TypeError):
+        write_json_atomic(path, {"x": object()})
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o664
+    assert read_json(path, None) == {"old": True}
+
+
+@posix_only
+def test_update_json_keeps_mode_of_existing_file(tmp_path):
+    path = str(tmp_path / "list.json")
+    update_json(path, lambda value: value + ["a"], [])
+    os.chmod(path, 0o664)
+    update_json(path, lambda value: value + ["b"], [])
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o664
 
 
 # ---------- read_json ----------

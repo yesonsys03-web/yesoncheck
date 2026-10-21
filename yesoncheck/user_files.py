@@ -17,6 +17,7 @@
 import errno
 import json
 import os
+import stat
 import sys
 import tempfile
 import time
@@ -30,6 +31,18 @@ _sleep = time.sleep
 _REPLACE_RETRIES = 20  # Windows에서 대상이 열려 있어 PermissionError일 때 다시 시도하는 횟수
 _REPLACE_RETRY_INTERVAL_S = 0.1
 _LOCK_POLL_INTERVAL_S = 0.05
+
+
+def _read_umask():
+    """프로세스의 umask. 읽기만 하는 방법이 없어 0으로 바꿨다가 되돌린다 — 그 사이에 다른 스레드가 만드는 파일의
+    권한이 틀어질 수 있으므로 모듈을 불러올 때 한 번만 부른다 (앱 시작 때 스레드가 늘기 전)."""
+    old = os.umask(0)
+    os.umask(old)
+    return old
+
+
+# open()이 새 파일에 주는 권한 (mkstemp는 0600이라 그대로 두면 다른 계정이 NAS의 파일을 못 읽음)
+_NEW_FILE_MODE = 0o666 & ~_read_umask()
 
 
 class UserFileError(Exception):
@@ -50,10 +63,24 @@ def _replace_with_retry(tmp_path, path):
             _sleep(_REPLACE_RETRY_INTERVAL_S)
 
 
+def _match_target_mode(tmp_path, path):
+    """임시 파일(mkstemp는 0600)의 권한을 바꿔 둘 파일의 권한으로: path가 있으면 그 권한, 없으면 새 파일의 보통 권한.
+
+    NAS의 파일은 Mac(NFS uid)·Windows(SMB 계정) 등 여러 계정이 함께 쓰므로 쓸 때마다 권한이 좁아지면 안 된다.
+    Windows의 os.chmod는 읽기 전용 표시만 바꾸므로 해가 없다.
+    """
+    try:
+        mode = stat.S_IMODE(os.stat(path).st_mode) & 0o777
+    except FileNotFoundError:
+        mode = _NEW_FILE_MODE
+    os.chmod(tmp_path, mode)
+
+
 def write_json_atomic(path: str, data, indent: int | None = 2) -> None:
     """data를 JSON으로 path에 씀: 같은 폴더의 임시 파일 + os.replace (폴더가 없으면 만듦).
 
     쓰다 실패하면 임시 파일을 지우고 원래 예외를 그대로 올린다 (원래 파일은 그대로). indent=None이면 한 줄.
+    파일 권한은 이미 있는 파일이면 그 권한을, 새 파일이면 open()과 같은 0o666 & ~umask를 준다 (좁아지지 않음).
     """
     folder = os.path.dirname(os.path.abspath(path))  # 폴더 없이 파일 이름만 줘도 됨
     os.makedirs(folder, exist_ok=True)
@@ -61,6 +88,7 @@ def write_json_atomic(path: str, data, indent: int | None = 2) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(data, fh, ensure_ascii=False, indent=indent)
+        _match_target_mode(tmp_path, path)
         _replace_with_retry(tmp_path, path)
     except Exception:
         try:
