@@ -1,8 +1,11 @@
 """웹 보고서 실시간 동기화: 창마다 빈 포트와 토큰 (review_sync), 보고서 HTML의 접속 주소 (web_info),
 OCR 검토 창이 서버를 쓰는 방식 (player_review)."""
 
+import base64
 import json
+import os
 import re
+import socket
 import time
 from urllib.parse import parse_qs, urlparse
 
@@ -15,8 +18,8 @@ from PyQt5.QtWidgets import QApplication
 from yesoncheck import review_sync, web_info
 
 
-def wait_until(cond, timeout=5.0):
-    """cond()가 참이 될 때까지 Qt 이벤트를 돌린다. 참이 되었는지를 돌려준다."""
+def wait_until(cond, timeout=10.0):
+    """cond()가 참이 될 때까지 Qt 이벤트를 돌린다. 참이 되었는지를 돌려준다 (기본 10초 — 느린 Windows CI)."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         QApplication.processEvents()
@@ -140,7 +143,57 @@ def test_server_sends_to_one_client_and_broadcasts(servers, pages):
     assert sorted(page_1.texts + page_2.texts) == ["everyone", "everyone", "only-first"]
 
 
+def raw_upgrade(port, path):
+    """QWebSocket 없이 소켓으로 WebSocket 업그레이드를 청하고, 서버가 연결을 끊을 때까지 받은 바이트를 (응답 머리, 그 뒤)로.
+    받은 차례 그대로 보므로 서버가 보낸 닫기 프레임을 플랫폼과 상관없이 확인할 수 있음 — QWebSocket 클라이언트의 closeCode()는
+    Windows CI에서 1008이 아니었음 (받은 바이트를 queued로 처리해 끊김을 먼저 보면 닫기 프레임을 읽지 않는 것으로 보임)."""
+    key = base64.b64encode(os.urandom(16)).decode("ascii")
+    request = (f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+               f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n")
+    sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+    try:
+        sock.sendall(request.encode("ascii"))
+        sock.setblocking(False)
+        data = bytearray()
+
+        def ended():
+            try:
+                chunk = sock.recv(4096)
+            except BlockingIOError:
+                return False
+            data.extend(chunk)
+            return not chunk
+
+        assert wait_until(ended), f"서버가 연결을 끊지 않음 (받은 것: {bytes(data)!r})"
+    finally:
+        sock.close()
+    head, sep, rest = bytes(data).partition(b"\r\n\r\n")
+    assert sep, f"업그레이드 응답이 끝나지 않음: {bytes(data)!r}"
+    return head, rest
+
+
+@pytest.mark.parametrize("path", ["/?token=not-the-token", "/"])
+def test_bad_token_gets_policy_violation_close_frame(servers, path, capsys):
+    """토큰이 틀리거나 없으면 서버가 닫기 프레임(1008 PolicyViolated, "bad token")만 보내고 TCP 연결을 끊음 (웹 보고서가 보는 것)."""
+    server = servers()
+    received, connected = [], []
+    server.message_received.connect(lambda client, msg: received.append(msg))
+    server.client_connected.connect(connected.append)
+    port, _ = port_and_token(server.start())
+
+    head, rest = raw_upgrade(port, path)
+
+    assert head.startswith(b"HTTP/1.1 101"), head
+    reason = b"bad token"
+    code = int(QWebSocketProtocol.CloseCodePolicyViolated).to_bytes(2, "big")
+    assert rest == bytes([0x88, 2 + len(reason)]) + code + reason  # FIN+닫기, 마스크 없음, 길이, 1008, 이유 — 그 뒤 끊김
+    assert received == [] and connected == [] and not server.has_clients()
+    assert "토큰이 맞지 않는 접속을 닫음" in capsys.readouterr().out
+
+
 def test_wrong_token_connection_closed(servers, pages, capsys):
+    """틀린 토큰의 보고서: 끊기고, 보낸 글은 닿지 않고, 서버가 모두에게 보내는 글도 받지 않음 (닫기 코드는
+    test_bad_token_gets_policy_violation_close_frame)."""
     server = servers()
     received, connected = [], []
     server.message_received.connect(lambda client, msg: received.append(msg))
@@ -150,26 +203,28 @@ def test_wrong_token_connection_closed(servers, pages, capsys):
     page = pages(with_token(url, "not-the-token"))
     assert wait_until(lambda: page.closed)
     page.send({"type": "request_sync"})  # 이미 닫힌 뒤: 아무 데도 닿지 않음
-    wait_until(lambda: bool(received), 0.3)
+    good = pages(url)
+    assert wait_until(lambda: len(connected) == 1 and good.is_open)
+    server.broadcast("everyone")
+    assert wait_until(lambda: good.texts == ["everyone"])
+    wait_until(lambda: bool(received) or bool(page.texts), 0.3)
 
-    assert page.sock.closeCode() == QWebSocketProtocol.CloseCodePolicyViolated
-    assert received == []
-    assert connected == []
-    assert not server.has_clients()
+    assert received == [] and page.texts == []
+    assert len(connected) == 1 and server.has_clients()  # 받아들인 것은 맞는 토큰의 보고서 하나
     log = capsys.readouterr()
-    assert "토큰" in log.out + log.err
+    assert "토큰이 맞지 않는 접속을 닫음" in log.out
     assert "not-the-token" not in log.out + log.err  # 받은 값을 기록에 남기지 않음
 
 
-def test_missing_token_connection_closed(servers, pages):
+def test_missing_token_connection_closed(servers, pages, capsys):
     server = servers()
     port, _ = port_and_token(server.start())
 
     page = pages(f"ws://127.0.0.1:{port}/")
 
     assert wait_until(lambda: page.closed)
-    assert page.sock.closeCode() == QWebSocketProtocol.CloseCodePolicyViolated
     assert not server.has_clients()
+    assert "토큰이 맞지 않는 접속을 닫음" in capsys.readouterr().out
 
 
 def test_other_windows_token_is_rejected(servers, pages):
