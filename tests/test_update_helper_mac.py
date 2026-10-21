@@ -3,9 +3,11 @@
 도우미 시험은 darwin에서만 돈다(macOS /bin/bash·ps·pgrep). 가짜 앱 = tmp_path 안의 .app 폴더로,
 Contents/MacOS/YesonCheck_Autocut이 작은 셸 스크립트다: "new"는 시험이 환경 변수(YC_TEST_OK_FILE)로 알려 준
 '잘 켜짐' 표시 파일에 {"version": "1.1.1"}을 쓰고, "silent"는 아무것도 쓰지 않고 계속 살아 있고, "crash"는 표시
-없이 곧 끝난다. 모든 가짜 앱은 켜질 때 흔적 파일(YC_TEST_TRACE_DIR/<old|new>_started)에 자기 pid를 남긴다 —
-옛 앱이 다시 켜졌는지·새 앱이 끝났는지를 그것으로 본다. YC_UPDATE_DIRECT_LAUNCH=1(open 대신 실행 파일을 직접
-켬)과 짧은 --timeout으로 빠르게 돈다. 실제 배포 경로(open -n -W)는 가짜 open(YC_UPDATE_OPEN=FAKE_OPEN)으로 시험한다.
+없이 곧 끝난다. 모든 가짜 앱은 켜질 때 흔적 파일(YC_TEST_TRACE_DIR/<old|new>_started)에 자기 pid를, <old|new>_args에
+받은 인자를 남긴다 — 옛 앱이 다시 켜졌는지·새 앱이 끝났는지·결과 판정 토큰(--update-result)을 받았는지를 그것으로 본다.
+YC_UPDATE_DIRECT_LAUNCH=1(open 대신 실행 파일을 직접 켬)과 짧은 --timeout으로 빠르게 돈다. 실제 배포 경로(open -n -W)는
+가짜 open(YC_UPDATE_OPEN=FAKE_OPEN)으로 시험한다. 같은 앱 번들의 다른 창은 가짜 앱 안의 Contents/MacOS/other_window를
+진짜 프로세스로 띄워 흉내 낸다 (명령 줄에 앱 경로가 들어 있어 도우미의 pgrep에 보임).
 
 launch_helper_mac 시험(subprocess.Popen을 바꿔 끼움)은 모든 플랫폼에서 돈다.
 """
@@ -31,7 +33,8 @@ LOG_LINE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2} ")  # update_ins
 
 darwin_only = pytest.mark.skipif(sys.platform != "darwin", reason="Mac 업데이트 도우미 (macOS bash·ps·pgrep)")
 
-_TRACE_START = 'printf "%s\\n" "$$" >> "$YC_TEST_TRACE_DIR/{name}_started"\n'
+_TRACE_START = ('printf "%s\\n" "$$" >> "$YC_TEST_TRACE_DIR/{name}_started"\n'
+                'printf "%s\\n" "$*" >> "$YC_TEST_TRACE_DIR/{name}_args"\n')
 FAKE_APP_SCRIPTS = {
     "old": _TRACE_START.format(name="old"),
     "new": _TRACE_START.format(name="new")
@@ -47,15 +50,23 @@ FAKE_APP_SCRIPTS = {
 }
 
 
+# 같은 앱 번들에서 도는 다른 창 흉내: $1 파일이 생길 때까지 돎 (start_other_window)
+OTHER_WINDOW_SCRIPT = '#!/bin/sh\nwhile [ ! -e "$1" ]; do sleep 0.1; done\n'
+
+
 # ---- 시험 도우미 (이 시험 모듈 안에만 둠) ----
 
 
 def make_fake_app(app_dir, kind):
-    """가짜 .app: Contents/MacOS/YesonCheck_Autocut(셸 스크립트)와 어느 앱인지 적은 Contents/Resources/kind.txt."""
+    """가짜 .app: Contents/MacOS/YesonCheck_Autocut(셸 스크립트)·other_window(다른 창 흉내)와 어느 앱인지 적은
+    Contents/Resources/kind.txt."""
     exe = Path(app_dir) / "Contents" / "MacOS" / update_install.APP_EXECUTABLE_NAME
     exe.parent.mkdir(parents=True)
     exe.write_text("#!/bin/sh\n" + FAKE_APP_SCRIPTS[kind], encoding="utf-8")
     exe.chmod(0o755)
+    other = exe.parent / "other_window"
+    other.write_text(OTHER_WINDOW_SCRIPT, encoding="utf-8")
+    other.chmod(0o755)
     resources = Path(app_dir) / "Contents" / "Resources"
     resources.mkdir()
     (resources / "kind.txt").write_text(kind, encoding="utf-8")
@@ -96,6 +107,31 @@ def trace_pids(trace_dir, name):
     return [int(x) for x in path.read_text(encoding="utf-8").split()]
 
 
+def trace_args(trace_dir, name):
+    """그 가짜 앱이 켜질 때마다 받은 인자 (켤 때마다 한 줄, 공백으로 이음 — 인자가 없으면 빈 줄)."""
+    path = Path(trace_dir) / f"{name}_args"
+    if not path.exists():
+        return []
+    return path.read_text(encoding="utf-8").splitlines()
+
+
+def start_other_window(case):
+    """같은 앱 번들(APP)에서 도는 다른 창 흉내 — APP/Contents/MacOS/other_window를 진짜 프로세스로. 흔적 폴더에
+    other_stop이 생기면(stop_other_window) 끝남."""
+    return subprocess.Popen(["/bin/sh", str(case.app / "Contents" / "MacOS" / "other_window"),
+                             str(case.trace / "other_stop")])
+
+
+def stop_other_window(case, proc):
+    (case.trace / "other_stop").touch()
+    try:
+        proc.wait(timeout=10)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+
 @pytest.fixture
 def update_case(tmp_path):
     """가짜 옛 앱(APP)·새 앱(STAGED, 종류는 make로 고름)·표시·로그·흔적 폴더를 만들어 주는 함수.
@@ -124,6 +160,7 @@ def update_case(tmp_path):
         env.pop("YC_UPDATE_OK_TIMEOUT_S", None)
         env.pop("YC_UPDATE_PID_TIMEOUT_S", None)
         env.pop("YC_UPDATE_OSASCRIPT", None)
+        env.pop("YC_OTHERS_TIMEOUT", None)
         # YC_UPDATE_NO_MESSAGEBOX: 종료 코드 2의 알림 창(osascript display alert)을 띄우지 않음 — 시험이 멈추지 않게
         env.update(YC_UPDATE_DIRECT_LAUNCH="1", YC_TEST_OK_FILE=str(ok_file), YC_TEST_TRACE_DIR=str(trace),
                    YC_UPDATE_NO_MESSAGEBOX="1")
@@ -173,7 +210,8 @@ def lock(path):
     Path(path).chmod(0o555)
 
 
-def helper_cmd(case, pid, timeout_s, staged=None):
+def helper_cmd(case, pid, timeout_s, staged=None, token=TOKEN):
+    """도우미 명령 — 앱(launch_helper_mac)처럼 --token을 넘김 (token=None이면 넘기지 않음: 토큰을 모르는 옛 앱)."""
     return [
         "/bin/bash", str(HELPER),
         "--pid", str(pid),
@@ -183,14 +221,14 @@ def helper_cmd(case, pid, timeout_s, staged=None):
         "--ok", str(case.ok_file),
         "--log", str(case.log),
         "--timeout", str(timeout_s),
-    ]
+    ] + ([] if token is None else ["--token", token])
 
 
-def run_helper(case, pid=None, timeout_s=4, staged=None):
-    """도우미를 끝까지 돌림 (넉넉히 60초 안에)."""
+def run_helper(case, pid=None, timeout_s=4, staged=None, token=TOKEN):
+    """도우미를 끝까지 돌림 (넉넉히 90초 안에)."""
     return subprocess.run(
-        helper_cmd(case, ended_pid() if pid is None else pid, timeout_s, staged),
-        env=case.env, capture_output=True, text=True, timeout=60,
+        helper_cmd(case, ended_pid() if pid is None else pid, timeout_s, staged, token),
+        env=case.env, capture_output=True, text=True, timeout=90,
     )
 
 
@@ -220,18 +258,8 @@ def test_helper_swaps_and_keeps_new(update_case):
 
 
 @darwin_only
-def test_helper_accepts_token_argument(update_case):
-    """앱(update_install.launch_helper_mac)이 넘기는 --token을 모르는 인자로 거절하지 않음 (쓰는 일은 Task A9)."""
-    case = update_case("new")
-    result = subprocess.run(helper_cmd(case, ended_pid(), 4) + ["--token", TOKEN], env=case.env, capture_output=True,
-                            text=True, timeout=60)
-    assert result.returncode == 0, failure_details(case, result)
-    assert app_kind(case.app) == "new" and "잘못된 인자" not in log_text(case)
-
-
-@darwin_only
 def test_helper_restores_when_new_app_silent(update_case):
-    case = update_case("silent", apps_dir_name="앱 (시험)+[1]")  # 괄호·+·[] — pgrep/pkill 정규식이 글자 그대로 맞아야 함
+    case = update_case("silent", apps_dir_name="앱 (시험)+[1]")  # 괄호·+·[] — pgrep 정규식이 글자 그대로 맞아야 함
     started = time.monotonic()
     result = run_helper(case, timeout_s=4)
     assert result.returncode == 1, failure_details(case, result)
@@ -647,19 +675,29 @@ def test_helper_log_truncates_admin_output_joined_with_cr(update_case, tmp_path)
 # ---- open 방식 (실제 배포 경로: YC_UPDATE_DIRECT_LAUNCH 없이) — 가짜 open으로 ----
 
 FAKE_OPEN = """#!/bin/sh
-# open 흉내: open [-n] [-W] <앱>. -W면 켠 앱이 끝날 때까지 기다렸다가 0으로 끝남 (진짜 open -W와 같음 — 앱의 종료 코드와
-# 상관없이 0). YC_TEST_OPEN_FAILS=<n>: 처음 n번은 진짜 open이 켜지 못할 때처럼 오류 글과 종료 코드 1
+# open 흉내: open [-n] [-W] <앱> [--args 인자…] (--args 뒤는 앱의 인자). -W면 켠 앱이 끝날 때까지 기다렸다가 0으로 끝남
+# (진짜 open -W와 같음 — 앱의 종료 코드와 상관없이 0). YC_TEST_OPEN_FAILS=<n>: 처음 n번은 진짜 open이 켜지 못할 때처럼
+# 오류 글과 종료 코드 1
 printf '%s\\n' "$*" >> "$YC_TEST_TRACE_DIR/open_calls"
 wait_app=0
-while [ $# -gt 1 ]; do
+while :; do
     case "$1" in
         -W) wait_app=1 ;;
         -n) ;;
-        *) echo "가짜 open: 모르는 옵션 $1" >&2; exit 2 ;;
+        -*) echo "가짜 open: 모르는 옵션 $1" >&2; exit 2 ;;
+        *) break ;;
     esac
     shift
 done
 app=$1
+shift
+if [ $# -gt 0 ]; then
+    if [ "$1" != "--args" ]; then
+        echo "가짜 open: 앱 뒤에 --args가 아닌 인자 $1" >&2
+        exit 2
+    fi
+    shift
+fi
 calls=$(wc -l < "$YC_TEST_TRACE_DIR/open_calls" | tr -d ' ')
 if [ "$calls" -le "${YC_TEST_OPEN_FAILS:-0}" ]; then
     echo "LSOpenURLsWithRole() failed with error -10810 for the file $app." >&2
@@ -667,10 +705,10 @@ if [ "$calls" -le "${YC_TEST_OPEN_FAILS:-0}" ]; then
 fi
 if [ "$wait_app" = 1 ]; then
     printf '%s\\n' "$$" > "$YC_TEST_TRACE_DIR/open_w_pid"
-    "$app/Contents/MacOS/YesonCheck_Autocut" </dev/null >/dev/null 2>&1
+    "$app/Contents/MacOS/YesonCheck_Autocut" "$@" </dev/null >/dev/null 2>&1
     exit 0
 fi
-"$app/Contents/MacOS/YesonCheck_Autocut" </dev/null >/dev/null 2>&1 &
+"$app/Contents/MacOS/YesonCheck_Autocut" "$@" </dev/null >/dev/null 2>&1 &
 exit 0
 """
 
@@ -706,7 +744,9 @@ def test_helper_open_mode_rolls_back_quickly_when_new_app_dies_at_once(update_ca
     assert elapsed < 10, f"{elapsed:.1f}초 — '잘 켜짐' 제한 시간(30초)을 기다림\n" + log_text(case)
     assert app_kind(case.app) == "old" and not case.backup.exists()
     assert "표시 없이 끝남" in log_text(case) and "되돌림" in log_text(case)
-    assert open_calls(case) == [f"-n -W {case.app}", f"-n {case.app}"]  # 옛 앱은 그냥 open -n
+    # 옛 앱은 그냥 open -n — 둘 다 결과 판정 토큰과 함께
+    assert open_calls(case) == [f"-n -W {case.app} --args --update-result {TOKEN}",
+                                f"-n {case.app} --args --update-result {TOKEN}"]
     assert wait_until(lambda: trace_pids(case.trace, "old")), log_text(case)
 
 
@@ -721,7 +761,7 @@ def test_helper_open_mode_success_leaves_open_w_running(update_case, tmp_path):
     waiter = open_w_pid(case)
     assert waiter is not None and not pid_gone(waiter), log_text(case)
     assert not pid_gone(trace_pids(case.trace, "new")[0])
-    assert open_calls(case) == [f"-n -W {case.app}"]
+    assert open_calls(case) == [f"-n -W {case.app} --args --update-result {TOKEN}"]
 
 
 @darwin_only
@@ -749,6 +789,157 @@ def test_helper_open_mode_rollback_ends_open_w_with_the_app(update_case, tmp_pat
     assert waiter is not None and wait_until(lambda: pid_gone(waiter)), log_text(case)
     assert wait_until(lambda: pid_gone(trace_pids(case.trace, "new")[0])), log_text(case)
     assert wait_until(lambda: trace_pids(case.trace, "old")), log_text(case)
+
+
+# ---- 여러 창: 모든 창이 끝난 뒤에만 바꿈, 되돌릴 때는 도우미가 켠 앱만 끝냄, 켜는 앱에 결과 판정 토큰 ----
+
+
+@darwin_only
+def test_waits_for_other_app_process_before_swap(update_case):
+    """누른 창(--pid)이 끝나도 같은 앱 번들의 다른 프로세스(다른 창)가 돌면 바꾸지 않고 기다림 — 바꾸면 그 창이 다음 지연
+    import에서 죽음(PyInstaller가 PYZ를 경로로 다시 엶). 그 창이 끝나면 바꿈."""
+    case = update_case("new")
+    other = start_other_window(case)
+    helper = subprocess.Popen(helper_cmd(case, ended_pid(), 10), env=case.env, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, text=True)
+    try:
+        time.sleep(1.5)
+        assert helper.poll() is None, "다른 창이 도는데 도우미가 끝남\n" + log_text(case)
+        assert app_kind(case.app) == "old" and not case.backup.exists() and case.staged.exists(), log_text(case)
+        assert f"다른 YesonCheck 창이 끝나기를 기다림 (pid {other.pid}(" in log_text(case), log_text(case)
+        stop_other_window(case, other)
+        out, err = helper.communicate(timeout=30)
+    finally:
+        if other.poll() is None:
+            other.kill()
+            other.wait()
+        helper.kill()
+    assert helper.returncode == 0, f"{out}\n{err}\n{log_text(case)}"
+    assert app_kind(case.app) == "new" and not case.backup.exists()
+    log = log_text(case)
+    assert log.index("다른 YesonCheck 창이 모두 끝남") < log.index("옛 앱을 백업 이름으로 옮김"), log
+
+
+@darwin_only
+def test_does_not_swap_when_other_process_keeps_running(update_case):
+    """다른 창이 YC_OTHERS_TIMEOUT초 안에 끝나지 않으면 바꾸지 않음(번들 그대로, 다른 창은 끝내지 않음) — 기록에 남기고 옛
+    앱을 결과 판정 토큰과 함께 켬(옛 앱이 '업데이트 실패' 창으로 기록을 보임), 준비한 새 앱은 지움."""
+    case = update_case("new")
+    case.env["YC_OTHERS_TIMEOUT"] = "2"
+    other = start_other_window(case)
+    try:
+        started = time.monotonic()
+        result = run_helper(case)
+        elapsed = time.monotonic() - started
+        other_still_running = other.poll() is None
+    finally:
+        stop_other_window(case, other)
+    assert result.returncode == 1, failure_details(case, result)
+    assert elapsed >= 2, f"{elapsed:.1f}초 — YC_OTHERS_TIMEOUT(2초)을 기다리지 않음\n" + log_text(case)
+    assert other_still_running, "다른 창을 끝냄\n" + log_text(case)
+    assert app_kind(case.app) == "old" and not case.backup.exists() and not case.staged.exists()
+    assert [p.name for p in case.apps_dir.iterdir()] == [case.app.name]
+    log = log_text(case)
+    assert f"다른 YesonCheck 창이 끝나지 않아 바꾸지 않음: pid {other.pid}(" in log, log
+    assert "옛 앱을 백업 이름으로 옮김" not in log and "앱은 바뀌지 않았음" in log, log
+    assert not trace_pids(case.trace, "new")
+    assert wait_until(lambda: trace_args(case.trace, "old") == [f"--update-result {TOKEN}"]), (
+        f"옛 앱 인자: {trace_args(case.trace, 'old')}\n{log_text(case)}")
+
+
+FAKE_PGREP_FAILING_FOR_ALL_USERS = """#!/bin/sh
+# 모든 사용자의 프로세스를 찾는 pgrep(-U 없이)만 실패 — 이 사용자의 것(-U)은 진짜 pgrep
+case " $* " in
+    *" -U "*) exec /usr/bin/pgrep "$@" ;;
+esac
+echo "pgrep: 시험 오류" >&2
+exit 3
+"""
+
+
+@darwin_only
+def test_does_not_swap_when_other_processes_cannot_be_listed(update_case, tmp_path):
+    """다른 창을 찾는 pgrep이 실패하면 '다른 창 없음'으로 보지 않음 — 바꾸지 않고 기록, 옛 앱을 토큰과 함께 켬."""
+    case = update_case("new")
+    fake_bin = tmp_path / "fake_bin"
+    fake_bin.mkdir()
+    (fake_bin / "pgrep").write_text(FAKE_PGREP_FAILING_FOR_ALL_USERS, encoding="utf-8")
+    (fake_bin / "pgrep").chmod(0o755)
+    case.env["PATH"] = f"{fake_bin}:{case.env['PATH']}"
+    result = run_helper(case)
+    assert result.returncode == 1, failure_details(case, result)
+    assert app_kind(case.app) == "old" and not case.backup.exists() and not case.staged.exists()
+    log = log_text(case)
+    assert "pgrep 오류 (종료 코드 3" in log and "다른 YesonCheck 창이 있는지 확인하지 못해 바꾸지 않음" in log, log
+    assert not trace_pids(case.trace, "new")
+    assert wait_until(lambda: trace_args(case.trace, "old") == [f"--update-result {TOKEN}"]), log_text(case)
+
+
+FAKE_MV_SPAWNING_OTHER_WINDOW = """#!/bin/sh
+# 바꾸기의 두 번째 mv(준비한 새 앱 → 앱 자리) 바로 뒤에 사용자가 앱을 켠 것처럼, 앱 자리의 other_window를 띄움 — 도우미가
+# 새 앱을 켜기 전부터 도는 같은 번들 프로세스. 출력은 막음 (도우미의 $(…)가 이 프로세스를 기다리지 않게)
+/bin/mv "$@" || exit
+if [ "$1" = "$YC_TEST_SPAWN_AFTER_MV_FROM" ]; then
+    nohup /bin/sh "$2/Contents/MacOS/other_window" "$YC_TEST_TRACE_DIR/other_stop" >/dev/null 2>&1 </dev/null &
+    printf '%s\\n' "$!" > "$YC_TEST_TRACE_DIR/other_pid"
+fi
+"""
+
+
+@darwin_only
+def test_rollback_kills_only_launched_pids(update_case, tmp_path):
+    """되돌릴 때 도우미가 켠 새 앱만 끝냄 — 새 앱을 켜기 전부터 돌던 같은 번들 프로세스(바꾸는 사이에 사용자가 켠 창)는
+    살아 있음 (앱 경로로 모두 pkill하지 않음)."""
+    case = update_case("silent")
+    fake_bin = tmp_path / "fake_bin"
+    fake_bin.mkdir()
+    (fake_bin / "mv").write_text(FAKE_MV_SPAWNING_OTHER_WINDOW, encoding="utf-8")
+    (fake_bin / "mv").chmod(0o755)
+    case.env["PATH"] = f"{fake_bin}:{case.env['PATH']}"  # 도우미가 사용자로 부르는 mv
+    case.env["YC_TEST_SPAWN_AFTER_MV_FROM"] = str(case.staged)
+    result = run_helper(case, timeout_s=3)
+    assert result.returncode == 1, failure_details(case, result)
+    other_pid = int((case.trace / "other_pid").read_text(encoding="utf-8"))
+    silent_pid = trace_pids(case.trace, "new")[0]
+    assert not pid_gone(other_pid), "새 앱을 켜기 전부터 돌던 프로세스를 끝냄\n" + log_text(case)
+    assert wait_until(lambda: pid_gone(silent_pid)), "표시 없는 새 앱이 끝나지 않음\n" + log_text(case)
+    assert app_kind(case.app) == "old" and not case.backup.exists()
+    log = log_text(case)
+    assert f"새 앱 프로세스를 끝냄 (TERM): {silent_pid}" in log and str(other_pid) in log, log
+    assert wait_until(lambda: trace_pids(case.trace, "old")), log_text(case)
+
+
+@darwin_only
+@pytest.mark.parametrize("mode", ["direct", "open"])
+def test_launch_passes_update_result_token(update_case, tmp_path, mode):
+    """도우미가 켜는 앱(새 앱, 되돌린 옛 앱)에는 모두 --update-result TOKEN — 그 앱만 지난 업데이트의 결과를 판정함
+    (launch_args, update_install.startup_result). open 방식은 open -n [-W] APP --args …, 직접 실행도 같은 인자."""
+    case = update_case("crash")  # 새 앱이 표시 없이 끝남 → 되돌려 옛 앱도 켬
+    if mode == "open":
+        use_fake_open(case, tmp_path)
+    result = run_helper(case, timeout_s=30)
+    assert result.returncode == 1, failure_details(case, result)
+    assert trace_args(case.trace, "new") == [f"--update-result {TOKEN}"], log_text(case)
+    assert wait_until(lambda: trace_args(case.trace, "old") == [f"--update-result {TOKEN}"]), (
+        f"옛 앱 인자: {trace_args(case.trace, 'old')}\n{log_text(case)}")
+    if mode == "open":
+        assert open_calls(case) == [f"-n -W {case.app} --args --update-result {TOKEN}",
+                                    f"-n {case.app} --args --update-result {TOKEN}"]
+
+
+@darwin_only
+@pytest.mark.parametrize("mode", ["direct", "open"])
+def test_launch_without_token_passes_no_arguments(update_case, tmp_path, mode):
+    """--token이 없으면(토큰을 모르는 옛 앱이 띄운 도우미) 인자 없이 켬 — 빈 --update-result는 앱이 거절함."""
+    case = update_case("crash")
+    if mode == "open":
+        use_fake_open(case, tmp_path)
+    result = run_helper(case, timeout_s=30, token=None)
+    assert result.returncode == 1, failure_details(case, result)
+    assert trace_args(case.trace, "new") == [""], log_text(case)
+    assert wait_until(lambda: trace_args(case.trace, "old") == [""]), log_text(case)
+    if mode == "open":
+        assert open_calls(case) == [f"-n -W {case.app}", f"-n {case.app}"]
 
 
 # ---- launch_helper_mac (모든 플랫폼) ----
@@ -885,8 +1076,11 @@ def test_helper_script_runs_under_bash_without_errexit():
     assert re.search(r"^set -u$", text, re.M) and not re.search(r"^set -[a-z]*e", text, re.M)
 
 
-def test_helper_only_looks_at_own_users_processes():
-    # 다른 사용자가 같은 Mac에서 같은 자리의 앱을 켜 두었어도 보지도 끝내지도 않음
-    calls = [line for line in HELPER.read_text(encoding="utf-8").splitlines()
-             if re.search(r"(^\s*|\$\()(pgrep|pkill) ", line)]  # 명령으로 부르는 줄 (주석·로그 글자 말고)
-    assert len(calls) == 3 and all('-U "$MY_UID"' in line for line in calls), calls
+def test_helper_kills_only_pids_and_waits_for_every_users_processes():
+    # 앱 경로로 모두 끝내지(pkill) 않음 — 도우미가 켠 새 앱의 pid만. 새 앱 찾기(app_pids)는 이 사용자의 프로세스만, 바꾸기 전
+    # 기다리기(all_app_pids)는 모든 사용자의 프로세스 (다른 사용자의 창도 바꾸면 죽음)
+    lines = HELPER.read_text(encoding="utf-8").splitlines()
+    calls = [line for line in lines if re.search(r"(^\s*|\$\()(pgrep|pkill) ", line)]  # 명령으로 부르는 줄 (주석·로그 글자 말고)
+    assert not [line for line in calls if "pkill" in line], calls
+    assert len(calls) == 2, calls
+    assert len([line for line in calls if '-U "$MY_UID"' in line]) == 1, calls

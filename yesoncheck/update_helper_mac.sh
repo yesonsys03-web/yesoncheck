@@ -4,14 +4,22 @@
 #   bash update_helper_mac.sh --pid PID --app APP --staged STAGED --target VER --ok OKFILE --log LOG [--timeout S]
 #       [--token TOKEN]
 #
-# TOKEN: 앱의 업데이트 기록(pending_update.json)의 토큰 — 다시 켜는 앱만 결과를 판정하게 넘길 값. 지금은 받아 두기만 함.
+# TOKEN: 앱의 업데이트 기록(pending_update.json)의 토큰. 도우미가 켜는 앱(새 앱, 되돌리거나 바꾸지 않고 다시 켜는 옛 앱)에
+# 모두 `--update-result TOKEN`으로 넘김(open -n [-W] APP --args --update-result TOKEN, 직접 실행도 같은 인자) — 그 앱만
+# 지난 업데이트의 결과를 판정하고, 업데이트 중에 사용자가 켠 앱은 "업데이트 중" 창만 보이고 끝남(launch_args,
+# update_install.startup_result·update_in_progress). 없으면(토큰을 모르는 옛 앱이 띄움) 인자 없이 켬.
 #
 # 앱(update_install.launch_helper_mac)이 이 파일을 업데이트 상태 폴더로 복사해 새 세션으로 띄운 뒤 끝난다.
-# 순서: PID가 끝나기를 기다림(300초 — 넘으면 아무것도 바꾸지 않음) → APP을 <APP 이름>.update-backup.app으로,
+# 순서: PID가 끝나기를 기다림(300초 — 넘으면 아무것도 바꾸지 않음) → APP/Contents/MacOS/ 아래 실행 파일로 도는 다른
+# 프로세스(다른 창 — 이 사용자·다른 사용자 모두)가 끝나기를 기다림(YC_OTHERS_TIMEOUT초 — 바꾸면 그 창들이 다음 지연
+# import에서 죽음: PyInstaller가 import마다 PYZ를 경로로 다시 엶. 앱은 넘기기 전에 이 사용자의 다른 창을 닫고, 업데이트 중에
+# 켜진 창은 몇 초 안에 스스로 끝남 — 이것은 그 뒤의 안전장치. 넘으면 바꾸지 않고 아래 되돌리기처럼 옛 앱을 켜고 끝냄)
+# → APP을 <APP 이름>.update-backup.app으로,
 # STAGED를 APP으로 옮김(앱 폴더에 쓸 수 없으면 두 mv를 관리자 암호 창으로 함께 — 그 뒤의 백업 지우기나 되돌리기도
 # 앱 폴더를 건드리므로 암호 창을 한 번 더 띄움; 켜기는 늘 사용자로) → OKFILE을 지움 → 새 앱을 켬 →
 # 새 앱이 창을 보인 뒤 쓰는 OKFILE({"version": "VER"})을 --timeout초까지 기다림 → 되면 백업과 OKFILE을 지움.
-# 중간에 실패하거나, 새 앱이 표시 없이 끝나거나, 시간이 지나면 되돌림: 새 앱 프로세스를 끝내고 새 앱을 치운 뒤
+# 중간에 실패하거나, 새 앱이 표시 없이 끝나거나, 시간이 지나면 되돌림: 도우미가 켠 새 앱 프로세스만 끝내고(새 앱을 켜기
+# 직전에 이미 돌던 같은 앱 프로세스 — 바꾸는 사이에 사용자가 켠 창 — 는 건드리지 않음) 새 앱을 치운 뒤
 # 백업을 APP으로 되돌려 옛 앱을 켠다. APP 자리에 앱이 없는 채로 끝내지 않는다 — 되돌리기마저 실패하면 두 오류를
 # 모두 기록하고, 알림 창(osascript display alert — 백업 앱의 자리)을 띄운 뒤(앱이 없으니 다음 실행에서 알릴 수 없음) 종료
 # 코드 2. 시작할 때 앱 자리에 앱이 없을 때도 같음.
@@ -26,6 +34,8 @@
 # 환경 변수 (주로 시험용):
 #   YC_UPDATE_OK_TIMEOUT_S   --timeout의 기본값 (없으면 180초)
 #   YC_UPDATE_PID_TIMEOUT_S  앱이 끝나기를 기다리는 시간 (없으면 300초)
+#   YC_OTHERS_TIMEOUT        그 뒤 같은 앱의 다른 프로세스(다른 창)가 모두 끝나기를 기다리는 시간 (없으면 60초 — 업데이트 중에
+#                            켜진 창이 "업데이트 중" 창을 보이고 스스로 끝나는 시간(app.UPDATE_IN_PROGRESS_CLOSE_MS)보다 넉넉히)
 #   YC_UPDATE_DIRECT_LAUNCH  1이면 open 대신 APP/Contents/MacOS/YesonCheck_Autocut을 직접 백그라운드로 켬
 #                            (환경 변수를 그대로 물려받고, 출력은 LOG에 덧붙임)
 #   YC_UPDATE_OPEN           open 대신 부를 명령 (시험의 가짜 open)
@@ -44,16 +54,18 @@ LOG=""
 TOKEN=""
 TIMEOUT="${YC_UPDATE_OK_TIMEOUT_S:-180}"
 PID_TIMEOUT="${YC_UPDATE_PID_TIMEOUT_S:-300}"
+OTHERS_TIMEOUT="${YC_OTHERS_TIMEOUT:-60}"
 
 ADMIN=0          # 1: 앱 폴더에 쓸 수 없어 파일 작업을 관리자 암호 창(osascript)으로 함
 SWAP_TRIED=0     # 1: APP을 백업 이름으로 옮기기 시작함 (그 뒤로는 백업이 있으면 우리가 옮긴 것)
 NEW_LAUNCHED=0   # 1: 새 앱을 켰음 (되돌릴 때 그 프로세스를 끝내야 함)
 LAUNCHED_PID=""  # 직접 실행(YC_UPDATE_DIRECT_LAUNCH=1)으로 켠 프로세스의 pid
 OPEN_W_PID=""    # open 방식: 새 앱을 켜고 그 앱이 끝날 때까지 기다리는 백그라운드 `open -n -W`의 pid
+PIDS_BEFORE=""   # 새 앱을 켜기 직전에 이미 돌던 이 사용자의 앱 프로세스 (공백으로 이음) — 새 앱으로 보지도 끝내지도 않음
 OPEN_CMD="${YC_UPDATE_OPEN:-open}"
 FS_OUT=""        # fs_run이 남긴 출력(오류)
 FAIL_REASON=""
-MY_UID=$(id -u)  # pgrep/pkill은 이 사용자의 프로세스만 (다른 사용자가 같은 자리의 앱을 켜 두었어도 건드리지 않음)
+MY_UID=$(id -u)  # 새 앱 찾기(app_pids)는 이 사용자의 프로세스만 — 바꾸기 전 기다리기(all_app_pids)는 모든 사용자
 
 log() {
     local line
@@ -95,7 +107,7 @@ applescript_escape() {  # AppleScript 큰따옴표 글자 안에 넣을 수 있�
     printf '%s' "$1" | LC_ALL=C sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
 
-regex_escape() {  # pgrep/pkill -f(확장 정규식)가 경로를 글자 그대로 찾도록
+regex_escape() {  # pgrep -f(확장 정규식)가 경로를 글자 그대로 찾도록
     printf '%s' "$1" | LC_ALL=C sed 's/[][\.*^$+?(){}|]/\\&/g'
 }
 
@@ -110,14 +122,45 @@ pid_alive() {  # 좀비(끝났지만 아직 거둬들이지 않음)는 끝난 �
     return 0
 }
 
-app_pids() {  # APP/Contents/MacOS/ 아래 실행 파일로 도는 프로세스들의 pid (한 줄에 하나)
+# app_pids·all_app_pids는 $(…) 안에서 부름 — 오류 기록은 stderr로 (stdout은 pid 목록; LOG에는 log가 따로 씀)
+app_pids() {  # APP/Contents/MacOS/ 아래 실행 파일로 도는 이 사용자의 프로세스들의 pid (한 줄에 하나)
     local out rc
     out=$(pgrep -U "$MY_UID" -f "$PATTERN")
     rc=$?
     if [ "$rc" -gt 1 ]; then
-        log "pgrep 오류 (종료 코드 $rc, 패턴 $PATTERN)"
+        log "pgrep 오류 (종료 코드 $rc, 패턴 $PATTERN)" >&2
     fi
     printf '%s' "$out"
+}
+
+all_app_pids() {  # 같은 것을 모든 사용자의 프로세스에서 (macOS pgrep은 -U 없이 다른 사용자의 명령 줄도 봄). pgrep 오류면 1
+    local out rc
+    out=$(pgrep -f "$PATTERN")
+    rc=$?
+    if [ "$rc" -gt 1 ]; then
+        log "pgrep 오류 (종료 코드 $rc, 패턴 $PATTERN)" >&2
+        return 1
+    fi
+    printf '%s' "$out"
+}
+
+new_app_pids() {  # 새 앱을 켠 뒤에 생긴 이 사용자의 앱 프로세스 (PIDS_BEFORE에 없던 것, 한 줄에 하나)
+    local pid
+    for pid in $(app_pids); do
+        case " $PIDS_BEFORE " in
+            *" $pid "*) ;;
+            *) printf '%s\n' "$pid" ;;
+        esac
+    done
+}
+
+describe_pids() {  # $1 = pid들(공백·줄바꿈으로 나눔) → "123(사용자) 456(사용자)" — 그 사이에 끝났으면 "(끝남)"
+    local pid user out=""
+    for pid in $1; do
+        user=$(ps -o user= -p "$pid" 2>/dev/null | tr -d ' ')
+        out="$out $pid(${user:-끝남})"
+    done
+    printf '%s' "${out# }"
 }
 
 # 기다리는 시간은 모두 bash SECONDS로 잼 — 초 단위로만 늘어 -ge로 비교하면 최대 1초 일찍 끝나므로 -gt(적어도 정한 시간)
@@ -133,29 +176,63 @@ wait_for_pid() {
     return 0
 }
 
-kill_new_app() {
+signal_pids() {  # $1 = TERM·KILL, $2 = pid들. 그 사이에 끝난 pid의 "No such process"도 기록 (삼키지 않음)
+    local out
+    if ! out=$(kill -"$1" $2 2>&1); then  # $2는 따옴표 없이 — pid들을 낱낱의 인자로
+        log "kill -$1 일부 실패 (그 사이에 끝났을 수 있음): $out"
+    fi
+}
+
+kill_new_app() {  # 새 앱을 켠 뒤에 생긴 프로세스(new_app_pids)만 끝냄 — 앱 경로로 모두 끝내지 않음
     local pids deadline
-    pids=$(app_pids)
+    pids=$(new_app_pids)
     if [ -z "$pids" ]; then
         log "새 앱 프로세스는 이미 끝나 있음"
         return 0
     fi
     log "새 앱 프로세스를 끝냄 (TERM): $(printf '%s' "$pids" | tr '\n' ' ')"
-    pkill -TERM -U "$MY_UID" -f "$PATTERN"
+    signal_pids TERM "$pids"
     deadline=$((SECONDS + 10))
-    while [ -n "$(app_pids)" ]; do
+    while pids=$(new_app_pids) && [ -n "$pids" ]; do
         if [ "$SECONDS" -gt "$deadline" ]; then
-            log "10초 안에 끝나지 않아 강제로 끝냄 (KILL)"
-            pkill -KILL -U "$MY_UID" -f "$PATTERN"
+            log "10초 안에 끝나지 않아 강제로 끝냄 (KILL): $(printf '%s' "$pids" | tr '\n' ' ')"
+            signal_pids KILL "$pids"
             sleep 1
             break
         fi
         sleep 0.5
     done
-    pids=$(app_pids)
+    pids=$(new_app_pids)
     if [ -n "$pids" ]; then
         log "새 앱 프로세스가 아직 남아 있음: $(printf '%s' "$pids" | tr '\n' ' ')"
     fi
+}
+
+wait_all_app_processes() {  # 앱(PID)이 끝난 뒤: 같은 앱의 다른 프로세스(다른 창 — 모든 사용자)가 모두 끝나기를 기다림.
+    # 바꾸기 전에 — 켜진 채 바꾸면 그 창이 다음 지연 import에서 죽음. 시간이 지나거나 찾지 못하면 FAIL_REASON을 두고 1
+    local deadline pids
+    deadline=$((SECONDS + OTHERS_TIMEOUT))
+    if ! pids=$(all_app_pids); then
+        FAIL_REASON="다른 YesonCheck 창이 있는지 확인하지 못해 바꾸지 않음 (pgrep 오류 — 위 기록)"
+        return 1
+    fi
+    if [ -z "$pids" ]; then
+        return 0
+    fi
+    log "다른 YesonCheck 창이 끝나기를 기다림 (pid $(describe_pids "$pids"), 최대 ${OTHERS_TIMEOUT}초)"
+    while [ -n "$pids" ]; do
+        if [ "$SECONDS" -gt "$deadline" ]; then
+            FAIL_REASON="다른 YesonCheck 창이 끝나지 않아 바꾸지 않음: pid $(describe_pids "$pids") (${OTHERS_TIMEOUT}초 기다림)"
+            return 1
+        fi
+        sleep 0.5
+        if ! pids=$(all_app_pids); then
+            FAIL_REASON="다른 YesonCheck 창이 있는지 확인하지 못해 바꾸지 않음 (pgrep 오류 — 위 기록)"
+            return 1
+        fi
+    done
+    log "다른 YesonCheck 창이 모두 끝남"
+    return 0
 }
 
 stop_open_w() {  # 되돌릴 때: 새 앱을 기다리던 open -n -W도 끝냄 (새 앱을 끝냈으면 보통 스스로 끝나 있음)
@@ -173,15 +250,17 @@ open_w_running() {  # 백그라운드 open -n -W가 아직 도는지 (이 셸의
     return 1
 }
 
+# 켜는 앱의 인자는 APP_ARGS(직접 실행)·OPEN_ARGS(open의 --args …) — 비었을 수 있어 ${X[@]+"${X[@]}"}로 씀
+# (bash 3.2는 set -u에서 빈 배열의 "${X[@]}"를 오류로 봄)
 launch_app() {  # $1 = 무엇을 켜는지 (로그용: "새 앱"·"옛 앱")
     local out
     if [ "${YC_UPDATE_DIRECT_LAUNCH:-}" = 1 ]; then
-        nohup "$APP/Contents/MacOS/$EXE_NAME" >>"$LOG" 2>&1 </dev/null &
+        nohup "$APP/Contents/MacOS/$EXE_NAME" ${APP_ARGS[@]+"${APP_ARGS[@]}"} >>"$LOG" 2>&1 </dev/null &
         LAUNCHED_PID=$!
         log "$1을 켬 (직접 실행, pid $LAUNCHED_PID): $APP"
         return 0
     fi
-    if out=$("$OPEN_CMD" -n "$APP" 2>&1); then
+    if out=$("$OPEN_CMD" -n "$APP" ${OPEN_ARGS[@]+"${OPEN_ARGS[@]}"} 2>&1); then
         log "$1을 켬 (open -n): $APP"
         return 0
     fi
@@ -199,7 +278,7 @@ launch_new_app() {
         launch_app "새 앱"
         return
     fi
-    nohup "$OPEN_CMD" -n -W "$APP" >>"$LOG" 2>&1 </dev/null &
+    nohup "$OPEN_CMD" -n -W "$APP" ${OPEN_ARGS[@]+"${OPEN_ARGS[@]}"} >>"$LOG" 2>&1 </dev/null &
     OPEN_W_PID=$!
     log "새 앱을 켬 (open -n -W, pid $OPEN_W_PID — 새 앱이 끝나면 끝남): $APP"
     return 0
@@ -339,12 +418,12 @@ ok_version() {  # OKFILE의 version 값 (없거나 아직 못 읽으면 빈 글�
     fi
 }
 
-new_app_running() {
+new_app_running() {  # 직접 실행이면 켠 pid, open 방식이면 새 앱을 켠 뒤에 생긴 프로세스 (켜기 전부터 돌던 창은 아님)
     if [ -n "$LAUNCHED_PID" ]; then
         pid_alive "$LAUNCHED_PID"
         return
     fi
-    [ -n "$(app_pids)" ]
+    [ -n "$(new_app_pids)" ]
 }
 
 wait_ok() {
@@ -365,7 +444,7 @@ wait_ok() {
                 FAIL_REASON="새 앱을 켜지 못함 (open -n -W 종료 코드 $open_status — open의 글은 위 기록에)"
                 return 1
             fi
-            if [ -z "$(app_pids)" ]; then
+            if [ -z "$(new_app_pids)" ]; then
                 version=$(ok_version)  # 표시를 쓰고 바로 끝났을 수 있음
                 if [ "$version" = "$TARGET" ]; then
                     return 0
@@ -489,7 +568,8 @@ for pair in "--pid:$PID" "--app:$APP" "--staged:$STAGED" "--target:$TARGET" "--o
         usage_error "${pair%%:*} 값이 없음"
     fi
 done
-for pair in "--pid:$PID" "--timeout(YC_UPDATE_OK_TIMEOUT_S):$TIMEOUT" "YC_UPDATE_PID_TIMEOUT_S:$PID_TIMEOUT"; do
+for pair in "--pid:$PID" "--timeout(YC_UPDATE_OK_TIMEOUT_S):$TIMEOUT" "YC_UPDATE_PID_TIMEOUT_S:$PID_TIMEOUT" \
+        "YC_OTHERS_TIMEOUT:$OTHERS_TIMEOUT"; do
     case "${pair#*:}" in
         "" | *[!0-9]*) usage_error "${pair%%:*} 값은 숫자여야 함: ${pair#*:}" ;;
     esac
@@ -502,12 +582,23 @@ APP_BASE=$(basename "$APP")
 BACKUP="$APP_DIR/${APP_BASE%.app}.update-backup.app"
 FAILED=""  # 되돌릴 때 restore_backup이 정함
 PATTERN=$(regex_escape "$APP/Contents/MacOS/")
+# 도우미가 켜는 앱의 인자 (launch_app·launch_new_app) — 맨 위 TOKEN 설명. 빈 --update-result는 앱이 거절하므로 토큰이
+# 없으면 넘기지 않음
+APP_ARGS=()
+OPEN_ARGS=()
+if [ -n "$TOKEN" ]; then
+    APP_ARGS=(--update-result "$TOKEN")
+    OPEN_ARGS=(--args --update-result "$TOKEN")
+fi
 # 준비한 새 앱이 앱(또는 백업) 자리와 겹치면 바꾸기가 실패한 뒤 '준비한 새 앱 지우기'가 되돌린 앱을 지움 — 손대기 전에 거절
 if paths_overlap "$STAGED" "$APP" || paths_overlap "$STAGED" "$BACKUP"; then
     usage_error "--staged가 --app(또는 그 백업 자리)과 같거나 겹침: --staged $STAGED, --app $APP"
 fi
 
 log "시작: 대상 버전 $TARGET, 앱 $APP, 준비한 새 앱 $STAGED"
+if [ -z "$TOKEN" ]; then
+    log "--token이 없음 — 켜는 앱에 결과 판정 인자(--update-result)를 넘기지 않음"
+fi
 
 if ! wait_for_pid; then
     log "앱(pid $PID)이 ${PID_TIMEOUT}초가 지나도 끝나지 않아 아무것도 바꾸지 않음"
@@ -523,6 +614,9 @@ $APP
 자세한 기록: $LOG"
     exit 2
 fi
+if ! wait_all_app_processes; then
+    rollback  # 바꾸지 않음: 옛 앱을 토큰과 함께 켜('업데이트 실패' 창에 이 기록) 준비한 새 앱을 지우고 끝냄
+fi
 if [ ! -x "$STAGED/Contents/MacOS/$EXE_NAME" ]; then
     FAIL_REASON="준비한 새 앱이 없음: $STAGED/Contents/MacOS/$EXE_NAME"
     rollback
@@ -536,6 +630,10 @@ fi
 if ! out=$(rm -f "$OKFILE" 2>&1); then
     FAIL_REASON="지난 '잘 켜짐' 표시를 지우지 못함: $OKFILE ($out)"
     rollback
+fi
+PIDS_BEFORE=$(app_pids | tr '\n' ' ')
+if [ -n "$PIDS_BEFORE" ]; then
+    log "새 앱을 켜기 전부터 도는 YesonCheck 프로세스 (새 앱으로 보지 않고, 되돌릴 때 끝내지 않음): pid $PIDS_BEFORE"
 fi
 NEW_LAUNCHED=1
 if ! launch_new_app; then
