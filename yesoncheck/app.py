@@ -16,13 +16,17 @@ if __package__ in (None, ""):
     sys.path.append(os.path.dirname(os.path.dirname(__file__)))
     from yesoncheck.main_window import VideoPlayer  # type: ignore  # pylint: disable=import-error
     from yesoncheck import (  # type: ignore  # pylint: disable=import-error
-        build_info, launch_args, mac_app_events, mac_mounts, new_window, paths, timing_log, update_install,
+        build_info, default_app, launch_args, mac_app_events, mac_mounts, new_window, paths, timing_log,
+        update_install,
     )
     from yesoncheck.player_base import EXIT_WAIT_S, wait_for_released_workers  # type: ignore  # pylint: disable=import-error
     from yesoncheck.player_update import BOX_TITLE_PROPERTY  # type: ignore  # pylint: disable=import-error
 else:
     from .main_window import VideoPlayer
-    from . import build_info, launch_args, mac_app_events, mac_mounts, new_window, paths, timing_log, update_install
+    from . import (
+        build_info, default_app, launch_args, mac_app_events, mac_mounts, new_window, paths, timing_log,
+        update_install,
+    )
     from .player_base import EXIT_WAIT_S, wait_for_released_workers
     from .player_update import BOX_TITLE_PROPERTY
 
@@ -141,7 +145,7 @@ def make_excepthook(log_path):
         else:
             dialog.requested.emit(text)  # GUI 스레드의 이벤트 루프에서 show_error 실행
 
-    excepthook.dialog = dialog  # 시험·GC 방지용 참조
+    excepthook.dialog = dialog  # 시험·GC 방지용 참조 — 예상된 실패의 오류 창도 이 창으로 (default_app._show_error)
     return excepthook
 
 
@@ -242,6 +246,14 @@ def show_update_in_progress():
     box.exec_()
 
 
+def handle_update_startup_then_ask(player, update_token):
+    """창을 보인 뒤 첫 일: 지난 업데이트의 결과 판정(player.handle_update_startup — 실패 창이면 닫힐 때까지) → (Mac 빌드 앱,
+    도우미가 켠 앱이 아니면) 동영상 기본 앱 묻기를 Qt 루프에 — 그사이 줄 서 있던 시작 일(창 기록·공유 설정·받은 파일) 뒤에."""
+    player.handle_update_startup(update_token)
+    if default_app.asks_on_start(update_token):
+        QTimer.singleShot(0, lambda: default_app.ask_at_start(player))
+
+
 # 창을 닫은 뒤 끝나지 않은 작업을 기다리는 최대 시간 EXIT_WAIT_S(초, 넘으면 로그를 남기고 강제 종료)는 player_base에 둠 —
 # 다른 창의 업데이트가 닫히는 창을 기다리는 한도(player_update.CLOSE_OTHERS_TIMEOUT_S)도 그 값으로 셈 (player_update는 이
 # 모듈을 불러올 수 없음: 이 모듈이 player_update를 부름)
@@ -327,8 +339,9 @@ def launch(argv=None):
     splash.finish(player)
     timing_log.startup("창 표시")
     # 지난 업데이트의 결과(이 컴퓨터의 기록 파일만 — NAS·인터넷 없음): 창을 보인 뒤 맨 먼저 — 새 버전이면 "잘 켜짐" 표시를
-    # 바로 남겨 업데이트 도우미가 기다림을 끝냄
-    QTimer.singleShot(0, lambda: player.handle_update_startup(args.update_token))
+    # 바로 남겨 업데이트 도우미가 기다림을 끝냄. 그 판정(실패 창을 닫기까지)이 끝난 뒤 (Mac 빌드 앱) 처음 한 번 동영상 기본 앱을
+    # 물음 — 아래의 시작 일들보다 뒤 (default_app.asks_on_start — 도우미가 켠 앱은 다음에 켤 때)
+    QTimer.singleShot(0, lambda: handle_update_startup_then_ask(player, args.update_token))
     # 창 기록·창 사이 연결 서버: 다른 창의 업데이트가 이 창을 세고 상태를 묻고 닫기를 요청할 수 있게
     # (기록은 창을 닫을 때·프로세스가 끝날 때 지움 — instances)
     QTimer.singleShot(0, player.start_instance_link)

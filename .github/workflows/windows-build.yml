@@ -319,6 +319,23 @@ jobs:
           fi
           PY="$VENV/bin/python" ./build_app.sh
 
+      - name: Info.plist — .mov·.mp4를 열 수 있다고 알림 (CFBundleDocumentTypes — Finder '다음으로 열기')
+        run: |
+          PLIST="dist/YesonCheck_Autocut_${LABEL}.app/Contents/Info.plist"
+          # 키가 없으면 plutil이 실패 (종료 코드 1)
+          plutil -extract CFBundleDocumentTypes xml1 -o - "$PLIST"
+          # spec(BUNDLE info_plist)의 값 그대로인지 — tests/test_default_app.py의 EXPECTED_DOCUMENT_TYPES와 같은 값
+          "$VENV/bin/python" - "$PLIST" <<'EOF'
+          import plistlib, sys
+          with open(sys.argv[1], "rb") as fh:
+              got = plistlib.load(fh).get("CFBundleDocumentTypes")
+          want = [{"CFBundleTypeName": "Video", "CFBundleTypeRole": "Viewer", "LSHandlerRank": "Alternate",
+                   "LSItemContentTypes": ["com.apple.quicktime-movie", "public.mpeg-4"]}]
+          if got != want:
+              sys.exit(f"Info.plist의 CFBundleDocumentTypes가 다릅니다: {got!r}")
+          print("CFBundleDocumentTypes 확인:", got)
+          EOF
+
       - name: 빌드 버전 (build/build_info.json → 파일 이름 꼬리)
         run: |
           # build_app.sh가 만들어 앱에 넣은 파일에서 읽음 (write_build_info.py를 다시 돌리지 않음 — 빌드 시각이 바뀜)

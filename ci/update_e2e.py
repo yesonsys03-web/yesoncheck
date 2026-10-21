@@ -28,6 +28,10 @@ make_test_data.py --update-dir이 가짜 공유 설정의 updates/에 꾸러미�
 Windows는 실제 화면 windows — APP_ENV의 설명),
 YC_UPDATE_DIRECT_LAUNCH=1, YC_UPDATE_OK_TIMEOUT_S=60, YC_UPDATE_NO_MESSAGEBOX=1, 업데이트 상태 폴더는 작업 폴더 아래
 (Windows LOCALAPPDATA, Mac HOME). PYTHONUTF8은 뺌 (사용자 PC와 같게 — ci/run_smoke_test.ps1처럼).
+Mac: 빌드 앱은 처음 켤 때 한 번 동영상 기본 앱을 묻는다(모달 창 — default_app.ask_at_start). 이 시험이 보통으로 켜는 앱(다른 창
+경로의 다른 창)이 그 창에 멈추거나 이 러너의 LaunchServices를 읽지 않게, 경우마다 사용자 폴더(HOME)의 prefs.json에 앱과 같은
+파일·키로 '이미 답함'을 남겨 둔다(answer_default_app_ask — 앱에 시험용 스위치를 두지 않음). 다른 창 경로는 그 창의 기록에
+'이미 답함' 줄이 있는지도 본다(check_default_app_not_asked). 도우미가 다시 켜는 앱(--update-result)은 원래 묻지 않는다.
 
 전체 제한 시간(--time-limit-min, 워크플로 단계의 timeout-minutes보다 몇 분 짧게)이 지나면 기다리던 단계가 실패해 단계가 끊기기
 전에 진단을 보인다. 단계마다 이름을 찍고, 실패하면 그 단계·트레이스백·도우미 기록(update.log)·도우미 출력
@@ -90,6 +94,11 @@ QT_PLATFORM = "windows" if WINDOWS else "offscreen"
 CLOSE_OTHERS_TITLE = "다른 창도 닫고 업데이트"  # player_update.UPDATE_OTHERS_TITLE
 CLOSE_OTHERS_COUNT = "다른 YesonCheck 창 1개도 닫힙니다."  # player_update.OTHERS_COUNT.format(n=1)
 CLOSE_ALL_BUTTON = "모두 닫고 업데이트"  # player_update.CLOSE_ALL_BUTTON
+# (Mac) 처음 켤 때의 동영상 기본 앱 질문 (default_app — 드라이버는 Qt를 불러오지 않으므로 같은 값을 따로 둠, 시험이 비교):
+# HOME 아래 설정 파일·'이미 답함' 키, 묻지 않고 넘어간 앱의 기록 줄
+DEFAULT_APP_PREFS = ("Library", "Application Support", "YesonCheck", "prefs.json")  # default_app.prefs_path()
+DEFAULT_APP_ASKED_KEY = "asked_default_video_app"  # default_app.ASKED_KEY
+DEFAULT_APP_NOT_ASKED_LOG = "[기본 앱] 이미 답함 — 묻지 않음"  # default_app.ALREADY_ANSWERED_LOG
 
 # 옛 앱(그리고 도우미가 물려받아 다시 켜는 앱)의 환경
 APP_ENV = {
@@ -578,6 +587,30 @@ def make_shared_config(case, platform_key):
         print(f"{manifest}:\n{fh.read()}", flush=True)
 
 
+def answer_default_app_ask(case):
+    """(Mac) 이 경우의 사용자 폴더(HOME)의 prefs.json에 동영상 기본 앱 질문에 이미 답했다고 남김(앱이 [예]·[아니요] 뒤에 쓰는 것과
+    같은 키 — default_app.record_asked) → 그 경로. 이 경우에서 켜는 빌드 앱은 묻지 않고(모달 창에 멈추지 않음) LaunchServices도
+    읽지 않는다(default_app._ask_at_start). 새 폴더라 파일이 없어야 함."""
+    path = os.path.join(case.user_dir, *DEFAULT_APP_PREFS)
+    assert not os.path.exists(path), f"이 경우의 사용자 폴더에 이미 prefs.json이 있습니다: {path}"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump({DEFAULT_APP_ASKED_KEY: True}, fh)
+    print(f"{path}: {read_text(path)}", flush=True)
+    return path
+
+
+def check_default_app_not_asked(case, pid):
+    """(Mac) 보통으로 켠 다른 창(pid)이 동영상 기본 앱을 묻지 않았음: 그 창의 기록(yesoncheck_<날짜>_<pid>.log)에 '이미 답함'
+    줄 — 빌드 앱이 묻기 판단까지 갔고 answer_default_app_ask의 prefs.json을 읽었다는 뜻."""
+    logs = [path for path in app_logs(case) if path.endswith(f"_{pid}.log")]
+    assert len(logs) == 1, f"다른 창(pid {pid})의 기록이 하나가 아닙니다: {logs}"
+    text = read_text(logs[0])
+    assert DEFAULT_APP_NOT_ASKED_LOG in text, \
+        f"다른 창(pid {pid})의 기록에 '{DEFAULT_APP_NOT_ASKED_LOG}'이 없습니다 (묻는 창이 떴을 수 있음): {logs[0]}"
+    print(f"다른 창(pid {pid}): 동영상 기본 앱을 묻지 않음 ({logs[0]})", flush=True)
+
+
 def instance_record_path(case, pid):
     """이 경우의 앱이 남기는 창 기록 (instances.register — Windows LOCALAPPDATA, Mac HOME 아래)."""
     with user_dir_env(case):
@@ -854,6 +887,9 @@ def run_case(args, case, platform_key):
     step(case, "업데이트 상태 폴더의 여유 공간", check_state_free_space, files, platform_key)
     step(case, f"가짜 공유 설정 + updates/ (latest.json {NEW_VERSION}, 꾸러미 {case.package_version})",
          make_shared_config, case, platform_key)
+    if not WINDOWS:
+        step(case, "동영상 기본 앱 질문에 이미 답한 것으로 (prefs.json — 켜는 앱이 묻는 창에 멈추지 않게)",
+             answer_default_app_ask, case)
     second = None
     if case.other_window:
         second = step(case, "같은 설치의 다른 창을 켬 (사용자가 켠 것처럼 — 창 기록이 생길 때까지)", start_second_window, case)
@@ -865,6 +901,8 @@ def run_case(args, case, platform_key):
     else:
         if second is not None:
             step(case, "결과: 다른 창은 업데이트의 닫기 요청으로 정상 종료", check_second_window_closed, case, second, log_text)
+            if not WINDOWS:
+                step(case, "다른 창은 동영상 기본 앱을 묻지 않았음 (prefs.json)", check_default_app_not_asked, case, second.pid)
         step(case, f"결과: {NEW_VERSION}로 업데이트 — 새 앱이 켜짐", check_success, case, files, log_text)
     print(f"===== [{case.name}] 업데이트 기록 전체 ({files['log']})\n{read_text(files['log'])}", flush=True)
 

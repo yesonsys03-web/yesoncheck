@@ -303,3 +303,44 @@ def test_app_logs_are_every_windows_log_next_to_update_log(tmp_path):
         os.utime(path, (1_700_000_000 - age * 60, 1_700_000_000 - age * 60))
     assert [os.path.basename(p) for p in update_e2e.app_logs(case)] == [
         "yesoncheck_20261021_4100.log", "yesoncheck_20261021_5300.log"]
+
+
+def test_default_app_texts_match_the_app():
+    """드라이버가 쓰는 동영상 기본 앱 질문의 설정 파일·키·기록 줄이 앱(default_app)의 것과 같음."""
+    from yesoncheck import default_app
+
+    assert update_e2e.DEFAULT_APP_ASKED_KEY == default_app.ASKED_KEY
+    assert update_e2e.DEFAULT_APP_NOT_ASKED_LOG == default_app.ALREADY_ANSWERED_LOG
+
+
+def test_mac_cases_answer_the_default_app_ask_beforehand(monkeypatch, tmp_path):
+    """(Mac 경우) 이 경우의 HOME에 남긴 prefs.json을 앱이 '이미 답함'으로 읽음 → 켜는 앱이 묻지 않음 (모달 창에 멈추지 않음)."""
+    from yesoncheck import default_app
+
+    case = SimpleNamespace(user_dir=str(tmp_path / "user"))
+    path = update_e2e.answer_default_app_ask(case)
+    monkeypatch.setenv("HOME", case.user_dir)
+    monkeypatch.setenv("USERPROFILE", case.user_dir)  # Windows의 expanduser
+    assert update_e2e.same_path(path, default_app.prefs_path())
+    prefs = default_app.read_prefs()
+    not_default = {uti: "com.apple.QuickTimePlayerX" for uti in default_app.VIDEO_UTIS}
+    assert not default_app.should_ask(prefs, not_default, "com.yeson.check")
+    with pytest.raises(AssertionError, match="이미 prefs.json"):  # 새 경우 폴더에만
+        update_e2e.answer_default_app_ask(case)
+
+
+def test_check_default_app_not_asked_reads_the_windows_log(tmp_path):
+    case = SimpleNamespace(user_dir=str(tmp_path / "user"))
+    folder = os.path.dirname(update_e2e.state_files(case)["log"])
+    os.makedirs(folder, exist_ok=True)
+    with pytest.raises(AssertionError, match="하나가 아닙니다"):
+        update_e2e.check_default_app_not_asked(case, 5300)
+    log = os.path.join(folder, "yesoncheck_20261021_5300.log")
+    with open(log, "w", encoding="utf-8") as fh:
+        fh.write("[기본 앱] 지금 기본 앱 {...} — 물음\n")
+    with pytest.raises(AssertionError, match="묻는 창이 떴을 수 있음"):
+        update_e2e.check_default_app_not_asked(case, 5300)
+    with open(log, "a", encoding="utf-8") as fh:
+        fh.write(f"{update_e2e.DEFAULT_APP_NOT_ASKED_LOG} (/Users/runner/Library/Application Support/YesonCheck/"
+                 "prefs.json)\n")
+    update_e2e.check_default_app_not_asked(case, 5300)
