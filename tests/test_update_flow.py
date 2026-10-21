@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 from PyQt5.QtCore import QTimer
-from PyQt5.QtWidgets import QApplication, QMessageBox, QWidget
+from PyQt5.QtWidgets import QApplication, QDialog, QMessageBox, QPushButton, QWidget
 
 from yesoncheck import build_info, instance_link, instances, player_base, player_update, update_install, updates
 from yesoncheck.update_install import Pending, ok_marker_path, read_pending, write_pending
@@ -1556,12 +1556,52 @@ def test_launch_exits_with_message_when_update_in_progress(qapp, helper_running,
     assert read_pending().token == TOKEN  # 기록은 그대로 (도우미가 켤 앱이 판정)
 
 
+class _OkDialog(QDialog):
+    """show_update_in_progress의 QMessageBox 대신 넣는 평범한 QDialog — 같은 만들기 인자, [OK](QMessageBox.Ok)는 accept.
+    Windows offscreen에서는 QMessageBox를 띄우면 Qt가 access violation으로 죽음 (시험 환경 문제 — 실제 Windows 실행은
+    offscreen이 아님, test_instance_link._question_and_exec_dialog와 같음)."""
+
+    Information = QMessageBox.Information
+    Ok = QMessageBox.Ok
+
+    def __init__(self, icon, title, text, buttons, parent=None):
+        super().__init__(parent)
+        assert (icon, buttons) == (QMessageBox.Information, QMessageBox.Ok)
+        self.setWindowTitle(title)
+        self._text = text
+        self._ok = QPushButton("OK", self)
+        self._ok.clicked.connect(self.accept)
+
+    def text(self):
+        return self._text
+
+    def button(self, which):
+        assert which == QMessageBox.Ok
+        return self._ok
+
+
+# "qdialog": 창을 _OkDialog로 바꿔 (모든 플랫폼) 타이머·accept·exec_가 끝나는 흐름을, "qmessagebox": 실제 QMessageBox (Windows 밖)
+UPDATE_BOX_KINDS = [
+    "qdialog",
+    pytest.param("qmessagebox", marks=pytest.mark.skipif(
+        sys.platform == "win32", reason="Windows offscreen에서 QMessageBox는 Qt를 죽임 (시험 환경)")),
+]
+
+
+def _update_box_class(app_module, kind, monkeypatch):
+    if kind == "qdialog":
+        monkeypatch.setattr(app_module, "QMessageBox", _OkDialog)
+        return _OkDialog
+    return QMessageBox
+
+
 class _BoxWatch:
-    """시험 중 실제로 뜬(exec_) QMessageBox를 after_ms 뒤에 찾아 action(box)을 함 — 창이 저절로 닫히지 않아도 시험이 멈추지
+    """시험 중 실제로 뜬(exec_) box_class 창을 after_ms 뒤에 찾아 action(box)을 함 — 창이 저절로 닫히지 않아도 시험이 멈추지
     않게 (seen: 그때 떠 있던 창의 글)."""
 
-    def __init__(self, after_ms, action):
+    def __init__(self, after_ms, action, box_class):
         self.seen = []
+        self.box_class = box_class
         self.timer = QTimer()
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(lambda: self._act(action))
@@ -1569,19 +1609,21 @@ class _BoxWatch:
 
     def _act(self, action):
         for widget in QApplication.topLevelWidgets():
-            if isinstance(widget, QMessageBox) and widget.isVisible():
+            if isinstance(widget, self.box_class) and widget.isVisible():
                 self.seen.append(widget.text())
                 action(widget)
 
 
-def test_update_in_progress_box_closes_itself(qapp, helper_running, launched, monkeypatch):
+@pytest.mark.parametrize("kind", UPDATE_BOX_KINDS)
+def test_update_in_progress_box_closes_itself(qapp, helper_running, launched, monkeypatch, kind):
     """'업데이트 중' 창을 띄운 채 자리를 비워도 곧 닫히고 프로세스가 끝남 — 도우미는 모든 앱 프로세스가 끝나기를 기다림."""
     from yesoncheck import app as app_module
 
     _built_app(monkeypatch, "1.1.0")
     assert 1000 <= app_module.UPDATE_IN_PROGRESS_CLOSE_MS <= 15000  # 읽을 만큼은 보이고, 도우미의 기다림보다 훨씬 짧게
     monkeypatch.setattr(app_module, "UPDATE_IN_PROGRESS_CLOSE_MS", 300)
-    stuck = _BoxWatch(5000, lambda box: box.done(QMessageBox.Ok))  # 저절로 닫히지 않으면 5초 뒤 대신 닫음
+    box_class = _update_box_class(app_module, kind, monkeypatch)
+    stuck = _BoxWatch(5000, lambda box: box.done(QMessageBox.Ok), box_class)  # 저절로 닫히지 않으면 5초 뒤 대신 닫음
     started = time.monotonic()
     try:
         assert app_module.launch(["yesoncheck"]) == 0
@@ -1590,12 +1632,14 @@ def test_update_in_progress_box_closes_itself(qapp, helper_running, launched, mo
     assert stuck.seen == [] and time.monotonic() - started < 4 and launched == []
 
 
-def test_update_in_progress_box_closes_at_once_on_ok(qapp, helper_running, launched, monkeypatch):
+@pytest.mark.parametrize("kind", UPDATE_BOX_KINDS)
+def test_update_in_progress_box_closes_at_once_on_ok(qapp, helper_running, launched, monkeypatch, kind):
     from yesoncheck import app as app_module
 
     _built_app(monkeypatch, "1.1.0")
     monkeypatch.setattr(app_module, "UPDATE_IN_PROGRESS_CLOSE_MS", 60000)
-    ok = _BoxWatch(100, lambda box: box.button(QMessageBox.Ok).click())
+    box_class = _update_box_class(app_module, kind, monkeypatch)
+    ok = _BoxWatch(100, lambda box: box.button(QMessageBox.Ok).click(), box_class)
     started = time.monotonic()
     try:
         assert app_module.launch(["yesoncheck"]) == 0
