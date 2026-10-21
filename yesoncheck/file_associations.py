@@ -16,7 +16,7 @@
 - 오류: 예상된 실패 — 레지스트리를 읽거나 쓰지 못함(액세스 거부 등 OSError → FileAssociationError: 어느 키·값과 원래 오류),
   설정 화면을 열지 못함(os.startfile의 OSError) — 는 오류 창에 무엇이 왜(기록에는 트레이스백도). 예상 못 한 예외는 기록과
   오류 창에 트레이스백. 오류 창은 빌드 앱이면 앱의 예외 창(app.make_excepthook가 sys.excepthook.dialog로 둔 창 — 기록 파일
-  경로를 붙이고 한 번에 하나만), 그 창이 없으면(소스 실행) 같은 제목의 QMessageBox.critical (error_window — default_app과 함께 씀).
+  경로를 붙이고 한 번에 하나만), 그 창이 없으면(소스 실행) 같은 제목의 QMessageBox.critical (error_window — default_app·mac_app_events와 함께 씀).
 - winreg·shell32는 Windows에만 있다 → 쓸 때 불러옴(_winreg·notify_associations_changed). 시험은 레지스트리(reg=)·알림(notify=)·
   설정 화면 열기(_open_uri)를 바꿔 끼워 Mac에서도 돈다.
 """

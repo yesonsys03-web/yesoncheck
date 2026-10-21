@@ -91,13 +91,14 @@ class VideoPlayer(PlayerUpdateMixin, PlayerAnnotationsMixin, PlayerSidebarMixin,
 ```
 
 **주요 파일**:
-- `yesoncheck/app.py` (385줄): 애플리케이션 부트스트랩 및 CLI 진입점 — 빌드 앱은 `setup_app_logging`이 stdout·stderr를
+- `yesoncheck/app.py` (397줄): 애플리케이션 부트스트랩 및 CLI 진입점 — 빌드 앱은 `setup_app_logging`이 stdout·stderr를
   창(프로세스)마다 기록 파일 `yesoncheck_<날짜>_<pid>.log`로(Mac `~/Library/Logs/YesonCheck`, Windows
   `%LOCALAPPDATA%\YesonCheck\logs` — update.log와 같은 폴더, 30일 지난 것은 켤 때 지움) 보내고 예외 창(`sys.excepthook`)을
   설치. 업데이트 중(다른 창이 넘긴 업데이트 — 도우미가 `--update-result`로 켠 앱은 빼고)에 켜면 창을 만들지 않고
   "업데이트 중입니다 — 끝난 뒤 다시 열어 주세요" 창만(8초 뒤 저절로 닫힘) 보이고 끝남. 받은 파일·Dock 클릭은
-  `mac_app_events`가 받아 첫 파일은 이 창의 A, 나머지와 켜진 뒤의 것은 새 창(`new_window`)으로 보내고, 창을 보인 뒤 Mac 빌드 앱은
-  처음 한 번 동영상 기본 앱을 묻고(`default_app`) Windows 빌드 앱은 이 계정에 연결 프로그램을 등록(`file_associations`) —
+  `mac_app_events`가 받아 첫 파일은 이 창의 A(`open_startup_file` — 있는지 보지 않고 `open_file`로, 열지 못하면 그 오류 창), 나머지와
+  켜진 뒤의 것은 새 창(`new_window`)으로 보내고, 창을 보인 뒤 Mac 빌드 앱은 처음 한 번 동영상 기본 앱을 묻고(`default_app`) Windows 빌드
+  앱은 이 계정에 연결 프로그램을 등록(`file_associations`) —
   시작 순서는 아래 '여러 창과 업데이트'의 '새 창·동영상 열기·기본 앱'
 - `yesoncheck/main_window.py` (~10줄): 믹스인 구성
 - `yesoncheck/player_base.py` (5,422줄): 핵심 UI 및 윈도우 관리
@@ -141,16 +142,17 @@ class VideoPlayer(PlayerUpdateMixin, PlayerAnnotationsMixin, PlayerSidebarMixin,
   `OPEN_TIMEOUT_S`(30초)까지 기다림(0이 아니거나 시간이 지나면 명령·출력이 든 `RuntimeError`). 소스 실행과 Windows 빌드 앱은
   프로세스를 바로 띄우고 기다리지 않음(Windows는 `PYINSTALLER_RESET_ENVIRONMENT=1`로 같은 exe를 새 앱으로). 실패(`OSError`·
   `RuntimeError`)는 감싸거나 삼키지 않고, 파일이 여럿일 때 한 파일이 실패하면 거기서 멈춤 — Qt 없음
-- `yesoncheck/mac_app_events.py` (279줄): 파일 열기·앱 다시 열기를 새 창으로 — `install`(QApplication 바로 다음)이 Mac이면 `FileOpenRouter`를
+- `yesoncheck/mac_app_events.py` (310줄): 파일 열기·앱 다시 열기를 새 창으로 — `install`(QApplication 바로 다음)이 Mac이면 `FileOpenRouter`를
   QApplication의 이벤트 필터(`QFileOpenEvent`)로 걸고, `ready(open_here)`(창을 보인 뒤)가 모아 둔 파일(시작 인자 + 시작 중 온
   이벤트, 받은 차례)의 첫 파일은 이 창의 A·나머지는 `new_window.spawn`, 그 뒤의 파일 열기는 이벤트마다 새 창. 같은 곳에서 Mac은
   `'aevt'/'rapp'`(kAEReopenApplication — Dock 클릭, 켜져 있을 때 Finder·Launchpad·Spotlight로 앱 다시 실행)를 받는 처리기를
-  ctypes로 등록(`NSAppleEventManager`에 Objective-C 클래스 하나, PyObjC 없음) → `spawn([])`(빈 새 창). 모듈 설명에 Step 1 실험
-  (고른 방법·버린 방법·등록 시점·부작용)이 있음
-- `yesoncheck/default_app.py` (470줄): Mac 동영상(.mov·.mp4) 기본 앱 — LaunchServices C API를 ctypes로(`LSCopyDefaultRoleHandlerForContentType`·
+  ctypes로 등록(`NSAppleEventManager`에 Objective-C 클래스 하나, PyObjC 없음) → `spawn([])`(빈 새 창). 실패는 바로 기록하고 오류 창은
+  Qt 루프에서 `error_window`로(`_report_error`). 모듈 설명에 Step 1 실험(고른 방법·버린 방법·등록 시점·부작용)이 있음
+- `yesoncheck/default_app.py` (494줄): Mac 동영상(.mov·.mp4) 기본 앱 — LaunchServices C API를 ctypes로(`LSCopyDefaultRoleHandlerForContentType`·
   `LSSetDefaultRoleHandlerForContentType`(`kLSRolesAll`)·`LSRegisterURL`·`LSCopyApplicationURLsForBundleIdentifier`, PyObjC 없음).
-  `set_default`는 정한 뒤 두 종류를 다시 읽어 확인(OSStatus·다시 읽은 값을 모두 담은 `DefaultAppError` — 조용한 성공 없음),
-  `other_copies`는 같은 앱 ID의 다른 사본(알리기만, 지우지 않음), `should_ask`(순수), 처음 켤 때 한 번 묻기(`asks_on_start`·`ask_at_start`)
+  `set_default`는 정한 뒤 두 종류를 역할 All과 Viewer(더블클릭 — `VERIFIED_ROLES`)로 다시 읽어 확인(OSStatus·다시 읽은 값을 모두 담은
+  `DefaultAppError` — 조용한 성공 없음), `other_copies`는 같은 앱 ID의 다른 사본(알리기만, 지우지 않음), `should_ask`(순수 — 같은 두 역할),
+  처음 켤 때 한 번 묻기(`asks_on_start`·`ask_at_start` — 다른 창이 열려 있으면 묻지 않음)
   와 Help 메뉴(`set_default_from_menu`), 답은 `prefs.json`에(`record_asked`) — 모듈 설명에 확인한 것(2026-10-21, macOS 26.2)과
   몬터레이에서 남은 것
 - `yesoncheck/file_associations.py` (194줄): Windows 동영상 연결 프로그램 — `association_entries(exe)`(순수, HKCU의 12개 값: ProgID
@@ -158,9 +160,10 @@ class VideoPlayer(PlayerUpdateMixin, PlayerAnnotationsMixin, PlayerSidebarMixin,
   `ensure_registered`(읽어서 없거나 다른 것만 쓰고, 쓴 것이 있으면 `SHChangeNotify`), `register_at_start`(빌드 Windows 앱이 켤 때 이 계정에
   등록), `open_default_apps_settings`(Help → "동영상 기본 앱 설정 열기…" — `ms-settings:defaultapps?registeredAppUser=YesonCheck`).
   `winreg`·`shell32`는 쓸 때 불러와 Mac에서도 모듈이 불림 — 설치 파일 `installer/yesoncheck.iss [Registry]`와 같은 내용(BUILD.md 8-2)
-- `yesoncheck/error_window.py` (27줄): `default_app`·`file_associations`가 함께 쓰는 오류 알림 — `show_error(prefix, text)`는 기록(stderr)에 남기고 앱의 예외 창
-  (`sys.excepthook.dialog` = `app._ErrorDialog` — 기록 파일 경로를 붙이고 한 번에 하나만), 없으면(소스 실행) `QMessageBox.critical`;
-  `show_unexpected`는 예외 처리 중에 트레이스백째
+- `yesoncheck/error_window.py` (43줄): `default_app`·`file_associations`·`mac_app_events`가 함께 쓰는 오류 알림 — `show_error(prefix, text)`는 기록(stderr)에
+  남기고 `show_window`: 앱의 예외 창(`sys.excepthook.dialog` = `app._ErrorDialog.show_text` — 기록 파일 경로를 붙이고 한 번에 하나만), 없으면(소스 실행)
+  `QMessageBox.critical`; `show_unexpected`는 예외 처리 중에 트레이스백째(기록에는 전부, 창에는 `with_details` — 무엇이 실패했는지는 그대로, 트레이스백은 끝
+  `DETAILS_LIMIT`(3000) 글자). 잡히지 않은 예외(`_ErrorDialog.show_error`)는 트레이스백만이라 끝 3000자
 - `yesoncheck/review_sync.py` (97줄): OCR 검토 창 ↔ 웹 보고서 실시간 동기화 서버(`ReviewSyncServer`) — 창마다 127.0.0.1의 빈 포트와
   무작위 토큰(`ws://127.0.0.1:포트/?token=…`), 토큰이 맞지 않는 연결은 닫고 기록. 보고서는 그 주소(`generate_web_report`의
   `ws_url`)로만 접속하고, 주소가 없으면(듣기 실패) 접속하지 않고 "실시간 동기화 꺼짐"
@@ -221,8 +224,8 @@ class VideoPlayer(PlayerUpdateMixin, PlayerAnnotationsMixin, PlayerSidebarMixin,
 
 새 창 = 새 프로세스(`new_window.spawn`). 들어오는 길은 셋이고 모두 `mac_app_events`의 라우터가 모아 `app.launch`가 넘긴 콜백으로 보냄:
 - **명령 줄 인자**(`launch_args.parse`의 `files`): Mac 빌드 앱은 PyInstaller `argv_emulation`이 시작 때의 'odoc'을 먹고 파일을 argv에
-  붙임(NFD 한글·링크 푼 경로 — `/tmp`는 `/private/tmp`로). Windows는 연결 프로그램 명령 `"<exe>" "%1"`(탐색기는 보통 파일마다 한 번 부름 — 한 명령으로
-  여럿을 받아도 첫 파일은 이 창, 나머지는 새 창).
+  붙임(NFD 한글·링크 푼 경로 — `/tmp`는 `/private/tmp`로. 부트로더가 URL을 `CFStringGetFileSystemRepresentation`으로 바꾸며 이름을 분해함). Windows는
+  연결 프로그램 명령 `"<exe>" "%1"`(탐색기는 보통 파일마다 한 번 부름 — 한 명령으로 여럿을 받아도 첫 파일은 이 창, 나머지는 새 창).
 - **`QFileOpenEvent`**(Mac, Finder 더블클릭·다음으로 열기): ready 전(시작 중)에는 모아 두었다가 첫 파일은 이 창의 A·나머지는 새 창, ready 뒤에는
   이벤트마다 새 창 — 이 창이나 다른 창에 열린 영상이어도 무조건 새 창. 시작 인자와 같은 파일의 이벤트는 시작 중에만 인자 하나당 하나
   흡수(키 = NFC + realpath, `path_key`) — 실험에서 중복은 한 번도 없었고 안전망일 뿐.
@@ -232,29 +235,40 @@ class VideoPlayer(PlayerUpdateMixin, PlayerAnnotationsMixin, PlayerSidebarMixin,
   새 프로세스의 argv로만 가고 옛 프로세스에는 아무 이벤트도 없음.
 
 콜백(`open_here`·`on_open_files`·`on_reopen`)은 Qt 루프에서(`QTimer.singleShot(0)`) 불림 — Apple Event 처리·이벤트 필터 안에서 `open`이 끝나기(Mac
-`spawn`, 최대 30초)를 기다리지 않게. 실패하면 기록(stderr — 빌드 앱은 기록 파일)과 오류 창에 트레이스백(`new_window`의 `RuntimeError`면 명령·출력)을
-남기고 이 창은 그대로.
+`spawn`, 최대 30초)를 기다리지 않게. 실패하면 바로 기록(stderr — 빌드 앱은 기록 파일)에 트레이스백(`new_window`의 `RuntimeError`면 명령·출력)을 남기고,
+오류 창은 Qt 루프에서 `error_window`로(빌드 앱은 앱의 예외 창 — 기록 파일 경로, 한 번에 하나만) — 이 창은 그대로. 알리다 또 실패하면 `sys.__stderr__`에
+(`_last_resort` — eventFilter·IMP·Qt 루프 밖으로 내보내지 않음).
+
+받은 첫 파일(`open_here` = `app.open_startup_file`)은 있는지 보지 않고 `player.open_file("A", …)`로 — 열지 못하면 `open_file`이 무엇을 왜 못 열었는지 오류 창
+(디스크에 없음·확인하지 못함(NAS 연결 끊김·권한)·OpenCV가 읽지 못함 — 설계 3-2), 창은 그대로. 받은 경로가 그대로는 없으면 `paths.find_unicode_variant`가
+이름의 정규화(NFC·NFD)만 다른 실제 경로를 찾아 그것으로 엶: NFS 공유는 이름을 바이트 그대로 비교해 NFC로 저장된 폴더(Windows·NAS에서 만든 것)의 NFD 경로는
+없다고 나옴(로컬 APFS·SMB는 가리지 않음 — 2026-10-22 이 Mac의 NFS 공유에서 확인). 이름마다 위 폴더 목록에서 NFC가 같은 이름을 하나만 찾음(둘 이상이면 고르지 않음).
 
 **시작 순서 (`app.launch`) — 순서를 바꾸면 말없이 깨진다**:
 1. `QApplication`을 만든 **바로 다음** `mac_app_events.install` — 업데이트 확인 창·스플래시의 `processEvents`보다 먼저. 늦게 달면 그사이 온
    `QFileOpenEvent`가 말없이 사라짐(실험에서 2/2).
 2. 업데이트 중이면(`update_in_progress_at_start`, 도우미가 켠 앱은 빼고) 창 없이 "업데이트 중" 창만 보이고 끝 — 그때 받은 파일은 열지 않고 기록.
 3. `load_mount_map` → 스플래시 + `processEvents`(여기서 AppKit `-[NSApplication finishLaunching]`이 자기 'rapp' 처리기를 등록) → `VideoPlayer` → `show()`.
-4. `QTimer.singleShot(0)`로 줄 세운 시작 일: 지난 업데이트 결과 판정 → 창 기록·연결 서버 → 사용자 파일 문제 → 공유 설정 읽기 → (Windows 빌드 앱)
-   연결 프로그램 등록 → 받은 첫 파일 열기 → (Mac 빌드 앱, `--update-result`로 켠 앱은 건너뜀) 동영상 기본 앱 묻기.
-5. `router.ready(open_here)` — 창을 보인 **뒤** Mac은 여기서 reopen 처리기를 **동기로** 등록(`register_reopen_handler`). 그 전에(`finishLaunching` 전)
+4. `QTimer.singleShot(0)`로 줄 세운 시작 일: 지난 업데이트 결과 판정(끝나면 동영상 기본 앱 묻기를 줄 맨 뒤에 세움) → 창 기록·연결 서버 → 사용자 파일
+   문제 → 공유 설정 읽기 → (Windows 빌드 앱) 연결 프로그램 등록.
+5. `router.ready(open_here)` — 4의 일이 하나도 돌기 전에 launch 안에서 **동기로** 불림: 받은 첫 파일 열기(나머지 파일은 새 창)를 4의 일 뒤에 줄 세움.
+   그래서 실제로 도는 차례는 4의 일 → 받은 첫 파일 열기 → (Mac 빌드 앱, `--update-result`로 켠 앱은 건너뜀) 동영상 기본 앱 묻기(창 기록이 이미 남아 있어
+   다른 창이 이 창을 셈). 창을 보인 **뒤** Mac은 여기서 reopen 처리기를 **동기로** 등록(`register_reopen_handler`). 그 전에(`finishLaunching` 전)
    등록하면 AppKit이 **오류 없이 덮어써서** 콜백이 0번이고 덮였는지 알려 주는 API도 없음 — Dock 클릭에 새 창이 안 뜨고 최소화한 창이 올라오면 이 증상.
    `tests/test_mac_app_events.py`의 `test_launch_installs_router_first_and_readies_after_window_is_shown` 등이 순서를 지킴.
 
 **Mac 기본 앱** (`default_app`):
 - Info.plist의 `CFBundleDocumentTypes`(spec, `LSHandlerRank: Alternate`)가 "다음으로 열기"에 늘 보이게 함(BUILD.md 8-1). 더블클릭으로 여는 기본 앱은 이 모듈이 정함.
 - 처음 켤 때 한 번(`asks_on_start` → `ask_at_start`, 빌드한 Mac 앱만): `prefs.json`에 답이 있으면 LaunchServices도 보지 않고 끝 → dmg(`/Volumes`)·
-  `AppTranslocation`이면 묻지도 기록하지도 않음(`location_problem`) → 두 종류가 모두 YesonCheck면 묻지도 기록하지도 않음(답한 것이 아님) →
+  같은 앱 자리의 다른 창이 열려 있으면(`instances.others` — 그 창이 묻고 있을 수 있음) 묻지도 기록하지도 않음(창 하나만 켜질 때 물음 — 답하기 전에 여러 파일·
+  Dock 클릭으로 띄운 창마다 질문이 쌓이지 않게) → `AppTranslocation`이면 묻지도 기록하지도 않음(`location_problem`) → 두 종류가 두 역할(All·Viewer) 모두
+  YesonCheck면 묻지도 기록하지도 않음(답한 것이 아님) →
   `ASK_TEXT` [예]/[아니요]. **단추를 누른 것만** 기록함 — Esc·⌘.(`_AskBox.keyPressEvent`가 `reject()`), 다른 창의 업데이트가 건 닫기 요청
   (`player_base.close_for_update`가 열린 대화 상자를 `reject()`), 앱 끝내기·로그아웃의 창 닫기는 답이 아님(다음에 켤 때 다시 물음). Qt 기본은 Esc가 탈출
   단추 [아니요]를 누르고 창 닫기도 `exec_()` 결과를 [아니요]로 두므로 `buttonClicked`로 직접 확인함. [아니요]는 탈출 단추로 남겨 둠(없으면
   `QMessageBox`가 창 닫기를 무시해 앱 끝내기·로그아웃이 막힘).
-- `set_default`: `LSRegisterURL`(이 번들 등록) → 종류마다 `LSSetDefaultRoleHandlerForContentType` → 둘 다 다시 읽어 앱 ID 확인. 한 종류가 실패해도 다른
+- `set_default`: `LSRegisterURL`(이 번들 등록) → 종류마다 `LSSetDefaultRoleHandlerForContentType`(`kLSRolesAll`) → 둘 다 역할 All과 Viewer로 다시 읽어 앱 ID
+  확인(Viewer만 다른 앱이어도 실패 — Viewer를 따로 정하지는 않음). 한 종류가 실패해도 다른
   종류는 정하고 실패를 모두 담아 `DefaultAppError`. 이후 `other_copies`가 같은 앱 ID의 다른 사본을 알림(지우지 않음).
 - 오류: 예상된 실패(`DefaultAppError`, prefs.json의 `UserFileError`)는 무엇이 왜인지 오류 창(트레이스백 없이), 예상 못 한 예외는 기록과 오류 창에 트레이스백
   (`error_window`). 소스 실행·dmg/격리 위치의 Help 항목은 안내 창만.
@@ -265,7 +279,8 @@ class VideoPlayer(PlayerUpdateMixin, PlayerAnnotationsMixin, PlayerSidebarMixin,
 
 **함정** (이 기능을 만들며 겪은 것 — 다시 밟지 말 것):
 - **PyQt5는 `eventFilter` 같은 가상 함수에서 빠져나간 예외로 프로세스를 끝낸다**(`qFatal` → SIGABRT, 오류 창 없음). 그래서 `FileOpenRouter.eventFilter`와
-  Qt 루프로 미룬 콜백(`_run_guarded`)은 본문 전체를 `except BaseException`으로 잡아 같은 방법으로 보임. 같은 이유로 PyQt5가 감싸지 않는
+  Qt 루프로 미룬 콜백(`_run_guarded`)은 본문 전체를 `except BaseException`으로 잡아 같은 방법으로 보임(그 알림이 또 실패해도 `_last_resort`가 `sys.__stderr__`에 —
+  밖으로 내보내지 않음). 같은 이유로 PyQt5가 감싸지 않는
   `QApplicationStateChangeEvent`의 `ev.applicationState()`는 `AttributeError`(상태가 필요하면 `QApplication.applicationState()`), `QFileOpenEvent`는
   만들 수도 없어(`TypeError`) 시험은 같은 모양(type·file·url)의 대역을 필터에 건넴.
 - **ctypes 콜백(IMP)에서 빠져나간 예외는 `Exception ignored on calling ctypes callback function` 한 줄만 남기고 사라짐** — `_ReopenHandler._imp`가 직접 잡아 오류 창으로.
@@ -278,8 +293,9 @@ class VideoPlayer(PlayerUpdateMixin, PlayerAnnotationsMixin, PlayerSidebarMixin,
 - **LaunchServices가 돌려주는 앱 ID는 소문자일 수 있음**(Info.plist의 대문자가 섞인 앱 ID가 저장 파일에는 소문자로 있음을 확인) — 비교는 대소문자 무관(`_same_app`).
 - **임시 폴더(`/tmp` 등)의 번들은 LaunchServices가 `in-temp-dir`로 표시해 앱 ID로 찾지 않음**: 정하기는 OSStatus 0인데 다시 읽으면 다른 앱, 사본 목록도 빔 —
   다시 읽어 확인하기 때문에 `DefaultAppError`로 드러남(조용한 성공 없음). 기본 앱을 시험하려면 홈 폴더나 Applications에 둔 번들로.
-- `set_default`는 `kLSRolesAll`(Finder의 '정보 가져오기 → 모두 변경'과 같은 항목)로 정하고, 확인(`default_handler`)도 같은 역할로 읽음 — 더블클릭은 Viewer 역할인데,
-  다른 앱이 Viewer 역할만 따로 지정돼 있는 경우는 확인한 적이 없음(그런 항목이 있으면 확인을 통과해도 그 앱이 열릴 수 있음). 진짜 Mac의 기본 앱으로 시험하고 원래대로
+- `set_default`는 `kLSRolesAll`(Finder의 '정보 가져오기 → 모두 변경'과 같은 항목)로 정하고, 확인(`set_default`·`should_ask`)은 All과 Viewer(더블클릭이 여는 역할)
+  둘로 읽음(`VERIFIED_ROLES`) — 다른 앱이 Viewer 역할만 따로 지정돼 남아 있으면 All만 봐서는 통과해도 더블클릭은 그 앱을 열므로 `DefaultAppError`. 그런 항목이 실제로
+  생기는지는 확인한 적 없고, Viewer를 따로 정하지는 않음. 진짜 Mac의 기본 앱으로 시험하고 원래대로
   되돌릴 때도 같은 역할로 하면, 원래 명시한 항목이 없던 종류에는 그때의 기본 앱이 명시 항목으로 남음(항목을 지우는 API 없음). LaunchServices C API는 26.2 SDK에서
   "앞으로 deprecated"(`API_TO_BE_DEPRECATED`)일 뿐 있고 12.3~최신에서 동기로 돎(대안 NSWorkspace는 Objective-C 블록·비동기).
 - **버튼 슬롯이 박스를 붙잡으면 순환 GC가 박스를 아무 때나(다른 이벤트 처리 중) 지워 크래시** — `_ask`는 `box.buttonClicked.connect(pressed.append)`로 박스를
@@ -290,10 +306,14 @@ class VideoPlayer(PlayerUpdateMixin, PlayerAnnotationsMixin, PlayerSidebarMixin,
 
 **알고 둔 한계**:
 - 이미 맨 앞인 창의 Dock 아이콘을 누르면 이제 새 창이 뜸 — 예전에는 사이드바를 다시 읽었음. 다른 앱에서 돌아올 때의 다시 읽기는 그대로(새로고침 버튼·F5도).
-- 이미 닫히는 중인 창(작업을 멈추고 기다리는 동안, 최대 약 30초)에 간 reopen은 아무것도 하지 않음 — 그동안 Dock 클릭·앱 다시 실행은 새 창을 못 띄움. 확인한 경로: `app.exec_()`가
-  끝난 뒤 `finish_released_workers`가 붙잡아 둔 작업을 최대 `EXIT_WAIT_S`(30초) 기다리는 동안은 Qt 루프가 없어 미룬 콜백(`QTimer.singleShot(0)`)이 돌지 않음.
-- 창을 만드는 몇 초 동안 누른 Dock은 Apple Event 큐에서 기다렸다 ready 뒤 새 창을 하나 더 띄울 수 있음(타이밍에 따라 AppKit 기본 처리기가 먹을 수도 — 확인 안 함).
-  답하기 전에 여러 창이 처음 켜지면 창마다 기본 앱을 물을 수 있음.
+- 이미 닫히는 중인 창(작업을 멈추고 기다리는 동안, 최대 약 30초)에 간 reopen은 아무것도 하지 않음 — 그동안 Dock 클릭·앱 다시 실행은 새 창을 못 띄움. 같은 때
+  그 프로세스로 간 동영상 더블클릭·다음으로 열기(macOS는 켜져 있는 YesonCheck에 'odoc'을 보냄)도 열리지 않고 사라짐 — 오류 창도 없음. 확인한 경로: `app.exec_()`가
+  끝난 뒤 `finish_released_workers`가 붙잡아 둔 작업을 최대 `EXIT_WAIT_S`(30초) 기다리는 동안은 Qt 루프가 없어 미룬 콜백(`QTimer.singleShot(0)`)도 이벤트 필터도
+  돌지 않음.
+- 창을 만드는 몇 초 동안 누른 Dock은 Apple Event 큐에서 기다림(확인 안 함): 보통은 `splash.finish`의 이벤트 처리에서 아직 남은 AppKit 기본 처리기가 먹어 새 창이
+  뜨지 않고, ready가 처리기를 등록할 때까지 큐에 남아 있었다면 새 창이 하나 더 뜸 — 타이밍에 따라 다름.
+- 기본 앱 묻기는 다른 창이 열려 있으면 하지 않으므로, 첫 창의 질문을 단추 없이 닫은 채 다른 창이 남아 있으면 창 하나만 켜질 때까지 다시 묻지 않음. (거의 동시에
+  켜진 두 창도 둘 다 묻지는 않음 — 창마다 자기 기록을 남긴 뒤에 다른 창을 세므로 늦게 센 쪽이 먼저 남긴 쪽을 봄. 둘 다 묻지 않을 수는 있음.)
 - Windows: 제거는 제거하는 계정의 HKCU만 지움 — 앱이 켤 때 다른 계정에 한 등록은 남아 없는 exe를 가리킴(그 계정에서 YesonCheck를 다시 설치하거나 켜면 새로 고쳐지고, 그 전에 고르면 Windows가 앱이 없다고 알려 다른 앱을 고르게 함 — 설정으로 지울 수 있다고 안내하지 않음). 설치하지 않은 frozen 사본을 켜면 그 계정의
   "연결 프로그램" 항목이 그 사본으로 다시 가리켜짐(설치한 앱을 다시 켜면 돌아옴). HKCU 쓰기가 막히면 켤 때마다 오류 창(조용히 넘기지 않음).
 - 몬터레이(12.3)에서의 동작(기본 앱이 확인 창 없이 정해지는지, Finder 더블클릭·다음으로 열기, 처음 묻는 창)은 CI가 아니라 사람이 확인함. 실제 마우스 Dock 클릭·⌘Tab·창 클릭·Mission Control,

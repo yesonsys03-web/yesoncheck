@@ -19,7 +19,7 @@
 - 오류: 예상된 실패 — DefaultAppError(LaunchServices의 상태 코드, 정한 뒤 다시 읽은 값이 다름, 앱의 Info.plist), prefs.json의
   UserFileError — 는 무엇이 왜인지 오류 창(트레이스백 없이). 예상 못 한 예외는 기록(stderr)과 오류 창에 트레이스백. 오류 창은
   빌드 앱이면 앱의 예외 창(app.make_excepthook의 창 — 기록 파일 경로를 붙이고 한 번에 하나만), 그 창이 없으면(소스 실행)
-  같은 제목의 QMessageBox.critical (error_window — file_associations와 함께 씀).
+  같은 제목의 QMessageBox.critical (error_window — file_associations·mac_app_events와 함께 씀).
 
 고른 API — LaunchServices C API를 ctypes로 (CoreServices·CoreFoundation, PyObjC 없음):
 `LSCopyDefaultRoleHandlerForContentType`(읽기)·`LSSetDefaultRoleHandlerForContentType`(정하기, 역할 kLSRolesAll — Finder의

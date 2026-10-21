@@ -284,7 +284,8 @@ GitHub의 Intel Mac 러너(`macos-15-intel`)는 언젠가 없어질 수 있습�
 - 시험: `tests/test_default_app.py::test_spec_declares_video_document_types`가 spec을 `ast`로 읽어 이 값을 그대로 비교합니다.
   CI의 Mac job은 빌드 바로 뒤 `plutil -extract CFBundleDocumentTypes xml1 -o - <앱>/Contents/Info.plist`(키가 없으면 종료 코드 1)로
   뽑고, Python `plistlib`로 읽은 값이 위와 같은지 확인합니다 (종류를 바꾸면 spec·`default_app.VIDEO_UTIS`·시험의
-  `EXPECTED_DOCUMENT_TYPES`·워크플로의 이 단계를 함께 고치세요). 로컬 빌드는 같은 `plutil` 명령으로 확인합니다.
+  `EXPECTED_DOCUMENT_TYPES`·워크플로의 이 단계를 함께 고치세요). 로컬 빌드(`./build_app.sh`)는 이 확인을 하지 않습니다 — 필요하면
+  빌드한 앱에 같은 `plutil` 명령을 손으로 돌려 확인하세요.
 - 앱 ID는 `com.yeson.check` 그대로입니다. LaunchServices는 기본 앱을 **앱 ID로** 기억하므로, 같은 ID의 다른 사본(예: 예전 이름으로
   Applications에 남은 낡은 사본, 버전 0.0.0)이 있으면 동영상 더블클릭이 그 사본을 열 수 있습니다. 이 앱은 Info.plist에 실제
   버전이 있어 macOS가 더 높은 버전을 고르는 편이지만, 기본 앱을 정한 뒤 `other_copies`로 찾은 다른 사본의 경로를 창에 보여
@@ -303,7 +304,7 @@ Windows 10·11은 앱·설치 파일이 기본 앱을 바꾸지 못하게 합니
 (기본 앱은 사용자가 "연결 프로그램"에서 한 번 "항상"으로 고름), 등록은 이 사용자(HKCU — 설치가 `PrivilegesRequired=lowest`)에 합니다.
 
 - 등록 내용은 `yesoncheck/file_associations.py`의 `association_entries(exe_path)`가 정합니다 (모두 HKCU, REG_SZ, 12개 값):
-  - `Software\Classes\YesonCheck.Video` — 기본값 `Yeson Checker 동영상`(탐색기의 '유형'), `\DefaultIcon` `"<exe>,0"`,
+  - `Software\Classes\YesonCheck.Video` — 기본값 `Yeson Checker 동영상`(탐색기의 '유형'), `\DefaultIcon` `<exe>,0`(따옴표 없음),
     `\shell\open\command` `"<exe>" "%1"`
   - `Software\Classes\.mov\OpenWithProgids`·`.mp4\OpenWithProgids` — 값 `YesonCheck.Video`(빈 문자열)
   - `Software\Classes\Applications\YesonCheck_Autocut.exe\SupportedTypes` — 값 `.mov`·`.mp4`
@@ -322,7 +323,8 @@ Windows 10·11은 앱·설치 파일이 기본 앱을 바꾸지 못하게 합니
   통째로, 다른 앱과 함께 쓰는 키(`.mov`·`.mp4`의 `OpenWithProgids`, `RegisteredApplications`)는 `uninsdeletevalue`로 우리 값만 지웁니다.
 - **`installer/yesoncheck.iss`는 UTF-8 + BOM으로 둡니다.** `[Registry]`가 한글("Yeson Checker 동영상", "동영상 A/B 비교·검토")을
   레지스트리에 쓰기 때문입니다. Inno Setup 6.3부터는 BOM이 없어도 내용으로 UTF-8을 알아보지만, 그 전 6.x는 BOM이 없으면 ANSI
-  (한국어 Windows는 cp949)로 읽어 글자가 깨집니다 — 어느 ISCC(CI는 6.7.1, 스튜디오 PC는 다를 수 있음)로 컴파일해도 같도록 BOM을
+  (한국어 Windows는 cp949)로 읽어 글자가 깨집니다 — 어느 ISCC(CI는 러너에 있는 것이나 choco로 받은 것 — 버전을 고정하지 않음, 스튜디오 PC도
+  다를 수 있음)로 컴파일해도 같도록 BOM을
   유지합니다. 편집기가 저장하면서 BOM을 떼지 않게 하세요 (`test_installer_script_is_utf8_with_bom`이 확인).
 - CI (Windows job, 환경 변수가 있을 때만 도는 pytest 시험 — 변수가 있으면 건너뛰지 않고, Windows가 아니면 실패):
   - 무음 설치 바로 뒤: `YC_INSTALLED_EXE=C:\yc_install\YesonCheck_Autocut.exe` →
@@ -331,7 +333,8 @@ Windows 10·11은 앱·설치 파일이 기본 앱을 바꾸지 못하게 합니
     지워졌는지 (제거 프로그램의 임시 사본이 마저 지우므로 최대 60초 기다림).
 - 알고 둔 한계:
   - 제거 프로그램은 **제거하는 계정의 HKCU만** 지웁니다. 앱이 켤 때 다른 계정에 한 등록은 그 계정의 것이라 남고, 없어진 exe를
-    가리킵니다. 관리자 권한 없이 지울 방법이 없습니다.
+    가리킵니다. 이 계정의 제거 프로그램은 다른 계정의 항목을 지울 수 없습니다 — 그 계정의 사용자는 자기 HKCU에서(예: regedit) 위의 값을
+    지울 수 있습니다 (Windows 설정 화면으로 지울 수 있는지는 확인하지 않았으므로 그렇게 안내하지 마세요).
     그 계정에서 YesonCheck를 다시 설치하거나 켜면 항목이 새로 고쳐지고, 그 전에 사용자가 고르면 Windows가 앱을 찾을 수 없다고 알려 다른 앱을 고르게 됩니다.
   - 설치하지 않은 빌드(폴더째 복사한 frozen 앱)를 켜면 `register_at_start`가 그 exe 경로(`sys.executable`)로 이 계정의 항목을
     **다시 가리킵니다**(경로는 대소문자까지 문자열 그대로 비교). 설치한 앱을 다시 켜면 설치한 쪽으로 돌아옵니다. 설치 폴더 두 곳을
@@ -358,4 +361,5 @@ Windows 10·11은 앱·설치 파일이 기본 앱을 바꾸지 못하게 합니
 - 실제 마우스로 Dock 클릭(맨 앞일 때·뒤일 때)·⌘Tab·창 클릭·Mission Control(→ 새 창 0개), 최소화한 창 + Dock 클릭(새 창만, 내려 둔
   창은 그대로), 모달 대화 상자가 떠 있을 때 Dock 클릭, 다른 앱에서 돌아올 때 사이드바 다시 읽기. 화면이 잠겨 있으면 macOS가 앱을
   앞으로 가져오지 않아 자동으로 확인할 수 없습니다.
-- Apple Silicon: LaunchServices·Objective-C(ctypes) 호출은 Apple Silicon 러너의 시험이 읽기 경로를 확인하고, 나머지는 사람이 확인합니다.
+- Apple Silicon: LaunchServices·Objective-C(ctypes) 호출은 Apple Silicon 러너의 시험이 읽기 경로(기본 앱을 두 역할로 읽기, 같은 앱 ID의
+  사본 목록 — CFArray·CFURL, reopen 처리기 등록과 자기에게 보낸 'rapp')를 확인하고, 정하기(`set_default`)와 나머지는 사람이 확인합니다.
