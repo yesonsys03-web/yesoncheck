@@ -111,6 +111,9 @@ class VideoPlayer(PlayerUpdateMixin, PlayerAnnotationsMixin, PlayerSidebarMixin,
 - `yesoncheck/auto_trim.py` (637줄): 자동 씬 컷을 위한 PySceneDetect 통합
 - `yesoncheck/transnetv2_detector.py` (698줄): 점진적 전환 감지를 위한 TransNetV2 통합
 - `yesoncheck/web_info.py` (~330줄): OCR 분석 결과를 웹 페이지로 내보내기
+- `yesoncheck/review_sync.py`: OCR 검토 창 ↔ 웹 보고서 실시간 동기화 서버(`ReviewSyncServer`) — 창마다 127.0.0.1의 빈 포트와
+  무작위 토큰(`ws://127.0.0.1:포트/?token=…`), 토큰이 맞지 않는 연결은 닫고 기록. 보고서는 그 주소(`generate_web_report`의
+  `ws_url`)로만 접속하고, 주소가 없으면(듣기 실패) 접속하지 않고 "실시간 동기화 꺼짐"
 - `yesoncheck/frame_utils.py` (~21줄): 영화 산업 표준 프레임 계산 (feet.frames 형식)
 - `yesoncheck/styles.py` (~22줄): 커스텀 UI 스타일
 - `yesoncheck/build_info.py` (89줄): 빌드가 앱에 넣은 `build_info.json`(버전·커밋·빌드 시각·플랫폼)을 읽어 창

@@ -5,7 +5,7 @@ import os
 import re
 import sys
 import cv2
-from yesoncheck import external_tools, web_info
+from yesoncheck import external_tools, review_sync, web_info
 from PyQt5.QtCore import (
     QEvent,
     QObject,
@@ -21,8 +21,6 @@ from PyQt5.QtCore import (
 )
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
 from PyQt5.QtGui import QBrush, QColor, QImage, QKeySequence, QPainter, QPen, QPixmap, QPolygonF, QWheelEvent, QCursor
-from PyQt5.QtWebSockets import QWebSocketServer, QWebSocket
-from PyQt5.QtNetwork import QHostAddress
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -1051,9 +1049,9 @@ class OCRReviewDialog(QDialog):
         self.timeline.set_segments(segments)
         self.update_summary()
 
-        # WebSocket 서버 초기화 (실시간 동기화용)
-        self.websocket_server = None
-        self.websocket_clients = []
+        # WebSocket 서버 초기화 (실시간 동기화용) — 창마다 빈 포트와 토큰
+        self.review_sync = None
+        self.sync_url = None
         self.setup_websocket_server()
         self.update_sequence()
 
@@ -6131,7 +6129,8 @@ class OCRReviewDialog(QDialog):
                 video_path=self.video_path,
                 fps=self.fps,
                 total_frames=self.total_frames,
-                ocr_mode=self.ocr_mode
+                ocr_mode=self.ocr_mode,
+                ws_url=self.sync_url  # 이 창의 주소. 서버가 없으면 None → 보고서는 동기화 꺼짐
             )
 
             if html_path:
@@ -6159,58 +6158,36 @@ class OCRReviewDialog(QDialog):
             traceback.print_exc()
 
     def setup_websocket_server(self):
-        """WebSocket 서버를 시작하여 실시간 동기화를 활성화합니다."""
+        """이 창의 WebSocket 서버를 시작하여 실시간 동기화를 활성화합니다. (포트·토큰은 창마다 다름)"""
+        server = review_sync.ReviewSyncServer(self)
         try:
-            import json
-
-            self.websocket_server = QWebSocketServer("OCR Review Sync", QWebSocketServer.NonSecureMode, self)
-
-            if self.websocket_server.listen(QHostAddress.LocalHost, 8765):
-                pass
-                # print(f"[WebSocket] 서버 시작: ws://localhost:8765")
-                self.websocket_server.newConnection.connect(self.on_new_connection)
-                self.websocket_port = 8765
-            else:
-                pass
-                # print(f"[WebSocket] 서버 시작 실패: {self.websocket_server.errorString()}")
-                self.websocket_server = None
-                self.websocket_port = None
-        except Exception as e:
-            pass
-            # print(f"[WebSocket] 서버 초기화 오류: {e}")
-            self.websocket_server = None
-            self.websocket_port = None
-
-    def on_new_connection(self):
-        """새로운 WebSocket 클라이언트 연결 처리."""
-        if not self.websocket_server:
-            pass
+            self.sync_url = server.start()
+        except RuntimeError as e:
+            reason = str(e)
+            print(f"[WebSocket] 서버 시작 실패: {reason}")
+            server.deleteLater()
+            self.review_sync = None
+            self.sync_url = None
+            # 생성 도중에 창을 띄우면 아직 덜 만든 창으로 이벤트가 들어오므로, 창이 뜬 뒤에 알림
+            QTimer.singleShot(0, lambda: self._warn_sync_unavailable(reason))
             return
+        self.review_sync = server
+        server.client_connected.connect(self.send_full_sync)  # 접속하면 현재 상태를 바로 보냄
+        server.message_received.connect(self.on_text_message_received)
 
-        client = self.websocket_server.nextPendingConnection()
-        if client:
-            pass
-            # print(f"[WebSocket] 새 클라이언트 연결: {client.peerAddress().toString()}")
-            self.websocket_clients.append(client)
+    def _warn_sync_unavailable(self, reason):
+        QMessageBox.warning(
+            self,
+            "실시간 동기화 꺼짐",
+            "웹 보고서와 실시간으로 연결할 수 없습니다.\n"
+            "웹 보고서는 만들 수 있지만, 보고서에서 고친 내용이 이 창에 반영되지 않고 "
+            "보고서에서 내보낼 수도 없습니다.\n\n"
+            f"원인: {reason}"
+        )
 
-            client.textMessageReceived.connect(lambda msg: self.on_text_message_received(client, msg))
-            client.disconnected.connect(lambda: self.on_client_disconnected(client))
-
-            # 초기 데이터 전송
-            self.send_full_sync(client)
-
-    def on_client_disconnected(self, client):
-        """WebSocket 클라이언트 연결 해제 처리."""
-        if client in self.websocket_clients:
-            self.websocket_clients.remove(client)
-            # print(f"[WebSocket] 클라이언트 연결 해제")
-
-    def on_text_message_received(self, client, message):
-        """웹 UI로부터 받은 변경사항을 처리합니다."""
+    def on_text_message_received(self, client, data):
+        """웹 UI로부터 받은 변경사항(JSON 객체)을 처리합니다."""
         try:
-            import json
-            data = json.loads(message)
-
             msg_type = data.get('type')
 
             if msg_type == 'segments_update':
@@ -6266,12 +6243,9 @@ class OCRReviewDialog(QDialog):
                 # 내보내기 실행
                 self.export_all()
 
-        except json.JSONDecodeError as e:
-            pass
-            # print(f"[WebSocket] JSON 파싱 오류: {e}")
         except Exception as e:
-            pass
-            # print(f"[WebSocket] 메시지 처리 오류: {e}")
+            # 웹 보고서의 메시지 하나가 잘못돼도 창마다 알림을 띄우지 않고 기록에 트레이스백을 남김
+            print(f"[WebSocket] 메시지 처리 오류: {e}")
             import traceback
             traceback.print_exc()
 
@@ -6364,12 +6338,9 @@ class OCRReviewDialog(QDialog):
             json_str = json.dumps(message)
 
             if client:
-                client.sendTextMessage(json_str)
+                self.review_sync.send(client, json_str)
             else:
-                pass
-                # 모든 클라이언트에 전송
-                for c in self.websocket_clients:
-                    c.sendTextMessage(json_str)
+                self.review_sync.broadcast(json_str)
 
             # print(f"[WebSocket] {len(simple_segments)}개 세그먼트 전송 (테이블 위젯 기준, selected_index={selected_index})")
         except Exception as e:
@@ -6840,8 +6811,7 @@ class OCRReviewDialog(QDialog):
             pass
             return
 
-        if not self.websocket_clients:
-            pass
+        if self.review_sync is None or not self.review_sync.has_clients():
             return
 
         self.send_full_sync()
@@ -7151,9 +7121,6 @@ class OCRReviewDialog(QDialog):
 
     def closeEvent(self, event):
         """다이얼로그 종료 시 WebSocket 서버 정리."""
-        if self.websocket_server:
-            for client in self.websocket_clients:
-                client.close()
-            self.websocket_server.close()
-            print("[WebSocket] 서버 종료")
+        if self.review_sync:
+            self.review_sync.close()
         super().closeEvent(event)
