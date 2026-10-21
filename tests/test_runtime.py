@@ -37,12 +37,6 @@ def test_use_ascii_paddleocr_dir_patches_actual_module(monkeypatch, tmp_path):
     assert sys.modules[PaddleOCR.__module__].BASE_DIR == fake_dir
 
 
-def test_windows_logging_only_when_frozen_windows(monkeypatch, tmp_path):
-    from yesoncheck import app
-    monkeypatch.setattr(app.sys, "platform", "darwin")
-    assert app.setup_windows_logging() is None
-
-
 def _raise(message):
     try:
         raise RuntimeError(message)

@@ -1,6 +1,7 @@
 """Application entry helpers."""
 
 import datetime
+import fnmatch
 import os
 import sys
 import time
@@ -30,24 +31,68 @@ UPDATE_IN_PROGRESS_TEXT = "업데이트 중입니다 — 끝난 뒤 다시 열�
 # "업데이트 중" 창이 저절로 닫히는 시간 (ms) — 닫히면 이 프로세스가 끝남. 도우미는 모든 YesonCheck 프로세스가 끝나기를
 # 기다렸다 바꾸므로(시간이 지나면 업데이트를 그만둠), 창을 띄운 채 자리를 비워도 업데이트를 막지 않게
 UPDATE_IN_PROGRESS_CLOSE_MS = 8000
+LOG_KEEP_DAYS = 30  # 이보다 오래 안 쓴 앱 기록(yesoncheck_*.log)은 시작할 때 지움
+LOG_FILE_PATTERN = "yesoncheck_*.log"
 
 
-def setup_windows_logging():
-    """Windows 빌드 앱(창 모드): stdout·stderr가 없으므로 로그 파일로 보내고, 잡히지 않은 예외를 로그+오류 창으로.
+def app_log_dir(platform):
+    """앱 기록 폴더: Windows %LOCALAPPDATA%\\YesonCheck\\logs, Mac ~/Library/Logs/YesonCheck (업데이트 기록 update.log와 같은 폴더).
+    그 밖의 플랫폼은 None."""
+    if platform == "win32":
+        return os.path.join(os.environ["LOCALAPPDATA"], "YesonCheck", "logs")
+    if platform == "darwin":
+        return os.path.join(os.path.expanduser("~"), "Library", "Logs", "YesonCheck")
+    return None
 
-    로그: %LOCALAPPDATA%\\YesonCheck\\logs\\yesoncheck_<날짜>.log. 그 외 환경에서는 아무것도 안 하고 None.
+
+def remove_old_logs(log_dir, now=None):
+    """log_dir의 LOG_KEEP_DAYS일(마지막 수정 기준) 지난 yesoncheck_*.log를 지움 — update.log 등 다른 파일은 건드리지 않음.
+
+    사용자 자료가 아니라 정리일 뿐이므로 지우지 못해도(Windows에서 다른 창이 연 파일 등) 시작을 막지 않고,
+    파일마다 스택 트레이스째 기록(print)하고 다음으로 넘어감. 다른 창이 먼저 지운 파일(FileNotFoundError)은 정상.
     """
-    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+    cutoff = (time.time() if now is None else now) - LOG_KEEP_DAYS * 24 * 60 * 60
+    try:
+        names = sorted(os.listdir(log_dir))
+    except OSError:
+        print(f"[기록] 오래된 기록을 정리하지 못함 (폴더를 읽지 못함, 건너뜀): {log_dir}", file=sys.stderr)
+        traceback.print_exc()
+        return
+    for name in names:
+        if not fnmatch.fnmatchcase(name, LOG_FILE_PATTERN):
+            continue
+        path = os.path.join(log_dir, name)
+        try:
+            if os.path.isfile(path) and os.path.getmtime(path) < cutoff:
+                os.remove(path)
+        except FileNotFoundError:
+            continue  # 다른 창이 먼저 지움
+        except OSError:
+            print(f"[기록] 오래된 기록을 지우지 못함 (건너뜀): {path}", file=sys.stderr)
+            traceback.print_exc()
+
+
+def setup_app_logging(platform=sys.platform):
+    """빌드 앱(frozen, Windows·Mac): 콘솔이 없으므로 stdout·stderr를 기록 파일로 보내고, 잡히지 않은 예외를 기록+오류 창으로.
+
+    기록: app_log_dir(platform)/yesoncheck_<날짜>_<pid>.log — 창(프로세스)마다 따로라 여러 창의 기록이 섞이지 않음.
+    LOG_KEEP_DAYS일 지난 yesoncheck_*.log는 지움. Mac은 예외 창이 없으면 슬롯의 예외가 앱을 끝냄(PyQt 5.15 기본).
+    소스 실행(frozen 아님)과 그 밖의 플랫폼은 아무것도 안 하고 None.
+    """
+    if not getattr(sys, "frozen", False):
         return None
-    log_dir = os.path.join(os.environ["LOCALAPPDATA"], "YesonCheck", "logs")
+    log_dir = app_log_dir(platform)
+    if log_dir is None:
+        return None
     os.makedirs(log_dir, exist_ok=True)
-    log_path = os.path.join(log_dir, f"yesoncheck_{datetime.date.today():%Y%m%d}.log")
+    log_path = os.path.join(log_dir, f"yesoncheck_{datetime.date.today():%Y%m%d}_{os.getpid()}.log")
     stream = open(log_path, "a", encoding="utf-8", buffering=1)
     sys.stdout = stream
     sys.stderr = stream
-    print(f"===== YesonCheck 시작 {datetime.datetime.now():%Y-%m-%d %H:%M:%S} =====")
+    print(f"===== YesonCheck 시작 {datetime.datetime.now():%Y-%m-%d %H:%M:%S} (pid {os.getpid()}) =====")
 
     sys.excepthook = make_excepthook(log_path)
+    remove_old_logs(log_dir)  # 기록 파일로 보낸 뒤에 — 정리 중의 문제도 기록에 남게
     return log_path
 
 
@@ -213,7 +258,7 @@ def finish_released_workers(timeout_s):
     print(f"[닫기] 작업 {len(still_running)}개가 {timeout_s:g}초 안에 끝나지 않아 강제로 종료합니다: "
           f"{', '.join(still_running)}", flush=True)
     sys.stdout.flush()
-    sys.stderr.flush()  # Windows 빌드 앱은 stdout·stderr가 로그 파일 (setup_windows_logging)
+    sys.stderr.flush()  # 빌드 앱은 stdout·stderr가 로그 파일 (setup_app_logging)
     os._exit(0)
 
 
@@ -299,7 +344,7 @@ def launch(argv=None):
 
 def main():
     """CLI entrypoint. --smoke-test <작업 폴더>: 실행 시험 (yesoncheck/smoke_test.py). 인자는 launch_args."""
-    setup_windows_logging()
+    setup_app_logging()
     args = launch_args.parse(sys.argv)
     if args.smoke_test is not None:
         from yesoncheck.smoke_test import run
