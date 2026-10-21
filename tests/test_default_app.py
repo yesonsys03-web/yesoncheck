@@ -13,6 +13,7 @@ import ast
 import json
 import os
 import plistlib
+import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -25,7 +26,7 @@ from tests.conftest import ROOT
 from tests.test_fast_startup import wait_until
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 from yesoncheck import app as app_module  # sys.frozen을 바꾸기 전에 (불러올 때 frozen이면 _MEIPASS를 찾음)
-from yesoncheck import default_app, file_associations, update_install
+from yesoncheck import default_app, file_associations, instances, update_install
 from yesoncheck.user_files import UserFileError
 
 MAC_ONLY = pytest.mark.skipif(
@@ -349,6 +350,32 @@ def test_first_run_asks_once_and_records_explicit_answers(qapp, fake_ls, dialogs
     default_app.ask_at_start(None)
     assert ask.asked == 3 and not os.path.exists(default_app.prefs_path())
     assert fake_ls.handlers == {QT_MOVIE: "com.apple.QuickTimePlayerX", MPEG4: None}
+
+
+def test_first_run_does_not_ask_while_other_windows_are_open(qapp, fake_ls, dialogs, ask, mac_app, home, capsys):
+    """처음 켤 때 한 번(설계 3-3): 같은 앱 자리의 다른 YesonCheck 창이 열려 있으면(창 기록 — 그 창이 묻고 있을 수 있음) 묻지도
+    기록하지도 않음 — 답하기 전에 여러 파일·Dock 클릭으로 창을 여러 개 띄워도 같은 질문이 창마다 쌓이지 않게. 혼자 켜질 때
+    다시 물음. 이 창의 기록(start_instance_link — 묻기보다 먼저)은 세지 않음."""
+    instances.register(mac_app, "yesoncheck-me")  # 이 창 (app.launch가 묻기 전에 남김)
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        started = instances.process_start_time(child.pid)
+        assert started is not None
+        os.makedirs(instances.registry_dir(), exist_ok=True)
+        with open(os.path.join(instances.registry_dir(), f"{child.pid}.json"), "w", encoding="utf-8") as fh:
+            json.dump({"pid": child.pid, "app_path": mac_app, "started": started, "server_name": "yesoncheck-other"}, fh)
+        default_app.ask_at_start(None)
+        assert ask.asked == 0 and dialogs.messages == []
+        assert not os.path.exists(default_app.prefs_path())  # 답한 것이 아님
+        assert fake_ls.calls == []  # LaunchServices도 보지 않음
+        out = capsys.readouterr().out
+        assert "다른 YesonCheck 창 1개" in out and f"pid {child.pid}" in out
+    finally:
+        child.kill()
+        child.wait()
+    # 다른 창이 끝나면(기록은 죽은 창 — others가 지움) 이 창 혼자 → 물음
+    default_app.ask_at_start(None)
+    assert ask.asked == 1 and prefs_on_disk() == {"asked_default_video_app": True}
 
 
 def _answer_box_with(action):

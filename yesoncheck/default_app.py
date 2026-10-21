@@ -10,6 +10,8 @@
     끝내기·로그아웃으로 창이 닫히는 것처럼 단추 없이 닫히면 기록하지 않는다(다음에 켤 때 다시 물음 — _ask). 취소 키(Esc, Mac은
     ⌘.도)도 [아니요]를 누르지 않고 닫으므로 기록하지 않음 (_AskBox — Qt 기본은 [아니요]를 누름).
   - 이미 기본 앱이면 묻지도 기록하지도 않는다(답한 것이 아님).
+  - 같은 앱 자리의 다른 YesonCheck 창이 열려 있으면(instances.others — 창 기록) 묻지도 기록하지도 않는다: 답하기 전에 여러
+    파일·Dock 클릭으로 창을 여러 개 띄워도 질문은 처음 창에만. 그 창에서 단추 없이 닫으면 창 하나만 켜질 때 다시 묻는다.
   - [예] → set_default → 같은 앱 ID의 다른 사본(other_copies)이 있으면 그 경로들과 지우라는 안내(지우지는 않음).
 - Help → MENU_TEXT(Mac만 — Windows 항목은 file_associations): 묻지 않고 같은 일 + 정했다는 창. 소스 실행은 안내만.
 - dmg 안(/Volumes)·임시 격리 위치(AppTranslocation)에서 켠 앱은 정하지 않고 묻지도 않는다(location_problem): 그 상태에서는
@@ -56,7 +58,7 @@ from ctypes import POINTER, byref, c_bool, c_char_p, c_int32, c_long, c_uint32, 
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import QMessageBox
 
-from yesoncheck import error_window, update_install, user_files
+from yesoncheck import error_window, instances, update_install, user_files
 from yesoncheck.user_files import UserFileError
 
 IS_MAC = sys.platform == "darwin"  # Help 메뉴 항목·처음 켤 때 묻기 (시험이 바꿔 끼움)
@@ -367,6 +369,14 @@ def _ask_at_start(parent):
         print(f"{ALREADY_ANSWERED_LOG} ({prefs_path()})", flush=True)
         return
     app_path = update_install.running_app_location()
+    # 처음 켤 때 한 번(설계 3-3): 같은 앱 자리의 다른 창이 열려 있으면 묻지 않음 — 그 창이 묻고 있을 수 있고(답하기 전에 여러
+    # 파일·Dock 클릭으로 띄운 창마다 같은 질문이 쌓이지 않게), 답한 것이 아니므로 기록하지 않음(혼자 켜질 때 다시 물음).
+    # 이 창의 기록은 app.launch가 묻기 전에 남기지만(start_instance_link) others는 자기를 세지 않음
+    others = instances.others(app_path)
+    if others:
+        _log(f"다른 YesonCheck 창 {len(others)}개가 열려 있음 — 묻지 않음, 기록하지 않음 (창 하나만 켜질 때 물음): "
+             + ", ".join(f"pid {record.pid}" for record in others))
+        return
     problem = location_problem(app_path)
     if problem is not None:
         _log(f"이 자리의 앱은 기본 앱으로 정하지 않음 — 묻지 않음, 기록하지 않음 ({app_path})")
