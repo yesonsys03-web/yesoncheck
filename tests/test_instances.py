@@ -219,6 +219,35 @@ def test_parse_ps_output_other_users():
         instances.parse_ps_output("pid uid user comm\n", MAC_EXE, 501)  # 형식이 바뀌면 숨기지 않음
 
 
+def test_parse_ps_output_non_ascii_path_any_normalization():
+    """한글이 든 앱 자리: ps가 보인 경로(NFD로 만든 폴더일 수 있음)와 이 앱의 경로(NFC)는 정규화해 비교."""
+    import unicodedata
+
+    exe = "/Users/studio02/예손 앱/YesonCheck.app/Contents/MacOS/YesonCheck_Autocut"
+    text = f"  909   502 studio02  {unicodedata.normalize('NFD', exe)}\n"
+    assert instances.parse_ps_output(text, unicodedata.normalize("NFC", exe), 501) == [(909, "studio02")]
+    assert instances.parse_ps_output(text, unicodedata.normalize("NFD", exe), 501) == [(909, "studio02")]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Mac ps")
+def test_real_ps_shows_non_ascii_executable_path(tmp_path):
+    """C 로캘의 ps는 한글을 M-l…로 바꿔 보여 같은 실행 파일을 찾지 못함 → 프로세스 목록은 UTF-8 로캘로 읽음."""
+    import shutil
+
+    macos = tmp_path / "예손 앱" / "YesonCheck.app" / "Contents" / "MacOS"
+    macos.mkdir(parents=True)
+    exe = str(macos / "YesonCheck_Autocut")
+    shutil.copyfile("/bin/sleep", exe)  # copy2는 시스템 파일 표시(restricted)까지 옮겨 실행이 막힘
+    os.chmod(exe, 0o755)
+    child = subprocess.Popen([exe, "60"])
+    try:
+        text = instances._run_ps()
+        assert [pid for pid, _user in instances.parse_ps_output(text, exe, -1)] == [child.pid], text[-3000:]
+    finally:
+        child.kill()
+        child.wait()
+
+
 # tasklist /V /FO CSV /NH /FI "IMAGENAME eq YesonCheck.exe" — 이름을 읽지 못한 다른 사용자의 프로세스는 N/A
 TASKLIST_SAMPLE = (
     '"YesonCheck.exe","1100","Console","1","210,512 K","Running","STUDIO01\\studio01","0:00:12","YesonCheck"\r\n'

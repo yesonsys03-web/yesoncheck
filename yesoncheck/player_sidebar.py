@@ -642,7 +642,7 @@ class PlayerSidebarMixin:
                     QApplication.processEvents()
 
             progress_dialog.setValue(len(selected_items))
-            if stopped:
+            if stopped or self._closing_for_update:  # 다른 창의 업데이트가 이 창을 닫는 중이면 알림 없이
                 return
             QMessageBox.information(self, "완료", f"{len(selected_items)}개 파일의 썸네일 재생성이 완료되었습니다.")
 
@@ -1581,12 +1581,15 @@ class PlayerSidebarMixin:
             timing_log.log("변환표 자동 설정", f"찾기 끝 ({timing_log.since(started)}): 짝 {len(proposal.pairs)}개")
         except path_map_setup.SetupCancelled:
             timing_log.log("변환표 자동 설정", f"찾기 취소됨 ({timing_log.since(started)})")
-            if startup and self.path_map_problem:
+            if startup and self.path_map_problem and not self._closing_for_update:
                 self._report_path_map_problem(parent)
             return False
         finally:
             progress.close()
             progress.deleteLater()
+        if self._closing_for_update:  # 찾는 동안 다른 창의 업데이트가 이 창을 닫음 → 확인 창·알림 없이 끝
+            timing_log.log("변환표 자동 설정", "창을 닫는 중이라 저장하지 않음")
+            return False
         proposal.share_problems = share_problems + proposal.share_problems
 
         if startup and not path_map_setup.has_additions(existing, proposal):

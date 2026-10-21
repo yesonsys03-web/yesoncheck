@@ -11,7 +11,10 @@ import time
 
 import pytest
 from PyQt5.QtCore import QTimer
-from PyQt5.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox
+from types import SimpleNamespace
+
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QApplication, QDialog, QFileDialog, QListWidgetItem, QMessageBox, QProgressDialog
 
 from tests.conftest import ROOT
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
@@ -124,22 +127,57 @@ def test_unknown_request_answered_with_error(qapp, capsys):
     assert "알 수 없는 요청" in capsys.readouterr().out  # 서버 쪽 기록에도
 
 
-def test_status_provider_error_reaches_client_and_is_raised(qapp, monkeypatch):
-    """상태를 만들다 난 예상 못 한 오류: 묻는 창에는 오류로 답하고, 이 창에서는 그대로 올림(excepthook — 창·기록)."""
-    raised = []
-    monkeypatch.setattr(sys, "excepthook", lambda *exc_info: raised.append(exc_info[1]))
+# 상태·닫기 처리 중 오류가 나는 창 (excepthook을 바꾸지 않음 — 그대로면 PyQt가 abort()로 창을 끝냄, Mac 빌드처럼)
+FAILING_SERVER = r"""
+import sys
+sys.path.insert(0, sys.argv[1])
+from PyQt5.QtCore import QCoreApplication
+from yesoncheck.instance_link import InstanceServer
+app = QCoreApplication([])
+calls = {"status": 0, "close": 0}
 
-    def broken():
+def status():
+    calls["status"] += 1
+    if calls["status"] == 1:
         raise RuntimeError("상태 오류 (시험)")
+    return {"calls": dict(calls)}
 
-    server = InstanceServer(broken, lambda: None)
-    name = server.start()
+def close():
+    calls["close"] += 1
+    if calls["close"] == 1:
+        raise RuntimeError("닫기 오류 (시험)")
+    app.quit()
+
+server = InstanceServer(status, close)
+print(server.start(), flush=True)
+sys.exit(app.exec_())
+"""
+
+
+def test_handler_errors_answered_and_window_keeps_serving(qapp):
+    """상태·닫기를 처리하다 난 오류: 창은 죽지 않고(작업을 잃지 않게) 트레이스백을 기록에 남기며, 상태 오류는 묻는 창에
+    InstanceLinkError(오류 내용)로 — 그 뒤에도 계속 답함."""
+    proc = subprocess.Popen([sys.executable, "-c", FAILING_SERVER, ROOT], cwd=ROOT, env=_child_env(),
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8")
     try:
-        reply = _run_client(qapp, "status", name)
+        name = proc.stdout.readline().strip()
+        assert name, proc.stderr.read()
+        with pytest.raises(InstanceLinkError, match=r"RuntimeError: 상태 오류 \(시험\)"):
+            instance_link.query_status(name)
+        assert instance_link.query_status(name) == {"calls": {"status": 2, "close": 0}}
+        instance_link.request_close(name)  # 받았다고 답한 뒤 처리하다 오류 — 창은 그대로
+        _wait_until(qapp, lambda: instance_link.query_status(name)["calls"]["close"] == 1)
+        assert proc.poll() is None
+        instance_link.request_close(name)  # 이번에는 닫힘
+        assert proc.wait(timeout=30) == 0
     finally:
-        server.close()
-    assert "상태 오류 (시험)" in reply["error"]
-    assert [str(exc) for exc in raised] == ["상태 오류 (시험)"]
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        err = proc.stderr.read()
+        proc.stdout.close()
+        proc.stderr.close()
+    assert "Traceback" in err and "RuntimeError: 상태 오류 (시험)" in err and "RuntimeError: 닫기 오류 (시험)" in err, err
 
 
 def test_query_unresponsive_server_times_out(qapp):
@@ -228,6 +266,9 @@ def test_close_for_update_rejects_open_dialog(qapp, new_player, dialogs, tmp_pat
 
     box = QMessageBox(QMessageBox.Question, "질문", "계속할까요?", QMessageBox.Yes | QMessageBox.No, player)
     box.open()  # 창 모달로 떠 있는 질문
+    progress = QProgressDialog("작업 중…", "취소", 0, 10, player)  # 진행 창은 Esc처럼 '취소' (wasCanceled)
+    progress.setWindowModality(Qt.WindowModal)
+    progress.show()
     modeless = QDialog(player)  # 모달이 아닌 창(OCR 검토 창 같은)은 건드리지 않음 — 앱이 끝나면 함께 닫힘
     modeless.show()
     QTimer.singleShot(0, player.close_for_update)  # 아래 대화 상자의 이벤트 루프 안에서 닫기 요청이 옴
@@ -235,9 +276,68 @@ def test_close_for_update_rejects_open_dialog(qapp, new_player, dialogs, tmp_pat
         result = QFileDialog(player, "저장").exec_()
         assert result == QDialog.Rejected
         assert not box.isVisible()
+        assert progress.wasCanceled() and not progress.isVisible()
         assert modeless.isVisible()
         assert not player.isVisible()
         assert not os.path.exists(record_path)  # 평소 닫기(closeEvent)를 거침
     finally:
         modeless.close()
         QApplication.processEvents()
+
+
+def test_close_for_update_stops_thumbnail_regeneration_loop(qapp, new_player, dialogs, tmp_path, monkeypatch):
+    """진행 창의 이벤트 처리 안에서 닫기 요청이 옴: 진행 창을 '취소'해 반복이 멈추고, 끝난 뒤의 '완료' 창도 띄우지 않음."""
+    player = new_player(make_config(str(tmp_path), {}))
+    player.show()
+    videos = []
+    for i in range(5):
+        path = tmp_path / f"FL_90{i}.mov"
+        path.write_bytes(b"x")
+        videos.append(str(path))
+        item = QListWidgetItem(path.name)
+        item.setToolTip(str(path))
+        player.sidebar.addItem(item)
+        item.setSelected(True)
+    made = []
+
+    def fake_generate(file_path, item=None):
+        made.append(file_path)
+        if len(made) == 1:
+            QTimer.singleShot(0, player.close_for_update)  # 첫 썸네일 뒤에 다른 창의 업데이트가 닫기를 요청
+
+    monkeypatch.setattr(player, "generate_thumbnail", fake_generate)
+    monkeypatch.setattr(player, "delete_thumbnail_file", lambda file_path, item=None: None)
+    player.regenerate_selected_thumbnails()
+    assert made == videos[:1]
+    assert not player.isVisible()
+    assert dialogs.messages == []
+
+
+@pytest.mark.parametrize("search_notices_cancel", [True, False], ids=["cancelled", "finished_anyway"])
+def test_close_for_update_stops_path_map_search_without_follow_up_dialog(qapp, new_player, dialogs, tmp_path,
+                                                                          monkeypatch, search_notices_cancel):
+    """변환표 찾기(진행 창, 0.5초 뒤에 보임) 중 닫기 요청: 찾기를 취소하고, 그 뒤의 변환표 문제 창·확인 창을 열지 않음."""
+    from yesoncheck import path_map_setup, player_sidebar
+
+    player = new_player(make_config(str(tmp_path), {}))
+    player.show()
+    player.path_map_problem = "변환표 문제 (시험)"  # 시작할 때 찾기: 취소·짝 없음이면 이 문제를 알리는 창이 뜨는 경로
+    monkeypatch.setattr(path_map_setup, "read_existing", lambda config_dir: (None, None))
+    monkeypatch.setattr(path_map_setup, "available_shares", lambda: ([], []))
+    answers = []
+
+    def fake_propose(work_paths, shares, progress=None, on_wait=None, **kwargs):
+        QTimer.singleShot(0, player.close_for_update)
+        for done in range(1, 4):
+            answers.append(progress(done, 3))  # 진행 창의 이벤트 처리 안에서 닫기 요청이 옴
+            if not answers[-1] and search_notices_cancel:
+                raise path_map_setup.SetupCancelled()
+        return SimpleNamespace(pairs=[], share_problems=[])  # 취소를 보기 전에 끝난 찾기
+
+    monkeypatch.setattr(path_map_setup, "propose_mapping", fake_propose)
+    monkeypatch.setattr(player_sidebar, "PathMapSetupDialog",
+                        lambda *a, **k: pytest.fail("닫는 중에 변환표 확인 창을 열면 안 됨"))
+    assert player.auto_setup_path_map(ask_password=False, startup=True) is False
+    assert answers[0] is False  # 첫 진행 보고에서 이미 취소됨
+    assert dialogs.messages == []
+    assert not player.isVisible()

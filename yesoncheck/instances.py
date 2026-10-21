@@ -25,6 +25,7 @@ import re
 import subprocess
 import sys
 import time
+import unicodedata
 from dataclasses import asdict, dataclass
 
 from yesoncheck import paths, update_install, user_files
@@ -179,7 +180,7 @@ def process_start_time(pid: int) -> float | None:
         return _windows_process_start_time(pid)
     result = subprocess.run(
         ["/bin/ps", "-o", "stat=,lstart=", "-p", str(pid)],
-        capture_output=True, text=True, env=_c_locale_env(utc=True), timeout=_COMMAND_TIMEOUT_S,
+        capture_output=True, text=True, env=_start_time_env(), timeout=_COMMAND_TIMEOUT_S,
     )
     if result.returncode == 1 and not result.stdout.strip():
         return None  # 그런 pid가 없음
@@ -188,12 +189,10 @@ def process_start_time(pid: int) -> float | None:
     return parse_ps_start(result.stdout)
 
 
-def _c_locale_env(utc=False):
-    """ps 출력을 읽을 수 있게: 영어 날짜·형식(LC_ALL=C), 시작 시각은 UTC(TZ=UTC0 — 창마다 시간대가 달라도 같은 값)."""
-    env = dict(os.environ, LC_ALL="C")
-    if utc:
-        env["TZ"] = "UTC0"
-    return env
+def _start_time_env():
+    """ps 시작 시각을 읽을 수 있게: 영어 날짜(LC_ALL=C — 한국어 로캘이면 '수 10/21 …'), UTC(TZ=UTC0 — 창마다
+    시간대가 달라도 같은 값)."""
+    return dict(os.environ, LC_ALL="C", TZ="UTC0")
 
 
 def parse_ps_start(text: str) -> float | None:
@@ -294,9 +293,11 @@ def _windows_me():
 
 
 def _run_ps():
-    """모든 프로세스의 `pid uid 사용자 실행 파일` (LC_ALL=C, 줄을 자르지 않음)."""
-    result = subprocess.run(["/bin/ps", "-axww", "-o", "pid=,uid=,user=,comm="], capture_output=True, text=True,
-                            env=_c_locale_env(), timeout=_COMMAND_TIMEOUT_S)
+    """모든 프로세스의 `pid uid 사용자 실행 파일` (줄을 자르지 않음). UTF-8 로캘로: C 로캘의 ps는 한글 등 ASCII가 아닌
+    글자를 M-l…로 바꿔 보여 한글이 든 앱 자리의 실행 파일을 찾지 못함. UTF-8이 아닌 바이트는 그대로(surrogateescape)."""
+    result = subprocess.run(["/bin/ps", "-axww", "-o", "pid=,uid=,user=,comm="], capture_output=True,
+                            encoding="utf-8", errors="surrogateescape",
+                            env=dict(os.environ, LC_ALL="en_US.UTF-8"), timeout=_COMMAND_TIMEOUT_S)
     if result.returncode != 0:
         raise RuntimeError(f"ps가 실패했습니다 (종료 코드 {result.returncode}): {result.stderr.strip()}")
     return result.stdout
@@ -319,8 +320,10 @@ def _run_tasklist(exe_name):
 def parse_ps_output(text: str, exe_path: str, me: int) -> list[tuple[int, str]]:
     """`ps -axww -o pid=,uid=,user=,comm=` 출력에서 exe_path로 도는, uid가 me가 아닌 프로세스 [(pid, 사용자 이름)].
 
-    실행 파일 경로에는 공백이 있을 수 있음(줄의 나머지 전부). pid·uid가 숫자가 아니면 ValueError (형식이 바뀜).
+    실행 파일 경로에는 공백이 있을 수 있음(줄의 나머지 전부) — 경로는 NFC로 맞춰 비교(Finder가 만든 한글 폴더는 NFD일 수
+    있음). pid·uid가 숫자가 아니면 ValueError (형식이 바뀜).
     """
+    exe_key = _path_key(exe_path)
     found = []
     for line in text.splitlines():
         fields = line.split(None, 3)
@@ -332,9 +335,13 @@ def parse_ps_output(text: str, exe_path: str, me: int) -> list[tuple[int, str]]:
             raise ValueError(f"ps 출력을 읽지 못했습니다: {line!r}") from exc
         if len(fields) < 4 or uid == me:
             continue
-        if posixpath.normpath(fields[3]) == posixpath.normpath(exe_path):
+        if _path_key(fields[3]) == exe_key:
             found.append((pid, fields[2]))
     return found
+
+
+def _path_key(path):
+    return unicodedata.normalize("NFC", posixpath.normpath(path))
 
 
 def parse_tasklist_csv(text: str, exe_name: str, me: str) -> list[tuple[int, str]]:

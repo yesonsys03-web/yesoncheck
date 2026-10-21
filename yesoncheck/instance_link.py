@@ -5,6 +5,10 @@
   이 사용자만 접속할 수 있게(UserAccessOption). Mac은 죽은 창이 남긴 소켓 파일을 듣기 전에 지움.
 - 규약: 한 줄에 JSON 하나(UTF-8). `{"op":"status"}` → `{"ok":true,"status":{…}}`, `{"op":"close"}` → `{"ok":true}`
   뒤 이벤트 루프에서 close_handler(닫기 버튼과 같은 정상 종료). 알 수 없는 요청은 `{"ok":false,"error":…}`.
+- status_provider·close_handler의 오류는 Qt 슬롯 밖으로 올리지 않는다: excepthook이 없는 앱(Mac 빌드 — 나중에 생김)에서는
+  PyQt가 abort()로 창을 끝내 저장 안 한 작업을 잃으므로. 트레이스백을 stderr(기록)에 남기고, 상태 오류는 묻는 창에
+  `{"ok":false,"error":"상태를 만들지 못했습니다: 오류 종류: 내용"}`으로 답하고(그 창은 InstanceLinkError), 계속 답한다.
+  닫기 오류는 이미 받았다고 답한 뒤라 기록만 — 창은 닫히지 않고 남으므로 업데이트하는 창은 기다리다 멈춘다.
 - 클라이언트(query_status·request_close): 기다리는 함수 — 업데이트하는 창의 GUI 스레드에서 창 몇 개에 차례로 부름.
   연결·보내기·답 받기를 합쳐 timeout_ms 안에 끝나고, 답이 없으면(GUI 스레드가 멈춘 창 등) InstanceLinkError.
 """
@@ -14,6 +18,7 @@ import json
 import os
 import sys
 import time
+import traceback
 from collections.abc import Callable
 
 from PyQt5.QtCore import QObject, QTimer
@@ -100,16 +105,18 @@ class InstanceServer(QObject):
             problem = None
         if op == "status":
             try:
-                status = self._status_provider()
+                reply = {"ok": True, "status": self._status_provider()}
+                data = json.dumps(reply, ensure_ascii=False)  # JSON으로 쓸 수 없는 상태도 상태 오류로
             except Exception as exc:
-                # 묻는 창에는 오류로 답하고, 이 창에서는 그대로 올림 (excepthook — 오류 창·기록)
+                print("[창 연결] 상태를 만들지 못했습니다:", file=sys.stderr, flush=True)
+                traceback.print_exc()
                 self._reply(socket, {"ok": False, "error": f"상태를 만들지 못했습니다: {type(exc).__name__}: {exc}"})
-                raise
-            self._reply(socket, {"ok": True, "status": status})
+                return
+            self._send(socket, data)
         elif op == "close":
             print("[창 연결] 다른 창의 업데이트가 이 창을 닫습니다", flush=True)
             self._reply(socket, {"ok": True})
-            QTimer.singleShot(0, self._close_handler)
+            QTimer.singleShot(0, self._run_close_handler)
         else:
             error = f"알 수 없는 요청: {line[:200].decode('utf-8', 'replace')}"
             if problem:
@@ -117,9 +124,20 @@ class InstanceServer(QObject):
             print(f"[창 연결] {error}", flush=True)
             self._reply(socket, {"ok": False, "error": error})
 
+    def _run_close_handler(self):
+        try:
+            self._close_handler()
+        except Exception:
+            print("[창 연결] 닫기 요청을 처리하지 못했습니다 (창은 그대로):", file=sys.stderr, flush=True)
+            traceback.print_exc()
+
+    @classmethod
+    def _reply(cls, socket, message):
+        cls._send(socket, json.dumps(message, ensure_ascii=False))
+
     @staticmethod
-    def _reply(socket, message):
-        socket.write(json.dumps(message, ensure_ascii=False).encode("utf-8") + b"\n")
+    def _send(socket, data):
+        socket.write(data.encode("utf-8") + b"\n")
         socket.flush()
 
 

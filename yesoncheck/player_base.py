@@ -4400,11 +4400,22 @@ QMessageBox {
             "unsaved_ocr": self.has_unsaved_ocr_results(),
         }
 
+    # 다른 창의 업데이트가 닫기를 요청한 뒤(close_for_update): 진행 창으로 도는 반복(썸네일 다시 만들기·변환표 찾기)이
+    # 멈춘 뒤의 다음 창(완료 알림·변환표 확인 창 등)을 열지 않음
+    _closing_for_update = False
+
     def close_for_update(self):
-        """다른 창의 업데이트가 닫기를 요청함: 떠 있는 모달 대화 상자(질문·파일 고르기·진행 창 등)를 취소(reject)하고
-        닫기 버튼을 누른 것처럼 닫음 (closeEvent — 작업 멈춤 포함). 모달이 아닌 창(OCR 검토 창 등)은 앱이 끝날 때 닫힘."""
+        """다른 창의 업데이트가 닫기를 요청함: 대화 상자를 Esc처럼 닫고 닫기 버튼을 누른 것처럼 닫음 (closeEvent — 작업
+        멈춤 포함). 진행 창(QProgressDialog)은 cancel() — 그 창으로 도는 반복이 wasCanceled로 멈춤 (최소 표시 시간 전이라
+        아직 보이지 않는 진행 창도). 그 밖의 보이는 모달 대화 상자(질문·파일 고르기 등)는 reject(). 모달이 아닌 창(OCR 검토
+        창 등)은 앱이 끝날 때 닫힘."""
+        self._closing_for_update = True
         for widget in QApplication.topLevelWidgets():
-            if isinstance(widget, QDialog) and widget.isVisible() and widget.isModal():
+            if isinstance(widget, QProgressDialog):
+                if not widget.wasCanceled():
+                    print(f"[창 연결] 업데이트로 닫음: 진행 창 취소 '{widget.labelText()}'", flush=True)
+                    widget.cancel()
+            elif isinstance(widget, QDialog) and widget.isVisible() and widget.isModal():
                 print(f"[창 연결] 업데이트로 닫음: 대화 상자 취소 {type(widget).__name__} '{widget.windowTitle()}'",
                       flush=True)
                 widget.reject()
