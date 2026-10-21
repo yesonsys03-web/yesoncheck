@@ -257,15 +257,35 @@ def test_window_registers_even_when_server_fails(qapp, new_player, dialogs, tmp_
     assert not os.path.exists(record_path)
 
 
-def test_close_for_update_rejects_open_dialog(qapp, new_player, dialogs, tmp_path):
+def _question_and_exec_dialog(player, kind):
+    """(창 모달로 열어 둘 질문, exec_로 띄울 대화 상자). "qdialog"는 평범한 QDialog, "message_file"은 QMessageBox·QFileDialog.
+    Windows offscreen에서는 QMessageBox·QFileDialog를 띄우면 Qt가 access violation으로 죽으므로(시험 환경 문제 — 실제
+    Windows 실행은 offscreen이 아님) Windows는 "qdialog"만 (close_for_update가 보는 것은 같은 QDialog의 모달·보임·reject)."""
+    if kind == "qdialog":
+        question = QDialog(player)
+        question.setWindowTitle("질문")
+        exec_dialog = QDialog(player)
+        exec_dialog.setWindowTitle("저장")
+        return question, exec_dialog
+    question = QMessageBox(QMessageBox.Question, "질문", "계속할까요?", QMessageBox.Yes | QMessageBox.No, player)
+    return question, QFileDialog(player, "저장")
+
+
+@pytest.mark.parametrize("kind", [
+    "qdialog",
+    pytest.param("message_file", marks=pytest.mark.skipif(
+        sys.platform == "win32", reason="Windows offscreen에서 QMessageBox·QFileDialog는 Qt를 죽임 (시험 환경)")),
+])
+def test_close_for_update_rejects_open_dialog(qapp, new_player, dialogs, tmp_path, kind):
     player = new_player(make_config(str(tmp_path), {}))
     player.show()
     player.start_instance_link()
     record_path = os.path.join(instances.registry_dir(), f"{os.getpid()}.json")
     assert os.path.exists(record_path)
 
-    box = QMessageBox(QMessageBox.Question, "질문", "계속할까요?", QMessageBox.Yes | QMessageBox.No, player)
+    box, exec_dialog = _question_and_exec_dialog(player, kind)
     box.open()  # 창 모달로 떠 있는 질문
+    assert box.isModal() and box.isVisible()
     progress = QProgressDialog("작업 중…", "취소", 0, 10, player)  # 진행 창은 Esc처럼 '취소' (wasCanceled)
     progress.setWindowModality(Qt.WindowModal)
     progress.show()
@@ -273,7 +293,7 @@ def test_close_for_update_rejects_open_dialog(qapp, new_player, dialogs, tmp_pat
     modeless.show()
     QTimer.singleShot(0, player.close_for_update)  # 아래 대화 상자의 이벤트 루프 안에서 닫기 요청이 옴
     try:
-        result = QFileDialog(player, "저장").exec_()
+        result = exec_dialog.exec_()
         assert result == QDialog.Rejected
         assert not box.isVisible()
         assert progress.wasCanceled() and not progress.isVisible()
