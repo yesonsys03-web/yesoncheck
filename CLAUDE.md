@@ -294,7 +294,7 @@ class VideoPlayer(PlayerUpdateMixin, PlayerAnnotationsMixin, PlayerSidebarMixin,
   끝난 뒤 `finish_released_workers`가 붙잡아 둔 작업을 최대 `EXIT_WAIT_S`(30초) 기다리는 동안은 Qt 루프가 없어 미룬 콜백(`QTimer.singleShot(0)`)이 돌지 않음.
 - 창을 만드는 몇 초 동안 누른 Dock은 Apple Event 큐에서 기다렸다 ready 뒤 새 창을 하나 더 띄울 수 있음(타이밍에 따라 AppKit 기본 처리기가 먹을 수도 — 확인 안 함).
   답하기 전에 여러 창이 처음 켜지면 창마다 기본 앱을 물을 수 있음.
-- Windows: 제거는 제거하는 계정의 HKCU만 지움 — 앱이 켤 때 다른 계정에 한 등록은 남아 없는 exe를 가리킴(그 계정의 Windows 설정에서 정리). 설치하지 않은 frozen 사본을 켜면 그 계정의
+- Windows: 제거는 제거하는 계정의 HKCU만 지움 — 앱이 켤 때 다른 계정에 한 등록은 남아 없는 exe를 가리킴(그 계정에서 YesonCheck를 다시 설치하거나 켜면 새로 고쳐지고, 그 전에 고르면 Windows가 앱이 없다고 알려 다른 앱을 고르게 함 — 설정으로 지울 수 있다고 안내하지 않음). 설치하지 않은 frozen 사본을 켜면 그 계정의
   "연결 프로그램" 항목이 그 사본으로 다시 가리켜짐(설치한 앱을 다시 켜면 돌아옴). HKCU 쓰기가 막히면 켤 때마다 오류 창(조용히 넘기지 않음).
 - 몬터레이(12.3)에서의 동작(기본 앱이 확인 창 없이 정해지는지, Finder 더블클릭·다음으로 열기, 처음 묻는 창)은 CI가 아니라 사람이 확인함. 실제 마우스 Dock 클릭·⌘Tab·창 클릭·Mission Control,
   Apple Silicon의 ctypes 경로(CI는 읽기 경로만)도 사람 확인 몫 — BUILD.md 8-4.
