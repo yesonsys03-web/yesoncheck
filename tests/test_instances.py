@@ -191,6 +191,43 @@ def test_broken_record_raises_with_path(tmp_path):
     assert os.path.exists(path)  # 깨진 기록은 지우지 않고 알림
 
 
+def test_malformed_json_record_raises_with_path():
+    os.makedirs(instances.registry_dir())
+    path = _record_path(41006)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write('{"pid": 41006, "app_path": ')  # 잘린 JSON
+    with pytest.raises(UserFileError, match="41006.json"):
+        instances.others(ROOT)
+    assert os.path.exists(path)
+
+
+def test_record_that_cannot_be_opened_now_is_skipped_this_pass(monkeypatch, capsys):
+    """Windows: 닫히는 창이 지운 기록이 '지우기 대기'(백신·색인이 잡고 있음)로 남으면 열 때 PermissionError — 그 기록은 이번에는
+    건너뛰고(기록에 남김) 다른 창은 그대로 셈. 업데이트가 '업데이트 실패'로 끝나지 않게 (다음 확인에서 다시 읽음)."""
+    from yesoncheck import user_files
+
+    child = _sleeping_child()
+    try:
+        started = instances.process_start_time(child.pid)
+        live = _write_record(child.pid, ROOT, started, "live")
+        held = _write_record(41007, ROOT, 1234.0, "held")
+        real_open = open
+
+        def open_held_denied(path, *args, **kwargs):
+            if os.path.normcase(os.path.abspath(path)) == os.path.normcase(os.path.abspath(held)):
+                raise PermissionError(13, "Permission denied", path)
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(user_files, "open", open_held_denied, raising=False)  # read_json이 부르는 open
+        assert instances.others(ROOT) == [InstanceRecord(child.pid, ROOT, started, "live")]
+        assert os.path.exists(held) and os.path.exists(live)  # 지우지 않음
+        out = capsys.readouterr().out
+        assert "41007.json" in out and "PermissionError" in out and "이번에는 건너뜀" in out, out
+    finally:
+        child.kill()
+        child.wait()
+
+
 # ---- 다른 사용자의 같은 앱 ----
 
 MAC_EXE = "/Applications/YesonCheck.app/Contents/MacOS/YesonCheck_Autocut"

@@ -11,7 +11,8 @@
 - other_user_processes: 같은 앱 자리의 실행 파일로 도는 다른 사용자의 프로세스 (Mac ps, Windows tasklist — Windows는
   다른 사용자 프로세스의 경로를 읽을 수 없어 실행 파일 이름으로만 찾음). 출력 읽기는 순수 함수(parse_*).
 
-예상 못 한 오류(명령 실패·깨진 기록)는 그대로 올린다.
+예상 못 한 오류(명령 실패·깨진 기록)는 그대로 올린다. 지금 열 수 없는 기록(PermissionError — Windows에서 지우는 중인
+파일)만 others()가 그 번에 건너뛰고 기록에 남긴다.
 """
 
 import atexit
@@ -123,7 +124,8 @@ def _remove(path) -> bool:
 
 
 def _read_record(path):
-    """기록 파일 → InstanceRecord, 읽는 사이에 지워졌으면 None. 형식이 틀리면 UserFileError (경로)."""
+    """기록 파일 → InstanceRecord, 읽는 사이에 지워졌으면 None. 형식이 틀리거나 읽지 못하면 UserFileError (경로 — 열 수
+    없었으면 원인 PermissionError가 __cause__)."""
     data = user_files.read_json(path, None)
     if data is None:
         return None
@@ -144,7 +146,12 @@ def is_running(record: InstanceRecord) -> bool:
 
 
 def others(app_path: str) -> list[InstanceRecord]:
-    """같은 앱 자리에서 도는 이 사용자의 다른 창 기록 (자기 제외). 죽은 창의 기록은 지운다(다른 자리의 앱 것도)."""
+    """같은 앱 자리에서 도는 이 사용자의 다른 창 기록 (자기 제외). 죽은 창의 기록은 지운다(다른 자리의 앱 것도).
+
+    지금 열 수 없는 기록(PermissionError — Windows에서 닫히는 창이 지운 파일을 백신·색인이 잡고 있으면 '지우기 대기'로
+    남음)은 이번에는 건너뛰고 기록(print)에 남긴다 — 다음에 부를 때 다시 읽음(업데이트는 0.5초마다 다시 셈). 깨진 기록(JSON·
+    형식)과 그 밖의 읽기 오류는 그대로 올린다.
+    """
     folder = registry_dir()
     try:
         names = sorted(os.listdir(folder))
@@ -155,7 +162,14 @@ def others(app_path: str) -> list[InstanceRecord]:
         if not _RECORD_NAME.fullmatch(name):
             continue  # 쓰는 중인 임시 파일(.tmp-…) 등
         path = os.path.join(folder, name)
-        record = _read_record(path)
+        try:
+            record = _read_record(path)
+        except user_files.UserFileError as exc:
+            if not isinstance(exc.__cause__, PermissionError):
+                raise
+            print(f"[창 기록] 기록을 지금 열 수 없어 이번에는 건너뜀 (지우는 중일 수 있음): {path} — "
+                  f"{type(exc.__cause__).__name__}: {exc.__cause__}", flush=True)
+            continue
         if record is None or record.pid == os.getpid():
             continue
         if not is_running(record):
