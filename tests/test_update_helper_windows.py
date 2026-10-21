@@ -938,24 +938,35 @@ def test_no_rename_when_second_instance_keeps_running(update_case):
 @windows_only
 def test_stop_new_app_keeps_preexisting_instance(update_case):
     """되돌릴 때는 도우미가 켠 새 앱(과 그 뒤에 생긴 프로세스)만 끝냄 — 새 앱을 켜기 전부터 설치 폴더의 exe로 돌던 창(업데이트
-    중에 사용자가 켠 창: '업데이트 중' 창을 보이고 스스로 끝남)은 끝내지 않고, 그 창이 끝난 뒤 되돌리기의 이름 바꾸기가 됨."""
+    중에 사용자가 켠 창: '업데이트 중' 창을 보이고 스스로 끝남)은 끝내지 않음. 이 창은 작업 폴더가 설치 폴더 밖이라 되돌리기의
+    이름 바꾸기는 되지만(실행 중인 exe는 이름은 바뀌어도 지울 수 없음) 치운 새 버전을 바로 지우지 못함 → 옛 앱을 먼저 켜고,
+    그 창이 스스로 끝나기를 기다렸다 치운 것을 지움 (남기지 않음)."""
     case = update_case("silent")
     case.env.update(YC_TEST_INSTALLER_SPAWN_APP="preexisting", YC_TEST_SPAWN_HOLD_S="15")
     code = run_helper(case, timeout_s=4)
     assert code == 1, failure_details(case, code)
-    assert app_kind(case.install_dir) == "old" and siblings(case) == ["YesonCheck"]
+    assert app_kind(case.install_dir) == "old" and siblings(case) == ["YesonCheck"], failure_details(case, code)
     preexisting = trace_pids(case, "preexisting")
     silent = trace_pids(case, "new")
     assert preexisting and silent, failure_details(case, code)
     text = log_text(case)
     killed = kill_line_pids(text, "새 앱")
-    assert silent[0] in killed and preexisting[0] not in killed, text
-    assert f"새 앱을 켜기 전부터 돌던 프로세스는 끝내지 않음: pid {preexisting[0]}" in text, text
+    assert silent[0] in killed and preexisting[0] not in killed, failure_details(case, code)
+    assert f"새 앱을 켜기 전부터 돌던 프로세스는 끝내지 않음: pid {preexisting[0]}" in text, failure_details(case, code)
     assert silent[0] not in processes_under(case.base), "새 앱이 끝나지 않음\n" + failure_details(case, code)
     assert trace_pids(case, "preexisting", "ended") == preexisting, (
         "켜기 전부터 돌던 창이 스스로 끝나지 않음 (도우미가 끝냄)\n" + failure_details(case, code))
     assert wait_until(lambda: trace_pids(case, "old")), "옛 앱이 다시 켜지지 않음\n" + failure_details(case, code)
-    assert "되돌리기 실패" not in text
+    assert "되돌리기 실패" not in text, failure_details(case, code)
+    # 치운 새 버전: 바로 못 지움 → 옛 앱을 켬 → 그 창이 끝나기를 기다림(끝내지 않음) → 지움
+    order = [text.find(part) for part in (
+        "치운 새 버전을 아직 지우지 못함: ",
+        "되돌림: 옛 앱을 다시 켬",
+        f"새 앱을 켜기 전부터 돌던 프로세스가 끝나기를 기다림 (최대 60초 — 끝내지 않음): pid {preexisting[0]}",
+        "새 앱을 켜기 전부터 돌던 프로세스가 모두 끝남",
+        "치운 새 버전을 지움: ",
+    )]
+    assert -1 not in order and order == sorted(order), f"{order}\n" + failure_details(case, code)
 
 
 @windows_only
@@ -1485,6 +1496,14 @@ def test_helper_stop_new_app_spares_processes_started_before_launch():
     assert "$started = $p.StartTime" in body and "if ($started -ge $script:NewProcStart) {" in body
     main = code[code.index("$exited = Wait-AppExit"):]
     assert main.index("$script:NewProcStart = [DateTime]::Now") < main.index("$script:NewProc = Start-App '새 앱'")
+    # 끝내지 않은 프로세스가 치운 새 버전을 잡고 있으면: 옛 앱을 켠 뒤 그 프로세스가 끝나기를(시간 한도) 기다렸다 지움
+    assert "Add-Target $script:Spared $p" in body
+    rollback = code[code.index("function Exit-Rollback"):code.index("if ($ExtraArgs.Count -gt 0)")]
+    assert rollback.index("Start-App '옛 앱'") < rollback.index("Remove-LeftoverAfterSpared") < rollback.index("exit 1\n}")
+    leftover = code[code.index("function Remove-LeftoverAfterSpared"):code.index("function Exit-Rollback")]
+    assert "$p.WaitForExit($leftMs)" in leftover and "$OthersTimeoutS" in leftover and ".Kill(" not in leftover
+    assert "$script:FailedLeftover = $failed" in code[code.index("function Restore-Backup"):code.index(
+        "function Remove-LeftoverAfterSpared")]
 
 
 def test_helper_start_app_passes_update_result_token():

@@ -32,8 +32,11 @@
 # 중간에 실패하거나, 새 앱이 표시 없이 끝나거나, 시간이 지나면 되돌림: 이 도우미가 켠 새 앱과 그 자손 프로세스, 실행 파일이
 # DIR 아래이고 새 앱을 켠 뒤에 시작한 프로세스만 끝내고(이름으로는 찾지 않음 — 켜기 전부터 돌던 창, 곧 업데이트 중에 사용자가
 # 켠 창은 건드리지 않음: '업데이트 중' 창을 보이고 스스로 끝나며, 그동안 되돌리기의 이름 바꾸기는 다시 해 봄), 반쯤 깔린 DIR을
-# 옆 이름으로 치운 뒤 백업을 DIR로 되돌리고, 치운 것을 지운 다음 옛 앱을 켠다. DIR에 앱이 없는 채로 끝내지 않는다 — 되돌리기마저
-# 실패하면 두 오류를 모두 기록하고, 알림 창을 띄우고(앱이 없으니 다음 실행에서 알릴 수 없음) 종료 코드 2.
+# 옆 이름으로 치운 뒤 백업을 DIR로 되돌리고, 치운 것을 지운 다음 옛 앱을 켠다. 켜기 전부터 돌던 창이 치운 폴더의 실행 파일로
+# 아직 돌아(작업 폴더가 DIR 밖이면 이름 바꾸기는 되지만 실행 중인 파일은 지울 수 없음) 치운 것을 못 지우면, 옛 앱을 켠 뒤 그
+# 창이 끝나기를 YC_OTHERS_TIMEOUT초까지 기다렸다 다시 지워 봄 (끝내지 않음 — 그래도 남으면 기록하고 다음 업데이트가 지움).
+# DIR에 앱이 없는 채로 끝내지 않는다 — 되돌리기마저 실패하면 두 오류를 모두 기록하고, 알림 창을 띄우고(앱이 없으니 다음
+# 실행에서 알릴 수 없음) 종료 코드 2.
 #
 # 종료 코드: 0 업데이트 성공, 1 바꾸지 않았거나 되돌림(옛 앱을 켬), 2 되돌리기 실패·설치 폴더에 앱이 없음·잘못된 인자.
 #
@@ -98,6 +101,8 @@ $script:NewProc = $null    # 켠 새 앱 프로세스
 # 새 앱을 켜기 바로 전 시각 — 자손 프로세스와, 되돌릴 때 끝낼 DIR 아래 프로세스(이 뒤에 시작한 것만)를 가릴 때 씀. 처음 값이면
 # (새 앱을 켜지 않은 되살림) DIR 아래 프로세스 모두
 $script:NewProcStart = [DateTime]::MinValue
+$script:Spared = New-Object System.Collections.ArrayList  # 되돌릴 때 끝내지 않은, 새 앱을 켜기 전부터 돌던 프로세스 (Stop-NewApp)
+$script:FailedLeftover = ''  # 되돌리기에서 치웠지만 아직 지우지 못한 새 버전 폴더 (Restore-Backup → Remove-LeftoverAfterSpared)
 $script:InstallerProc = $null  # 실행한 설치 파일 프로세스 — 되돌리기의 두 번째 이름 바꾸기 전에 그 자손을 다시 끝냄
 $script:InstallerStart = [DateTime]::MinValue
 $script:RecoverSet = $false  # 다음 로그인의 되살림을 등록했음 — 끝날 때 지워야 함
@@ -446,6 +451,7 @@ function Stop-NewApp {
             Add-Target $targets $p
         } else {
             $null = $kept.Add($p.Id)
+            Add-Target $script:Spared $p  # 치운 새 버전을 지우기 전에 끝나기를 기다림 (Remove-LeftoverAfterSpared)
         }
     }
     if ($kept.Count -gt 0) {
@@ -730,10 +736,45 @@ function Restore-Backup {
             Remove-Dir $failed
             Write-Log "치운 새 버전을 지움: $failed"
         } catch {
-            Write-Log ('치운 새 버전을 지우지 못함 (다음 업데이트가 다시 지워 봄): ' + $failed + ' (' + (Format-Err $_) + ')')
+            # 새 앱을 켜기 전부터 돌던 창(Stop-NewApp이 끝내지 않음)이 이 폴더의 실행 파일로 아직 돌 수 있음 — 되돌린 뒤
+            # Exit-Rollback이 그 창이 끝나기를 기다렸다 다시 지워 봄 (되살림이면 다음 업데이트의 Remove-FailedLeftovers가)
+            $script:FailedLeftover = $failed
+            Write-Log ('치운 새 버전을 아직 지우지 못함: ' + $failed + ' (' + (Format-Err $_) + ')')
         }
     }
     return $true
+}
+
+function Remove-LeftoverAfterSpared {
+    # 되돌리기에서 지우지 못한 치운 새 버전($script:FailedLeftover): 새 앱을 켜기 전부터 돌던 프로세스($script:Spared — 끝내지
+    # 않은 창: 이름을 바꾼 이 폴더의 실행 파일로 계속 돌며 그 파일을 잡음, 곧 스스로 끝남)가 끝나기를 OthersTimeoutS초까지
+    # 기다린 뒤 다시 지워 봄. 끝내지 않음. 옛 앱을 켠 뒤에 부름(기다리는 동안 앱이 없지 않게). 그래도 못 지우면 기록만 — 설치
+    # 폴더는 이미 되돌렸고, 다음 업데이트의 Remove-FailedLeftovers가 지움
+    $dir = $script:FailedLeftover
+    $running = @($script:Spared | Where-Object { -not $_.HasExited })
+    if ($running.Count -gt 0) {
+        Write-Log ('치운 새 버전을 지우기 전에, 새 앱을 켜기 전부터 돌던 프로세스가 끝나기를 기다림 (최대 ' + $OthersTimeoutS +
+            '초 — 끝내지 않음): pid ' + (($running | ForEach-Object { $_.Id }) -join ' '))
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        foreach ($p in $running) {
+            $leftMs = [int](($OthersTimeoutS - $sw.Elapsed.TotalSeconds) * 1000)
+            if ($leftMs -lt 0) { $leftMs = 0 }
+            $null = $p.WaitForExit($leftMs)
+        }
+        $still = @($running | Where-Object { -not $_.HasExited })
+        if ($still.Count -gt 0) {
+            Write-Log ('치운 새 버전을 지우지 않음 — ' + $OthersTimeoutS + '초가 지나도 끝나지 않은 프로세스: pid ' +
+                (($still | ForEach-Object { $_.Id }) -join ' ') + ' (다음 업데이트가 다시 지워 봄): ' + $dir)
+            return
+        }
+        Write-Log '새 앱을 켜기 전부터 돌던 프로세스가 모두 끝남'
+    }
+    try {
+        Remove-Dir $dir
+        Write-Log "치운 새 버전을 지움: $dir"
+    } catch {
+        Write-Log ('치운 새 버전을 지우지 못함 (다음 업데이트가 다시 지워 봄): ' + $dir + ' (' + (Format-Err $_) + ')')
+    }
 }
 
 function Exit-Rollback {
@@ -777,6 +818,13 @@ function Exit-Rollback {
     $null = Clear-Recover
     Write-Log '되돌림: 옛 앱을 다시 켬'
     try { $null = Start-App '옛 앱' } catch { Write-Log ('옛 앱을 켜지 못함: ' + (Format-Err $_)) }
+    if ($script:FailedLeftover) {
+        try {
+            Remove-LeftoverAfterSpared
+        } catch {
+            Write-Log ('치운 새 버전을 지우다 오류 (다음 업데이트가 다시 지워 봄): ' + $script:FailedLeftover + ' (' + (Format-Err $_) + ')')
+        }
+    }
     exit 1
 }
 
@@ -858,6 +906,7 @@ if ($Recover) {
             '설치 폴더를 지우거나 다른 이름으로 바꾼 뒤, 백업 폴더의 이름을 설치 폴더 이름으로 바꾸면 이전 버전을 다시 쓸 수 있습니다.')
     }
     $null = Remove-OkMarker '되살림 끝'
+    if ($script:FailedLeftover) { Write-Log ('치운 새 버전은 다음 업데이트가 다시 지워 봄: ' + $script:FailedLeftover) }
     Write-Log ('다음 로그인에서 되살림: 이전 버전을 설치 폴더로 되돌림 (' + $InstallDir +
         ') — 앱은 켜지 않음 (다음에 켤 때 업데이트 실패를 알림)')
     exit 1
