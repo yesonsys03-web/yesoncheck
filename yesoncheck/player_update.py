@@ -29,9 +29,10 @@
    Mac은 이어서 dmg에서 새 앱을 준비("준비 중…"). 띠에 진행·[취소].
 5. 다 받으면 다른 창을 다시 확인: 다른 사용자가 켰으면 멈춤. 받는 동안 이 창에서 새로 시작한 작업, 작업을 시작했거나 저장 안
    한 결과가 생긴 창(새로 켜진 창 포함)이 있으면 다시 물음. 새로 켜진 빈 창은 묻지 않고 함께 닫음. 다른 창마다 정상 종료를
-   요청(request_close — 닫기 버튼과 같음)하고 그 프로세스가 모두 끝나기를 기다림(CLOSE_OTHERS_POLL_MS마다, 최대
-   CLOSE_OTHERS_TIMEOUT_S — 띠에 "다른 창을 닫는 중…", 창은 쓰지 못하게, 그사이 새로 켜진 창도 묻지 않고 닫음). 끝나지 않은
-   창이 있으면 받은 것을 지우고 "업데이트를 멈췄습니다 — 이 창이 닫히지 않았습니다: …" 창, 앱은 그대로.
+   요청(request_close — 닫기 버튼과 같음)하고 그 프로세스가 모두 끝나기를 기다림(CLOSE_OTHERS_POLL_MS마다, 요청의 답을 받은
+   뒤 최대 CLOSE_OTHERS_TIMEOUT_S — 닫히는 창이 작업·붙잡아 둔 작업을 기다리는 시간의 합보다 넉넉히, 띠에 "다른 창을 닫는
+   중…", 창은 쓰지 못하게, 그사이 새로 켜진 창도 묻지 않고 닫음). 끝나지 않은 창이 있으면 받은 것을 지우고 "업데이트를
+   멈췄습니다 — 이 창이 닫히지 않았습니다: …" 창, 앱은 그대로.
 6. 업데이트 기록(write_pending — 무작위 토큰·이 창의 pid) → 도우미(launch_helper_mac/windows — 토큰을 넘김: 도우미가 다시
    켠 앱만 결과를 판정) → 기록에 도우미 pid를 더해 다시 씀(그동안 켜는 앱은 '업데이트 중' 창만 — app.launch) → 도우미가 시작
    기록을 남기면 창을 닫고 앱을 끝냄 (기다리는 동안 띠에 "업데이트 도우미를 시작하는 중…", 창은 쓰지 못하게). 도우미를 띄우지
@@ -63,7 +64,7 @@ from PyQt5.QtCore import QThread, QTimer, pyqtSignal
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
 from yesoncheck import build_info, instance_link, instances, timing_log, update_install, updates
-from yesoncheck.player_base import release_worker
+from yesoncheck.player_base import EXIT_WAIT_S, VideoPlayerBase, release_worker
 
 CHECK_TITLE = "업데이트 확인"
 CHECK_FAILED_TITLE = "업데이트 확인 실패"
@@ -105,9 +106,15 @@ UPDATE_JOB_LABEL = "업데이트 받기"  # 다른 창의 업데이트가 묻는
 # 다른 창 하나에 상태를 묻거나 닫기를 요청하는 한도. Windows는 파이프 연결이 이보다 최대 약 5초 더 걸릴 수 있음
 # (WaitNamedPipe) — 뒤 스레드에서 차례로 하므로 창은 멈추지 않음
 OTHERS_LINK_TIMEOUT_MS = 3000
-# 닫기를 요청한 창의 프로세스가 끝나기를 기다리는 한도: 창 기록은 닫기를 시작할 때 지워지지만, 창 닫기가 작업을 멈추고(작업마다
-# 최대 10초) 붙잡아 둔 작업을 기다리는(최대 30초) 동안 프로세스는 돎
-CLOSE_OTHERS_TIMEOUT_S = 40
+# 닫기를 요청한 창의 프로세스가 끝나기를 기다리는 한도 (초) — 닫기 요청을 보내고 답을 받은 뒤부터 (_on_close_requested —
+# Windows는 파이프 연결에 창마다 몇 초 걸릴 수 있음). 창 기록은 닫기를 시작할 때 지워지지만, 그 창의 프로세스는 창 닫기가
+# 작업마다 멈추기를 기다리고(JOB_CLOSE_WAIT_MS × RUNNING_JOB_ATTRS), 공유 설정 불러오기를 기다리고
+# (SHARED_CONFIG_CLOSE_WAIT_MS), 앱이 끝나기 전에 붙잡아 둔 작업(예: 단계 사이에서만 멈추는 애니매틱2 추론)을 기다리는
+# (EXIT_WAIT_S) 동안 돎 → 그 합에 썸네일 워커 멈추기·프로세스 정리의 여유(CLOSE_OTHERS_MARGIN_S)를 더함 (약 90초). 짧으면
+# 정상적으로 닫히는 중인 창 때문에 업데이트를 멈추고 받은 것(수백 MB)을 지움
+CLOSE_OTHERS_MARGIN_S = 15
+CLOSE_OTHERS_TIMEOUT_S = (VideoPlayerBase.JOB_CLOSE_WAIT_MS / 1000 * len(VideoPlayerBase.RUNNING_JOB_ATTRS)
+                          + VideoPlayerBase.SHARED_CONFIG_CLOSE_WAIT_MS / 1000 + EXIT_WAIT_S + CLOSE_OTHERS_MARGIN_S)
 CLOSE_OTHERS_POLL_MS = 500  # 그동안 다른 창의 프로세스·새로 켜진 창을 보는 간격
 _UNSAVED_CONCERN = "저장 안 한 결과"  # 다시 물을지 가리는 것 (_concerns) 중 하나 — 작업 이름과 겹치지 않음
 
@@ -501,14 +508,15 @@ class _HelperStart:
 @dataclass
 class _OthersStep:
     """다른 창을 확인하거나 닫는 동안의 것 (받기 전·넘기기 전 — _update_others). work: 실행 중인 뒤 스레드(확인·닫기 요청).
-    닫기를 기다리는 동안(deadline이 있음): closing — 닫기를 요청한 창, ended — 끝난 것을 기록한 창의 pid."""
+    닫기를 기다리는 동안(closing이 있음): closing — 닫기를 요청한 창, ended — 끝난 것을 기록한 창의 pid, deadline — 닫기
+    요청의 답을 받은 때 + CLOSE_OTHERS_TIMEOUT_S (요청을 보내는 중에는 None — 그동안은 시간이 지나도 멈추지 않음)."""
 
     run: _UpdateRun
     prepared: str | None  # 넘기기 전이면 받은 파일·준비한 앱 (넘기지 않으면 지움), 받기 전이면 None
     work: OthersWork | None = None
     closing: list = field(default_factory=list)  # [OtherWindow]
     ended: set = field(default_factory=set)
-    deadline: float | None = None  # time.monotonic() — 이때까지 끝나지 않은 창이 있으면 업데이트를 멈춤
+    deadline: float | None = None  # time.monotonic() — 이때까지 끝나지 않은 창이 있으면 업데이트를 멈춤 (_on_close_requested)
 
 
 def _update_log_report(pending):
@@ -999,20 +1007,21 @@ class PlayerUpdateMixin:
 
     def _close_other_windows(self, step, windows):
         """다른 창들에 정상 종료를 요청하고(뒤 스레드) 그 프로세스가 모두 끝나기를 CLOSE_OTHERS_POLL_MS마다 확인
-        (_poll_closing_others, 최대 CLOSE_OTHERS_TIMEOUT_S, 띠에 "다른 창을 닫는 중…"). 기다리는 동안 이 창은 쓰지 못하게 함
-        — 새로 시작한 작업을 넘긴 뒤 창 닫기가 묻지 않고 멈추지 않게."""
+        (_poll_closing_others, 요청의 답을 받은 뒤 최대 CLOSE_OTHERS_TIMEOUT_S, 띠에 "다른 창을 닫는 중…"). 기다리는 동안 이
+        창은 쓰지 못하게 함 — 새로 시작한 작업을 넘긴 뒤 창 닫기가 묻지 않고 멈추지 않게."""
         run = step.run
-        step.deadline = time.monotonic() + CLOSE_OTHERS_TIMEOUT_S
-        _log_update(f"업데이트 {run.version}: 다른 창 {len(windows)}개에 닫기를 요청하고 프로세스가 끝나기를 기다림 (최대 "
-                    f"{CLOSE_OTHERS_TIMEOUT_S:g}초): " + ", ".join(w.label for w in windows))
+        _log_update(f"업데이트 {run.version}: 다른 창 {len(windows)}개에 닫기를 요청하고 프로세스가 끝나기를 기다림 (요청의 "
+                    f"답을 받은 뒤 최대 {CLOSE_OTHERS_TIMEOUT_S:g}초): " + ", ".join(w.label for w in windows))
         self.setEnabled(False)
         self.update_banner.show_progress(0, 0, CLOSING_OTHERS_TEXT, cancellable=False)
         self._request_close(step, windows)
         self._update_others_timer.start(CLOSE_OTHERS_POLL_MS)
 
     def _request_close(self, step, windows):
-        """windows에 닫기 요청을 보내는 뒤 스레드를 시작 (결과는 _on_close_requested) — 그 창들은 끝나기를 기다릴 창에."""
+        """windows에 닫기 요청을 보내는 뒤 스레드를 시작 (결과는 _on_close_requested) — 그 창들은 끝나기를 기다릴 창에.
+        보내는 동안(창마다 몇 초까지)은 기다리는 한도를 세지 않음 (deadline None — 답을 받으면 다시 처음부터)."""
         step.closing.extend(windows)
+        step.deadline = None
         work = OthersWork(functools.partial(request_close_all, list(windows)))
         work.done.connect(self._on_close_requested)
         work.failed.connect(self._on_others_work_failed)
@@ -1020,21 +1029,23 @@ class PlayerUpdateMixin:
         work.start()
 
     def _on_close_requested(self, answers):
-        """(GUI 스레드) 닫기 요청의 답을 기록에 — 답하지 않은 창도 늦게 받은 요청으로 닫힐 수 있어 끝나기를 계속 기다림."""
+        """(GUI 스레드) 닫기 요청의 답을 기록에 — 답하지 않은 창도 늦게 받은 요청으로 닫힐 수 있어 끝나기를 계속 기다림.
+        끝나기를 기다리는 한도(CLOSE_OTHERS_TIMEOUT_S)는 여기서부터 (요청을 보내는 데 걸린 시간은 빼고)."""
         step = self._take_others_work()
         if step is None:
             return
+        step.deadline = time.monotonic() + CLOSE_OTHERS_TIMEOUT_S
         lines = "".join(f"\n  {window.label}: " + ("받음" if problem is None else f"답 없음 — 끝나기를 계속 기다림 ({problem})")
                         for window, problem in answers)
-        _log_update(f"업데이트 {step.run.version}: 닫기 요청의 답{lines}")
+        _log_update(f"업데이트 {step.run.version}: 닫기 요청의 답 — 지금부터 최대 {CLOSE_OTHERS_TIMEOUT_S:g}초 기다림{lines}")
 
     def _poll_closing_others(self):
         """(타이머 슬롯, GUI 스레드) 닫기를 요청한 창의 프로세스가 모두 끝났고(창 기록이 아니라 instances.is_running — 기록은
         닫기를 시작할 때 지워짐) 새로 켜진 창이 없으면 도우미에 넘김. 그사이 새로 켜진 창(창 기록)에는 묻지 않고 닫기를 요청.
-        CLOSE_OTHERS_TIMEOUT_S가 지나도 끝나지 않은 창이 있으면 업데이트를 멈춤. 슬롯이라 예외를 밖으로 내지 않음 — 확인하다
-        난 예외는 실패 창 (트레이스백째)."""
+        닫기 요청의 답을 받은 뒤 CLOSE_OTHERS_TIMEOUT_S가 지나도 끝나지 않은 창이 있으면 업데이트를 멈춤 (요청을 보내는 중에는
+        멈추지 않음). 슬롯이라 예외를 밖으로 내지 않음 — 확인하다 난 예외는 실패 창 (트레이스백째)."""
         step = self._update_others
-        if step is None or step.deadline is None:
+        if step is None or not step.closing:
             return
         run = step.run
         try:
@@ -1061,7 +1072,7 @@ class PlayerUpdateMixin:
             self.setEnabled(True)  # _hand_off가 도우미를 띄운 뒤 다시 쓰지 못하게 함 (띄우지 못하면 창을 그대로 씀)
             self._hand_off(run, step.prepared)
             return
-        if running and time.monotonic() >= step.deadline:
+        if running and step.deadline is not None and time.monotonic() >= step.deadline:
             self._stop_for_open_windows(step, running)
 
     def _stop_for_open_windows(self, step, running):

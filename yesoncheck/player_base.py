@@ -107,6 +107,10 @@ def korean_date(day):
 _RELEASED_WORKERS = {}  # 워커 → 이름(로그용)
 _released_sweep_timer = None
 RELEASED_SWEEP_INTERVAL_MS = 200
+# 창을 닫은 뒤 끝나지 않은 작업(예: TensorFlow 추론 중인 애니매틱2)을 기다리는 최대 시간 (초) — app.launch가 이벤트 루프가
+# 끝난 뒤 wait_for_released_workers로 (넘으면 로그를 남기고 프로세스를 강제로 끝냄 — app.finish_released_workers).
+# 다른 창의 업데이트가 닫히는 창을 기다리는 한도(player_update.CLOSE_OTHERS_TIMEOUT_S)도 이 값으로 셈
+EXIT_WAIT_S = 30
 
 
 def _sweep_released_workers():

@@ -18,12 +18,12 @@ if __package__ in (None, ""):
     from yesoncheck import (  # type: ignore  # pylint: disable=import-error
         build_info, launch_args, mac_mounts, paths, timing_log, update_install,
     )
-    from yesoncheck.player_base import wait_for_released_workers  # type: ignore  # pylint: disable=import-error
+    from yesoncheck.player_base import EXIT_WAIT_S, wait_for_released_workers  # type: ignore  # pylint: disable=import-error
     from yesoncheck.player_update import BOX_TITLE_PROPERTY  # type: ignore  # pylint: disable=import-error
 else:
     from .main_window import VideoPlayer
     from . import build_info, launch_args, mac_mounts, paths, timing_log, update_install
-    from .player_base import wait_for_released_workers
+    from .player_base import EXIT_WAIT_S, wait_for_released_workers
     from .player_update import BOX_TITLE_PROPERTY
 
 APP_TITLE = "YesonCheck"
@@ -242,11 +242,9 @@ def show_update_in_progress():
     box.exec_()
 
 
-# 창을 닫은 뒤 끝나지 않은 작업(예: TensorFlow 추론 중인 애니매틱2)을 기다리는 최대 시간 (초).
-# 넘으면 로그를 남기고 프로세스를 강제로 끝냄 (finish_released_workers)
-EXIT_WAIT_S = 30
-
-
+# 창을 닫은 뒤 끝나지 않은 작업을 기다리는 최대 시간 EXIT_WAIT_S(초, 넘으면 로그를 남기고 강제 종료)는 player_base에 둠 —
+# 다른 창의 업데이트가 닫히는 창을 기다리는 한도(player_update.CLOSE_OTHERS_TIMEOUT_S)도 그 값으로 셈 (player_update는 이
+# 모듈을 불러올 수 없음: 이 모듈이 player_update를 부름)
 def finish_released_workers(timeout_s):
     """창을 닫을 때 붙잡아 둔 작업을 timeout_s초까지 기다리고, 그래도 안 끝나면 로그를 남긴 뒤 os._exit(0).
 

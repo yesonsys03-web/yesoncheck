@@ -334,7 +334,7 @@ def fast_close_poll(monkeypatch):
 
 @pytest.fixture
 def quick_close_wait(fast_close_poll, monkeypatch):
-    """다른 창이 닫히기를 기다리는 한도를 0.4초로 (시험이 40초를 기다리지 않게)."""
+    """다른 창이 닫히기를 기다리는 한도를 0.4초로 (시험이 90초를 기다리지 않게)."""
     monkeypatch.setattr(player_update, "CLOSE_OTHERS_TIMEOUT_S", 0.4)
 
 
@@ -1166,6 +1166,33 @@ def test_window_opened_while_closing_others_is_closed_too(player_offer, other_wi
     [new] = late
     assert first.close_requests == 1 and new.close_requests == 1 and not new.alive
     assert len(dialogs.messages) == 1 and quits == ["quit"]
+
+
+def test_close_others_timeout_covers_a_closing_windows_longest_exit():
+    """닫기를 요청한 창이 끝나기를 기다리는 한도는 그 창이 정상적으로 닫히며 기다릴 수 있는 시간의 합보다 넉넉해야 함: 작업마다
+    멈추기를 기다림(JOB_CLOSE_WAIT_MS × RUNNING_JOB_ATTRS) + 공유 설정 불러오기(SHARED_CONFIG_CLOSE_WAIT_MS) + 앱이 끝나기
+    전에 붙잡아 둔 작업(app.EXIT_WAIT_S — 단계 사이에서만 멈추는 애니매틱2 추론). 짧으면 닫히는 중인 창 때문에 업데이트를
+    멈추고 받은 것(수백 MB)을 지움."""
+    from yesoncheck import app
+
+    base = player_base.VideoPlayerBase
+    longest_exit = (base.JOB_CLOSE_WAIT_MS / 1000 * len(base.RUNNING_JOB_ATTRS)
+                    + base.SHARED_CONFIG_CLOSE_WAIT_MS / 1000 + app.EXIT_WAIT_S)
+    assert player_update.CLOSE_OTHERS_TIMEOUT_S >= longest_exit + 10, (player_update.CLOSE_OTHERS_TIMEOUT_S, longest_exit)
+
+
+def test_close_wait_starts_when_the_close_request_is_answered(player_offer, other_windows, dialogs, fake_helpers, quits,
+                                                              quick_close_wait):
+    """끝나기를 기다리는 한도는 닫기 요청을 보내고 답을 받은 뒤부터 (Windows 파이프 연결은 창마다 몇 초 걸릴 수 있음) — 요청을
+    보내는 데 한도보다 오래 걸려도, 그 뒤 곧 끝나는 창 때문에 업데이트를 멈추지 않음."""
+    slow = other_windows.add(101, exits_after=2)
+    slow.on_close = lambda: time.sleep(1.0)  # 요청에 1초 (뒤 스레드) — 한도 0.4초보다 김
+    player_offer.start_update()
+    wait_until(lambda: fake_helpers.called or dialogs.warnings)
+    assert dialogs.warnings == [] and fake_helpers.called and quits == ["quit"]
+    assert slow.close_requests == 1 and not slow.alive
+    log = update_log()
+    assert log.index("닫기 요청의 답") < log.index("다른 창이 끝남"), log
 
 
 def test_scan_error_shows_failure_and_keeps_offer(player_offer, other_windows, dialogs, downloads, monkeypatch):
