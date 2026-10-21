@@ -458,8 +458,8 @@ def test_open_startup_file_uses_path_with_other_unicode_form(qapp, monkeypatch, 
     """받은 경로가 그대로는 없고 이름의 정규화(NFC·NFD)만 다른 실제 경로가 있으면(NFS 공유) 그 경로로 엶 (paths.find_unicode_variant)."""
     from yesoncheck import app as app_module, paths
 
-    handed = unicodedata.normalize("NFD", "/nas/usadata9/FL_901 컷/장면.mov")
-    real = unicodedata.normalize("NFC", "/nas/usadata9/FL_901 컷/") + unicodedata.normalize("NFD", "장면.mov")
+    handed = unicodedata.normalize("NFD", "/nas/Mainnas/FL_901 컷/장면.mov")
+    real = unicodedata.normalize("NFC", "/nas/Mainnas/FL_901 컷/") + unicodedata.normalize("NFD", "장면.mov")
     asked = []
 
     def fake_find(path):

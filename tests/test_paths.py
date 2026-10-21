@@ -325,7 +325,7 @@ def _nfc(text):
 def test_find_unicode_variant_on_byte_exact_share():
     """Mac이 넘긴 경로(NFD — argv_emulation의 CFStringGetFileSystemRepresentation)가 NFS 공유에서 이름이 NFC로 저장된 폴더를
     지나면 그대로는 없음 → 이름마다 위 폴더 목록에서 NFC가 같은 것을 찾아 실제 경로로 (NFC·NFD 이름이 섞여 있어도)."""
-    share = os.path.join(os.sep, "nas", "usadata9")
+    share = os.path.join(os.sep, "nas", "Mainnas")
     folder_nfc = _nfc("FL_901 컷 모음")  # Windows·NAS에서 만든 폴더 — NFC로 저장됨
     video_nfd = _nfd("장면 #3.mov")  # Mac에서 넣은 파일 — NFD로 저장됨
     real = os.path.join(share, folder_nfc, video_nfd)
@@ -338,7 +338,7 @@ def test_find_unicode_variant_on_byte_exact_share():
 
 
 def test_find_unicode_variant_returns_none_when_nothing_to_find():
-    share = os.path.join(os.sep, "nas", "usadata9")
+    share = os.path.join(os.sep, "nas", "Mainnas")
     real = os.path.join(share, _nfc("가나"), "a.mov")
     fs = ByteExactFS(real)
     # 있는 경로는 그대로 쓰면 됨 → None
@@ -357,7 +357,7 @@ def test_find_unicode_variant_returns_none_when_nothing_to_find():
 
 def test_find_unicode_variant_ambiguous_or_unreadable_is_none(capsys):
     """NFC가 같은 이름이 둘 이상(NFC·NFD로 따로 저장된 두 폴더)이면 고르지 않음, 폴더를 읽지 못하면 None — 둘 다 기록에 까닭."""
-    share = os.path.join(os.sep, "nas", "usadata9")
+    share = os.path.join(os.sep, "nas", "Mainnas")
     both = ByteExactFS(os.path.join(share, _nfc("가각"), "a.mov"), os.path.join(share, _nfd("가각"), "a.mov"))
     mixed = "가" + _nfd("각")  # 앞 글자는 NFC, 뒤 글자는 NFD — 어느 쪽과도 바이트가 다름
     assert paths.find_unicode_variant(os.path.join(share, mixed, "a.mov"), lexists=both.lexists,
