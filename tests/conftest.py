@@ -35,7 +35,8 @@ def dialogs(monkeypatch):
     messages: 모든 창의 (종류, 제목, 글). questions·warnings·criticals: 그 종류의 글만 차례로.
     question 창의 대답은 기본 Yes — answer_question(QMessageBox.No)로 그 뒤의 대답을 바꿈.
     QMessageBox를 만들어 exec_()로 띄운 창(자세한 글 setDetailedText이 있는 창 등)도 같은 목록에 — 글은 "본문\n\n자세한 글",
-    본문과 자세한 글을 따로 보려면 boxes (종류·제목·본문·자세한 글).
+    본문과 자세한 글을 따로 보려면 boxes (종류·제목·본문·자세한 글·단추 글자). 그런 창 중 question 아이콘의 창도 대답은
+    answer_question으로 정한 값 (나머지는 Ok).
     """
     from PyQt5.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
@@ -69,10 +70,11 @@ def dialogs(monkeypatch):
         details = box.detailedText()
         text = f"{box.text()}\n\n{details}" if details else box.text()
         rec.messages.append((kind, title, text))
-        rec.boxes.append(SimpleNamespace(kind=kind, title=title, text=box.text(), details=details))
+        rec.boxes.append(SimpleNamespace(kind=kind, title=title, text=box.text(), details=details,
+                                         buttons=[button.text() for button in box.buttons()]))
         if kind in texts:
             texts[kind].append(text)
-        return QMessageBox.Ok
+        return answers["question"] if kind == "question" else QMessageBox.Ok
 
     monkeypatch.setattr(QMessageBox, "exec_", box_exec)
     monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: rec.folders.pop(0) if rec.folders else "")
