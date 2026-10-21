@@ -43,6 +43,7 @@ ROOT = Path(__file__).resolve().parent.parent
 HELPER = ROOT / "yesoncheck" / "update_helper_windows.ps1"
 SPEC = ROOT / "YesonCheck_Autocut.spec"
 TARGET = "1.1.1"
+TOKEN = "0123456789abcdef"  # 앱이 넘기는 업데이트 토큰 (도우미가 다시 켜는 앱만 결과를 판정 — update_install.Pending)
 EXE_NAME = "YesonCheck_Autocut.exe"
 LOG_LINE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2} ")  # update_install.log()와 같은 줄 앞 시각
 POWERSHELL = update_install._windows_powershell()
@@ -569,6 +570,15 @@ def test_helper_installs_and_keeps_new(update_case):
 
 
 @windows_only
+def test_helper_accepts_token_argument(update_case):
+    """앱(update_install.launch_helper_windows)이 넘기는 -Token을 모르는 인자로 거절하지 않음 (쓰는 일은 Task A10)."""
+    case = update_case("new")
+    code = run_helper(case, cmd=helper_cmd(case, os.getpid(), 4) + ["-Token", TOKEN])
+    assert code == 0, failure_details(case, code)
+    assert app_kind(case.install_dir) == "new" and "잘못된 인자" not in log_text(case)
+
+
+@windows_only
 def test_helper_restores_when_installer_fails(update_case):
     case = update_case("new", installer_exit=3)
     code = run_helper(case)
@@ -1009,7 +1019,7 @@ def test_launch_helper_windows_copies_script_and_passes_arguments(tmp_state_dir,
     _RecordingPopen.calls = []
     monkeypatch.setattr(update_install.subprocess, "Popen", _RecordingPopen)
     installer = "C:\\Users\\studio01\\AppData\\Local\\YesonCheck\\updates\\YesonCheck_Setup_1.1.1.exe"
-    update_install.launch_helper_windows(installer, "C:\\YesonCheck", "1.1.1")
+    update_install.launch_helper_windows(installer, "C:\\YesonCheck", "1.1.1", TOKEN)
     copy = os.path.join(update_install.state_dir(), "update_helper_windows.ps1")
     console = _RecordingPopen.calls[0][1].pop("stdout")  # 도우미 출력 파일 (아래에서 따로 확인)
     assert console.name == update_install.helper_console_path() and console.closed
@@ -1024,6 +1034,7 @@ def test_launch_helper_windows_copies_script_and_passes_arguments(tmp_state_dir,
             "-Target", "1.1.1",
             "-OkFile", update_install.ok_marker_path(),
             "-Log", update_install.log_path(),
+            "-Token", TOKEN,
         ],
         {
             # CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW (Win32 값 — Mac의 subprocess에는 없음). DETACHED_PROCESS(0x8)는
@@ -1054,7 +1065,7 @@ def test_launch_helper_windows_resets_pyinstaller_environment_for_relaunched_app
     monkeypatch.delenv("PYINSTALLER_RESET_ENVIRONMENT", raising=False)
     _RecordingPopen.calls = []
     monkeypatch.setattr(update_install.subprocess, "Popen", _RecordingPopen)
-    update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1")
+    update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1", TOKEN)
     env = _RecordingPopen.calls[0][1]["env"]
     assert env["PYINSTALLER_RESET_ENVIRONMENT"] == "1" and env["YC_UPDATE_NO_MESSAGEBOX"] == "1"
     assert "PYINSTALLER_RESET_ENVIRONMENT" not in os.environ
@@ -1089,7 +1100,7 @@ def test_launch_helper_windows_starts_a_fresh_console_file(tmp_state_dir, monkey
         fh.write("지난 도우미의 출력\n")
     _RecordingPopen.calls = []
     monkeypatch.setattr(update_install.subprocess, "Popen", _RecordingPopen)
-    update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1")
+    update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1", TOKEN)
     assert Path(update_install.helper_console_path()).read_bytes() == b""
 
 
@@ -1122,7 +1133,7 @@ def test_real_launch_helper_windows_writes_start_line_with_ps7_module_path(tmp_s
     update_install.log("업데이트 1.1.1: 업데이트 기록을 남김 (앱의 줄)")
     offset = update_install.log_size()
     try:
-        proc = update_install.launch_helper_windows(str(tmp_path / "YesonCheck_Setup_1.1.1.exe"), str(install_dir), "1.1.1")
+        proc = update_install.launch_helper_windows(str(tmp_path / "YesonCheck_Setup_1.1.1.exe"), str(install_dir), "1.1.1", TOKEN)
     finally:
         # launch는 띄운 뒤 DLL 찾는 곳을 (가짜) _MEIPASS로 되돌림 — 이 시험 프로세스(빌드된 앱이 아님)는 원래대로 기본
         update_install._set_dll_directory(None)
@@ -1145,7 +1156,7 @@ def test_real_launch_helper_windows_records_early_powershell_failure(tmp_state_d
     monkeypatch.setattr(update_install, "_bundled_file", lambda name: str(broken))
     monkeypatch.setenv("YC_UPDATE_NO_MESSAGEBOX", "1")
     proc = update_install.launch_helper_windows(str(tmp_path / "Setup.exe"), str(tmp_path / "Programs" / "YesonCheck"),
-                                                "1.1.1")
+                                                "1.1.1", TOKEN)
     code, text, console = _wait_real_helper(proc)
     details = f"종료 코드 {code}\n기록:\n{text}\n도우미 출력:\n{console}"
     assert code != 0 and "yc-early-failure-marker" in console, details
@@ -1183,7 +1194,7 @@ def test_launch_helper_windows_launches_with_default_dll_search_when_frozen(tmp_
     events = []
     monkeypatch.setattr(update_install, "_kernel32", lambda: _FakeKernel32(events))
     monkeypatch.setattr(update_install.subprocess, "Popen", lambda args, **kwargs: events.append(("Popen", args[0])))
-    update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1")
+    update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1", TOKEN)
     assert events == [("SetDllDirectoryW", None), ("Popen", update_install._windows_powershell()),
                       ("SetDllDirectoryW", meipass)]
 
@@ -1196,7 +1207,7 @@ def test_launch_helper_windows_launches_with_default_dll_search_when_frozen(tmp_
 
     monkeypatch.setattr(update_install.subprocess, "Popen", failing_popen)
     with pytest.raises(OSError, match="PowerShell을 실행하지 못함"):
-        update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1")
+        update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1", TOKEN)
     assert events[-1] == ("SetDllDirectoryW", meipass)
 
 
@@ -1207,7 +1218,7 @@ def test_launch_helper_windows_does_not_launch_when_dll_search_reset_fails(tmp_s
     monkeypatch.setattr(update_install, "_last_windows_error", lambda: 87)
     monkeypatch.setattr(update_install.subprocess, "Popen", lambda args, **kwargs: events.append(("Popen", args[0])))
     with pytest.raises(OSError, match=r"SetDllDirectoryW\(None\)가 실패했습니다 \(Windows 오류 87\)"):
-        update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1")
+        update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1", TOKEN)
     assert events == [("SetDllDirectoryW", None)]
 
 
@@ -1217,7 +1228,7 @@ def test_launch_helper_windows_does_not_swallow_popen_failure(tmp_state_dir, mon
 
     monkeypatch.setattr(update_install.subprocess, "Popen", failing_popen)
     with pytest.raises(OSError, match="PowerShell을 실행하지 못함"):
-        update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1")
+        update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1", TOKEN)
 
 
 def helper_code():

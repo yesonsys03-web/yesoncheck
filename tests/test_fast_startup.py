@@ -361,7 +361,7 @@ def test_launch_shows_window_then_loads_shared_config(qapp, monkeypatch):
         def start_shared_config_load(self):
             events.append("load")
 
-        def handle_update_startup(self):
+        def handle_update_startup(self, update_token):
             events.append("update")
 
         def show_user_file_problems(self):
@@ -400,7 +400,7 @@ def test_launch_opens_command_line_file_after_window_is_shown(qapp, monkeypatch,
         def start_shared_config_load(self):
             events.append("load")
 
-        def handle_update_startup(self):
+        def handle_update_startup(self, update_token):
             events.append("update")
 
         def show_user_file_problems(self):

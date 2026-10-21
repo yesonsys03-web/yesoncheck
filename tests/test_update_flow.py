@@ -9,17 +9,21 @@ build_info.platform_key를 바꿔 정함 — Mac·Windows 경로를 두 CI 모�
 
 import hashlib
 import os
+import re
 import subprocess
+import sys
 import threading
 from types import SimpleNamespace
 
 import pytest
-from PyQt5.QtWidgets import QApplication, QMessageBox
+from PyQt5.QtWidgets import QApplication, QMessageBox, QWidget
 
 from yesoncheck import build_info, instance_link, instances, player_base, player_update, update_install, updates
 from yesoncheck.update_install import Pending, ok_marker_path, read_pending, write_pending
 from tests.test_fast_startup import wait_until
-from tests.test_update_ui import _settle, check_now, error, fake_check, found, player_with_build  # noqa: F401 (fixture)
+from tests.test_update_ui import (  # noqa: F401 (fixture)
+    _built_app, _settle, check_now, error, fake_check, found, player_with_build,
+)
 from tests.test_work_paths_ui import new_player  # noqa: F401 (fixture)
 
 INSTALLER = bytes(range(256)) * 4096 * 3  # 3 MB → 받기는 1 MB씩 세 번 (중간에 멈추는 시험)
@@ -114,11 +118,11 @@ class FakeHelpers:
     def args(self):
         return self.calls[-1]
 
-    def windows(self, installer, install_dir, target):
-        return self._record("windows", installer=installer, install_dir=install_dir, target=target)
+    def windows(self, installer, install_dir, target, token):
+        return self._record("windows", installer=installer, install_dir=install_dir, target=target, token=token)
 
-    def mac(self, staged_app, app_path, target):
-        return self._record("mac", staged_app=staged_app, app_path=app_path, target=target)
+    def mac(self, staged_app, app_path, target, token):
+        return self._record("mac", staged_app=staged_app, app_path=app_path, target=target, token=token)
 
     def _record(self, kind, **kwargs):
         if self.raises is not None:
@@ -526,6 +530,9 @@ def test_success_hands_off_and_quits(player_offer, fake_helpers, quits, download
     assert pending.target == "1.1.1" and fake_helpers.args.target == "1.1.1"
     assert (pending.previous, pending.platform_key) == ("1.1.0", "windows")
     assert pending.started >= started and len(pending.started) == len(started)  # log_tail_since가 비교하는 형식
+    # 도우미가 다시 켤 앱만 결과를 판정하는 토큰(도우미에 넘김), 업데이트 중인지 볼 도우미 pid, 기록을 거를 이 창의 pid
+    assert re.fullmatch(r"[0-9a-f]{16}", pending.token) and fake_helpers.args.token == pending.token
+    assert pending.helper_pid == str(FakeHelperProc.pid) and pending.app_pid == str(os.getpid())
     installer = os.path.join(downloads_dir(), "YesonCheck_Setup_1.1.1.exe")
     assert fake_helpers.args.kind == "windows"
     assert fake_helpers.args.installer == installer and fake_helpers.args.install_dir == install_dir
@@ -697,6 +704,28 @@ def test_helper_failure_and_record_not_cleared_shows_both(player_offer, fake_hel
     assert "OSError: 시험용 도우미 실행 실패" in text and "PermissionError: 시험용 기록 지우기 실패" in text
     assert logged_before_clear == [True]
     assert player_offer.isVisible() and quits == [] and player_offer.update_banner.mode() == "offer"
+
+
+def test_helper_pid_not_recorded_stops_helper(player_offer, fake_helpers, dialogs, quits, monkeypatch):
+    """도우미를 띄운 뒤 업데이트 기록에 그 pid를 다시 쓰지 못함 → 도우미를 끝내고 기록을 지운 뒤 실패 창, 앱은 그대로
+    (그 사이 켜진 앱이 '업데이트 중'을 알 수 없는 채로 넘기지 않음)."""
+    real_write = update_install.write_pending
+
+    def write_without_helper_pid(p):
+        if p.helper_pid:
+            raise OSError("시험용 기록 쓰기 실패")
+        real_write(p)
+
+    monkeypatch.setattr(update_install, "write_pending", write_without_helper_pid)
+    player_offer.start_update()
+    wait_until(lambda: dialogs.criticals)
+    _settle()
+    [(kind, title, text)] = dialogs.messages
+    assert (kind, title) == ("critical", "업데이트 실패")
+    assert "업데이트 기록에 도우미(pid 4242)를 적지 못했습니다" in text and "OSError: 시험용 기록 쓰기 실패" in text
+    assert fake_helpers.procs[0].killed and read_pending() is None
+    assert player_offer.isVisible() and player_offer.isEnabled() and quits == []
+    assert player_offer.update_banner.mode() == "offer"
 
 
 def test_log_failure_at_start_shows_failure_and_does_not_download(player_offer, broken_log, dialogs, downloads,
@@ -1277,6 +1306,7 @@ def test_mac_stages_then_hands_off(player_offer_mac, fake_stage, fake_helpers, q
     assert downloaded_files() == []  # 새 앱을 꺼낸 dmg는 지움
     pending = read_pending()
     assert (pending.target, pending.previous, pending.platform_key) == ("1.1.1", "1.1.0", "mac-x86_64")
+    assert pending.token and fake_helpers.args.token == pending.token and pending.helper_pid == str(FakeHelperProc.pid)
     assert player_offer_mac.isHidden() and quits == ["quit"] and dialogs.messages == []
 
 
@@ -1298,7 +1328,7 @@ def test_mac_close_while_staging_removes_staged_app(player_offer_mac, fake_stage
 def test_startup_ok_shows_message(tmp_state_dir, player_with_build, dialogs):
     write_pending(Pending("1.1.1", "1.1.0", "windows", now()))
     p = player_with_build("1.1.1")
-    p.handle_update_startup()
+    p.handle_update_startup(None)
     assert p.update_banner.full_text() == "1.1.1로 업데이트했습니다" and p.update_banner.mode() == "message"
     assert os.path.exists(ok_marker_path())
     assert read_pending() is None and dialogs.messages == []
@@ -1313,7 +1343,7 @@ def test_startup_ok_removes_downloaded_installer(tmp_state_dir, player_with_buil
             fh.write(b"installer")
     write_pending(Pending("1.1.1", "1.1.0", "windows", now()))
     p = player_with_build("1.1.1")
-    p.handle_update_startup()
+    p.handle_update_startup(None)
     assert downloaded_files() == [] and dialogs.messages == []
     assert p.update_banner.full_text() == "1.1.1로 업데이트했습니다"
     assert "받은 것을 지움" in update_log()
@@ -1332,7 +1362,7 @@ def test_startup_ok_download_removal_failure_is_logged_only(tmp_state_dir, playe
     monkeypatch.setattr(player_update, "remove_prepared", locked)
     write_pending(Pending("1.1.1", "1.1.0", "windows", now()))
     p = player_with_build("1.1.1")
-    p.handle_update_startup()
+    p.handle_update_startup(None)
     assert dialogs.messages == [] and p.update_banner.full_text() == "1.1.1로 업데이트했습니다"
     log = update_log()
     assert "받은 것을 지우지 못함" in log and "PermissionError: 시험용 지우기 실패" in log
@@ -1342,7 +1372,7 @@ def test_startup_failed_shows_log(tmp_state_dir, player_with_build, dialogs):
     write_pending(Pending("1.1.1", "1.1.0", "windows", now()))
     update_install.log("설치 실패: 예시")
     p = player_with_build("1.1.0")
-    p.handle_update_startup()
+    p.handle_update_startup(None)
     assert "설치 실패: 예시" in dialogs.criticals[0]
     [(kind, title, text)] = dialogs.messages
     assert title == "업데이트 실패" and "1.1.1" in text and update_install.log_path() in text
@@ -1355,7 +1385,7 @@ def test_startup_failed_long_log_goes_to_details(tmp_state_dir, player_with_buil
     for i in range(120):
         update_install.log(f"도우미: 긴 기록 {i:03d}")
     p = player_with_build("1.1.0")
-    p.handle_update_startup()
+    p.handle_update_startup(None)
     [box] = dialogs.boxes
     assert (box.kind, box.title) == ("critical", "업데이트 실패")
     assert "1.1.1로 업데이트하지 못했습니다" in box.text and update_install.log_path() in box.text
@@ -1374,7 +1404,7 @@ def test_startup_failed_shows_helper_output_missing_from_log(tmp_state_dir, play
     with open(update_install.helper_console_path(), "w", encoding="utf-8") as fh:
         fh.write(f"{logged}\n{error}\n")
     p = player_with_build("1.1.0")
-    p.handle_update_startup()
+    p.handle_update_startup(None)
     [(kind, title, text)] = dialogs.messages
     assert (kind, title) == ("critical", "업데이트 실패")
     assert error in text and update_install.helper_console_path() in text and text.count(logged) == 1
@@ -1385,7 +1415,7 @@ def test_startup_corrupt_record_shows_dialog(tmp_state_dir, player_with_build, d
     with open(os.path.join(tmp_state_dir, update_install.PENDING_FILE_NAME), "w", encoding="utf-8") as fh:
         fh.write("{깨진")
     p = player_with_build("1.1.1")
-    p.handle_update_startup()
+    p.handle_update_startup(None)
     [(kind, title, text)] = dialogs.messages
     assert (kind, title) == ("critical", "업데이트 실패") and "업데이트 기록을 읽지 못했습니다" in text
     assert read_pending() is None  # 보인 뒤 지움 (켤 때마다 같은 창이 뜨지 않게)
@@ -1393,10 +1423,159 @@ def test_startup_corrupt_record_shows_dialog(tmp_state_dir, player_with_build, d
 
 def test_startup_without_record_or_in_source_run_does_nothing(tmp_state_dir, player_with_build, dialogs, monkeypatch):
     p = player_with_build("1.1.1")
-    p.handle_update_startup()
+    p.handle_update_startup(None)
     assert dialogs.messages == [] and p.update_banner.mode() == "hidden"
     write_pending(Pending("1.1.1", "1.1.0", "windows", now()))
     monkeypatch.setattr(build_info, "current", lambda: None)
-    p.handle_update_startup()
+    p.handle_update_startup(None)
     assert dialogs.messages == [] and read_pending() is not None  # 소스 실행은 기록을 건드리지 않음
     assert not os.path.exists(ok_marker_path())
+
+
+# ---- 업데이트 결과는 도우미가 켠 앱만 (토큰) ----
+
+TOKEN = "a1b2c3d4e5f60718"
+
+
+def test_startup_with_token_only_helper_launched_app_judges(tmp_state_dir, player_with_build, dialogs):
+    """업데이트 중에 사용자가 켠 앱(토큰 없음)은 기록을 건드리지 않음 — 도우미가 토큰과 함께 켠 새 앱이 '잘 켜짐'을 씀."""
+    pending = Pending("1.1.1", "1.1.0", "windows", now(), token=TOKEN, helper_pid="4242", app_pid="4100")
+    write_pending(pending)
+    p = player_with_build("1.1.0")
+    p.handle_update_startup(None)
+    p.handle_update_startup("ffffffffffffffff")
+    assert dialogs.messages == [] and read_pending() == pending and not os.path.exists(ok_marker_path())
+    p.handle_update_startup(TOKEN)  # 옛 버전이 토큰과 함께 켜짐 = 도우미가 되돌림
+    [(kind, title, text)] = dialogs.messages
+    assert (kind, title) == ("critical", "업데이트 실패") and read_pending() is None
+    write_pending(pending)
+    q = player_with_build("1.1.1")
+    q.handle_update_startup(TOKEN)
+    assert q.update_banner.full_text() == "1.1.1로 업데이트했습니다" and os.path.exists(ok_marker_path())
+    assert read_pending() is None and len(dialogs.messages) == 1
+
+
+def test_startup_failed_shows_only_lines_of_updating_window_and_helper(tmp_state_dir, player_with_build, dialogs):
+    started = now()
+    write_pending(Pending("1.1.1", "1.1.0", "windows", started, token=TOKEN, helper_pid="4242", app_pid="4100"))
+    with open(update_install.log_path(), "a", encoding="utf-8") as fh:
+        fh.write(f"{started} [pid 4100] 업데이트 1.1.1: 도우미를 띄움\n")
+        fh.write(f"{started} [pid 5300] 업데이트 확인: 다른 창의 줄\n")
+        fh.write(f"{started} 도우미: 설치 실패: 예시\n")
+    p = player_with_build("1.1.0")
+    p.handle_update_startup(TOKEN)
+    [box] = dialogs.boxes
+    assert "[pid 4100] 업데이트 1.1.1: 도우미를 띄움" in box.details and "도우미: 설치 실패: 예시" in box.details
+    assert "다른 창의 줄" not in box.details
+
+
+class LaunchedPlayer(QWidget):
+    """app.launch가 만드는 창 대신 — 지난 업데이트의 결과 판정에 넘어온 토큰을 남김."""
+
+    created = []
+
+    def __init__(self, **kwargs):
+        super().__init__()
+        self.update_tokens = []
+        LaunchedPlayer.created.append(self)
+
+    def start_shared_config_load(self):
+        pass
+
+    def handle_update_startup(self, update_token):
+        self.update_tokens.append(update_token)
+
+    def show_user_file_problems(self):
+        pass
+
+    def start_instance_link(self):
+        pass
+
+
+@pytest.fixture
+def launched(monkeypatch):
+    from yesoncheck import app as app_module
+
+    LaunchedPlayer.created = []
+    monkeypatch.setattr(app_module, "VideoPlayer", LaunchedPlayer)
+    yield LaunchedPlayer.created
+    for player in LaunchedPlayer.created:
+        player.close()
+
+
+@pytest.fixture
+def helper_running(tmp_state_dir):
+    """다른 창이 넘긴 업데이트의 도우미가 도는 중 (업데이트 기록 + 살아 있는 도우미 프로세스)."""
+    started = now()
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    write_pending(Pending("1.1.1", "1.1.0", build_info.platform_key(), started, token=TOKEN, helper_pid=str(proc.pid),
+                          app_pid="4100"))
+    yield proc
+    proc.kill()
+    proc.wait(10)
+
+
+def test_launch_exits_with_message_when_update_in_progress(qapp, helper_running, launched, dialogs, monkeypatch,
+                                                           tmp_path):
+    from yesoncheck import app as app_module
+
+    _built_app(monkeypatch, "1.1.0")
+
+    def no_splash(*args, **kwargs):
+        raise AssertionError("업데이트 중인데 스플래시를 만듦")
+
+    monkeypatch.setattr(app_module, "QSplashScreen", no_splash)
+    video = str(tmp_path / "장면 #1.mov")
+    assert app_module.launch(["yesoncheck", video]) == 0
+    assert dialogs.messages == [("information", "YesonCheck", "업데이트 중입니다 — 끝난 뒤 다시 열어 주세요")]
+    assert launched == []  # 창을 만들지 않음
+    assert read_pending().token == TOKEN  # 기록은 그대로 (도우미가 켤 앱이 판정)
+
+
+def test_launch_with_update_token_starts_during_update(qapp, helper_running, launched, dialogs, monkeypatch):
+    """도우미가 토큰과 함께 켠 앱은 '업데이트 중'이어도 켜지고, 그 토큰으로 결과를 판정."""
+    from yesoncheck import app as app_module
+
+    _built_app(monkeypatch, "1.1.1")
+    assert app_module.launch(["yesoncheck", "--update-result", TOKEN]) == 0
+    assert dialogs.messages == []
+    [player] = launched
+    wait_until(lambda: player.update_tokens)
+    assert player.update_tokens == [TOKEN]
+
+
+def test_launch_in_source_run_does_not_check_update(qapp, helper_running, launched, dialogs, monkeypatch):
+    """소스 실행은 업데이트하지 않음 → 빌드된 앱의 업데이트 중에도 켜짐 (결과도 판정하지 않음 — handle_update_startup)."""
+    from yesoncheck import app as app_module
+
+    monkeypatch.setattr(build_info, "current", lambda: None)
+    assert app_module.launch(["yesoncheck"]) == 0
+    assert dialogs.messages == [] and len(launched) == 1
+
+
+def test_launch_shows_error_when_update_check_fails_and_starts(qapp, tmp_state_dir, launched, dialogs, monkeypatch):
+    """업데이트 중인지 확인하다 예상 못 한 오류 → 트레이스백째 창, 앱은 켬 (확인을 못 해 앱을 못 쓰게 되지 않게)."""
+    from yesoncheck import app as app_module
+
+    _built_app(monkeypatch, "1.1.0")
+
+    def broken():
+        raise RuntimeError("시험용 확인 실패")
+
+    monkeypatch.setattr(update_install, "update_in_progress", broken)
+    assert app_module.launch(["yesoncheck"]) == 0
+    [(kind, title, text)] = dialogs.messages
+    assert kind == "critical" and "Traceback" in text and "RuntimeError: 시험용 확인 실패" in text
+    assert len(launched) == 1
+
+
+def test_launch_with_corrupt_record_starts_and_leaves_it_to_startup_result(qapp, tmp_state_dir, launched, dialogs,
+                                                                         monkeypatch):
+    """업데이트 기록이 깨졌으면 '업데이트 중'인지 알 수 없음 → 켬 (창을 보인 뒤 handle_update_startup이 보이고 지움)."""
+    from yesoncheck import app as app_module
+
+    _built_app(monkeypatch, "1.1.0")
+    with open(os.path.join(tmp_state_dir, update_install.PENDING_FILE_NAME), "w", encoding="utf-8") as fh:
+        fh.write("{깨진")
+    assert app_module.launch(["yesoncheck"]) == 0
+    assert dialogs.messages == [] and len(launched) == 1

@@ -26,6 +26,7 @@ from yesoncheck import update_install
 
 HELPER = Path(__file__).resolve().parent.parent / "yesoncheck" / "update_helper_mac.sh"
 TARGET = "1.1.1"
+TOKEN = "0123456789abcdef"  # 앱이 넘기는 업데이트 토큰 (도우미가 다시 켜는 앱만 결과를 판정 — update_install.Pending)
 LOG_LINE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2} ")  # update_install.log()와 같은 줄 앞 시각
 
 darwin_only = pytest.mark.skipif(sys.platform != "darwin", reason="Mac 업데이트 도우미 (macOS bash·ps·pgrep)")
@@ -216,6 +217,16 @@ def test_helper_swaps_and_keeps_new(update_case):
     assert trace_pids(case.trace, "new") and not trace_pids(case.trace, "old")
     lines = [line for line in log_text(case).splitlines() if line]
     assert lines and all(LOG_LINE_RE.match(line) for line in lines), log_text(case)
+
+
+@darwin_only
+def test_helper_accepts_token_argument(update_case):
+    """앱(update_install.launch_helper_mac)이 넘기는 --token을 모르는 인자로 거절하지 않음 (쓰는 일은 Task A9)."""
+    case = update_case("new")
+    result = subprocess.run(helper_cmd(case, ended_pid(), 4) + ["--token", TOKEN], env=case.env, capture_output=True,
+                            text=True, timeout=60)
+    assert result.returncode == 0, failure_details(case, result)
+    assert app_kind(case.app) == "new" and "잘못된 인자" not in log_text(case)
 
 
 @darwin_only
@@ -753,7 +764,7 @@ class _RecordingPopen:
 def test_launch_helper_mac_copies_script_and_passes_arguments(tmp_state_dir, monkeypatch):
     _RecordingPopen.calls = []
     monkeypatch.setattr(update_install.subprocess, "Popen", _RecordingPopen)
-    update_install.launch_helper_mac("/Applications/.X.app.update-1.1.1", "/Applications/X.app", "1.1.1")
+    update_install.launch_helper_mac("/Applications/.X.app.update-1.1.1", "/Applications/X.app", "1.1.1", TOKEN)
     copy = os.path.join(update_install.state_dir(), "update_helper_mac.sh")
     console = _RecordingPopen.calls[0][1].pop("stdout")  # 도우미 출력 파일 (아래에서 따로 확인)
     assert console.name == update_install.helper_console_path() and console.closed
@@ -768,6 +779,7 @@ def test_launch_helper_mac_copies_script_and_passes_arguments(tmp_state_dir, mon
             "--target", "1.1.1",
             "--ok", update_install.ok_marker_path(),
             "--log", update_install.log_path(),
+            "--token", TOKEN,
         ],
         {
             "start_new_session": True,
@@ -787,7 +799,7 @@ def test_launch_helper_mac_uses_bundled_script_when_frozen(tmp_state_dir, tmp_pa
     monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "meipass"), raising=False)
     _RecordingPopen.calls = []
     monkeypatch.setattr(update_install.subprocess, "Popen", _RecordingPopen)
-    update_install.launch_helper_mac("/A/.X.app.update-1.1.1", "/A/X.app", "1.1.1")
+    update_install.launch_helper_mac("/A/.X.app.update-1.1.1", "/A/X.app", "1.1.1", TOKEN)
     copy = Path(update_install.state_dir()) / "update_helper_mac.sh"
     assert copy.read_bytes() == b"# bundled copy\n"
     assert _RecordingPopen.calls[0][0][1] == str(copy)
@@ -801,7 +813,7 @@ def test_launch_helper_mac_resets_pyinstaller_environment_for_relaunched_app(tmp
     monkeypatch.delenv("PYINSTALLER_RESET_ENVIRONMENT", raising=False)
     _RecordingPopen.calls = []
     monkeypatch.setattr(update_install.subprocess, "Popen", _RecordingPopen)
-    update_install.launch_helper_mac("/A/.X.app.update-1.1.1", "/A/X.app", "1.1.1")
+    update_install.launch_helper_mac("/A/.X.app.update-1.1.1", "/A/X.app", "1.1.1", TOKEN)
     env = _RecordingPopen.calls[0][1]["env"]
     assert env["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
     assert env["YC_UPDATE_DIRECT_LAUNCH"] == "1" and env["_PYI_ARCHIVE_FILE"].endswith("YesonCheck_Autocut")
@@ -835,7 +847,7 @@ def test_real_launch_helper_mac_records_console_and_log(tmp_state_dir, tmp_path,
     app = tmp_path / "Applications" / "X.app"
     update_install.log("업데이트 1.1.1: 업데이트 기록을 남김 (앱의 줄)")
     offset = update_install.log_size()
-    proc = update_install.launch_helper_mac(str(tmp_path / "Applications" / ".X.app.update-1.1.1"), str(app), "1.1.1")
+    proc = update_install.launch_helper_mac(str(tmp_path / "Applications" / ".X.app.update-1.1.1"), str(app), "1.1.1", TOKEN)
     code, text, console = _wait_real_helper(proc)
     details = f"종료 코드 {code}\n기록:\n{text}\n도우미 출력:\n{console}"
     assert code == 1 and " 도우미: 시작: 대상 버전 1.1.1" in text and "아무것도 바꾸지 않음" in text, details
@@ -850,7 +862,7 @@ def test_real_launch_helper_mac_records_early_failure(tmp_state_dir, tmp_path, m
     broken = tmp_path / "broken_helper.sh"
     broken.write_text("echo yc-early-failure-marker >&2\nexit 3\n", encoding="utf-8")
     monkeypatch.setattr(update_install, "_bundled_file", lambda name: str(broken))
-    proc = update_install.launch_helper_mac(str(tmp_path / ".X.app.update-1.1.1"), str(tmp_path / "X.app"), "1.1.1")
+    proc = update_install.launch_helper_mac(str(tmp_path / ".X.app.update-1.1.1"), str(tmp_path / "X.app"), "1.1.1", TOKEN)
     code, text, console = _wait_real_helper(proc)
     assert code == 3 and console == "yc-early-failure-marker\n", (code, text, console)
     assert update_install.helper_console_extra() == "yc-early-failure-marker\n"
@@ -863,7 +875,7 @@ def test_launch_helper_mac_does_not_swallow_popen_failure(tmp_state_dir, monkeyp
 
     monkeypatch.setattr(update_install.subprocess, "Popen", failing_popen)
     with pytest.raises(OSError, match="bash를 실행하지 못함"):
-        update_install.launch_helper_mac("/A/.X.app.update-1.1.1", "/A/X.app", "1.1.1")
+        update_install.launch_helper_mac("/A/.X.app.update-1.1.1", "/A/X.app", "1.1.1", TOKEN)
 
 
 def test_helper_script_runs_under_bash_without_errexit():

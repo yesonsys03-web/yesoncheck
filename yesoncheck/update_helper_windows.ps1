@@ -3,6 +3,8 @@
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File update_helper_windows.ps1
 #       -AppPid PID -InstallDir DIR -Installer EXE -Target VER -OkFile OK -Log LOG [-TimeoutSeconds S] [-ExeName NAME]
+#       [-Token TOKEN]
+#   (TOKEN: 앱의 업데이트 기록(pending_update.json)의 토큰 — 다시 켜는 앱만 결과를 판정하게 넘길 값. 지금은 받아 두기만 함)
 #   powershell ... -File update_helper_windows.ps1 -Recover      (다음 로그인에서 — RunOnce가 부름, 아래 '되살림')
 #
 # 앱(update_install.launch_helper_windows)이 이 파일을 업데이트 상태 폴더로 복사해 창 없는 콘솔로 띄운 뒤 끝난다.
@@ -41,7 +43,8 @@
 #   - 되살리지 못하면 기록하고 알림 창 (2).
 #
 # 모든 단계와 실패를 LOG에 "YYYY-MM-DDTHH:MM:SS 도우미: 내용" 한 줄씩 UTF-8로 덧붙인다 — update_install.log()와 같은
-# 형식이라 다시 켜진 앱이 log_tail_since로 이 줄들을 "업데이트 실패" 창에 보여 준다(시각 없이 이어지는 줄은 앞줄을 따름).
+# 시각 형식이고(앱의 줄은 시각 뒤에 "[pid N]") 다시 켜진 앱이 log_tail_since로 업데이트를 건 창의 줄과 이 줄들을 "업데이트
+# 실패" 창에 보여 준다(시각 없이 이어지는 줄은 앞줄을 따름).
 # Windows PowerShell 5.1에서 돈다 — 이 파일은 UTF-8 BOM으로 저장한다(BOM이 없으면 5.1이 한글을 ANSI로 읽음).
 # $ErrorActionPreference = 'Stop'이고, 단계마다 try/catch로 직접 처리해 되돌리기가 반드시 돈다.
 #
@@ -63,6 +66,7 @@ param(
     [string]$Log = '',
     [string]$TimeoutSeconds = '',
     [string]$ExeName = 'YesonCheck_Autocut.exe',
+    [string]$Token = '',
     [switch]$Recover
 )
 

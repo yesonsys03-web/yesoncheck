@@ -98,7 +98,7 @@ class QuickPlayer(QWidget):
     def start_shared_config_load(self):
         QTimer.singleShot(0, QGuiApplication.instance().quit)
 
-    def handle_update_startup(self):
+    def handle_update_startup(self, update_token):
         pass  # 지난 업데이트의 결과 알림 — 이 시험의 대상이 아님
 
     def show_user_file_problems(self):

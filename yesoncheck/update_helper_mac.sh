@@ -2,6 +2,9 @@
 # YesonCheck Mac 업데이트 도우미 — 앱이 끝난 뒤 새 앱으로 바꾸고 다시 켜며, 잘 켜지지 않으면 되돌린다.
 #
 #   bash update_helper_mac.sh --pid PID --app APP --staged STAGED --target VER --ok OKFILE --log LOG [--timeout S]
+#       [--token TOKEN]
+#
+# TOKEN: 앱의 업데이트 기록(pending_update.json)의 토큰 — 다시 켜는 앱만 결과를 판정하게 넘길 값. 지금은 받아 두기만 함.
 #
 # 앱(update_install.launch_helper_mac)이 이 파일을 업데이트 상태 폴더로 복사해 새 세션으로 띄운 뒤 끝난다.
 # 순서: PID가 끝나기를 기다림(300초 — 넘으면 아무것도 바꾸지 않음) → APP을 <APP 이름>.update-backup.app으로,
@@ -15,8 +18,9 @@
 #
 # 종료 코드: 0 업데이트 성공, 1 바꾸지 않았거나 되돌림(옛 앱을 켬), 2 되돌리기 실패 또는 잘못된 인자.
 #
-# 모든 단계와 실패를 LOG에 "YYYY-MM-DDTHH:MM:SS 내용" 한 줄씩 덧붙인다 — update_install.log()와 같은 형식이라
-# 다시 켜진 앱이 log_tail_since로 이 줄들을 "업데이트 실패" 창에 보여 준다(시각 없이 이어지는 줄은 앞줄을 따름).
+# 모든 단계와 실패를 LOG에 "YYYY-MM-DDTHH:MM:SS 도우미: 내용" 한 줄씩 덧붙인다 — update_install.log()와 같은 시각
+# 형식이고(앱의 줄은 시각 뒤에 "[pid N]") 다시 켜진 앱이 log_tail_since로 업데이트를 건 창의 줄과 이 줄들을 "업데이트 실패"
+# 창에 보여 준다(시각 없이 이어지는 줄은 앞줄을 따름).
 # macOS 기본 /bin/bash(3.2)에서 돈다. set -e는 쓰지 않는다 — 실패마다 직접 처리해야 되돌리기가 반드시 돈다.
 #
 # 환경 변수 (주로 시험용):
@@ -37,6 +41,7 @@ STAGED=""
 TARGET=""
 OKFILE=""
 LOG=""
+TOKEN=""
 TIMEOUT="${YC_UPDATE_OK_TIMEOUT_S:-180}"
 PID_TIMEOUT="${YC_UPDATE_PID_TIMEOUT_S:-300}"
 
@@ -76,7 +81,7 @@ fatal_alert() {  # $1 = 알림 창의 글. 종료 코드 2 바로 전: 앱 자�
 
 usage_error() {
     log "잘못된 인자: $*"
-    printf '%s\n' "사용법: bash update_helper_mac.sh --pid PID --app APP --staged STAGED --target VER --ok OKFILE --log LOG [--timeout S]" >&2
+    printf '%s\n' "사용법: bash update_helper_mac.sh --pid PID --app APP --staged STAGED --target VER --ok OKFILE --log LOG [--timeout S] [--token TOKEN]" >&2
     exit 2
 }
 
@@ -460,7 +465,7 @@ rollback() {  # FAIL_REASON을 기록하고 옛 앱으로 되돌려 켠 뒤 끝�
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --pid | --app | --staged | --target | --ok | --log | --timeout)
+        --pid | --app | --staged | --target | --ok | --log | --timeout | --token)
             if [ $# -lt 2 ]; then
                 usage_error "$1 뒤에 값이 없음"
             fi
@@ -472,6 +477,7 @@ while [ $# -gt 0 ]; do
                 --ok) OKFILE=$2 ;;
                 --log) LOG=$2 ;;
                 --timeout) TIMEOUT=$2 ;;
+                --token) TOKEN=$2 ;;
             esac
             shift 2
             ;;
