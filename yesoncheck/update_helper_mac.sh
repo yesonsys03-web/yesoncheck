@@ -123,12 +123,13 @@ pid_alive() {  # 좀비(끝났지만 아직 거둬들이지 않음)는 끝난 �
 }
 
 # app_pids·all_app_pids는 $(…) 안에서 부름 — 오류 기록은 stderr로 (stdout은 pid 목록; LOG에는 log가 따로 씀)
-app_pids() {  # APP/Contents/MacOS/ 아래 실행 파일로 도는 이 사용자의 프로세스들의 pid (한 줄에 하나)
+app_pids() {  # APP/Contents/MacOS/ 아래 실행 파일로 도는 이 사용자의 프로세스들의 pid (한 줄에 하나). pgrep 오류면 1
     local out rc
     out=$(pgrep -U "$MY_UID" -f "$PATTERN")
     rc=$?
     if [ "$rc" -gt 1 ]; then
         log "pgrep 오류 (종료 코드 $rc, 패턴 $PATTERN)" >&2
+        return 1
     fi
     printf '%s' "$out"
 }
@@ -631,7 +632,13 @@ if ! out=$(rm -f "$OKFILE" 2>&1); then
     FAIL_REASON="지난 '잘 켜짐' 표시를 지우지 못함: $OKFILE ($out)"
     rollback
 fi
-PIDS_BEFORE=$(app_pids | tr '\n' ' ')
+# 켜기 전부터 도는 프로세스를 모르면 켜지 않음 — 빈 목록으로 보면 그 창이 '새 앱'으로 보여 되돌릴 때 끝내질 수 있음.
+# 아직 새 앱을 켜지 않았으므로(NEW_LAUNCHED=0) 되돌리기는 아무것도 끝내지 않고 백업을 제자리로 돌려 옛 앱을 켬
+if ! PIDS_BEFORE=$(app_pids); then
+    FAIL_REASON="새 앱을 켜기 전부터 도는 YesonCheck 프로세스를 확인하지 못해 새 앱을 켜지 않음 (pgrep 오류 — 위 기록)"
+    rollback
+fi
+PIDS_BEFORE=$(printf '%s' "$PIDS_BEFORE" | tr '\n' ' ')
 if [ -n "$PIDS_BEFORE" ]; then
     log "새 앱을 켜기 전부터 도는 YesonCheck 프로세스 (새 앱으로 보지 않고, 되돌릴 때 끝내지 않음): pid $PIDS_BEFORE"
 fi

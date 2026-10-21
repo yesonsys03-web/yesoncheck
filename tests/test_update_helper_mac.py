@@ -875,6 +875,38 @@ def test_does_not_swap_when_other_processes_cannot_be_listed(update_case, tmp_pa
     assert wait_until(lambda: trace_args(case.trace, "old") == [f"--update-result {TOKEN}"]), log_text(case)
 
 
+FAKE_PGREP_FAILING_FOR_THIS_USER = """#!/bin/sh
+# 이 사용자의 프로세스를 찾는 pgrep(-U — 새 앱을 켜기 전부터 도는 프로세스 PIDS_BEFORE·새 앱 찾기)만 실패 — 바꾸기 전 모든
+# 사용자의 것(-U 없이)은 진짜 pgrep
+case " $* " in
+    *" -U "*) echo "pgrep: 시험 오류" >&2; exit 3 ;;
+esac
+exec /usr/bin/pgrep "$@"
+"""
+
+
+@darwin_only
+def test_does_not_launch_when_pids_before_cannot_be_listed(update_case, tmp_path):
+    """새 앱을 켜기 직전에 도는 이 사용자의 앱 프로세스(PIDS_BEFORE)를 pgrep 오류로 알 수 없으면 새 앱을 켜지 않고 되돌림 —
+    빈 목록으로 보면 켜기 전부터 돌던 창이 '새 앱'으로 보여 되돌릴 때 끝내질 수 있음. 켜기 전의 되돌리기(끝낼 새 앱 없음):
+    백업을 제자리로, 옛 앱을 토큰과 함께 켬, 기록에 이유."""
+    case = update_case("new")
+    fake_bin = tmp_path / "fake_bin"
+    fake_bin.mkdir()
+    (fake_bin / "pgrep").write_text(FAKE_PGREP_FAILING_FOR_THIS_USER, encoding="utf-8")
+    (fake_bin / "pgrep").chmod(0o755)
+    case.env["PATH"] = f"{fake_bin}:{case.env['PATH']}"
+    result = run_helper(case)
+    assert result.returncode == 1, failure_details(case, result)
+    assert not trace_pids(case.trace, "new"), "새 앱을 켬\n" + log_text(case)
+    assert app_kind(case.app) == "old" and not case.backup.exists() and not case.staged.exists(), log_text(case)
+    log = log_text(case)
+    assert "pgrep 오류 (종료 코드 3" in log, log
+    assert "새 앱을 켜기 전부터 도는 YesonCheck 프로세스를 확인하지 못해 새 앱을 켜지 않음" in log, log
+    assert "새 앱 프로세스를 끝냄" not in log and "새 앱 프로세스는 이미 끝나 있음" not in log, log
+    assert wait_until(lambda: trace_args(case.trace, "old") == [f"--update-result {TOKEN}"]), log_text(case)
+
+
 FAKE_MV_SPAWNING_OTHER_WINDOW = """#!/bin/sh
 # 바꾸기의 두 번째 mv(준비한 새 앱 → 앱 자리) 바로 뒤에 사용자가 앱을 켠 것처럼, 앱 자리의 other_window를 띄움 — 도우미가
 # 새 앱을 켜기 전부터 도는 같은 번들 프로세스. 출력은 막음 (도우미의 $(…)가 이 프로세스를 기다리지 않게)
