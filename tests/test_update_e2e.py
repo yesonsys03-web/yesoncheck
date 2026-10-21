@@ -323,7 +323,8 @@ def test_mac_cases_answer_the_default_app_ask_beforehand(monkeypatch, tmp_path):
     monkeypatch.setenv("USERPROFILE", case.user_dir)  # Windows의 expanduser
     assert update_e2e.same_path(path, default_app.prefs_path())
     prefs = default_app.read_prefs()
-    not_default = {uti: "com.apple.QuickTimePlayerX" for uti in default_app.VIDEO_UTIS}
+    not_default = {(uti, role): "com.apple.QuickTimePlayerX"
+                   for uti in default_app.VIDEO_UTIS for role, _ in default_app.VERIFIED_ROLES}
     assert not default_app.should_ask(prefs, not_default, "com.yeson.check")
     with pytest.raises(AssertionError, match="이미 prefs.json"):  # 새 경우 폴더에만
         update_e2e.answer_default_app_ask(case)

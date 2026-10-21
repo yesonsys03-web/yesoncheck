@@ -42,13 +42,24 @@ EXPECTED_DOCUMENT_TYPES = [{"CFBundleTypeName": "Video", "CFBundleTypeRole": "Vi
                             "LSItemContentTypes": ["com.apple.quicktime-movie", "public.mpeg-4"]}]
 
 
+ALL, VIEWER = "All", "Viewer"  # 역할 이름 (default_app.VERIFIED_ROLES)
+
+
+def both_roles(handlers):
+    """UTI → 앱 ID 표를 (UTI, 역할) → 앱 ID로 (두 역할이 같은 앱 — should_ask의 handlers 모양)."""
+    return {(uti, role): handler for uti, handler in handlers.items() for role in (ALL, VIEWER)}
+
+
 class FakeLaunchServices:
-    """LaunchServices 대역. handlers: UTI → 기본 앱 ID (없으면 None), copies: 앱 ID(소문자) → 등록된 사본 경로들,
-    calls: 부른 차례. set_status: UTI → 돌려줄 OSStatus (0이 아니면 바꾸지 않음), ignored: 정해도(0) 바뀌지 않는 UTI
-    (다시 읽으면 옛 값 — 확인에서 걸려야 함), raises: 정해 두면 정하기에서 그 예외. LaunchServices처럼 정한 앱 ID는 소문자로."""
+    """LaunchServices 대역. handlers: UTI → 기본 앱 ID (없으면 None — 역할 All·Viewer 모두), viewer: UTI → Viewer 역할에만
+    따로 정해진 앱 ID (kLSRolesAll로 정해도 바뀌지 않음 — 다른 동영상 앱이 남긴 항목), copies: 앱 ID(소문자) → 등록된 사본
+    경로들, calls: 부른 차례 (읽기는 역할 이름까지). set_status: UTI → 돌려줄 OSStatus (0이 아니면 바꾸지 않음), ignored: 정해도(0)
+    바뀌지 않는 UTI (다시 읽으면 옛 값 — 확인에서 걸려야 함), raises: 정해 두면 정하기에서 그 예외. LaunchServices처럼 정한 앱 ID는
+    소문자로."""
 
     def __init__(self, handlers=None, copies=None):
         self.handlers = dict(handlers or {})
+        self.viewer = {}
         self.copies = dict(copies or {})
         self.calls = []
         self.set_status = {}
@@ -60,8 +71,11 @@ class FakeLaunchServices:
         self.calls.append(("register", app_path))
         return self.register_status
 
-    def default_handler(self, uti):
-        self.calls.append(("read", uti))
+    def default_handler(self, uti, role):
+        name = {default_app._ROLES_ALL: ALL, default_app._ROLES_VIEWER: VIEWER}[role]
+        self.calls.append(("read", uti, name))
+        if name == VIEWER and uti in self.viewer:
+            return self.viewer[uti]
         return self.handlers.get(uti)
 
     def set_default_handler(self, uti, bundle_id):
@@ -140,17 +154,23 @@ def prefs_on_disk():
 
 def test_should_ask_only_once_and_only_when_not_default():
     assert default_app.VIDEO_UTIS == ("com.apple.quicktime-movie", "public.mpeg-4")
-    not_default = {QT_MOVIE: "com.apple.QuickTimePlayerX", MPEG4: None}
+    # 확인하는 역할: All(정하는 역할)과 Viewer(Finder 더블클릭이 여는 역할)
+    assert default_app.VERIFIED_ROLES == ((ALL, 0xFFFFFFFF), (VIEWER, 0x00000002))
+    not_default = both_roles({QT_MOVIE: "com.apple.QuickTimePlayerX", MPEG4: None})
     assert default_app.should_ask({}, not_default, BUNDLE_ID)
     assert default_app.should_ask({"other": 1}, not_default, BUNDLE_ID)
     # 한 번만: [예]·[아니요]를 기록한 뒤에는 묻지 않음 (기본 앱이 아니어도)
     assert not default_app.should_ask({"asked_default_video_app": True}, not_default, BUNDLE_ID)
     assert default_app.should_ask({"asked_default_video_app": False}, not_default, BUNDLE_ID)
     # 두 종류 모두 이미 YesonCheck면 묻지 않음 — LaunchServices는 앱 ID를 소문자로 돌려주기도 함 → 대소문자 무관
-    assert not default_app.should_ask({}, {QT_MOVIE: "com.yeson.check", MPEG4: "COM.Yeson.Check"}, "com.Yeson.check")
+    yeson = both_roles({QT_MOVIE: "com.yeson.check", MPEG4: "COM.Yeson.Check"})
+    assert not default_app.should_ask({}, yeson, "com.Yeson.check")
     # 하나라도 아니면 물음
-    assert default_app.should_ask({}, {QT_MOVIE: "com.yeson.check", MPEG4: "com.apple.QuickTimePlayerX"}, BUNDLE_ID)
-    assert default_app.should_ask({}, {QT_MOVIE: None, MPEG4: "com.yeson.check"}, BUNDLE_ID)
+    assert default_app.should_ask({}, both_roles({QT_MOVIE: "com.yeson.check", MPEG4: "com.apple.QuickTimePlayerX"}),
+                                  BUNDLE_ID)
+    assert default_app.should_ask({}, both_roles({QT_MOVIE: None, MPEG4: "com.yeson.check"}), BUNDLE_ID)
+    # All은 YesonCheck여도 Viewer 역할(더블클릭)에 다른 앱이 따로 있으면 물음
+    assert default_app.should_ask({}, {**yeson, (MPEG4, VIEWER): "org.videolan.vlc"}, BUNDLE_ID)
 
 
 def test_prefs_file_records_answer_and_refuses_broken_file(home):
@@ -183,13 +203,37 @@ def test_prefs_file_records_answer_and_refuses_broken_file(home):
 def test_set_default_sets_both_utis_and_verifies(fake_ls, tmp_path):
     app = make_bundle(tmp_path, "YesonCheck_Autocut_Intel.app", "com.Yeson.Check")
     default_app.set_default(app)
-    # 이 번들을 LaunchServices에 등록(이미 있으면 그대로) → 두 종류 모두 정함 → 둘 다 다시 읽어 확인
+    # 이 번들을 LaunchServices에 등록(이미 있으면 그대로) → 두 종류 모두 정함(역할 All — Viewer를 따로 정하지 않음) →
+    # 둘 다 역할 All과 Viewer(더블클릭)로 다시 읽어 확인
     assert fake_ls.calls == [("register", app),
                              ("set", QT_MOVIE, "com.Yeson.Check"), ("set", MPEG4, "com.Yeson.Check"),
-                             ("read", QT_MOVIE), ("read", MPEG4)]
+                             ("read", QT_MOVIE, ALL), ("read", QT_MOVIE, VIEWER),
+                             ("read", MPEG4, ALL), ("read", MPEG4, VIEWER)]
     # 다시 읽은 값이 소문자여도 같은 앱 (대소문자 무관)
     assert fake_ls.handlers == {QT_MOVIE: "com.yeson.check", MPEG4: "com.yeson.check"}
     assert default_app.current_handler(QT_MOVIE) == "com.yeson.check"
+    assert default_app.current_handlers() == both_roles({QT_MOVIE: "com.yeson.check", MPEG4: "com.yeson.check"})
+
+
+def test_set_default_fails_when_double_click_role_stays_another_app(qapp, fake_ls, dialogs, ask, mac_app, home,
+                                                                    tmp_path):
+    """역할 All로 정해도 Viewer 역할(Finder 더블클릭)에 다른 앱이 따로 정해져 남아 있으면 더블클릭은 그 앱을 열 수 있음 →
+    정한 것으로 치지 않고 DefaultAppError (다시 읽은 두 역할의 값). Viewer를 따로 정하지는 않음."""
+    app = make_bundle(tmp_path, "YesonCheck_Autocut_Intel.app")
+    fake_ls.viewer[MPEG4] = "org.videolan.vlc"
+    with pytest.raises(default_app.DefaultAppError) as caught:
+        default_app.set_default(app)
+    text = str(caught.value)
+    assert "public.mpeg-4" in text and "Viewer 'org.videolan.vlc'" in text and "All 'com.yeson.check'" in text
+    assert "com.apple.quicktime-movie" not in text  # 이 종류는 두 역할 모두 YesonCheck
+    assert [c for c in fake_ls.calls if c[0] == "set"] == [("set", QT_MOVIE, BUNDLE_ID), ("set", MPEG4, BUNDLE_ID)]
+
+    # 처음 켤 때: All은 둘 다 YesonCheck여도 Viewer가 다른 앱이면 물음 → [예] → 정하기 실패를 오류 창으로
+    fake_ls.calls.clear()
+    default_app.ask_at_start(None)
+    assert ask.asked == 1
+    [(kind, title, text)] = dialogs.messages
+    assert kind == "critical" and default_app.SET_FAILED_TEXT in text and "org.videolan.vlc" in text
 
 
 def test_set_default_reports_status_and_mismatch(fake_ls, tmp_path):
@@ -562,5 +606,19 @@ def test_current_handler_real_api_returns_str_or_none():
     for uti in default_app.VIDEO_UTIS:
         handler = default_app.current_handler(uti)
         assert handler is None or (isinstance(handler, str) and handler), (uti, handler)
+    handlers = default_app.current_handlers()  # 두 역할 (All·Viewer)
+    assert set(handlers) == {(uti, role) for uti in default_app.VIDEO_UTIS for role in (ALL, VIEWER)}
+    assert all(h is None or (isinstance(h, str) and h) for h in handlers.values()), handlers
     # 등록된 사본이 없는 앱 ID → 빈 목록 (kLSApplicationNotFoundErr는 오류가 아님)
     assert default_app.other_copies("com.yeson.no-such-app-for-tests", "/Applications/None.app") == []
+
+
+
+@MAC_ONLY
+def test_application_paths_real_api_reads_url_array():
+    """진짜 API로 사본 목록 읽기(CFArray를 돌며 CFURL → 경로 — LSCopyApplicationURLsForBundleIdentifier, 읽기만): Finder는 어느 Mac에나
+    있음 → 있는 Finder.app이 하나 이상 (등록만 남은, 떼어 낸 디스크의 경로는 있을 수 있음 — other_copies가 뺌). Apple Silicon
+    CI에서도 이 ctypes 경로(arm64)를 탐."""
+    found = default_app._launch_services().application_paths("com.apple.finder")
+    assert all(isinstance(path, str) and path.endswith(".app") for path in found), found
+    assert any(os.path.basename(path) == "Finder.app" and os.path.isdir(path) for path in found), found

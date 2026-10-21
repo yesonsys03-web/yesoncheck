@@ -24,7 +24,10 @@
 고른 API — LaunchServices C API를 ctypes로 (CoreServices·CoreFoundation, PyObjC 없음):
 `LSCopyDefaultRoleHandlerForContentType`(읽기)·`LSSetDefaultRoleHandlerForContentType`(정하기, 역할 kLSRolesAll — Finder의
 '정보 가져오기 → 모두 변경'과 같은 항목)·`LSRegisterURL`(정하기 전에 이 번들을 등록 — 이미 있으면 그대로)·
-`LSCopyApplicationURLsForBundleIdentifier`(같은 앱 ID의 사본). macOS 10.4/10.10부터 있고 26.2 SDK에서도 "앞으로
+`LSCopyApplicationURLsForBundleIdentifier`(같은 앱 ID의 사본). 정한 뒤와 물을지는 역할 All과 Viewer(Finder 더블클릭이 여는
+역할) 둘로 읽어 확인한다(VERIFIED_ROLES) — Viewer 역할에만 다른 앱이 따로 남아 있으면 All만 봐서는 통과해도 더블클릭은 그
+앱을 열 수 있으므로 DefaultAppError(Viewer를 따로 정하지는 않음 — 그런 항목이 실제로 생기는지는 확인한 적 없음).
+macOS 10.4/10.10부터 있고 26.2 SDK에서도 "앞으로
 deprecated"(API_TO_BE_DEPRECATED)일 뿐 그대로 있다 → 12.3~최신 모두. 동기 호출이라 블록(완료 처리기)이 필요 없다.
 대안 NSWorkspace `setDefaultApplicationAtURL:toOpenContentType:completionHandler:`(12+)는 Objective-C 블록·UTType이 필요하고
 결과가 비동기로 온다 — 헤더 설명: "Some types require user consent" → 그 경우 macOS가 확인 창을 띄운 뒤 완료 처리기를 부름.
@@ -132,11 +135,12 @@ def record_asked() -> None:
 
 
 def should_ask(prefs: dict, handlers: dict, bundle_id: str) -> bool:
-    """(순수) 처음 켤 때 물을지: 이미 [예]·[아니요]로 답했으면(prefs) 아니요, 두 종류(VIDEO_UTIS) 모두 기본 앱이 bundle_id면
-    아니요, 그 밖에는 예. handlers: UTI → 기본 앱 ID(없으면 None). 앱 ID는 대소문자 무관 (LaunchServices가 소문자로 돌려주기도 함)."""
+    """(순수) 처음 켤 때 물을지: 이미 [예]·[아니요]로 답했으면(prefs) 아니요, 두 종류(VIDEO_UTIS) 모두 확인하는 역할(VERIFIED_ROLES
+    — All과 더블클릭의 Viewer)의 기본 앱이 bundle_id면 아니요, 그 밖에는 예. handlers: (UTI, 역할 이름) → 기본 앱 ID(없으면 None —
+    current_handlers). 앱 ID는 대소문자 무관 (LaunchServices가 소문자로 돌려주기도 함)."""
     if prefs.get(ASKED_KEY) is True:
         return False
-    return not all(_same_app(handlers[uti], bundle_id) for uti in VIDEO_UTIS)
+    return not all(_same_app(handlers[(uti, role)], bundle_id) for uti in VIDEO_UTIS for role, _ in VERIFIED_ROLES)
 
 
 def _same_app(handler, bundle_id) -> bool:
@@ -160,14 +164,21 @@ def bundle_id_of(app_path: str) -> str:
     return bundle_id
 
 
-def current_handler(uti: str) -> str | None:
-    """uti의 기본 앱 ID (LaunchServices가 돌려준 그대로 — 소문자일 수 있음), 없으면 None."""
-    return _launch_services().default_handler(uti)
+def current_handler(uti: str, role: int | None = None) -> str | None:
+    """uti의 역할 role(기본 kLSRolesAll) 기본 앱 ID (LaunchServices가 돌려준 그대로 — 소문자일 수 있음), 없으면 None."""
+    return _launch_services().default_handler(uti, _ROLES_ALL if role is None else role)
+
+
+def current_handlers() -> dict:
+    """두 종류(VIDEO_UTIS) × 확인하는 역할(VERIFIED_ROLES)의 기본 앱 ID → {(UTI, 역할 이름): 앱 ID 또는 None} (should_ask)."""
+    return {(uti, name): current_handler(uti, role) for uti in VIDEO_UTIS for name, role in VERIFIED_ROLES}
 
 
 def set_default(app_path: str) -> None:
     """app_path(.app)를 두 종류(VIDEO_UTIS) 모두의 기본 앱으로: 이 번들을 LaunchServices에 등록(이미 있으면 그대로) → 종류마다
-    정함 → 둘 다 다시 읽어 그 앱 ID인지 확인. 한 종류가 실패해도 다른 종류는 정하고, 실패(상태 코드·다시 읽은 값)를 모두 담아
+    역할 kLSRolesAll로 정함 → 둘 다 확인하는 역할(VERIFIED_ROLES — All과 Finder 더블클릭이 여는 Viewer)로 다시 읽어 그 앱 ID인지
+    확인. Viewer 역할에 다른 앱이 따로 정해져 남으면(All로 정해도 바뀌지 않는 항목이 있다면) 더블클릭은 그 앱을 열 수 있으므로
+    실패로 침 — Viewer를 따로 정하지는 않음. 한 종류가 실패해도 다른 종류는 정하고, 실패(상태 코드·다시 읽은 값)를 모두 담아
     DefaultAppError. LaunchServices는 앱 ID로 기억하므로 같은 앱 ID의 다른 사본이 열릴 수 있다 — other_copies."""
     bundle_id = bundle_id_of(app_path)
     services = _launch_services()
@@ -177,10 +188,10 @@ def set_default(app_path: str) -> None:
     statuses = {uti: services.set_default_handler(uti, bundle_id) for uti in VIDEO_UTIS}
     problems = []
     for uti in VIDEO_UTIS:
-        handler = services.default_handler(uti)
-        if statuses[uti] != 0 or not _same_app(handler, bundle_id):
-            problems.append(f"- {uti}: LSSetDefaultRoleHandlerForContentType OSStatus {statuses[uti]}, "
-                            f"다시 읽은 기본 앱 {handler!r}")
+        read = {name: services.default_handler(uti, role) for name, role in VERIFIED_ROLES}
+        if statuses[uti] != 0 or not all(_same_app(handler, bundle_id) for handler in read.values()):
+            problems.append(f"- {uti}: LSSetDefaultRoleHandlerForContentType OSStatus {statuses[uti]}, 다시 읽은 기본 앱 "
+                            + ", ".join(f"{name} {handler!r}" for name, handler in read.items()))
     if problems:
         raise DefaultAppError(f"앱 ID {bundle_id} ({app_path}):\n" + "\n".join(problems))
 
@@ -214,7 +225,10 @@ def location_problem(app_path: str) -> str | None:
 _CORE_FOUNDATION = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
 _CORE_SERVICES = "/System/Library/Frameworks/CoreServices.framework/CoreServices"
 _UTF8 = 0x08000100  # kCFStringEncodingUTF8
-_ROLES_ALL = 0xFFFFFFFF  # kLSRolesAll
+_ROLES_ALL = 0xFFFFFFFF  # kLSRolesAll — 정하는 역할 (Finder의 '정보 가져오기 → 모두 변경'과 같은 항목)
+_ROLES_VIEWER = 0x00000002  # kLSRolesViewer — Finder 더블클릭이 여는 역할 (CFBundleDocumentTypes의 Viewer)
+# 정한 뒤·물을지 다시 읽어 확인하는 역할 (이름, 값) — All만 보면 Viewer에만 따로 정해진 다른 앱을 놓침
+VERIFIED_ROLES = (("All", _ROLES_ALL), ("Viewer", _ROLES_VIEWER))
 _APPLICATION_NOT_FOUND = -10814  # kLSApplicationNotFoundErr — 그 앱 ID로 등록된 앱이 없음 (오류 아님)
 _PATH_BUFFER = 4096
 
@@ -241,9 +255,9 @@ class _LaunchServices:
         _declare(cs.LSRegisterURL, c_int32, [c_void_p, c_bool])
         _declare(cs.LSCopyApplicationURLsForBundleIdentifier, c_void_p, [c_void_p, POINTER(c_void_p)])
 
-    def default_handler(self, uti: str) -> str | None:
+    def default_handler(self, uti: str, role: int) -> str | None:
         with self._string(uti) as uti_ref:
-            handler = self.cs.LSCopyDefaultRoleHandlerForContentType(uti_ref, _ROLES_ALL)
+            handler = self.cs.LSCopyDefaultRoleHandlerForContentType(uti_ref, role)
         if not handler:
             return None
         try:
@@ -382,7 +396,7 @@ def _ask_at_start(parent):
         _log(f"이 자리의 앱은 기본 앱으로 정하지 않음 — 묻지 않음, 기록하지 않음 ({app_path})")
         return
     bundle_id = bundle_id_of(app_path)
-    handlers = {uti: current_handler(uti) for uti in VIDEO_UTIS}
+    handlers = current_handlers()
     if not should_ask(prefs, handlers, bundle_id):
         _log(f"이미 기본 앱이 {bundle_id} — 묻지 않음 {handlers}")
         return
