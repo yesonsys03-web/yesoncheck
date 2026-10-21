@@ -66,7 +66,8 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck.video_widget import CustomVideoWidget
-from yesoncheck import bookmarks, build_info, external_tools, image_io, paths, shared_config, timing_log, user_files, video_list
+from yesoncheck import bookmarks, build_info, external_tools, image_io, instance_link, instances, paths, shared_config, \
+    timing_log, user_files, video_list
 from yesoncheck.slider_style import jump_to_click
 from yesoncheck.update_banner import UpdateBanner
 from yesoncheck.user_files import UserFileError
@@ -4357,8 +4358,66 @@ QMessageBox {
                 print(f"창 닫기: {label}이(가) {timeout_ms / 1000:g}초 안에 끝나지 않았습니다")
                 release_worker(worker, label)
 
+    # ---- 다른 창(프로세스)과: 창 기록·상태 묻기·업데이트의 닫기 요청 (instances·instance_link) ----
+
+    def start_instance_link(self):
+        """창을 보인 뒤(app.launch): 창 사이 연결 서버를 열고 창 기록을 남김 — 다른 창의 업데이트가 이 창을 세고
+        상태를 묻고 닫기를 요청할 수 있게. 서버를 열지 못해도 기록은 남김(세어지면 그 업데이트는 이 창을 닫지 못해
+        멈춤 — 모르는 채 앱 파일을 바꾸지 않게) + 경고 창."""
+        server = instance_link.InstanceServer(self.instance_status, self.close_for_update, self)
+        try:
+            name = server.start()
+            listen_error = None
+        except instance_link.InstanceLinkError as exc:
+            name = instance_link.server_name()
+            listen_error = exc
+            print(f"[창 연결] {exc}", flush=True)
+        else:
+            self._instance_server = server
+        record = instances.register(instances.current_app_path(), name)  # 경고 창이 떠 있는 동안에도 세어지게 먼저
+        print(f"[창 기록] pid {record.pid}, {record.app_path}, {record.server_name}", flush=True)
+        if listen_error is not None:
+            QMessageBox.warning(
+                self, "다른 창과 연결하지 못함",
+                f"다른 YesonCheck 창과 연결하지 못했습니다. 다른 창에서 업데이트하면 이 창을 닫지 못해 업데이트가 "
+                f"멈춥니다.\n\n{listen_error}",
+            )
+
+    def stop_instance_link(self):
+        """창을 닫을 때: 창 기록을 지우고 서버를 닫음 (닫히는 창은 다른 창의 업데이트가 세지 않음). 두 번 불러도 됨."""
+        server, self._instance_server = getattr(self, '_instance_server', None), None
+        if server is not None:
+            server.close()
+        instances.unregister()
+
+    def instance_status(self) -> dict:
+        """다른 창(업데이트)이 묻는 이 창의 상태: 창 제목·영상 A·하는 작업·저장 안 한 OCR·애니매틱 검토 결과."""
+        return {
+            "pid": os.getpid(),
+            "title": self.windowTitle(),
+            "video": self.filename_a or "",
+            "jobs": self.running_job_labels(),
+            "unsaved_ocr": self.has_unsaved_ocr_results(),
+        }
+
+    def close_for_update(self):
+        """다른 창의 업데이트가 닫기를 요청함: 떠 있는 모달 대화 상자(질문·파일 고르기·진행 창 등)를 취소(reject)하고
+        닫기 버튼을 누른 것처럼 닫음 (closeEvent — 작업 멈춤 포함). 모달이 아닌 창(OCR 검토 창 등)은 앱이 끝날 때 닫힘."""
+        for widget in QApplication.topLevelWidgets():
+            if isinstance(widget, QDialog) and widget.isVisible() and widget.isModal():
+                print(f"[창 연결] 업데이트로 닫음: 대화 상자 취소 {type(widget).__name__} '{widget.windowTitle()}'",
+                      flush=True)
+                widget.reject()
+        self.close()
+
     def closeEvent(self, event):
-        """앱 종료 시 리소스를 빠르게 정리합니다."""
+        """앱 종료 시 리소스를 빠르게 정리합니다. 맨 먼저 창 기록을 지움 — 지우다 오류가 나도 정리는 하고 그 오류를 올림."""
+        try:
+            self.stop_instance_link()
+        finally:
+            self._release_resources_on_close(event)
+
+    def _release_resources_on_close(self, event):
         try:
             print("앱 종료 중 - 빠른 리소스 정리 시작")
 

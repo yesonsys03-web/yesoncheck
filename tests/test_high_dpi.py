@@ -104,6 +104,9 @@ class QuickPlayer(QWidget):
     def show_user_file_problems(self):
         pass  # 시작할 때 읽은 북마크·설정 파일의 문제 알림 — 이 시험의 대상이 아님
 
+    def start_instance_link(self):
+        pass  # 창 기록·창 사이 연결 서버 — 이 시험의 대상이 아님
+
 
 app_module.VideoPlayer = QuickPlayer
 code = app_module.launch([sys.argv[0]])

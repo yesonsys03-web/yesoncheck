@@ -163,6 +163,18 @@ def _bookmarks_file_in_tmp(monkeypatch, tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _instances_in_tmp(monkeypatch, tmp_path_factory):
+    """창 기록(instances)은 시험마다 새 임시 폴더에 — 사용자의 기록 폴더(~/Library/Caches/YesonCheck/instances,
+    %LOCALAPPDATA%\\YesonCheck\\instances)를 건드리지 않게. 환경 변수로 돌리므로 시험이 띄우는 자식 프로세스(app.launch
+    등)도 같은 임시 폴더를 씀. 시험이 남긴 이 프로세스의 등록은 지움."""
+    from yesoncheck import instances
+
+    monkeypatch.setenv(instances.REGISTRY_DIR_ENV, str(tmp_path_factory.mktemp("instances") / "instances"))
+    yield
+    instances.unregister()
+
+
+@pytest.fixture(autouse=True)
 def _fresh_shortcut_cache():
     """바로 가기 대상 캐시는 프로세스 전체에 하나 → 시험마다 비움 (가짜 경로가 다른 시험의 결과를 쓰지 않게)."""
     from yesoncheck import path_map_setup
