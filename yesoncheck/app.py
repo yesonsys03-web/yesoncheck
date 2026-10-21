@@ -145,7 +145,7 @@ def make_excepthook(log_path):
         else:
             dialog.requested.emit(text)  # GUI 스레드의 이벤트 루프에서 show_error 실행
 
-    # 시험·GC 방지용 참조 — 예상된 실패의 오류 창도 이 창으로 (default_app·file_associations의 _show_error)
+    # 시험·GC 방지용 참조 — 예상된 실패의 오류 창도 이 창으로 (error_window.show_error — default_app·file_associations)
     excepthook.dialog = dialog
     return excepthook
 

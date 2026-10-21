@@ -16,7 +16,7 @@
 - 오류: 예상된 실패 — 레지스트리를 읽거나 쓰지 못함(액세스 거부 등 OSError → FileAssociationError: 어느 키·값과 원래 오류),
   설정 화면을 열지 못함(os.startfile의 OSError) — 는 오류 창에 무엇이 왜(기록에는 트레이스백도). 예상 못 한 예외는 기록과
   오류 창에 트레이스백. 오류 창은 빌드 앱이면 앱의 예외 창(app.make_excepthook가 sys.excepthook.dialog로 둔 창 — 기록 파일
-  경로를 붙이고 한 번에 하나만), 그 창이 없으면(소스 실행) 같은 제목의 QMessageBox.critical (default_app._show_error와 같음).
+  경로를 붙이고 한 번에 하나만), 그 창이 없으면(소스 실행) 같은 제목의 QMessageBox.critical (error_window — default_app과 함께 씀).
 - winreg·shell32는 Windows에만 있다 → 쓸 때 불러옴(_winreg·notify_associations_changed). 시험은 레지스트리(reg=)·알림(notify=)·
   설정 화면 열기(_open_uri)를 바꿔 끼워 Mac에서도 돈다.
 """
@@ -26,9 +26,7 @@ import os
 import sys
 import traceback
 
-from PyQt5.QtWidgets import QMessageBox
-
-from yesoncheck import file_names
+from yesoncheck import error_window, file_names
 
 IS_WINDOWS = sys.platform == "win32"  # Help 메뉴 항목·켤 때 등록 (시험이 바꿔 끼움)
 EXTENSIONS = file_names.LISTED_VIDEO_EXTENSIONS  # .mov · .mp4
@@ -46,7 +44,7 @@ OWNED_KEYS = (rf"Software\Classes\{PROG_ID}", rf"Software\Classes\Applications\{
 
 SETTINGS_URI = f"ms-settings:defaultapps?registeredAppUser={REGISTERED_APP}"
 MENU_TEXT = "동영상 기본 앱 설정 열기…"
-ERROR_TITLE = "YesonCheck 오류"  # 앱의 예외 창(app._ErrorDialog)과 같은 제목
+LOG_PREFIX = "[파일 연결]"  # 기록 줄의 머리 (_log·오류 창 — error_window)
 REGISTER_FAILED_TEXT = ("동영상(.mov·.mp4)을 여는 앱으로 YesonCheck를 이 계정에 등록하지 못했습니다 — 탐색기의 '연결 프로그램'·"
                         "Windows 기본 앱 설정에 YesonCheck가 보이지 않을 수 있습니다.")
 REGISTER_UNEXPECTED_TEXT = "동영상 연결 프로그램 등록을 확인하다 예상치 못한 오류가 났습니다."
@@ -163,10 +161,10 @@ def register_at_start() -> None:
         changed = ensure_registered(exe_path)
     except FileAssociationError as exc:
         traceback.print_exc()
-        _show_error(f"{REGISTER_FAILED_TEXT}\n\n{exc}")
+        error_window.show_error(LOG_PREFIX, f"{REGISTER_FAILED_TEXT}\n\n{exc}")
         return
     except Exception:
-        _show_unexpected(REGISTER_UNEXPECTED_TEXT)
+        error_window.show_unexpected(LOG_PREFIX, REGISTER_UNEXPECTED_TEXT)
         return
     if not changed:
         _log(f"이 계정에 이미 등록됨 ({exe_path})")
@@ -179,10 +177,10 @@ def open_default_apps_settings() -> None:
         _open_uri(SETTINGS_URI)
     except OSError as exc:
         traceback.print_exc()
-        _show_error(f"{SETTINGS_FAILED_TEXT}\n{SETTINGS_URI}\n\n{type(exc).__name__}: {exc}")
+        error_window.show_error(LOG_PREFIX, f"{SETTINGS_FAILED_TEXT}\n{SETTINGS_URI}\n\n{type(exc).__name__}: {exc}")
         return
     except Exception:
-        _show_unexpected(f"{SETTINGS_UNEXPECTED_TEXT}\n{SETTINGS_URI}")
+        error_window.show_unexpected(LOG_PREFIX, f"{SETTINGS_UNEXPECTED_TEXT}\n{SETTINGS_URI}")
         return
     _log(f"Windows 기본 앱 설정 화면을 엶: {SETTINGS_URI}")
 
@@ -193,20 +191,4 @@ def _open_uri(uri: str) -> None:
 
 
 def _log(line):
-    print(f"[파일 연결] {line}", flush=True)
-
-
-def _show_unexpected(context):
-    """예외 처리 중에: context와 트레이스백을 기록·오류 창으로."""
-    _show_error(f"{context}\n\n{traceback.format_exc()}")
-
-
-def _show_error(text):
-    """기록(stderr)에 남기고 오류 창 — 빌드 앱이면 앱의 예외 창(app.make_excepthook가 sys.excepthook.dialog로 둔 창: 기록
-    파일 경로를 붙이고, 이미 떠 있으면 기록에만), 그 창이 없으면(소스 실행) 같은 제목의 QMessageBox.critical."""
-    print(f"[파일 연결] {text}", file=sys.stderr, flush=True)
-    dialog = getattr(sys.excepthook, "dialog", None)
-    if dialog is not None:
-        dialog.show_error(text)
-    else:
-        QMessageBox.critical(None, ERROR_TITLE, text)
+    print(f"{LOG_PREFIX} {line}", flush=True)

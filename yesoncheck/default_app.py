@@ -17,7 +17,7 @@
 - 오류: 예상된 실패 — DefaultAppError(LaunchServices의 상태 코드, 정한 뒤 다시 읽은 값이 다름, 앱의 Info.plist), prefs.json의
   UserFileError — 는 무엇이 왜인지 오류 창(트레이스백 없이). 예상 못 한 예외는 기록(stderr)과 오류 창에 트레이스백. 오류 창은
   빌드 앱이면 앱의 예외 창(app.make_excepthook의 창 — 기록 파일 경로를 붙이고 한 번에 하나만), 그 창이 없으면(소스 실행)
-  같은 제목의 QMessageBox.critical.
+  같은 제목의 QMessageBox.critical (error_window — file_associations와 함께 씀).
 
 고른 API — LaunchServices C API를 ctypes로 (CoreServices·CoreFoundation, PyObjC 없음):
 `LSCopyDefaultRoleHandlerForContentType`(읽기)·`LSSetDefaultRoleHandlerForContentType`(정하기, 역할 kLSRolesAll — Finder의
@@ -56,7 +56,7 @@ from ctypes import POINTER, byref, c_bool, c_char_p, c_int32, c_long, c_uint32, 
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import QMessageBox
 
-from yesoncheck import update_install, user_files
+from yesoncheck import error_window, update_install, user_files
 from yesoncheck.user_files import UserFileError
 
 IS_MAC = sys.platform == "darwin"  # Help 메뉴 항목·처음 켤 때 묻기 (시험이 바꿔 끼움)
@@ -65,7 +65,7 @@ ASKED_KEY = "asked_default_video_app"  # prefs.json: [예]·[아니요]로 답�
 PREFS_FILE_NAME = "prefs.json"
 
 TITLE = "동영상 기본 앱"
-ERROR_TITLE = "YesonCheck 오류"  # 앱의 예외 창(app._ErrorDialog)과 같은 제목
+LOG_PREFIX = "[기본 앱]"  # 기록 줄의 머리 (_log·오류 창 — error_window)
 ASK_TEXT = "동영상(.mov·.mp4)을 더블클릭하면 YesonCheck로 열까요?"
 YES_BUTTON = "예"
 NO_BUTTON = "아니요"
@@ -352,16 +352,16 @@ def ask_at_start(parent) -> None:
     try:
         _ask_at_start(parent)
     except DefaultAppError as exc:
-        _show_error(f"{CHECK_FAILED_TEXT}\n\n{exc}")
+        error_window.show_error(LOG_PREFIX, f"{CHECK_FAILED_TEXT}\n\n{exc}")
     except Exception:
-        _show_unexpected(START_FAILED_TEXT)
+        error_window.show_unexpected(LOG_PREFIX, START_FAILED_TEXT)
 
 
 def _ask_at_start(parent):
     try:
         prefs = read_prefs()
     except UserFileError as exc:
-        _show_error(f"{PREFS_READ_FAILED_TEXT}\n\n{exc}")
+        error_window.show_error(LOG_PREFIX, f"{PREFS_READ_FAILED_TEXT}\n\n{exc}")
         return
     if prefs.get(ASKED_KEY) is True:  # should_ask와 같은 판단 — 답한 뒤에는 앱 자리·LaunchServices도 보지 않게 먼저
         print(f"{ALREADY_ANSWERED_LOG} ({prefs_path()})", flush=True)
@@ -386,7 +386,7 @@ def _ask_at_start(parent):
         record_asked()
     except (UserFileError, TimeoutError, OSError) as exc:
         traceback.print_exc()
-        _show_error(f"{RECORD_FAILED_TEXT}\n\n{type(exc).__name__}: {exc}")
+        error_window.show_error(LOG_PREFIX, f"{RECORD_FAILED_TEXT}\n\n{type(exc).__name__}: {exc}")
     if answer:
         _apply(parent, app_path, bundle_id, announce=False)
 
@@ -406,9 +406,9 @@ def set_default_from_menu(parent) -> None:
             return
         _apply(parent, app_path, bundle_id_of(app_path), announce=True)
     except DefaultAppError as exc:
-        _show_error(f"{SET_FAILED_TEXT}\n\n{exc}")
+        error_window.show_error(LOG_PREFIX, f"{SET_FAILED_TEXT}\n\n{exc}")
     except Exception:
-        _show_unexpected(MENU_FAILED_TEXT)
+        error_window.show_unexpected(LOG_PREFIX, MENU_FAILED_TEXT)
 
 
 def _apply(parent, app_path, bundle_id, announce):
@@ -416,13 +416,13 @@ def _apply(parent, app_path, bundle_id, announce):
     try:
         set_default(app_path)
     except DefaultAppError as exc:
-        _show_error(f"{SET_FAILED_TEXT}\n\n{exc}")
+        error_window.show_error(LOG_PREFIX, f"{SET_FAILED_TEXT}\n\n{exc}")
         return
     _log(f"기본 앱을 정함: {', '.join(VIDEO_UTIS)} → {bundle_id} ({app_path})")
     try:
         copies = other_copies(bundle_id, app_path)
     except DefaultAppError as exc:
-        _show_error(f"{COPIES_FAILED_TEXT}\n\n{exc}")
+        error_window.show_error(LOG_PREFIX, f"{COPIES_FAILED_TEXT}\n\n{exc}")
         return
     if copies:
         _log(f"같은 앱 ID의 다른 사본 {len(copies)}개 — 지우라고 안내: {copies!r}")
@@ -467,20 +467,4 @@ def _ask(parent) -> bool | None:
 
 
 def _log(line):
-    print(f"[기본 앱] {line}", flush=True)
-
-
-def _show_unexpected(context):
-    """예외 처리 중에: context와 트레이스백을 기록·오류 창으로."""
-    _show_error(f"{context}\n\n{traceback.format_exc()}")
-
-
-def _show_error(text):
-    """기록(stderr)에 남기고 오류 창 — 빌드 앱이면 앱의 예외 창(app.make_excepthook가 sys.excepthook.dialog로 둔 창: 기록
-    파일 경로를 붙이고, 이미 떠 있으면 기록에만), 그 창이 없으면(소스 실행) 같은 제목의 QMessageBox.critical."""
-    print(f"[기본 앱] {text}", file=sys.stderr, flush=True)
-    dialog = getattr(sys.excepthook, "dialog", None)
-    if dialog is not None:
-        dialog.show_error(text)
-    else:
-        QMessageBox.critical(None, ERROR_TITLE, text)
+    print(f"{LOG_PREFIX} {line}", flush=True)
