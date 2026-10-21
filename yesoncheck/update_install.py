@@ -7,10 +7,13 @@
 
 Mac에서는 dmg를 hdiutil로 열고 안의 .app 하나를 ditto로(심볼릭 링크가 많아 shutil 대신) 앱 옆의 숨김 이름으로
 복사한 뒤 항상 떼어내고, 복사한 앱의 버전을 build_info로 확인한다. 업데이트를 건 뒤 기록
-(state_dir()/pending_update.json)을 남겨 두면, 재시작한 앱이 현재 버전과 비교해 성공(ok)·실패(failed)를
-판정해 지운다(startup_result). 이 기록·로그(update.log)는 재시작 뒤 앱과, 종료를 기다리다 새 앱을 켜는
-도우미(다른 프로세스)가 함께 쓴다 — log()는 매번 열고 닫는다(핸들을 오래 들고 있으면 Windows에서 도우미가
-로그 파일에 쓰지 못함).
+(state_dir()/pending_update.json — 무작위 토큰·도우미 pid·건 창의 pid 포함)을 남겨 두면, 도우미가 그 토큰과 함께
+다시 켠 앱(`--update-result TOKEN`)만 현재 버전과 비교해 성공(ok)·실패(failed)를 판정해 지운다(startup_result) — 업데이트
+중에 사용자가 켠 다른 앱은 기록을 건드리지 않고(update_in_progress로 알아채고 켜지지 않음, app.launch) 진짜 새 앱이 '잘
+켜짐'을 쓴다. 토큰 없는 옛 기록(1.1.x 앱이 씀 — 1.1.x 도우미는 토큰 없이 켬)은 예전 규칙 그대로 판정한다. 이 기록·로그
+(update.log)는 재시작 뒤 앱과, 종료를 기다리다 새 앱을 켜는 도우미(다른 프로세스)와 다른 창들이 함께 쓴다 — log()는
+매번 열고 닫고(핸들을 오래 들고 있으면 Windows에서 도우미가 로그 파일에 쓰지 못함), 줄마다 쓴 프로세스의 pid를 붙인다
+(log_tail_since가 그 업데이트의 줄만 고르게).
 
 requests는 URL에서 받을 때(_copy_from_url) 불러온다 — 앱의 시작이 requests를 기다리지 않게 (updates와 같음).
 """
@@ -27,10 +30,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from yesoncheck import build_info, paths
+from yesoncheck import build_info, paths, user_files
 from yesoncheck.updates import FileEntry
 
 PENDING_FILE_NAME = "pending_update.json"
@@ -43,6 +47,16 @@ HELPER_CONSOLE_FILE_NAME = "update_helper_console.txt"  # 도우미의 stdout·s
 # 두 도우미(update_helper_mac.sh·update_helper_windows.ps1)가 인자를 확인한 뒤 맨 처음 쓰는 기록 줄의 시각 뒤 글
 # ("<시각> 도우미: 시작: 대상 버전 …") — 앱은 이 줄을 본 뒤에만 끝난다 (helper_start_logged)
 HELPER_START_TEXT = " 도우미: 시작: "
+# 도우미가 쓰는 기록 줄의 시각 뒤 글 ("<시각> 도우미: …" — pid 없음). 앱의 줄은 "<시각> [pid N] …" (log)
+HELPER_LINE_TEXT = " 도우미:"
+# 도우미 pid가 업데이트 기록을 쓴 때(Pending.started)부터 이 초 안에 시작한 프로세스일 때만 그 도우미로 봄 (_helper_alive
+# — pid는 끝난 뒤 다른 프로세스가 물려받음, Windows는 특히 빨리). 앱은 기록을 쓰고 1초 안팎에 도우미를 띄우고 그 pid를 더해
+# 다시 씀 — 도우미 pid가 아직 없는 기록도 이 초 동안은 업데이트 중으로 봄 (_hand_off가 다시 쓰기 전)
+HELPER_START_WINDOW_S = 60
+# 도우미가 가장 오래 도는 시간보다 넉넉히: 앱이 끝나기 기다림 300초 + 다른 창이 끝나기 기다림 60초 + (Windows) 설치 파일
+# 기다림 1800초 + '잘 켜짐' 기다림 180초 + 되돌리기. 기록이 이보다 오래되었으면 그 도우미는 더는 앱을 다시 켜지 않음 —
+# 업데이트 중이 아님(pid를 물려받은 오래 도는 프로세스 때문에 앱이 계속 켜지지 않는 일이 없게)
+HELPER_MAX_LIFETIME_S = 45 * 60
 
 # Windows 도우미를 띄우는 플래그: 창 없는 자기 콘솔(CREATE_NO_WINDOW — 창 모드 앱에는 콘솔이 없음), 새 프로세스 그룹.
 # 프로세스는 부모가 끝나도 남으므로 앱이 끝난 뒤에도 돈다. DETACHED_PROCESS는 쓰지 않음: 콘솔이 아예 없으면 Windows
@@ -59,6 +73,7 @@ NEEDED_BYTES = {"windows": 1_500_000_000, "mac-x86_64": 3_000_000_000, "mac-arm6
 _CHUNK_BYTES = 1024 * 1024  # NAS 복사·sha256 계산·requests 스트리밍 모두 1 MB 단위
 _DOWNLOAD_TIMEOUT_S = 10  # 연결·읽기 각각
 _LOG_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")  # log()가 줄 앞에 붙이는 시각
+_PID_TEXT_RE = re.compile(r"[0-9]+")  # 업데이트 기록의 helper_pid·app_pid
 
 
 class UpdateError(Exception):
@@ -104,12 +119,13 @@ def timestamp() -> str:
 
 
 def log(line: str) -> None:
-    """시각(timestamp())을 붙여 log_path()에 한 줄 덧붙이고 stdout에도 보임.
+    """시각(timestamp())과 이 프로세스의 pid를 붙여("<시각> [pid N] 줄") log_path()에 한 줄 덧붙이고 stdout에도 보임.
 
     매번 열고 닫는다(긴 시간 핸들을 들고 있지 않음) — 업데이트 뒤 다시 켜는 도우미(별도 프로세스)가
-    Windows에서 같은 파일에 덧붙여 쓸 수 있어야 하기 때문.
+    Windows에서 같은 파일에 덧붙여 쓸 수 있어야 하기 때문. pid는 여러 창이 함께 쓰는 기록에서 그 업데이트의 줄만 고르려고
+    (log_tail_since).
     """
-    stamped = f"{timestamp()} {line}"
+    stamped = f"{timestamp()} [pid {os.getpid()}] {line}"
     with open(log_path(), "a", encoding="utf-8") as fh:
         fh.write(stamped + "\n")
     print(stamped)
@@ -137,14 +153,16 @@ def helper_start_logged(offset: int) -> bool:
     return HELPER_START_TEXT.encode("utf-8") in data
 
 
-def log_tail_since(started: str, max_lines: int = 80) -> str:
-    """로그에서 시각이 started 이상인 줄만, 최근 max_lines줄까지. 로그 파일이 없으면 빈 글자.
+def log_tail_since(started: str, pid: int | str | None, max_lines: int = 80) -> str:
+    """로그에서 시각이 started 이상이고 pid 프로세스(그 업데이트를 건 창 — Pending.app_pid)나 도우미가 쓴 줄만, 최근
+    max_lines줄까지. 다른 창이 그사이 쓴 줄은 뺀다. pid가 None이면(옛 기록 — 1.1.x 앱의 줄에는 pid가 없음) 쓴 곳을 가리지
+    않음. 로그 파일이 없으면 빈 글자.
 
-    log()가 쓴 줄은 "<ISO 시각> …"로 시작하지만, 트레이스백처럼 그 뒤에 시각 없이 여러 줄이 이어지는
-    경우가 있다(실패 로그를 통째로 보여 줘야 함 — "업데이트 실패" 창의 자료). 시각으로 시작하는 줄만
-    포함 여부를 다시 정하고, 시각이 없는 줄(들여쓴 트레이스백 줄 등)은 바로 앞의 시각 있는 줄과 같은
-    여부를 따른다. started는 초 단위까지만 비교한다(앞 19자리 "YYYY-MM-DDTHH:MM:SS") — 더 긴(마이크로초·
-    시간대) 값이 들어와도 같은 초의 줄을 빼먹지 않게.
+    log()가 쓴 줄은 "<ISO 시각> [pid N] …", 도우미의 줄은 "<ISO 시각> 도우미: …"로 시작하지만, 트레이스백처럼 그 뒤에 시각
+    없이 여러 줄이 이어지는 경우가 있다(실패 로그를 통째로 보여 줘야 함 — "업데이트 실패" 창의 자료). 시각으로 시작하는
+    줄만 포함 여부를 다시 정하고, 시각이 없는 줄(들여쓴 트레이스백 줄 등)은 바로 앞의 시각 있는 줄과 같은 여부를 따른다.
+    started는 초 단위까지만 비교한다(앞 19자리 "YYYY-MM-DDTHH:MM:SS") — 더 긴(마이크로초·시간대) 값이 들어와도 같은 초의
+    줄을 빼먹지 않게.
     """
     try:
         with open(log_path(), encoding="utf-8") as fh:
@@ -152,11 +170,14 @@ def log_tail_since(started: str, max_lines: int = 80) -> str:
     except FileNotFoundError:
         return ""
     cutoff = started[:19]
+    own = None if pid is None else f" [pid {pid}] "
     matched = []
     include = False
     for line in lines:
         if _LOG_TIMESTAMP_RE.match(line):
-            include = line[:19] >= cutoff
+            rest = line[19:]
+            include = line[:19] >= cutoff and (
+                own is None or rest.startswith(own) or rest.startswith(HELPER_LINE_TEXT))
         if include:
             matched.append(line)
     return "".join(matched[-max_lines:])
@@ -607,8 +628,9 @@ def _default_dll_search_for_children():
         _set_dll_directory(frozen_dir)
 
 
-def launch_helper_mac(staged_app: str, app_path: str, target: str) -> subprocess.Popen:
+def launch_helper_mac(staged_app: str, app_path: str, target: str, token: str) -> subprocess.Popen:
     """앱이 끝나기를 기다렸다가 staged_app을 app_path 자리로 바꾸고 다시 켜는 도우미(update_helper_mac.sh)를 띄움.
+    token: 업데이트 기록(Pending.token)의 토큰 — 도우미가 다시 켜는 앱에 `--update-result TOKEN`으로 넘김(그 앱만 결과를 판정).
 
     부른 쪽은 업데이트 기록(write_pending)을 남긴 뒤 이것을 부르고 앱을 끝낸다. 도우미는 바뀔 앱 번들 밖에서
     돌아야 하므로(번들째 백업 이름으로 옮기고, 되돌릴 때는 지움) 번들 안의 스크립트를 state_dir()로 복사해
@@ -626,6 +648,7 @@ def launch_helper_mac(staged_app: str, app_path: str, target: str) -> subprocess
         "--target", target,
         "--ok", ok_marker_path(),
         "--log", log_path(),
+        "--token", token,
     ]
     with open(helper_console_path(), "wb") as console:
         return subprocess.Popen(
@@ -645,9 +668,10 @@ def _windows_powershell() -> str:
     return exe if os.path.isfile(exe) else "powershell"
 
 
-def launch_helper_windows(installer: str, install_dir: str, target: str) -> subprocess.Popen:
+def launch_helper_windows(installer: str, install_dir: str, target: str, token: str) -> subprocess.Popen:
     """앱이 끝나기를 기다렸다가 install_dir을 백업 이름으로 바꾸고 installer를 조용히 실행해 새 버전을 켜는 도우미
-    (update_helper_windows.ps1)를 띄움. 새 버전이 잘 켜지지 않으면 도우미가 백업을 되돌리고 옛 앱을 켠다.
+    (update_helper_windows.ps1)를 띄움. 새 버전이 잘 켜지지 않으면 도우미가 백업을 되돌리고 옛 앱을 켠다. token: 업데이트
+    기록(Pending.token)의 토큰 — 도우미가 다시 켜는 앱에 `--update-result TOKEN`으로 넘김(그 앱만 결과를 판정).
 
     부른 쪽은 업데이트 기록(write_pending)을 남긴 뒤 이것을 부르고 앱을 끝낸다. 도우미가 설치 폴더의 이름을 바꾸므로
     설치 폴더 안의 스크립트를 state_dir()로 복사해 실행하고, 작업 폴더도 state_dir()로 둔다 — 앱의 작업 폴더(바로
@@ -669,6 +693,7 @@ def launch_helper_windows(installer: str, install_dir: str, target: str) -> subp
         "-Target", target,
         "-OkFile", ok_marker_path(),
         "-Log", log_path(),
+        "-Token", token,
     ]
     with open(helper_console_path(), "wb") as console, _default_dll_search_for_children():
         return subprocess.Popen(
@@ -688,37 +713,25 @@ def launch_helper_windows(installer: str, install_dir: str, target: str) -> subp
 @dataclass(frozen=True)
 class Pending:
     """업데이트를 건 뒤 남기는 기록: target(바꾸려는 버전)·previous(바꾸기 전 버전)·platform_key·started
-    (건 시각, ISO 8601)."""
+    (건 시각, timestamp()). token: 도우미가 다시 켜는 앱에 넘기는 무작위 토큰(그 앱만 결과를 판정), helper_pid: 도우미의
+    pid(살아 있는 동안 '업데이트 중'), app_pid: 업데이트를 건 창의 pid(실패 창에 그 창의 기록만) — pid는 글자. 1.1.x 앱이
+    쓴 옛 기록에는 뒤의 셋이 없음 → 빈 글자."""
 
     target: str
     previous: str
     platform_key: str
     started: str
+    token: str = ""
+    helper_pid: str = ""
+    app_pid: str = ""
 
 
 def _pending_path():
     return os.path.join(state_dir(), PENDING_FILE_NAME)
 
 
-def _write_json_atomic(path, data):
-    """임시 파일 + os.replace로 씀 (쓰는 중에 읽는 쪽이 반쪽짜리 파일을 보지 않게)."""
-    folder = os.path.dirname(path)
-    os.makedirs(folder, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=folder, prefix=".tmp-")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, ensure_ascii=False)
-        os.replace(tmp_path, path)
-    except Exception:
-        try:
-            os.remove(tmp_path)
-        except FileNotFoundError:
-            pass
-        raise
-
-
 def write_pending(p: Pending) -> None:
-    _write_json_atomic(_pending_path(), dataclasses.asdict(p))
+    user_files.write_json_atomic(_pending_path(), dataclasses.asdict(p), indent=None)
 
 
 def read_pending() -> Pending | None:
@@ -731,10 +744,16 @@ def read_pending() -> Pending | None:
         return None
     except (OSError, ValueError) as exc:
         raise UpdateError(f"업데이트 기록을 읽지 못했습니다: {path}\n{exc}") from exc
-    names = [f.name for f in dataclasses.fields(Pending)]
-    if not isinstance(data, dict) or not all(isinstance(data.get(name), str) for name in names):
+    fields = dataclasses.fields(Pending)
+    required = [f.name for f in fields if f.default is dataclasses.MISSING]
+    optional = [f.name for f in fields if f.default is not dataclasses.MISSING]  # 옛 기록에는 없음 → 빈 글자
+    if not (isinstance(data, dict) and all(isinstance(data.get(name), str) for name in required)
+            and all(isinstance(data.get(name, ""), str) for name in optional)):
         raise UpdateError(f"업데이트 기록의 형식이 다릅니다: {path}\n{data!r}")
-    return Pending(**{name: data[name] for name in names})
+    p = Pending(**{name: data[name] for name in required}, **{name: data.get(name, "") for name in optional})
+    if not all(_PID_TEXT_RE.fullmatch(pid) for pid in (p.helper_pid, p.app_pid) if pid):
+        raise UpdateError(f"업데이트 기록의 형식이 다릅니다 (pid가 숫자가 아님): {path}\n{data!r}")
+    return p
 
 
 def clear_pending() -> None:
@@ -749,18 +768,25 @@ def ok_marker_path() -> str:
 
 
 def write_ok_marker(version: str) -> None:
-    _write_json_atomic(ok_marker_path(), {"version": version})
+    user_files.write_json_atomic(ok_marker_path(), {"version": version}, indent=None)
 
 
-def startup_result(current_version: str) -> tuple[str, Pending] | None:
+def startup_result(current_version: str, update_token: str | None) -> tuple[str, Pending] | None:
     """앱이 시작할 때 부름: 업데이트 기록이 있으면 현재 버전과 비교해 판정하고 기록을 지운다.
 
-    기록이 없으면 None. current_version == target이면 ok 표시를 쓰고 기록을 지운 뒤 ("ok", 기록).
+    기록이 없으면 None. 기록에 토큰이 있고 그 도우미가 아직 앱을 다시 켤 수 있으면(_helper_may_relaunch) 도우미가 그 토큰과
+    함께 켠 앱(update_token이 같음)만 판정 — 다르거나 없으면(업데이트 중에 사용자가 켠 앱) 기록을 그대로 두고 None: 진짜 새
+    앱이 '잘 켜짐'을 쓰게. 도우미가 다시 켜지 않고 끝났으면(앱이 끝나지 않아 그만둠·로그아웃 뒤 되살림·충돌 등) 아무 앱이나
+    판정 — 실패를 알리지 않은 채 기록이 남지 않게. 토큰 없는 옛 기록(1.1.x 앱이 씀 — 1.1.x 도우미는 토큰 없이 켬, 이
+    버전으로 올리는 첫 업데이트)은 update_token과 상관없이 예전 규칙 그대로.
+    current_version == target이면 ok 표시를 쓰고 기록을 지운 뒤 ("ok", 기록).
     current_version == previous(업데이트가 실패해 옛 버전이 그대로 켜짐)면 기록을 지운 뒤 ("failed", 기록).
     그 밖(업데이트를 거는 동안 다른 버전 — 예: 아직 바꾸는 중)이면 기록을 그대로 두고 None.
     """
     p = read_pending()
     if p is None:
+        return None
+    if p.token and update_token != p.token and _helper_may_relaunch(p):
         return None
     if current_version == p.target:
         write_ok_marker(p.target)
@@ -770,3 +796,44 @@ def startup_result(current_version: str) -> tuple[str, Pending] | None:
         clear_pending()
         return ("failed", p)
     return None
+
+
+def _record_time(p: Pending) -> float:
+    """기록을 쓴 시각(started — 시간대 없는 지역 시각, timestamp())을 epoch 초로."""
+    return datetime.datetime.fromisoformat(p.started).timestamp()
+
+
+def _helper_alive(p: Pending) -> bool:
+    """기록의 도우미(helper_pid)가 아직 도는지 — 그 pid의 프로세스가 살아 있고 기록을 쓴 때부터 HELPER_START_WINDOW_S 안에
+    시작했음 (pid를 물려받은 다른 프로세스가 아님). 시작 시각은 Mac ps가 초 단위(버림), started도 초 단위(버림) → 1초 여유.
+    프로세스를 확인하다 난 오류는 그대로 올림."""
+    from yesoncheck import instances  # instances가 이 모듈을 불러오므로 여기서
+
+    helper_started = instances.process_start_time(int(p.helper_pid))
+    if helper_started is None:
+        return False  # 도우미가 끝남
+    written = _record_time(p)
+    return written - 1 <= helper_started <= written + HELPER_START_WINDOW_S
+
+
+def _helper_may_relaunch(p: Pending) -> bool:
+    """토큰 있는 기록의 도우미가 아직 앱을 (토큰과 함께) 다시 켤 수 있는지 — 업데이트 중. 기록이 HELPER_MAX_LIFETIME_S보다
+    오래되었으면 아님. 도우미 pid가 있으면 그 도우미가 돎(_helper_alive), 없으면 기록이 HELPER_START_WINDOW_S 안에 쓰임
+    (_hand_off가 도우미를 띄우고 그 pid를 다시 쓰기 전 — 이때 켠 앱이 '실패'로 판정해 기록을 지우면 도우미가 켤 새 앱이 '잘
+    켜짐'을 쓰지 못해 되돌림). 토큰 없는 옛 기록은 아님 (1.1.x 도우미가 토큰 없이 켜는 새 앱이 판정해야 함)."""
+    if not p.token:
+        return False
+    age = time.time() - _record_time(p)
+    if age > HELPER_MAX_LIFETIME_S:
+        return False
+    if not p.helper_pid:
+        return age <= HELPER_START_WINDOW_S
+    return _helper_alive(p)
+
+
+def update_in_progress() -> bool:
+    """다른 창이 넘긴 업데이트가 진행 중인지 — 토큰 있는 업데이트 기록이 있고 그 도우미가 아직 앱을 다시 켤 수 있음
+    (_helper_may_relaunch: 도우미가 돎, 또는 도우미 pid를 아직 쓰기 전). 토큰 없는 옛 기록(1.1.x 앱이 씀)은 False.
+    기록이 깨졌으면 UpdateError, 프로세스를 확인하다 난 오류는 그대로 올림."""
+    p = read_pending()
+    return p is not None and _helper_may_relaunch(p)

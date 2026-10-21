@@ -4,6 +4,7 @@ Windows CI: --share-root C:\\yc_share --unc \\\\localhost\\yc_test --mac-root /V
 Mac(로컬 확인): --share-root /tmp/x --mac-root /tmp/x (변환표 없이 Mac 경로 그대로) 후 YESONCHECK_CONFIG_DIR=/tmp/x/.yesoncheck
 자동 연결(--auto-connect): 공유 설정은 <share-root>\\test_jn\\.yesoncheck, 변환표는 '여기에_붙여넣기'가 남은 기본 파일
 업데이트(--update-dir, ci/update_e2e.py): 공유 설정의 updates/에 새 버전 꾸러미(설치 파일·dmg)와 latest.json(NAS 배포 흉내)
+  — --close-others면 다른 창이 켜진 채 업데이트 (실행 시험이 '다른 창도 닫고 업데이트' 확인 창에 답함)
 """
 
 import argparse
@@ -96,6 +97,9 @@ def main():
                         help="업데이트 시험: 새 버전 꾸러미(설치 파일·dmg) 하나가 든 폴더 — 공유 설정의 updates/에 복사하고 "
                              "latest.json을 씀, 실행 시험은 'update' 시나리오 (빌드된 앱이 그 버전을 알리고 받아 도우미에 넘김)")
     parser.add_argument("--update-version", help="업데이트 시험: latest.json의 버전 = 앱이 알려야 할 새 버전")
+    parser.add_argument("--close-others", action="store_true",
+                        help="업데이트 시험: 같은 설치의 다른 창이 켜진 채 업데이트 — 실행 시험이 '다른 창도 닫고 업데이트' "
+                             "확인 창에 [모두 닫고 업데이트]로 답함 (smoke_config의 close_others)")
     parser.add_argument("--update-platform", choices=build_info.PLATFORM_KEYS,
                         help="업데이트 시험: latest.json의 플랫폼 키 (기본: 이 컴퓨터)")
     args = parser.parse_args()
@@ -110,8 +114,8 @@ def main():
             updates.Version.parse(args.update_version)
         except ValueError as exc:
             parser.error(f"--update-version: {exc}")
-    elif args.update_version or args.update_platform:
-        parser.error("--update-version·--update-platform은 --update-dir과 함께만 씁니다")
+    elif args.update_version or args.update_platform or args.close_others:
+        parser.error("--update-version·--update-platform·--close-others는 --update-dir과 함께만 씁니다")
 
     ffmpeg = external_tools.ffmpeg_path()
     if args.auto_connect:
@@ -142,6 +146,8 @@ def main():
                                        args.update_platform or build_info.platform_key())
         print("업데이트 꾸러미 배포 (NAS 흉내):", manifest_path)
         smoke_config.update({"scenario": "update", "expect_offer": args.update_version})
+        if args.close_others:
+            smoke_config["close_others"] = True
     write_json(os.path.join(args.workdir, "smoke_config.json"), smoke_config)
     if args.settings and args.auto_connect:
         if os.path.exists(args.settings):

@@ -212,6 +212,31 @@ def test_make_test_data_publishes_update_like_nas(tmp_path):
     assert updates.read_nas(config_dir, "mac-arm64").error
     smoke_config = json.loads((tmp_path / "work" / "smoke_config.json").read_text(encoding="utf-8"))
     assert smoke_config["scenario"] == "update" and smoke_config["expect_offer"] == "99.0.0"
+    assert "close_others" not in smoke_config
+
+
+def test_make_test_data_close_others_answers_the_close_others_box(tmp_path):
+    """다른 창이 켜진 채 업데이트(ci/update_e2e.py의 다른 창 경로): --close-others → smoke_config의 close_others → 실행
+    시험이 '다른 창도 닫고 업데이트' 확인 창에만 [모두 닫고 업데이트](Yes)로 답함 (box_answer)."""
+    from PyQt5.QtWidgets import QMessageBox
+
+    from yesoncheck import player_update
+    from yesoncheck.smoke_test import box_answer
+
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    (package_dir / "YesonCheck_Setup_99.0.0.exe").write_bytes(b"MZ")
+    result = run_make_test_data(tmp_path, "--update-dir", str(package_dir), "--update-version", "99.0.0",
+                                "--update-platform", "windows", "--close-others")
+    assert result.returncode == 0, result.stdout + result.stderr
+    smoke_config = json.loads((tmp_path / "work" / "smoke_config.json").read_text(encoding="utf-8"))
+    assert smoke_config["close_others"] is True
+    assert box_answer(smoke_config, player_update.UPDATE_OTHERS_TITLE) == QMessageBox.Yes
+    # 다른 창 (업데이트 실패 창 등)은 답하지 않음 — 기록하고 Ok (실패로 봄)
+    assert box_answer(smoke_config, player_update.UPDATE_FAILED_TITLE) is None
+    # close_others가 없거나 update 시나리오가 아니면 확인 창에도 답하지 않음
+    assert box_answer({"scenario": "update"}, player_update.UPDATE_OTHERS_TITLE) is None
+    assert box_answer({"close_others": True}, player_update.UPDATE_OTHERS_TITLE) is None
 
 
 @pytest.mark.parametrize("extra, message", [
@@ -221,6 +246,7 @@ def test_make_test_data_publishes_update_like_nas(tmp_path):
     (["--update-dir", "PKG", "--update-version", "99.0.0", "--expect-version", "1.1.0"], "--expect-version"),
     (["--update-version", "99.0.0"], "--update-dir"),
     (["--update-platform", "windows"], "--update-dir"),
+    (["--close-others"], "--update-dir"),
 ])
 def test_make_test_data_rejects_inconsistent_update_options(tmp_path, extra, message):
     package_dir = tmp_path / "package"

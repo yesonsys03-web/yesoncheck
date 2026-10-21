@@ -35,7 +35,8 @@ def dialogs(monkeypatch):
     messages: 모든 창의 (종류, 제목, 글). questions·warnings·criticals: 그 종류의 글만 차례로.
     question 창의 대답은 기본 Yes — answer_question(QMessageBox.No)로 그 뒤의 대답을 바꿈.
     QMessageBox를 만들어 exec_()로 띄운 창(자세한 글 setDetailedText이 있는 창 등)도 같은 목록에 — 글은 "본문\n\n자세한 글",
-    본문과 자세한 글을 따로 보려면 boxes (종류·제목·본문·자세한 글).
+    본문과 자세한 글을 따로 보려면 boxes (종류·제목·본문·자세한 글·단추 글자). 그런 창 중 question 아이콘의 창도 대답은
+    answer_question으로 정한 값 (나머지는 Ok).
     """
     from PyQt5.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
@@ -69,10 +70,11 @@ def dialogs(monkeypatch):
         details = box.detailedText()
         text = f"{box.text()}\n\n{details}" if details else box.text()
         rec.messages.append((kind, title, text))
-        rec.boxes.append(SimpleNamespace(kind=kind, title=title, text=box.text(), details=details))
+        rec.boxes.append(SimpleNamespace(kind=kind, title=title, text=box.text(), details=details,
+                                         buttons=[button.text() for button in box.buttons()]))
         if kind in texts:
             texts[kind].append(text)
-        return QMessageBox.Ok
+        return answers["question"] if kind == "question" else QMessageBox.Ok
 
     monkeypatch.setattr(QMessageBox, "exec_", box_exec)
     monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: rec.folders.pop(0) if rec.folders else "")
@@ -150,6 +152,28 @@ def _no_mac_mount_map(monkeypatch):
     monkeypatch.setattr(mac_mounts, "DEFAULT_ROOT", os.path.join(ROOT, "tests", "no_such_mac_root"))
     yield
     paths.activate_mount_map(None)
+
+
+@pytest.fixture(autouse=True)
+def _bookmarks_file_in_tmp(monkeypatch, tmp_path_factory):
+    """창이 북마크를 사용자의 ~/.yeson_bookmarks.json이 아니라 시험마다 새 임시 파일에서 읽고 쓰게 (끌어다 놓은 폴더가
+    진짜 북마크에 남지 않게). 한 시험 안의 여러 창은 같은 파일을 씀."""
+    from yesoncheck import bookmarks
+
+    path = str(tmp_path_factory.mktemp("bookmarks") / ".yeson_bookmarks.json")
+    monkeypatch.setattr(bookmarks, "default_path", lambda: path)
+
+
+@pytest.fixture(autouse=True)
+def _instances_in_tmp(monkeypatch, tmp_path_factory):
+    """창 기록(instances)은 시험마다 새 임시 폴더에 — 사용자의 기록 폴더(~/Library/Caches/YesonCheck/instances,
+    %LOCALAPPDATA%\\YesonCheck\\instances)를 건드리지 않게. 환경 변수로 돌리므로 시험이 띄우는 자식 프로세스(app.launch
+    등)도 같은 임시 폴더를 씀. 시험이 남긴 이 프로세스의 등록은 지움."""
+    from yesoncheck import instances
+
+    monkeypatch.setenv(instances.REGISTRY_DIR_ENV, str(tmp_path_factory.mktemp("instances") / "instances"))
+    yield
+    instances.unregister()
 
 
 @pytest.fixture(autouse=True)

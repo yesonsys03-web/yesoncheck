@@ -15,40 +15,56 @@
 - 오류(error): 자동 확인은 창 — 한 실행에 같은 문제는 한 번 ((소스, 첫 줄). 트레이스백은 첫 줄이 늘 같아 마지막 줄).
 - 수동 확인: 언제나 결과 창 — 소스마다 찾은 버전·예상된 문제·오류 전부 (오류가 있으면 경고 창).
 
-'업데이트'를 누르면 (start_update, 설계 5-2) — 누른 때의 update_offer를 끝까지 씀 (그 뒤의 확인 결과가 바꾸지 않음):
+'업데이트'를 누르면 (start_update, 설계 5-2·3-4) — 누른 때의 update_offer를 끝까지 씀 (그 뒤의 확인 결과가 바꾸지 않음):
 1. 바꿀 수 없는 앱이면 "업데이트할 수 없음" 안내 창, 받지 않음 — Mac: dmg 안·격리 위치에서 켬 (refuse_reason_mac), Windows:
    업데이트 상태 폴더가 설치 폴더 안이거나 설치 파일로 설치한 앱이 아님 (refuse_reason_windows).
-2. 진행 중인 작업(running_jobs — 창 닫기가 멈추는 작업)이 있으면 멈추고 업데이트할지 물음. 작업은 넘긴 뒤 앱을 끝낼 때
-   창 닫기가 멈춤 — 받다 실패·취소하면 그대로 이어짐. 받는 동안 새로 시작한 작업은 넘기기 전에 다시 물음.
-3. 여유 공간 확인(update_install.NEEDED_BYTES) → 뒤 스레드(UpdateDownload)가 <state_dir>/downloads에 받기(크기·sha256),
+2. 다른 창 확인 (뒤 스레드 OthersWork — 띠에 "다른 창 확인 중…"): 같은 앱 자리에서 다른 사용자의 YesonCheck가 돌면 그 창은
+   닫으라고 요청할 수 없으므로 "다른 사용자(…)가 YesonCheck를 쓰고 있어 업데이트할 수 없습니다" 창, 받지 않음. 이 사용자의
+   다른 창(instances.others)에는 상태를 물음(instance_link.query_status — 답하지 않는 창은 "응답 없음").
+3. 다른 창이 있으면 확인 창 하나(_confirm_close_others — 닫을 창 수, 이 창을 포함해 작업 중인 창과 그 작업, 저장 안 한 검토
+   결과가 있는 창, 응답 없는 창 — [모두 닫고 업데이트] [취소]). 없으면 지금처럼 진행 중인 작업(running_jobs — 창 닫기가
+   멈추는 작업)이 있을 때만 멈추고 업데이트할지 물음. 작업은 넘긴 뒤 앱을 끝낼 때 창 닫기가 멈춤 — 받다 실패·취소하면 그대로
+   이어짐. [취소]·아니오면 받지 않고 띠는 다시 알림.
+4. 여유 공간 확인(update_install.NEEDED_BYTES) → 뒤 스레드(UpdateDownload)가 <state_dir>/downloads에 받기(크기·sha256),
    Mac은 이어서 dmg에서 새 앱을 준비("준비 중…"). 띠에 진행·[취소].
-4. 다 되면 업데이트 기록(write_pending) → 도우미(launch_helper_mac/windows) → 도우미가 시작 기록을 남기면 창을 닫고 앱을
-   끝냄 (기다리는 동안 띠에 "업데이트 도우미를 시작하는 중…", 창은 쓰지 못하게). 도우미를 띄우지 못하거나, 띄운 도우미가 시작
-   기록 없이 끝나거나 UPDATE_HELPER_START_TIMEOUT_MS 안에 시작 기록을 남기지 않으면(정책·백신이 PowerShell 스크립트를 막음
-   등 — 앱이 끝나면 다시 켜 줄 것이 없음) 도우미를 끝내고 기록을 지운 뒤 실패 창, 앱은 그대로.
+5. 다 받으면 다른 창을 다시 확인: 다른 사용자가 켰으면 멈춤. 받는 동안 이 창에서 새로 시작한 작업, 작업을 시작했거나 저장 안
+   한 결과가 생긴 창(새로 켜진 창 포함)이 있으면 다시 물음. 새로 켜진 빈 창은 묻지 않고 함께 닫음. 다른 창마다 정상 종료를
+   요청(request_close — 닫기 버튼과 같음)하고 그 프로세스가 모두 끝나기를 기다림(CLOSE_OTHERS_POLL_MS마다, 요청의 답을 받은
+   뒤 최대 CLOSE_OTHERS_TIMEOUT_S — 닫히는 창이 작업·붙잡아 둔 작업을 기다리는 시간의 합보다 넉넉히, 띠에 "다른 창을 닫는
+   중…", 창은 쓰지 못하게, 그사이 새로 켜진 창도 묻지 않고 닫음). 끝나지 않은 창이 있으면 받은 것을 지우고 "업데이트를
+   멈췄습니다 — 이 창이 닫히지 않았습니다: …" 창, 앱은 그대로.
+6. 업데이트 기록(write_pending — 무작위 토큰·이 창의 pid) → 도우미(launch_helper_mac/windows — 토큰을 넘김: 도우미가 다시
+   켠 앱만 결과를 판정) → 기록에 도우미 pid를 더해 다시 씀(그동안 켜는 앱은 '업데이트 중' 창만 — app.launch) → 도우미가 시작
+   기록을 남기면 창을 닫고 앱을 끝냄 (기다리는 동안 띠에 "업데이트 도우미를 시작하는 중…", 창은 쓰지 못하게). 도우미를 띄우지
+   못하거나, 도우미 pid를 기록에 쓰지 못하거나, 띄운 도우미가 시작 기록 없이 끝나거나 UPDATE_HELPER_START_TIMEOUT_MS 안에
+   시작 기록을 남기지 않으면(정책·백신이 PowerShell 스크립트를 막음 등 — 앱이 끝나면 다시 켜 줄 것이 없음) 도우미를 끝내고
+   기록을 지운 뒤 실패 창, 앱은 그대로.
 실패는 "업데이트 실패" 창(본문은 이유 한 줄·출처 NAS/GitHub·위치, 전체 — 예상 못 한 예외는 트레이스백 — 는 자세히) 뒤 띠를
 다시 그 알림으로. 받기 실패면 곧바로 같은 곳들을 다시 확인해 띠가 지금 있는 것을 알림. 다른 곳에서 저절로 받지 않음 — 다시
-누르면 처음부터. 취소·창 닫기는 받던 것을 지우고 넘기지 않음. 단계마다 update_install.log.
+누르면 처음부터. 취소·창 닫기는 받던 것(받은 것)을 지우고 넘기지 않음. 단계마다 update_install.log.
 
-다시 켜진 앱 (handle_update_startup — 창을 보인 뒤 한 번, 이 컴퓨터의 파일만): 기록의 목표 버전이면 "잘 켜짐" 표시를
-남기고 띠에 잠깐 "{버전}로 업데이트했습니다", 받아 둔 설치 파일을 지움, 예전 버전이 켜졌으면(도우미가 되돌림) "업데이트 실패" 창에 그 뒤의 기록
-(도우미 출력 중 기록에 없는 것도 — 도우미가 기록을 쓰기 전에 실패한 이유).
+다시 켜진 앱 (handle_update_startup — 창을 보인 뒤 한 번, 이 컴퓨터의 파일만, 도우미가 토큰과 함께 켠 앱만 — 토큰 없는 옛
+기록은 아무 앱이나): 기록의 목표 버전이면 "잘 켜짐" 표시를 남기고 띠에 잠깐 "{버전}로 업데이트했습니다", 받아 둔 설치 파일을
+지움, 예전 버전이 켜졌으면(도우미가 되돌림) "업데이트 실패" 창에 그 뒤의 기록 중 업데이트를 건 창과 도우미의 줄(도우미 출력 중
+기록에 없는 것도 — 도우미가 기록을 쓰기 전에 실패한 이유).
 """
 
+import dataclasses
 import functools
 import os
+import secrets
 import shutil
 import sys
 import threading
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from PyQt5.QtCore import QThread, QTimer, pyqtSignal
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
-from yesoncheck import build_info, timing_log, update_install, updates
-from yesoncheck.player_base import release_worker
+from yesoncheck import build_info, instance_link, instances, timing_log, update_install, updates
+from yesoncheck.player_base import EXIT_WAIT_S, VideoPlayerBase, release_worker
 
 CHECK_TITLE = "업데이트 확인"
 CHECK_FAILED_TITLE = "업데이트 확인 실패"
@@ -66,10 +82,41 @@ DOWNLOAD_TEXT = "{version} 받는 중 ({source})… {done} / {total} MB"
 STAGING_TEXT = "준비 중…"
 CANCELLING_TEXT = "취소하는 중…"
 HELPER_STARTING_TEXT = "업데이트 도우미를 시작하는 중…"
+# 도우미가 시작 기록 없이 끝났거나 시간이 지남 → 앱을 끝내지 않은 이유 (_helper_start_failed)
+HELPER_BLOCKED_NOTE = "앱을 끝내면 다시 켜 줄 것이 없어 끝내지 않았습니다 (보안 정책·백신이 도우미를 막았을 수 있음)."
 DETAILS_HINT = "전체 기록은 아래 'Show Details…' 단추를 누르면 보입니다."
 SUMMARY_MAX_CHARS = 300  # 실패 창 본문의 이유 한 줄 (넘으면 줄임 — 전체는 자세히)
 BOX_TITLE_PROPERTY = "ycTitle"  # show_details_box의 창 제목 (macOS는 QMessageBox의 제목을 버리므로 따로)
 DOWNLOADS_DIR_NAME = "downloads"  # <update_install.state_dir()>/downloads — 받은 설치 파일·dmg (한 번에 하나만 둠)
+
+# 다른 YesonCheck 창 (설계 3-4)
+UPDATE_OTHERS_TITLE = "다른 창도 닫고 업데이트"
+OTHERS_COUNT = "다른 YesonCheck 창 {n}개도 닫힙니다."
+OTHERS_JOBS_STOP = "작업 중인 창의 작업은 멈춥니다."
+OTHERS_UNSAVED_LOST = "닫으면 저장 안 한 결과는 사라집니다."
+CLOSE_ALL_BUTTON = "모두 닫고 업데이트"
+CANCEL_BUTTON = "취소"
+NO_RESPONSE = "응답 없음"
+OTHER_USER_MESSAGE = "다른 사용자({user})가 YesonCheck를 쓰고 있어 업데이트할 수 없습니다"
+UPDATE_STOPPED_TITLE = "업데이트 멈춤"
+UPDATE_STOPPED = "업데이트를 멈췄습니다 — 이 창이 닫히지 않았습니다: {windows}"
+CHECKING_OTHERS_TEXT = "다른 창 확인 중…"
+CLOSING_OTHERS_TEXT = "다른 창을 닫는 중…"
+UPDATE_JOB_LABEL = "업데이트 받기"  # 다른 창의 업데이트가 묻는 이 창의 작업 (이 창의 업데이트가 진행 중)
+# 다른 창 하나에 상태를 묻거나 닫기를 요청하는 한도. Windows는 파이프 연결이 이보다 최대 약 5초 더 걸릴 수 있음
+# (WaitNamedPipe) — 뒤 스레드에서 차례로 하므로 창은 멈추지 않음
+OTHERS_LINK_TIMEOUT_MS = 3000
+# 닫기를 요청한 창의 프로세스가 끝나기를 기다리는 한도 (초) — 닫기 요청을 보내고 답을 받은 뒤부터 (_on_close_requested —
+# Windows는 파이프 연결에 창마다 몇 초 걸릴 수 있음). 창 기록은 닫기를 시작할 때 지워지지만, 그 창의 프로세스는 창 닫기가
+# 작업마다 멈추기를 기다리고(JOB_CLOSE_WAIT_MS × RUNNING_JOB_ATTRS), 공유 설정 불러오기를 기다리고
+# (SHARED_CONFIG_CLOSE_WAIT_MS), 앱이 끝나기 전에 붙잡아 둔 작업(예: 단계 사이에서만 멈추는 애니매틱2 추론)을 기다리는
+# (EXIT_WAIT_S) 동안 돎 → 그 합에 썸네일 워커 멈추기·프로세스 정리의 여유(CLOSE_OTHERS_MARGIN_S)를 더함 (약 90초). 짧으면
+# 정상적으로 닫히는 중인 창 때문에 업데이트를 멈추고 받은 것(수백 MB)을 지움
+CLOSE_OTHERS_MARGIN_S = 15
+CLOSE_OTHERS_TIMEOUT_S = (VideoPlayerBase.JOB_CLOSE_WAIT_MS / 1000 * len(VideoPlayerBase.RUNNING_JOB_ATTRS)
+                          + VideoPlayerBase.SHARED_CONFIG_CLOSE_WAIT_MS / 1000 + EXIT_WAIT_S + CLOSE_OTHERS_MARGIN_S)
+CLOSE_OTHERS_POLL_MS = 500  # 그동안 다른 창의 프로세스·새로 켜진 창을 보는 간격
+_UNSAVED_CONCERN = "저장 안 한 결과"  # 다시 물을지 가리는 것 (_concerns) 중 하나 — 작업 이름과 겹치지 않음
 
 
 class UpdateCheck(QThread):
@@ -268,6 +315,160 @@ class UpdateDownload(QThread):
         UpdateDownload._running.discard(self)
 
 
+# ---- 다른 YesonCheck 창 (설계 3-4) ----
+
+
+def _concerns(shown):
+    """다시 물을지 가리는 것: 확인 창에 보인 상태(OtherWindow.shown) → 작업 이름들, 저장 안 한 결과, 응답 없음. 확인 창에 없던
+    창(None)은 없음 — 새로 켜진 창은 이것이 비어 있을 때만 묻지 않고 닫음."""
+    if shown is None:
+        return frozenset()
+    if "no_response" in shown:
+        return frozenset({NO_RESPONSE})
+    concerns = set(shown["jobs"])
+    if shown["unsaved_ocr"]:
+        concerns.add(_UNSAVED_CONCERN)
+    return frozenset(concerns)
+
+
+@dataclass
+class OtherWindow:
+    """다른 창 하나: 창 기록과 물어서 받은 상태(VideoPlayer.instance_status — 답하지 않았으면 None, error에 이유). 닫기를
+    기다리는 동안 새로 켜져 묻지 않은 창은 status·error 모두 None."""
+
+    record: instances.InstanceRecord
+    status: dict | None = None
+    error: str | None = None
+
+    @property
+    def pid(self):
+        return self.record.pid
+
+    @property
+    def jobs(self):
+        return list(self.status["jobs"]) if self.status is not None else []
+
+    @property
+    def unsaved(self):
+        return self.status is not None and self.status["unsaved_ocr"]
+
+    @property
+    def label(self):
+        """확인 창·멈춤 창의 한 창: "창 제목 — 영상 이름 (pid N)"(영상이 없으면 제목만), 답하지 않은 창 "pid N — 응답 없음"."""
+        if self.status is None:
+            return f"pid {self.pid} — {NO_RESPONSE if self.error is not None else '닫는 중에 켜진 창'}"
+        video = self.status["video"]
+        name = f"{self.status['title']} — {os.path.basename(video)}" if video else self.status["title"]
+        return f"{name} (pid {self.pid})"
+
+    def shown(self):
+        """확인 창에 보인 상태 (_UpdateRun.approved_others의 값): 받은 상태, 답하지 않았으면 {"pid", "no_response": 이유}."""
+        if self.status is not None:
+            return dict(self.status)
+        return {"pid": self.pid, "no_response": self.error}
+
+    def concerns(self):
+        return _concerns(self.shown())
+
+    def describe(self):
+        """업데이트 기록의 한 창: 상태 전부 또는 답하지 않은 이유."""
+        if self.status is None:
+            return f"{self.label} ({self.error})"
+        jobs = ", ".join(self.jobs) or "없음"
+        return f"{self.label}: 작업 {jobs}, 저장 안 한 결과 {'있음' if self.unsaved else '없음'}"
+
+
+@dataclass
+class OthersScan:
+    """다른 창 확인 결과: 같은 앱 자리에서 도는 다른 사용자의 프로세스 [(pid, 사용자)]와 이 사용자의 다른 창 [OtherWindow]."""
+
+    users: list
+    windows: list
+
+
+def _checked_status(status, server_name):
+    """다른 창이 답한 상태의 모양 확인 — 다르면 InstanceLinkError (답하지 않은 창처럼 "응답 없음"으로: GUI 스레드에서
+    KeyError가 나지 않게)."""
+    jobs = status.get("jobs")
+    if not (isinstance(status.get("title"), str) and isinstance(status.get("video"), str)
+            and isinstance(jobs, list) and all(isinstance(job, str) for job in jobs)
+            and isinstance(status.get("unsaved_ocr"), bool)):
+        raise instance_link.InstanceLinkError(f"창이 알 수 없는 상태를 답했습니다 ({server_name}): {status!r}")
+    return status
+
+
+def scan_other_windows(app_path):
+    """(뒤 스레드) 같은 앱 자리에서 도는 다른 사용자의 프로세스와 이 사용자의 다른 창의 상태 → OthersScan. 다른 사용자가
+    있으면 창은 묻지 않음(업데이트하지 않으므로). 답하지 않는 창은 이유째 — 묻는 사이에 끝난 창은 뺌. 예상 못 한 오류(ps·
+    tasklist 실패, 깨진 창 기록)는 그대로 올림."""
+    users = instances.other_user_processes(app_path)
+    if users:
+        return OthersScan(users, [])
+    windows = []
+    for record in instances.others(app_path):
+        try:
+            status = _checked_status(instance_link.query_status(record.server_name, OTHERS_LINK_TIMEOUT_MS),
+                                     record.server_name)
+        except instance_link.InstanceLinkError as exc:
+            if not instances.is_running(record):
+                continue  # 묻는 사이에 끝난 창
+            windows.append(OtherWindow(record, error=str(exc)))
+        else:
+            windows.append(OtherWindow(record, status))
+    return OthersScan(users, windows)
+
+
+def request_close_all(windows):
+    """(뒤 스레드) 창마다 정상 종료(닫기 버튼과 같음)를 요청 → [(창, 요청하지 못한 이유 — 받았으면 None)]. 답하지 않은 창도
+    늦게 받은 요청으로 닫힐 수 있으므로 답과 상관없이 프로세스가 끝나기를 기다림 (_poll_closing_others)."""
+    answers = []
+    for window in windows:
+        try:
+            instance_link.request_close(window.record.server_name, OTHERS_LINK_TIMEOUT_MS)
+        except instance_link.InstanceLinkError as exc:
+            answers.append((window, str(exc)))
+        else:
+            answers.append((window, None))
+    return answers
+
+
+class OthersWork(QThread):
+    """다른 창에 묻는 일(scan_other_windows·request_close_all — 창마다 몇 초까지 기다릴 수 있고, Windows tasklist도 몇 초)을
+    GUI 밖에서 하는 스레드. 소켓(QLocalSocket)도 이 스레드에서 만들고 씀. 위젯은 건드리지 않음. work: 인자 없이 부를 함수 —
+    결과는 done, 예상 못 한 예외는 트레이스백째 failed (stderr에도).
+
+    UpdateCheck처럼 부모 없이 만들고 실행 중에는 _running에 붙잡아 둠. 창을 닫을 때·업데이트를 멈출 때 실행 중이면
+    release_worker (_end_others).
+    """
+
+    done = pyqtSignal(object)
+    failed = pyqtSignal(str)
+    _running = set()
+
+    def __init__(self, work):
+        super().__init__()
+        self._work = work
+        self.finished.connect(self._forget)
+
+    def start(self, *args):
+        OthersWork._running.add(self)
+        super().start(*args)
+
+    def run(self):
+        try:
+            result = self._work()
+        except Exception:
+            text = traceback.format_exc()
+            print(f"[업데이트 — 다른 창] 예상치 못한 오류:\n{text}", file=sys.stderr, flush=True)
+            self.failed.emit(text)
+            return
+        self.done.emit(result)
+
+    def _forget(self):
+        self.wait()  # finished는 스레드가 끝나기 직전에 옴 → 완전히 끝날 때까지 (곧 끝남)
+        OthersWork._running.discard(self)
+
+
 @dataclass
 class _UpdateRun:
     """'업데이트'를 누른 때 정한 것 — 그 뒤의 확인 결과가 바꾸지 않음. download: 받는 스레드 (시작한 뒤)."""
@@ -278,7 +479,9 @@ class _UpdateRun:
     platform_key: str
     location: str  # 받을 곳 (NAS 경로 또는 URL)
     app_path: str = ""  # Mac: 지금 앱 번들, Windows: 설치 폴더 (update_install.running_app_location)
+    others_app_path: str = ""  # 다른 창을 셀 앱 자리 (instances.current_app_path — 창 기록에 남기는 값)
     approved: tuple = ()  # 멈추고 업데이트하기로 한 작업 (워커)
+    approved_others: dict = field(default_factory=dict)  # pid → 확인 창에서 보인 그 창의 상태 (OtherWindow.shown)
     download: UpdateDownload | None = None
 
     @property
@@ -302,12 +505,28 @@ class _HelperStart:
     deadline: float  # time.monotonic() — 이때까지 시작 기록이 없으면 실패
 
 
-def _update_log_report(started):
-    """실패 창에 보일 기록: 업데이트 기록 중 started 뒤의 줄과, 도우미 출력 중 기록에 없는 것(도우미가 기록을 쓰기 전에
-    실패한 이유 — PowerShell·bash가 스크립트를 시작하지 못함 등) → (기록 글, 도우미 출력 글 — 없으면 빈 글자). 읽다 난
-    오류는 그 자리에 트레이스백째 (삼키지 않음)."""
+@dataclass
+class _OthersStep:
+    """다른 창을 확인하거나 닫는 동안의 것 (받기 전·넘기기 전 — _update_others). work: 실행 중인 뒤 스레드(확인·닫기 요청).
+    닫기를 기다리는 동안(closing이 있음): closing — 닫기를 요청한 창, ended — 끝난 것을 기록한 창의 pid, deadline — 닫기
+    요청의 답을 받은 때 + CLOSE_OTHERS_TIMEOUT_S (요청을 보내는 중에는 None — 그동안은 시간이 지나도 멈추지 않음)."""
+
+    run: _UpdateRun
+    prepared: str | None  # 넘기기 전이면 받은 파일·준비한 앱 (넘기지 않으면 지움), 받기 전이면 None
+    work: OthersWork | None = None
+    closing: list = field(default_factory=list)  # [OtherWindow]
+    ended: set = field(default_factory=set)
+    deadline: float | None = None  # time.monotonic() — 이때까지 끝나지 않은 창이 있으면 업데이트를 멈춤 (_on_close_requested)
+
+
+def _update_log_report(pending):
+    """실패 창에 보일 기록: 업데이트 기록 중 pending.started 뒤의 줄 — 그 업데이트를 건 창(pending.app_pid, 옛 기록에는 없어
+    모든 줄)과 도우미의 줄만 — 과, 도우미 출력 중 기록에 없는 것(도우미가 기록을 쓰기 전에 실패한 이유 — PowerShell·bash가
+    스크립트를 시작하지 못함 등) → (기록 글, 도우미 출력 글 — 없으면 빈 글자). 읽다 난 오류는 그 자리에 트레이스백째
+    (삼키지 않음)."""
     try:
-        tail = update_install.log_tail_since(started) or "(이 업데이트 뒤의 기록이 없습니다)\n"
+        tail = (update_install.log_tail_since(pending.started, pending.app_pid or None)
+                or "(이 업데이트 뒤의 기록이 없습니다)\n")
     except Exception:
         tail = f"(업데이트 기록을 읽지 못했습니다)\n{traceback.format_exc()}"
     try:
@@ -371,6 +590,9 @@ class PlayerUpdateMixin:
         self._update_helper_timer = QTimer(self)
         self._update_helper_timer.setInterval(self.UPDATE_HELPER_POLL_MS)
         self._update_helper_timer.timeout.connect(self._poll_update_helper)
+        self._update_others = None  # 다른 창을 확인하거나 닫는 중 (_OthersStep)
+        self._update_others_timer = QTimer(self)  # 닫기를 요청한 창이 끝났는지 봄 (CLOSE_OTHERS_POLL_MS마다)
+        self._update_others_timer.timeout.connect(self._poll_closing_others)
         self.update_banner.notes_clicked.connect(self.show_update_notes)
         self.update_banner.update_clicked.connect(self.start_update)
         self.update_banner.later_clicked.connect(self.dismiss_update_offer)
@@ -549,12 +771,24 @@ class PlayerUpdateMixin:
 
     # ---- '업데이트'를 누른 뒤: 받기·넘기기 ----
 
+    def _update_busy(self):
+        """업데이트가 진행 중 — 다른 창 확인(받기 전)부터 도우미가 시작하기를 기다릴 때까지."""
+        return self._update_run is not None or self._update_others is not None or self._update_helper is not None
+
+    def instance_status(self) -> dict:
+        """다른 창의 업데이트가 묻는 이 창의 상태 (VideoPlayerBase.instance_status) — 이 창의 업데이트가 진행 중이면 작업에
+        "업데이트 받기"도 (설계 3-4의 작업 목록: 그 창이 이 창을 닫으면 이 창의 업데이트는 멈춤)."""
+        status = super().instance_status()
+        if self._update_busy():
+            status["jobs"] = [*status["jobs"], UPDATE_JOB_LABEL]
+        return status
+
     def start_update(self) -> None:
         """알림 띠의 '업데이트': 알리는 버전(누른 때의 update_offer — 끝까지 이것)을 받아 도우미에 넘기고 앱을 끝냄.
-        받기는 뒤 스레드 — 바로 돌아옴. 순서와 실패는 모듈 설명 ('업데이트'를 누르면)."""
+        다른 창 확인·받기는 뒤 스레드 — 바로 돌아옴. 순서와 실패는 모듈 설명 ('업데이트'를 누르면)."""
         offer = self._offered()
-        if self._update_run is not None:
-            raise RuntimeError(f"이미 {self._update_run.version}을 받는 중인데 '업데이트'가 불렸습니다")
+        if self._update_busy():
+            raise RuntimeError(f"업데이트가 이미 진행 중인데 '업데이트'가 불렸습니다 (띠: {self.update_banner.mode()})")
         info = build_info.current()
         if info is None:
             raise RuntimeError("소스 실행에서 '업데이트'가 불렸습니다 (알림 띠는 빌드된 앱에서만 보임)")
@@ -565,6 +799,7 @@ class PlayerUpdateMixin:
             # 업데이트 기록을 쓸 수 있어야 시작 — 도우미의 기록과 다시 켜진 앱의 실패 창도 이 파일 (뒤의 기록은 _log_update)
             update_install.log(f"업데이트 {version}: 시작 — 지금 {run.current}, {run.source}에서 받음 ({location})")
             run.app_path = update_install.running_app_location()
+            run.others_app_path = instances.current_app_path()
         except Exception as exc:
             self._show_update_failure(run, _failure_text(exc))
             return
@@ -580,11 +815,11 @@ class PlayerUpdateMixin:
             _log_update(f"업데이트 {version}: 이 자리의 앱은 바꿀 수 없음 ({run.app_path}) — {reason}")
             QMessageBox.warning(self, CANNOT_UPDATE_TITLE, reason)
             return
-        jobs = self.running_jobs()
-        if jobs:
-            if not self._confirm_stop_jobs(run, [label for label, _worker in jobs]):
-                return
-            run.approved = tuple(worker for _label, worker in jobs)
+        self._check_other_windows(run, None)
+
+    def _start_update_download(self, run):
+        """여유 공간을 확인하고 받기 스레드를 시작 (결과는 _on_update_ready·_on_update_download_failed·
+        _on_update_cancelled), 띠에 진행·[취소]."""
         try:
             state_dir = update_install.state_dir()
             update_install.check_free_space(state_dir, update_install.NEEDED_BYTES[run.platform_key])
@@ -592,7 +827,8 @@ class PlayerUpdateMixin:
             self._show_update_failure(run, _failure_text(exc))
             return
         dest_dir = os.path.join(state_dir, DOWNLOADS_DIR_NAME)
-        run.download = UpdateDownload(location, offer.entry, dest_dir, version, run.source,
+        entry = run.offer.entry
+        run.download = UpdateDownload(run.location, entry, dest_dir, run.version, run.source,
                                       app_path=run.app_path if run.mac else None)
         run.download.progress.connect(self._on_update_progress)  # GUI 스레드에서 (대기열을 거쳐)
         run.download.ready.connect(self._on_update_ready)
@@ -600,9 +836,256 @@ class PlayerUpdateMixin:
         run.download.cancelled.connect(self._on_update_cancelled)
         self._update_run = run
         then = f", 이어서 새 앱을 {run.app_path} 옆에 준비" if run.mac else ""
-        _log_update(f"업데이트 {version}: 받기 시작 → {dest_dir}{then}")
-        self.update_banner.show_progress(0, offer.entry.size, download_text(version, run.source, 0, offer.entry.size))
+        _log_update(f"업데이트 {run.version}: 받기 시작 → {dest_dir}{then}")
+        self.update_banner.show_progress(0, entry.size, download_text(run.version, run.source, 0, entry.size))
         run.download.start()
+
+    # ---- 다른 창: 확인하고 묻기·닫고 기다리기 (설계 3-4) ----
+
+    def _check_other_windows(self, run, prepared):
+        """같은 앱 자리의 다른 사용자 프로세스와 이 사용자의 다른 창의 상태를 뒤 스레드로 확인 (결과는
+        _on_other_windows_checked) — 받기 전(prepared None)과 넘기기 직전(prepared: 받은 것). 그동안 띠에 "다른 창 확인 중…"
+        ([취소] 없음 — 창마다 정해진 시간에 끝남)."""
+        _log_update(f"업데이트 {run.version}: 다른 창 확인 ({'넘기기 전' if prepared else '받기 전'}, 앱 자리 "
+                    f"{run.others_app_path})")
+        work = OthersWork(functools.partial(scan_other_windows, run.others_app_path))
+        work.done.connect(self._on_other_windows_checked)  # GUI 스레드에서 (대기열을 거쳐)
+        work.failed.connect(self._on_others_work_failed)
+        self._update_others = _OthersStep(run, prepared, work)
+        self.update_banner.show_progress(0, 0, CHECKING_OTHERS_TEXT, cancellable=False)
+        work.start()
+
+    def _take_others_work(self):
+        """뒤 스레드(확인·닫기 요청)가 끝남 → 그 단계(_OthersStep), 창을 닫았거나 업데이트를 멈춘 뒤면 None. 결과를 받는
+        슬롯이 맨 먼저 부름 — GUI 스레드가 아니면 상태를 바꾸기 전에 RuntimeError. 결과 신호는 run()의 맨 끝이라 스레드가 곧
+        끝남 → 끝날 때까지 기다림."""
+        if QThread.currentThread() is not QApplication.instance().thread():
+            raise RuntimeError("다른 창 확인·닫기 요청의 결과를 GUI 스레드가 아닌 곳에서 받았습니다")
+        step = self._update_others
+        if step is None or step.work is None or self._update_closed:
+            return None  # release_worker가 신호를 막지만 이미 대기열에 들어간 결과
+        step.work.wait()
+        step.work = None
+        return step
+
+    def _end_others(self):
+        """다른 창 단계를 끝냄 → 그 단계 (없었으면 None): 기다림 타이머를 멈추고, 실행 중인 뒤 스레드는 결과를 버린 채 끝날
+        때까지 붙잡아 둠 (release_worker — 답하지 않는 창을 기다리는 중일 수 있음, 창마다 정해진 시간에 끝남)."""
+        self._update_others_timer.stop()
+        step, self._update_others = self._update_others, None
+        if step is not None and step.work is not None:
+            release_worker(step.work, "업데이트 — 다른 창 확인·닫기 요청")
+            OthersWork._running.discard(step.work)  # 이제 release_worker가 붙잡음 (신호를 막아 finished로는 놓지 못함)
+            step.work = None
+        return step
+
+    def _give_up_update(self, step):
+        """넘기지 않음: 다른 창 단계를 끝내고 창을 다시 쓸 수 있게, 받은 것이 있으면 지운 뒤 띠를 누른 때의 알림으로 (지우지
+        못하면 실패 창 — 띠는 그 창이 되돌림)."""
+        self._end_others()
+        self.setEnabled(True)  # 창보다 먼저 (쓰지 못하게 한 창의 자식 창도 쓰지 못함)
+        if step.prepared is None or self._discard_prepared(step.run, step.prepared):
+            self._restore_update_offer(step.run)
+
+    def _on_others_work_failed(self, text):
+        """(GUI 스레드) 다른 창을 확인하거나 닫기를 요청하다 예상 못 한 오류 (트레이스백)."""
+        step = self._take_others_work()
+        if step is None:
+            return
+        self._others_failed(step, text)
+
+    def _others_failed(self, step, text):
+        """다른 창을 확인하거나 닫다 예상 못 한 오류 → 넘기지 않음: 받은 것을 지우고 "업데이트 실패" 창(트레이스백째),
+        띠는 다시 알림, 앱은 그대로."""
+        self._end_others()
+        self.setEnabled(True)
+        if step.prepared is not None and not self._discard_prepared(step.run, step.prepared):
+            return  # 지우지 못한 실패 창을 보였음 (오류도 기록에 남김)
+        self._show_update_failure(step.run, text)
+
+    def _on_other_windows_checked(self, scan):
+        """(GUI 스레드) 다른 창 확인 결과 (OthersScan): 기록에 남기고, 다른 사용자가 쓰고 있으면 멈춤 (받은 것은 지움). 아니면
+        받기 전 — 묻고 받기, 넘기기 전 — 다시 물을지 정해 다른 창을 닫거나 넘김."""
+        step = self._take_others_work()
+        if step is None:
+            return
+        run = step.run
+        lines = "".join(f"\n  {window.describe()}" for window in scan.windows)
+        _log_update(f"업데이트 {run.version}: 다른 창 확인 끝 — 다른 사용자의 프로세스 {len(scan.users)}개, "
+                    f"다른 창 {len(scan.windows)}개{lines}")
+        if scan.users:
+            names = ", ".join(dict.fromkeys(user for _pid, user in scan.users))
+            procs = ", ".join(f"pid {pid} ({user})" for pid, user in scan.users)
+            _log_update(f"업데이트 {run.version}: 같은 앱 자리에서 다른 사용자의 YesonCheck가 돎 ({procs}) — 업데이트하지 않음")
+            self._give_up_update(step)
+            QMessageBox.warning(self, CANNOT_UPDATE_TITLE, OTHER_USER_MESSAGE.format(user=names))
+            return
+        if step.prepared is None:
+            self._others_checked_before_download(step, scan.windows)
+        else:
+            self._others_checked_before_hand_off(step, scan.windows)
+
+    def _others_checked_before_download(self, step, windows):
+        """받기 전: 다른 창이 있으면 이 창의 작업과 합친 확인 창 하나, 없으면 지금처럼 진행 중인 작업이 있을 때만 물음.
+        예면 멈추기로 한 작업·보인 창의 상태를 남기고 받기."""
+        run = step.run
+        jobs = self.running_jobs()
+        labels = [label for label, _worker in jobs]
+        if windows:
+            yes = self._confirm_close_others(run, labels, windows)
+        else:
+            yes = self._confirm_stop_jobs(run, labels) if jobs else True
+        if self._update_others is not step:
+            return  # 묻는 동안 창이 닫힘 (stop_update_download가 끝냄)
+        if not yes:
+            self._give_up_update(step)
+            return
+        self._end_others()
+        run.approved = tuple(worker for _label, worker in jobs)
+        run.approved_others = {window.pid: window.shown() for window in windows}
+        self._start_update_download(run)
+
+    def _others_checked_before_hand_off(self, step, windows):
+        """넘기기 직전 (설계 3-4·6장): 받는 동안 이 창에서 새로 시작한 작업, 확인 창에서 본 것보다 할 일이 늘어난 창(작업·저장
+        안 한 결과·응답 없음 — 새로 켜진 창은 하나라도 있으면)이 있으면 다시 물음 (다른 창이 있으면 합친 확인 창, 없으면 지금처럼
+        이 창의 작업만). 새로 켜진 빈 창은 묻지 않고 함께 닫음. 아니오 — 어느 창도 닫지 않고 받은 것을 지움. 다른 창이 있으면
+        닫고 기다린 뒤, 없으면 바로 도우미에 넘김."""
+        run = step.run
+        jobs = self.running_jobs()
+        new_jobs = [label for label, worker in jobs if worker not in run.approved]
+        changed = [w for w in windows if not w.concerns() <= _concerns(run.approved_others.get(w.pid))]
+        fresh = [w for w in windows if w.pid not in run.approved_others and not w.concerns()]
+        if fresh:
+            _log_update(f"업데이트 {run.version}: 받는 동안 새로 켜진 빈 창 {len(fresh)}개 — 묻지 않고 함께 닫음: "
+                        + ", ".join(w.label for w in fresh))
+        if new_jobs or changed:
+            if changed:
+                _log_update(f"업데이트 {run.version}: 받는 동안 작업·저장 안 한 결과가 생긴 창 {len(changed)}개 — 다시 "
+                            "물음: " + ", ".join(w.label for w in changed))
+            if windows:
+                yes = self._confirm_close_others(run, [label for label, _worker in jobs], windows)
+            else:
+                yes = self._confirm_stop_jobs(run, new_jobs)
+            if self._update_others is not step:
+                return  # 묻는 동안 창이 닫힘 (stop_update_download가 받은 것을 지움)
+            if not yes:
+                self._give_up_update(step)
+                return
+            run.approved = tuple(worker for _label, worker in jobs)
+            run.approved_others = {window.pid: window.shown() for window in windows}
+        if not windows:
+            self._end_others()
+            self._hand_off(run, step.prepared)
+            return
+        self._close_other_windows(step, windows)
+
+    def _confirm_close_others(self, run, own_jobs, windows):
+        """다른 창도 닫고 업데이트할지 한 창으로 물음 (설계 3-4): 닫을 창 수, 작업 중인 창(이 창의 작업 own_jobs도 여기에 —
+        "진행 중인 작업…" 질문을 따로 띄우지 않음)과 그 작업·"작업은 멈춥니다", 저장 안 한 OCR·애니매틱 검토 결과가 있는 창과
+        "저장 안 한 결과는 사라집니다", 응답 없는 창. [모두 닫고 업데이트]면 True (기본·Esc는 [취소]). 묻고 대답을 기록에."""
+        lines = [OTHERS_COUNT.format(n=len(windows))]
+        busy = [f"- 이 창: {', '.join(own_jobs)}"] if own_jobs else []
+        busy += [f"- {window.label}: {', '.join(window.jobs)}" for window in windows if window.jobs]
+        if busy:
+            lines += ["", "작업 중인 창:", *busy, OTHERS_JOBS_STOP]
+        unsaved = [f"- {window.label}" for window in windows if window.unsaved]
+        if unsaved:
+            lines += ["", "저장 안 한 OCR·애니매틱 검토 결과가 있는 창:", *unsaved, OTHERS_UNSAVED_LOST]
+        silent = [f"- {window.label}" for window in windows if window.status is None]
+        if silent:
+            lines += ["", "하는 일을 알 수 없는 창:", *silent]
+        text = "\n".join(lines)
+        _log_update(f"업데이트 {run.version}: 다른 창도 닫고 업데이트할지 물음\n{text}")
+        box = QMessageBox(QMessageBox.Question, UPDATE_OTHERS_TITLE, text, QMessageBox.Yes | QMessageBox.Cancel, self)
+        box.setProperty(BOX_TITLE_PROPERTY, UPDATE_OTHERS_TITLE)  # macOS는 창 제목을 버림 (show_details_box)
+        box.button(QMessageBox.Yes).setText(CLOSE_ALL_BUTTON)
+        box.button(QMessageBox.Cancel).setText(CANCEL_BUTTON)
+        box.setDefaultButton(QMessageBox.Cancel)
+        yes = box.exec_() == QMessageBox.Yes
+        _log_update(f"업데이트 {run.version}: → {'모두 닫고 업데이트' if yes else '업데이트하지 않음'}")
+        return yes
+
+    def _close_other_windows(self, step, windows):
+        """다른 창들에 정상 종료를 요청하고(뒤 스레드) 그 프로세스가 모두 끝나기를 CLOSE_OTHERS_POLL_MS마다 확인
+        (_poll_closing_others, 요청의 답을 받은 뒤 최대 CLOSE_OTHERS_TIMEOUT_S, 띠에 "다른 창을 닫는 중…"). 기다리는 동안 이
+        창은 쓰지 못하게 함 — 새로 시작한 작업을 넘긴 뒤 창 닫기가 묻지 않고 멈추지 않게."""
+        run = step.run
+        _log_update(f"업데이트 {run.version}: 다른 창 {len(windows)}개에 닫기를 요청하고 프로세스가 끝나기를 기다림 (요청의 "
+                    f"답을 받은 뒤 최대 {CLOSE_OTHERS_TIMEOUT_S:g}초): " + ", ".join(w.label for w in windows))
+        self.setEnabled(False)
+        self.update_banner.show_progress(0, 0, CLOSING_OTHERS_TEXT, cancellable=False)
+        self._request_close(step, windows)
+        self._update_others_timer.start(CLOSE_OTHERS_POLL_MS)
+
+    def _request_close(self, step, windows):
+        """windows에 닫기 요청을 보내는 뒤 스레드를 시작 (결과는 _on_close_requested) — 그 창들은 끝나기를 기다릴 창에.
+        보내는 동안(창마다 몇 초까지)은 기다리는 한도를 세지 않음 (deadline None — 답을 받으면 다시 처음부터)."""
+        step.closing.extend(windows)
+        step.deadline = None
+        work = OthersWork(functools.partial(request_close_all, list(windows)))
+        work.done.connect(self._on_close_requested)
+        work.failed.connect(self._on_others_work_failed)
+        step.work = work
+        work.start()
+
+    def _on_close_requested(self, answers):
+        """(GUI 스레드) 닫기 요청의 답을 기록에 — 답하지 않은 창도 늦게 받은 요청으로 닫힐 수 있어 끝나기를 계속 기다림.
+        끝나기를 기다리는 한도(CLOSE_OTHERS_TIMEOUT_S)는 여기서부터 (요청을 보내는 데 걸린 시간은 빼고)."""
+        step = self._take_others_work()
+        if step is None:
+            return
+        step.deadline = time.monotonic() + CLOSE_OTHERS_TIMEOUT_S
+        lines = "".join(f"\n  {window.label}: " + ("받음" if problem is None else f"답 없음 — 끝나기를 계속 기다림 ({problem})")
+                        for window, problem in answers)
+        _log_update(f"업데이트 {step.run.version}: 닫기 요청의 답 — 지금부터 최대 {CLOSE_OTHERS_TIMEOUT_S:g}초 기다림{lines}")
+
+    def _poll_closing_others(self):
+        """(타이머 슬롯, GUI 스레드) 닫기를 요청한 창의 프로세스가 모두 끝났고(창 기록이 아니라 instances.is_running — 기록은
+        닫기를 시작할 때 지워짐) 새로 켜진 창이 없으면 도우미에 넘김. 그사이 새로 켜진 창(창 기록)에는 묻지 않고 닫기를 요청.
+        닫기 요청의 답을 받은 뒤 CLOSE_OTHERS_TIMEOUT_S가 지나도 끝나지 않은 창이 있으면 업데이트를 멈춤 (요청을 보내는 중에는
+        멈추지 않음). 슬롯이라 예외를 밖으로 내지 않음 — 확인하다 난 예외는 실패 창 (트레이스백째)."""
+        step = self._update_others
+        if step is None or not step.closing:
+            return
+        run = step.run
+        try:
+            if step.work is None:  # 닫기 요청을 보내는 중이 아닐 때 새로 켜진 창을 셈
+                asked = {window.record for window in step.closing}
+                appeared = [OtherWindow(record) for record in instances.others(run.others_app_path)
+                            if record not in asked]
+                if appeared:
+                    _log_update(f"업데이트 {run.version}: 다른 창을 닫는 동안 새로 켜진 창 {len(appeared)}개 — 묻지 않고 "
+                                "닫기를 요청: " + ", ".join(f"pid {window.pid}" for window in appeared))
+                    self._request_close(step, appeared)
+            running = [window for window in step.closing if instances.is_running(window.record)]
+        except Exception:
+            self._others_failed(step, traceback.format_exc())
+            return
+        running_pids = {window.pid for window in running}
+        for window in step.closing:
+            if window.pid not in running_pids and window.pid not in step.ended:
+                step.ended.add(window.pid)
+                _log_update(f"업데이트 {run.version}: 다른 창이 끝남 — {window.label}")
+        if not running and step.work is None:
+            _log_update(f"업데이트 {run.version}: 다른 창 {len(step.closing)}개가 모두 끝남 — 도우미에 넘김")
+            self._end_others()
+            self.setEnabled(True)  # _hand_off가 도우미를 띄운 뒤 다시 쓰지 못하게 함 (띄우지 못하면 창을 그대로 씀)
+            self._hand_off(run, step.prepared)
+            return
+        if running and step.deadline is not None and time.monotonic() >= step.deadline:
+            self._stop_for_open_windows(step, running)
+
+    def _stop_for_open_windows(self, step, running):
+        """정해진 시간에 끝나지 않은 창이 있음 → 앱을 바꾸지 않음: 받은 것을 지우고 띠는 다시 알림, "업데이트를 멈췄습니다 —
+        이 창이 닫히지 않았습니다: (창 제목·영상 이름·pid)" 창. 누른 창은 그대로."""
+        run = step.run
+        names = ", ".join(window.label for window in running)
+        _log_update(f"업데이트 {run.version}: {CLOSE_OTHERS_TIMEOUT_S:g}초 안에 닫히지 않은 창 {len(running)}개 — "
+                    f"업데이트를 멈춤 (앱은 그대로): {names}")
+        self._give_up_update(step)
+        QMessageBox.warning(self, UPDATE_STOPPED_TITLE,
+                            f"{UPDATE_STOPPED.format(windows=names)}\n\n지금 버전({run.current})은 그대로입니다. 그 창을 "
+                            "닫은 뒤 다시 '업데이트'를 누르세요.")
 
     def _confirm_stop_jobs(self, run, labels):
         """진행 중인 작업(labels)을 멈추고 업데이트할지 물음 → 예면 True. 묻고 대답을 기록에."""
@@ -646,8 +1129,8 @@ class PlayerUpdateMixin:
         return run
 
     def _on_update_ready(self, prepared):
-        """(GUI 스레드) 받기(+ Mac 준비)가 끝남: 그사이 취소를 눌렀으면 받은 것을 지우고 멈춤. 받는 동안 새로 시작한
-        작업이 있으면 다시 물음(아니오 — 받은 것을 지우고 띠를 알림으로). 그다음 도우미에 넘김."""
+        """(GUI 스레드) 받기(+ Mac 준비)가 끝남: 그사이 취소를 눌렀으면 받은 것을 지우고 멈춤. 아니면 다른 창을 다시 확인
+        (_check_other_windows — 받는 동안 새로 시작한 작업·바뀐 창은 다시 묻고, 다른 창을 닫은 뒤 도우미에 넘김)."""
         run = self._end_update_download()
         if run is None:
             return
@@ -656,12 +1139,7 @@ class PlayerUpdateMixin:
             if self._discard_prepared(run, prepared):
                 self._update_cancelled(run)
             return
-        new_jobs = [label for label, worker in self.running_jobs() if worker not in run.approved]
-        if new_jobs and not self._confirm_stop_jobs(run, new_jobs):
-            if self._discard_prepared(run, prepared):
-                self._restore_update_offer(run)
-            return
-        self._hand_off(run, prepared)
+        self._check_other_windows(run, prepared)
 
     def _hand_off(self, run, prepared):
         """업데이트 기록(다시 켜진 앱이 결과를 판정) → 도우미(앱이 끝나기를 기다렸다 바꾸고 다시 켬) → 도우미가 시작 기록을
@@ -671,17 +1149,23 @@ class PlayerUpdateMixin:
         도우미가 정말 시작했는지 본 뒤에만 끝냄: 띄운 도우미가 곧 끝나거나(그룹 정책 AllSigned·Constrained Language Mode·
         백신이 `powershell -ExecutionPolicy Bypass -File …`을 막음 등) 시작 기록을 남기지 않으면, 앱이 끝난 뒤 다시 켜 줄 것이
         없음. 기다리는 동안(보통 1~3초, 최대 UPDATE_HELPER_START_TIMEOUT_MS) 창은 그대로 돌되 쓰지 못하게 함 — 새로 시작한
-        작업을 넘긴 뒤 창 닫기가 묻지 않고 멈추지 않게."""
+        작업을 넘긴 뒤 창 닫기가 묻지 않고 멈추지 않게.
+
+        기록에는 무작위 토큰(도우미가 다시 켜는 앱에 넘김 — 그 앱만 결과를 판정, 업데이트 중에 사용자가 켠 앱은 기록을
+        건드리지 않음)과 이 창의 pid(실패 창에 이 창의 기록 줄만)를 남기고, 도우미를 띄운 뒤 그 pid를 더해 다시 씀(도우미가
+        도는 동안 새로 켜는 앱은 '업데이트 중' 창만 — update_install.update_in_progress). 다시 쓰지 못하면 도우미를 끝내고
+        실패 (_helper_start_failed)."""
         pending = update_install.Pending(target=run.version, previous=run.current, platform_key=run.platform_key,
-                                         started=update_install.timestamp())
+                                         started=update_install.timestamp(), token=secrets.token_hex(8),
+                                         app_pid=str(os.getpid()))
         try:
             update_install.write_pending(pending)
             _log_update(f"업데이트 {run.version}: 업데이트 기록을 남김 ({pending})")
             log_offset = update_install.log_size()  # 이 뒤에 이번 도우미의 시작 기록이 있어야 함
             if run.mac:
-                proc = update_install.launch_helper_mac(prepared, run.app_path, run.version)
+                proc = update_install.launch_helper_mac(prepared, run.app_path, run.version, pending.token)
             else:
-                proc = update_install.launch_helper_windows(prepared, run.app_path, run.version)
+                proc = update_install.launch_helper_windows(prepared, run.app_path, run.version, pending.token)
             if proc is None:
                 raise RuntimeError("도우미를 띄우는 함수가 도우미 프로세스를 돌려주지 않았습니다")
         except Exception as exc:
@@ -695,9 +1179,19 @@ class PlayerUpdateMixin:
             self._show_update_failure(run, text, log_text=False)
             return
         timeout_s = self.UPDATE_HELPER_START_TIMEOUT_MS / 1000
+        wait = _HelperStart(run, prepared, proc, pending, log_offset, time.monotonic() + timeout_s)
+        try:
+            recorded = dataclasses.replace(pending, helper_pid=str(proc.pid))
+            update_install.write_pending(recorded)
+            wait.pending = recorded
+        except Exception as exc:
+            self._helper_start_failed(
+                wait, f"업데이트 기록에 도우미(pid {proc.pid})를 적지 못했습니다.\n{_failure_text(exc)}",
+                "도우미를 끝내고 업데이트를 멈췄습니다 (그동안 켜는 YesonCheck가 업데이트 중인 것을 알 수 없음).")
+            return
         _log_update(f"업데이트 {run.version}: 도우미를 띄움 (pid {proc.pid}, {prepared} → {run.app_path}) — 시작 기록을 "
                     f"기다림 (최대 {timeout_s:g}초)")
-        self._update_helper = _HelperStart(run, prepared, proc, pending, log_offset, time.monotonic() + timeout_s)
+        self._update_helper = wait
         self.setEnabled(False)
         self.update_banner.show_progress(0, 0, HELPER_STARTING_TEXT, cancellable=False)
         self._update_helper_timer.start()
@@ -753,16 +1247,16 @@ class PlayerUpdateMixin:
         except Exception:
             return traceback.format_exc()
 
-    def _helper_start_failed(self, wait, why):
-        """도우미가 시작하지 못함 → 도우미를 끝내고(돌고 있으면) 업데이트 기록을 지운 뒤 "업데이트 실패" 창(그 뒤의 기록과 도우미
-        출력째), 앱은 그대로·띠는 다시 알림. 도우미를 끝내지 못하면 기록은 남겨 둠 — 그 도우미가 나중에(앱이 끝난 뒤) 바꾸면
-        새 앱이 그 기록으로 '잘 켜짐'을 남겨야 함."""
+    def _helper_start_failed(self, wait, why, note=HELPER_BLOCKED_NOTE):
+        """도우미가 시작하지 못함(또는 그 pid를 기록에 쓰지 못함) → 도우미를 끝내고(돌고 있으면) 업데이트 기록을 지운 뒤
+        "업데이트 실패" 창(why·note, 그 뒤의 기록과 도우미 출력째), 앱은 그대로·띠는 다시 알림. 도우미를 끝내지 못하면 기록은
+        남겨 둠 — 그 도우미가 나중에(앱이 끝난 뒤) 바꾸면 새 앱이 그 기록(토큰)으로 '잘 켜짐'을 남겨야 함."""
         run = wait.run
         not_stopped = self._stop_helper(wait.proc)
-        tail, extra = _update_log_report(wait.pending.started)
+        tail, extra = _update_log_report(wait.pending)
         # 기록에는 이유와 도우미 출력만 (출력 파일은 다음 업데이트에서 새로 쓰므로 그 내용이 남는 곳은 기록뿐)
         _log_update(f"업데이트 {run.version}: {why} 앱은 끝내지 않음{extra}")
-        text = (f"{why}\n앱을 끝내면 다시 켜 줄 것이 없어 끝내지 않았습니다 (보안 정책·백신이 도우미를 막았을 수 있음).\n\n"
+        text = (f"{why}\n{note}\n\n"
                 f"업데이트 기록 ({update_install.log_path()}, {wait.pending.started}부터):\n{tail}{extra}")
         if not_stopped is not None:
             _log_update(f"업데이트 {run.version}: 도우미(pid {wait.proc.pid})를 끝내지 못함 — 업데이트 기록은 남겨 둠\n"
@@ -831,8 +1325,23 @@ class PlayerUpdateMixin:
 
     def stop_update_download(self):
         """(창을 닫을 때) 받는 중이면 멈추라고 알리고(cancel — 받던 .part·준비하던 앱은 스레드가 지움) 끝날 때까지
-        붙잡아 둠 (release_worker — 결과 신호를 막음: 닫은 뒤에는 업데이트 기록·도우미로 넘어가지 않음). 도우미의 시작
-        기록을 기다리는 중이면 기다림만 멈춤 — 도우미와 업데이트 기록은 그대로 (앱이 끝나면 도우미가 업데이트함)."""
+        붙잡아 둠 (release_worker — 결과 신호를 막음: 닫은 뒤에는 업데이트 기록·도우미로 넘어가지 않음). 다른 창을
+        확인하거나 닫는 중이면 그것을 멈추고(닫기를 요청한 창은 그대로 닫힘) 받은 것이 있으면 지움 — 못 지우면 이유째 기록에만
+        (창은 닫히는 중). 도우미의 시작 기록을 기다리는 중이면 기다림만 멈춤 — 도우미와 업데이트 기록은 그대로 (앱이 끝나면
+        도우미가 업데이트함)."""
+        step = self._end_others()
+        if step is not None:
+            version = step.run.version
+            if step.prepared is None:
+                _log_update(f"업데이트 {version}: 다른 창을 확인하는 중에 창을 닫음 — 받지 않음")
+            else:
+                try:
+                    remove_prepared(step.prepared)
+                except Exception:
+                    _log_update(f"업데이트 {version}: 넘기기 전에 창을 닫음 — 받은 것을 지우지 못함 ({step.prepared})\n"
+                                f"{traceback.format_exc()}")
+                else:
+                    _log_update(f"업데이트 {version}: 넘기기 전에 창을 닫음 — 넘기지 않고 받은 것을 지움 ({step.prepared})")
         wait = self._end_helper_wait()
         if wait is not None:
             _log_update(f"업데이트 {wait.run.version}: 도우미의 시작 기록을 기다리는 중에 창을 닫음 — 도우미(pid "
@@ -847,9 +1356,10 @@ class PlayerUpdateMixin:
 
     # ---- 다시 켜진 앱: 지난 업데이트의 결과 ----
 
-    def handle_update_startup(self) -> None:
+    def handle_update_startup(self, update_token: str | None) -> None:
         """(창을 보인 뒤 한 번 — app.launch) 지난 업데이트의 기록(pending_update.json)이 있으면 지금 버전과 비교
-        (update_install.startup_result — 목표 버전이면 "잘 켜짐" 표시를 남겨 도우미가 기다림을 끝냄). 성공이면 띠에 잠깐
+        (update_install.startup_result — 목표 버전이면 "잘 켜짐" 표시를 남겨 도우미가 기다림을 끝냄). update_token: 도우미가
+        켠 앱이면 받은 `--update-result`의 토큰 (아니면 None — 토큰이 있는 기록은 건드리지 않음). 성공이면 띠에 잠깐
         "{버전}로 업데이트했습니다"와 받아 둔 설치 파일을 지움(remove_downloads), 실패(예전 버전이 켜짐 — 도우미가 되돌림)면 "업데이트 실패" 창에 그 뒤의 업데이트 기록과
         도우미 출력 중 기록에 없는 것(update_install.helper_console_extra).
         이 컴퓨터의 파일만 읽음 (NAS·인터넷 없음). 소스 실행은 아무것도 하지 않음. 기록이 깨졌으면 창에 보인 뒤 지움
@@ -858,7 +1368,7 @@ class PlayerUpdateMixin:
         if info is None:
             return
         try:
-            result = update_install.startup_result(info.version)
+            result = update_install.startup_result(info.version, update_token)
         except update_install.UpdateError as exc:
             _log_update(f"켜짐: 업데이트 기록을 읽지 못함 — 보이고 지움\n{exc}")
             try:
@@ -887,7 +1397,7 @@ class PlayerUpdateMixin:
             remove_downloads()
             return
         # 도우미가 기록을 쓰기 전에 실패했으면(PowerShell·bash가 스크립트를 시작하지 못함 등) 그 이유는 도우미 출력에만 있음
-        tail, extra = _update_log_report(pending.started)
+        tail, extra = _update_log_report(pending)
         # 기록에도 — 도우미 출력 파일은 다음 업데이트에서 새로 쓰므로 그 내용이 남는 곳은 기록뿐
         _log_update(f"켜짐: {pending.target}로 업데이트하지 못해 {pending.previous}이(가) 켜짐 — 실패 창{extra}")
         show_details_box(

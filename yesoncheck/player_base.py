@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import time
+import traceback
 
 # cv2는 lazy import로 변경 (실제 사용 시점에만 로드)
 # import cv2
@@ -65,9 +66,11 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck.video_widget import CustomVideoWidget
-from yesoncheck import build_info, external_tools, image_io, paths, shared_config, timing_log, video_list
+from yesoncheck import bookmarks, build_info, external_tools, image_io, instance_link, instances, paths, shared_config, \
+    timing_log, user_files, video_list
 from yesoncheck.slider_style import jump_to_click
 from yesoncheck.update_banner import UpdateBanner
+from yesoncheck.user_files import UserFileError
 from yesoncheck.window_layout import ElidedLabel, InfoRowLayout, VerticalScrollArea, startup_geometry
 # 무거운 모듈들은 lazy import로 변경 (실제 사용 시점에만 로드)
 # from yesoncheck.workers import OCRWorker, OCRExportWorker, SceneDetectWorker
@@ -104,6 +107,10 @@ def korean_date(day):
 _RELEASED_WORKERS = {}  # 워커 → 이름(로그용)
 _released_sweep_timer = None
 RELEASED_SWEEP_INTERVAL_MS = 200
+# 창을 닫은 뒤 끝나지 않은 작업(예: TensorFlow 추론 중인 애니매틱2)을 기다리는 최대 시간 (초) — app.launch가 이벤트 루프가
+# 끝난 뒤 wait_for_released_workers로 (넘으면 로그를 남기고 프로세스를 강제로 끝냄 — app.finish_released_workers).
+# 다른 창의 업데이트가 닫히는 창을 기다리는 한도(player_update.CLOSE_OTHERS_TIMEOUT_S)도 이 값으로 셈
+EXIT_WAIT_S = 30
 
 
 def _sweep_released_workers():
@@ -180,6 +187,10 @@ class VideoPlayerBase(QMainWindow):
         """load_shared_config=False: 공유 설정(NAS)을 읽지 않고 빈 '불러오는 중' 상태로 만듦 — 창을 보인 뒤
         start_shared_config_load()로 백그라운드에서 읽음 (app.launch). 기본값은 예전처럼 여기서 바로 읽음."""
         super().__init__()
+        # 사용자 파일(북마크·오버레이·내보내기 폴더 설정)을 읽다 난 문제: 창이 보이기 전(시작)에는 모아 두었다가
+        # show_user_file_problems가 알림 (스플래시에 가리지 않게), 그 뒤에는 바로. 같은 문제는 창 세션에 한 번만
+        self._user_file_problems = []  # 알릴 (제목, 글) — None이면 창이 보이는 중
+        self._user_file_problem_keys = set()
         # 소리 재생기(QMediaPlayer)는 처음 쓸 때 만듦 (mediaPlayer 속성) — Windows에서 처음 만들 때 8초쯤 걸림
         self._media_player = None
         self._media_volume = 100  # 재생기를 만들기 전에 정한 볼륨 (QMediaPlayer 기본값과 같음)
@@ -199,7 +210,7 @@ class VideoPlayerBase(QMainWindow):
 
         # 북마크 관련 초기화
         self.bookmarks = []
-        self.bookmarks_file = os.path.join(os.path.expanduser("~"), ".yeson_bookmarks.json")
+        self.bookmarks_file = bookmarks.default_path()
         self.load_bookmarks()
 
         # 작품 경로: 공유 설정 폴더의 work_paths.json (문제는 창 표시 후 resolve_shared_config_problem이 알림)
@@ -468,6 +479,7 @@ QMessageBox {
         self.ocr_review_dialog = None
         self.ocr_status_message = ""
         self.last_ocr_segments = []
+        self._ocr_results_unsaved = False  # 'OCR 저장'을 누르지 않은 결과가 있음 (업데이트 확인 창용)
         self.ocr_cancelled = False
         self.pending_ocr_metadata = None
         self.ocr_export_worker = None
@@ -1552,17 +1564,7 @@ QSlider::add-page:horizontal {
                 
                 # 폴더가 포함된 경우 북마크에 자동 추가
                 if folder_paths:
-                    for folder_path in folder_paths:
-                        if not paths.contains_path(self.bookmarks, folder_path):
-                            self.bookmarks.append(folder_path)
-                            print(f"폴더가 북마크에 자동 추가됨: {folder_path}")
-                    
-                    # 북마크 저장
-                    self.save_bookmarks()
-                    
-                    # 사용자에게 알림 (폴더가 여러 개인 경우에만)
-                    if len(folder_paths) > 1:
-                        QMessageBox.information(self, "북마크 추가", f"{len(folder_paths)}개의 폴더가 북마크에 자동으로 추가되었습니다.")
+                    self.add_dropped_folders_to_bookmarks(folder_paths)
                 
                 if video_files:
                     # 폴더가 포함된 경우 썸네일 폴더 설정
@@ -2221,10 +2223,15 @@ QMessageBox {
         self.ocrTrackingCheckBox.setChecked(False)
         self.update_ocr_status_label()
 
+    def has_unsaved_ocr_results(self):
+        """'OCR 저장'을 누르지 않은 OCR·애니매틱 검토 결과가 있는지 (업데이트로 창을 닫으면 사라짐)."""
+        return self._ocr_results_unsaved
+
     def reset_ocr_state(self):
         """Clear OCR state when media changes."""
         self.ocr_roi = None
         self.last_ocr_segments = []
+        self._ocr_results_unsaved = False
         self.saved_edited_segments = None  # 저장된 편집 상태도 초기화
         self.pending_ocr_metadata = None
         if hasattr(self, "ocrStatusLabel"):
@@ -2318,6 +2325,7 @@ QMessageBox {
             self.pending_ocr_metadata = None
             self.saved_edited_segments = None
             self.last_ocr_segments = []
+            self._ocr_results_unsaved = False
             # 기존 다이얼로그도 닫기
             if hasattr(self, 'ocr_review_dialog') and self.ocr_review_dialog is not None:
                 if self.ocr_review_dialog.isVisible():
@@ -2331,6 +2339,7 @@ QMessageBox {
             self.saved_edited_segments = None
             # 새로운 분석 시작 시 이전 결과도 클리어
             self.last_ocr_segments = []
+            self._ocr_results_unsaved = False
         
         # OCR 모드 저장 (reopen_ocr_result에서 사용)
         self._last_ocr_mode = ocr_mode
@@ -2549,6 +2558,7 @@ QMessageBox {
             self.pending_ocr_metadata = None
             self.saved_edited_segments = None
             self.last_ocr_segments = []
+            self._ocr_results_unsaved = False
             # 기존 다이얼로그도 닫기
             if hasattr(self, 'ocr_review_dialog') and self.ocr_review_dialog is not None:
                 if self.ocr_review_dialog.isVisible():
@@ -2783,6 +2793,7 @@ QMessageBox {
                 print(f"[선택구간 분석] 병합 후 총 세그먼트 개수: {len(merged_segments)}")
                 self.saved_edited_segments = merged_segments
                 self.last_ocr_segments = merged_segments
+                self._ocr_results_unsaved = True
                 
                 # 저장 버튼 활성화
                 if hasattr(self, 'ocrSaveResultButton'):
@@ -2822,6 +2833,7 @@ QMessageBox {
                 print(f"[선택구간 분석] 모드 불일치: 이전={prev_mode}, 현재={current_ocr_mode}, 이전 결과 무시 및 초기화")
                 self.saved_edited_segments = None
                 self.last_ocr_segments = []
+                self._ocr_results_unsaved = False
                 # 새로운 분석 결과만 사용 (existing_segments는 None으로 유지)
             
             if existing_segments:
@@ -2837,10 +2849,12 @@ QMessageBox {
                 merged_segments.sort(key=sort_key)
                 segments = merged_segments
                 self.last_ocr_segments = segments
+                self._ocr_results_unsaved = True
                 self.saved_edited_segments = segments  # 저장 시 최신 상태 반영
             else:
                 # 기존 결과가 없으면 새 결과만 사용
                 self.last_ocr_segments = segments
+                self._ocr_results_unsaved = True
                 self.saved_edited_segments = segments  # 저장 시 최신 상태 반영
                 self.pending_ocr_metadata = result
             
@@ -2983,6 +2997,7 @@ QMessageBox {
         # 씬 감지 완료 후 썸네일 미리 추출 (애니매틱/애니매틱2)
         self._preload_scene_thumbnails(segments)
         self.last_ocr_segments = segments
+        self._ocr_results_unsaved = bool(segments) and not was_cancelled  # 취소한 분석의 일부 결과는 보여 주지 않음
 
         if was_cancelled:
             QMessageBox.information(self, "OCR 취소", "사용자가 OCR 분석을 취소했습니다.")
@@ -3458,6 +3473,7 @@ QMessageBox {
             
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(save_data, f, ensure_ascii=False, indent=2)
+            self._ocr_results_unsaved = False  # 파일을 썼음 (이미지 일부 실패는 아래에서 알림)
             
             if image_failures:
                 QMessageBox.warning(
@@ -3656,6 +3672,7 @@ QMessageBox {
             
             # 로드된 segments를 저장
             self.last_ocr_segments = segments
+            self._ocr_results_unsaved = False  # 저장된 파일에서 읽은 결과
             self.saved_edited_segments = segments
             
             # pending_ocr_metadata 설정 (reopen_ocr_result에서 사용)
@@ -4345,8 +4362,77 @@ QMessageBox {
                 print(f"창 닫기: {label}이(가) {timeout_ms / 1000:g}초 안에 끝나지 않았습니다")
                 release_worker(worker, label)
 
+    # ---- 다른 창(프로세스)과: 창 기록·상태 묻기·업데이트의 닫기 요청 (instances·instance_link) ----
+
+    def start_instance_link(self):
+        """창을 보인 뒤(app.launch): 창 사이 연결 서버를 열고 창 기록을 남김 — 다른 창의 업데이트가 이 창을 세고
+        상태를 묻고 닫기를 요청할 수 있게. 서버를 열지 못해도 기록은 남김(세어지면 그 업데이트는 이 창을 닫지 못해
+        멈춤 — 모르는 채 앱 파일을 바꾸지 않게) + 경고 창."""
+        server = instance_link.InstanceServer(self.instance_status, self.close_for_update, self)
+        try:
+            name = server.start()
+            listen_error = None
+        except instance_link.InstanceLinkError as exc:
+            name = instance_link.server_name()
+            listen_error = exc
+            print(f"[창 연결] {exc}", flush=True)
+        else:
+            self._instance_server = server
+        record = instances.register(instances.current_app_path(), name)  # 경고 창이 떠 있는 동안에도 세어지게 먼저
+        print(f"[창 기록] pid {record.pid}, {record.app_path}, {record.server_name}", flush=True)
+        if listen_error is not None:
+            QMessageBox.warning(
+                self, "다른 창과 연결하지 못함",
+                f"다른 YesonCheck 창과 연결하지 못했습니다. 다른 창에서 업데이트하면 이 창을 닫지 못해 업데이트가 "
+                f"멈춥니다.\n\n{listen_error}",
+            )
+
+    def stop_instance_link(self):
+        """창을 닫을 때: 창 기록을 지우고 서버를 닫음 (닫히는 창은 다른 창의 업데이트가 세지 않음). 두 번 불러도 됨."""
+        server, self._instance_server = getattr(self, '_instance_server', None), None
+        if server is not None:
+            server.close()
+        instances.unregister()
+
+    def instance_status(self) -> dict:
+        """다른 창(업데이트)이 묻는 이 창의 상태: 창 제목·영상 A·하는 작업·저장 안 한 OCR·애니매틱 검토 결과."""
+        return {
+            "pid": os.getpid(),
+            "title": self.windowTitle(),
+            "video": self.filename_a or "",
+            "jobs": self.running_job_labels(),
+            "unsaved_ocr": self.has_unsaved_ocr_results(),
+        }
+
+    # 다른 창의 업데이트가 닫기를 요청한 뒤(close_for_update): 진행 창으로 도는 반복(썸네일 다시 만들기·변환표 찾기)이
+    # 멈춘 뒤의 다음 창(완료 알림·변환표 확인 창 등)을 열지 않음
+    _closing_for_update = False
+
+    def close_for_update(self):
+        """다른 창의 업데이트가 닫기를 요청함: 대화 상자를 Esc처럼 닫고 닫기 버튼을 누른 것처럼 닫음 (closeEvent — 작업
+        멈춤 포함). 진행 창(QProgressDialog)은 cancel() — 그 창으로 도는 반복이 wasCanceled로 멈춤 (최소 표시 시간 전이라
+        아직 보이지 않는 진행 창도). 그 밖의 보이는 모달 대화 상자(질문·파일 고르기 등)는 reject(). 모달이 아닌 창(OCR 검토
+        창 등)은 앱이 끝날 때 닫힘."""
+        self._closing_for_update = True
+        for widget in QApplication.topLevelWidgets():
+            if isinstance(widget, QProgressDialog):
+                if not widget.wasCanceled():
+                    print(f"[창 연결] 업데이트로 닫음: 진행 창 취소 '{widget.labelText()}'", flush=True)
+                    widget.cancel()
+            elif isinstance(widget, QDialog) and widget.isVisible() and widget.isModal():
+                print(f"[창 연결] 업데이트로 닫음: 대화 상자 취소 {type(widget).__name__} '{widget.windowTitle()}'",
+                      flush=True)
+                widget.reject()
+        self.close()
+
     def closeEvent(self, event):
-        """앱 종료 시 리소스를 빠르게 정리합니다."""
+        """앱 종료 시 리소스를 빠르게 정리합니다. 맨 먼저 창 기록을 지움 — 지우다 오류가 나도 정리는 하고 그 오류를 올림."""
+        try:
+            self.stop_instance_link()
+        finally:
+            self._release_resources_on_close(event)
+
+    def _release_resources_on_close(self, event):
         try:
             print("앱 종료 중 - 빠른 리소스 정리 시작")
 
@@ -5007,88 +5093,120 @@ QMessageBox {
             self.save_overlay_settings()
             print("오버레이 컨트롤러 위치가 리셋되었습니다.")
 
+    def _report_user_file_problem(self, key, title, text):
+        """사용자 파일(북마크·설정)을 읽거나 쓰다 난 문제를 경고 창으로 알림: key마다 창 세션에 한 번.
+
+        창이 보이기 전(시작할 때 읽는 파일)에는 모아 두었다가 show_user_file_problems가 알림.
+        """
+        if key in self._user_file_problem_keys:
+            return
+        self._user_file_problem_keys.add(key)
+        if self._user_file_problems is not None:
+            self._user_file_problems.append((title, text))
+        else:
+            QMessageBox.warning(self, title, text)
+
+    def show_user_file_problems(self):
+        """시작할 때 모아 둔 사용자 파일 문제를 창으로 알림 (app.launch가 창을 보인 뒤 부름). 이후 문제는 바로 알림."""
+        pending, self._user_file_problems = self._user_file_problems or [], None
+        for title, text in pending:
+            QMessageBox.warning(self, title, text)
+
+    @staticmethod
+    def _overlay_pair(settings, key, path):
+        """설정의 key 값: 없으면 None, 숫자 두 개의 목록이어야 하며 아니면 UserFileError."""
+        value = settings.get(key)
+        if value is None:
+            return None
+        if (not isinstance(value, list) or len(value) != 2
+                or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value)):
+            raise UserFileError(f"오버레이 설정 파일 형식이 올바르지 않습니다: {path}\n'{key}'는 숫자 두 개의 목록이어야 합니다: {value!r}")
+        return value
+
     def load_overlay_settings(self):
-        """오버레이 설정을 파일에서 로드합니다."""
+        """오버레이 설정을 파일에서 로드합니다. 읽지 못하면 기본값 (기록에 스택 트레이스 + 창 한 번, 파일은 그대로)."""
+        self.overlay_saved_pos = None
+        self.overlay_saved_size = None
+        self.overlay_saved_parent_size = None
+        self.overlay_is_bottom_center = False
+        path = self.overlay_settings_file
         try:
-            if os.path.exists(self.overlay_settings_file):
-                with open(self.overlay_settings_file, 'r', encoding='utf-8') as f:
-                    settings = json.load(f)
-                    
-                    # 설정 로드
-                    self.overlay_saved_pos = settings.get('position', None)
-                    self.overlay_saved_size = settings.get('size', None)
-                    self.overlay_saved_parent_size = settings.get('parent_size', None)
-                    self.overlay_is_bottom_center = settings.get('is_bottom_center', False)
-                    
-                    # 유효성 검사
-                    if self.overlay_saved_pos and len(self.overlay_saved_pos) == 2:
-                        if self.overlay_saved_pos[0] < 0 or self.overlay_saved_pos[1] < 0:
-                            print("저장된 위치가 유효하지 않아 기본값으로 초기화합니다.")
-                            self.overlay_saved_pos = None
-                    
-                    if self.overlay_saved_parent_size and len(self.overlay_saved_parent_size) == 2:
-                        if self.overlay_saved_parent_size[0] <= 0 or self.overlay_saved_parent_size[1] <= 0:
-                            print("저장된 창 크기가 유효하지 않아 기본값으로 초기화합니다.")
-                            self.overlay_saved_parent_size = None
-                    
-                    print(f"오버레이 설정을 로드했습니다. 위치={self.overlay_saved_pos}, 창크기={self.overlay_saved_parent_size}, 하단중앙={self.overlay_is_bottom_center}")
-            else:
-                self.overlay_saved_pos = None
-                self.overlay_saved_size = None
-                self.overlay_saved_parent_size = None
-                self.overlay_is_bottom_center = False
-        except Exception as e:
-            print(f"오버레이 설정 로드 실패: {e}")
-            self.overlay_saved_pos = None
-            self.overlay_saved_size = None
-            self.overlay_saved_parent_size = None
-            self.overlay_is_bottom_center = False
+            settings = user_files.read_json(path, {})
+            if not isinstance(settings, dict):
+                raise UserFileError(f"오버레이 설정 파일 형식이 올바르지 않습니다 (설정 목록이어야 함): {path}")
+            saved_pos = self._overlay_pair(settings, 'position', path)
+            saved_size = self._overlay_pair(settings, 'size', path)
+            saved_parent_size = self._overlay_pair(settings, 'parent_size', path)
+        except UserFileError as exc:
+            traceback.print_exc()
+            self._report_user_file_problem(
+                "overlay-read", "오버레이 설정을 읽지 못함",
+                f"오버레이 컨트롤러의 저장된 위치를 읽지 못해 기본 위치를 씁니다 (파일은 그대로 둡니다):\n{exc}")
+            return
+
+        # 유효성 검사
+        if saved_pos and (saved_pos[0] < 0 or saved_pos[1] < 0):
+            print("저장된 위치가 유효하지 않아 기본값으로 초기화합니다.")
+            saved_pos = None
+        if saved_parent_size and (saved_parent_size[0] <= 0 or saved_parent_size[1] <= 0):
+            print("저장된 창 크기가 유효하지 않아 기본값으로 초기화합니다.")
+            saved_parent_size = None
+
+        self.overlay_saved_pos = saved_pos
+        self.overlay_saved_size = saved_size
+        self.overlay_saved_parent_size = saved_parent_size
+        self.overlay_is_bottom_center = bool(settings.get('is_bottom_center', False))
+        print(f"오버레이 설정을 로드했습니다. 위치={self.overlay_saved_pos}, 창크기={self.overlay_saved_parent_size}, 하단중앙={self.overlay_is_bottom_center}")
 
     def save_overlay_settings(self):
-        """오버레이 설정을 파일에 저장합니다."""
-        try:
-            if hasattr(self, 'overlayFrame'):
-                # 현재 실제 위치와 크기 가져오기
-                current_pos = [self.overlayFrame.x(), self.overlayFrame.y()]
-                current_size = [self.overlayFrame.width(), self.overlayFrame.height()]
-                current_parent_size = [self.width(), self.height()]
-                
-                # 유효성 검사
-                if current_parent_size[0] <= 0 or current_parent_size[1] <= 0:
-                    print("창 크기가 유효하지 않아 설정 저장을 건너뜁니다.")
-                    return
-                
-                # 하단 중앙 위치인지 확인 (더 정확한 감지)
-                x_ratio = current_pos[0] / current_parent_size[0]
-                y_ratio = current_pos[1] / current_parent_size[1]
-                
-                # 하단 중앙 판단 기준:
-                # 1. Y 위치가 화면 하단 10% 이내
-                # 2. X 위치가 화면 중앙에서 ±15% 이내
-                # 3. 또는 저장된 하단 중앙 플래그가 True인 경우
-                is_bottom_center = (
-                    (y_ratio >= 0.85 and abs(x_ratio - 0.5) < 0.15) or
-                    (hasattr(self, 'overlay_is_bottom_center') and self.overlay_is_bottom_center)
-                )
-                
-                settings = {
-                    'position': current_pos,
-                    'size': current_size,
-                    'parent_size': current_parent_size,
-                    'is_bottom_center': is_bottom_center
-                }
-                with open(self.overlay_settings_file, 'w', encoding='utf-8') as f:
-                    json.dump(settings, f, ensure_ascii=False, indent=2)
-                
-                # 메모리 변수도 업데이트
-                self.overlay_saved_pos = current_pos
-                self.overlay_saved_size = current_size
-                self.overlay_saved_parent_size = current_parent_size
-                self.overlay_is_bottom_center = is_bottom_center
-                
-                print(f"오버레이 설정 저장됨: 위치={current_pos}, 크기={current_size}, 창크기={current_parent_size}, 하단중앙={is_bottom_center}")
-        except Exception as e:
-            print(f"오버레이 설정 저장 실패: {e}")
+        """오버레이 설정을 파일에 저장합니다 (원자적으로 — 마지막에 쓴 창의 값이 남음). 쓰지 못하면 기록 + 창 한 번."""
+        if hasattr(self, 'overlayFrame'):
+            # 현재 실제 위치와 크기 가져오기
+            current_pos = [self.overlayFrame.x(), self.overlayFrame.y()]
+            current_size = [self.overlayFrame.width(), self.overlayFrame.height()]
+            current_parent_size = [self.width(), self.height()]
+
+            # 유효성 검사
+            if current_parent_size[0] <= 0 or current_parent_size[1] <= 0:
+                print("창 크기가 유효하지 않아 설정 저장을 건너뜁니다.")
+                return
+
+            # 하단 중앙 위치인지 확인 (더 정확한 감지)
+            x_ratio = current_pos[0] / current_parent_size[0]
+            y_ratio = current_pos[1] / current_parent_size[1]
+
+            # 하단 중앙 판단 기준:
+            # 1. Y 위치가 화면 하단 10% 이내
+            # 2. X 위치가 화면 중앙에서 ±15% 이내
+            # 3. 또는 저장된 하단 중앙 플래그가 True인 경우
+            is_bottom_center = (
+                (y_ratio >= 0.85 and abs(x_ratio - 0.5) < 0.15) or
+                (hasattr(self, 'overlay_is_bottom_center') and self.overlay_is_bottom_center)
+            )
+
+            settings = {
+                'position': current_pos,
+                'size': current_size,
+                'parent_size': current_parent_size,
+                'is_bottom_center': is_bottom_center
+            }
+            try:
+                user_files.write_json_atomic(self.overlay_settings_file, settings)
+            except OSError as exc:
+                traceback.print_exc()
+                self._report_user_file_problem(
+                    "overlay-write", "오버레이 설정을 저장하지 못함",
+                    f"오버레이 컨트롤러의 위치를 저장하지 못했습니다 (파일은 그대로 둡니다):\n"
+                    f"{self.overlay_settings_file}\n{type(exc).__name__}: {exc}")
+                return
+
+            # 메모리 변수도 업데이트
+            self.overlay_saved_pos = current_pos
+            self.overlay_saved_size = current_size
+            self.overlay_saved_parent_size = current_parent_size
+            self.overlay_is_bottom_center = is_bottom_center
+
+            print(f"오버레이 설정 저장됨: 위치={current_pos}, 크기={current_size}, 창크기={current_parent_size}, 하단중앙={is_bottom_center}")
 
     def position_overlay_controls(self):
         print("position_overlay_controls() 호출됨")  # 디버깅

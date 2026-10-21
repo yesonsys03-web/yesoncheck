@@ -1,7 +1,7 @@
 """Frame annotation UI and playback integration."""
 
-import json
 import os
+import traceback
 
 import cv2
 from PyQt5.QtCore import Qt
@@ -29,7 +29,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from yesoncheck import external_tools, paths
+from yesoncheck import external_tools, paths, user_files
+from yesoncheck.user_files import UserFileError
 from yesoncheck.annotation_export import AnnotationExportWorker
 from yesoncheck.annotation_burn import burn_annotations_on_frame
 from yesoncheck.frame_annotations import (
@@ -40,9 +41,11 @@ from yesoncheck.frame_annotations import (
     MIN_FONT_SIZE,
     MIN_STROKE_WIDTH,
     MAX_STROKE_WIDTH,
+    AnnotationFileError,
     FrameAnnotationStore,
     annotation_export_suggested_name,
     annotation_file_path,
+    annotation_share_problem,
     annotation_storage_dir,
     is_annotation_storage_writable,
     new_annotation_id,
@@ -57,6 +60,7 @@ class PlayerAnnotationsMixin:
 
     def init_annotation_system(self):
         self.annotation_store = FrameAnnotationStore()
+        self._annotation_unreadable_video = None  # 주석 파일을 읽지 못한 영상 (그 영상은 저장하지 않음)
         self._editing_annotation = None
         self._edit_handle = None
         self._edit_origin_norm = None
@@ -228,23 +232,33 @@ class PlayerAnnotationsMixin:
         ]
 
     def _load_annotation_export_settings(self):
+        """내보내기 저장 폴더 설정을 읽음. 읽지 못하면 미지정 (기록에 스택 트레이스 + 창 한 번, 파일은 그대로)."""
         self.annotation_export_dir = ""
+        path = self.annotation_export_settings_file
         try:
-            if os.path.exists(self.annotation_export_settings_file):
-                with open(self.annotation_export_settings_file, "r", encoding="utf-8") as handle:
-                    data = json.load(handle)
-                export_dir = data.get("export_dir", "")
-                if export_dir and os.path.isdir(export_dir):
-                    self.annotation_export_dir = export_dir
-        except Exception:
-            self.annotation_export_dir = ""
+            data = user_files.read_json(path, {})
+            if not isinstance(data, dict) or not isinstance(data.get("export_dir", ""), str):
+                raise UserFileError(f"주석 내보내기 설정 파일 형식이 올바르지 않습니다 (export_dir 글자가 든 설정이어야 함): {path}")
+        except UserFileError as exc:
+            traceback.print_exc()
+            self._report_user_file_problem(
+                "annotation-export-read", "주석 내보내기 설정을 읽지 못함",
+                f"주석 내보내기 저장 폴더 설정을 읽지 못해 폴더를 미지정으로 둡니다 (파일은 그대로 둡니다):\n{exc}")
+            return
+        export_dir = data.get("export_dir", "")
+        if export_dir and os.path.isdir(export_dir):
+            self.annotation_export_dir = export_dir
 
     def _save_annotation_export_settings(self):
+        """내보내기 저장 폴더를 원자적으로 저장 (마지막에 쓴 창의 값이 남음). 쓰지 못하면 기록 + 창 한 번."""
         try:
-            with open(self.annotation_export_settings_file, "w", encoding="utf-8") as handle:
-                json.dump({"export_dir": self.annotation_export_dir}, handle, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+            user_files.write_json_atomic(self.annotation_export_settings_file, {"export_dir": self.annotation_export_dir})
+        except OSError as exc:
+            traceback.print_exc()
+            self._report_user_file_problem(
+                "annotation-export-write", "주석 내보내기 설정을 저장하지 못함",
+                f"주석 내보내기 저장 폴더를 저장하지 못했습니다 (파일은 그대로 둡니다):\n"
+                f"{self.annotation_export_settings_file}\n{type(exc).__name__}: {exc}")
 
     def _update_annotation_export_dir_label(self):
         if self.annotation_export_dir:
@@ -602,30 +616,77 @@ class PlayerAnnotationsMixin:
     def auto_save_annotations(self):
         if not self.filename_a:
             return False
+        if self._annotation_unreadable_video == self.filename_a:
+            # 이 영상의 주석 파일을 열 때 읽지 못했음(창으로 알림) → 읽지 못한 파일을 덮어 지우지 않게 저장하지 않음
+            self.annotationStorageLabel.setText(
+                f"⚠ 주석 저장 안 함 (주석 파일을 읽지 못함): {annotation_file_path(self.filename_a)}"
+            )
+            return False
         if not is_annotation_storage_writable(self.filename_a):
             self.annotationStorageLabel.setText(
                 f"⚠ 주석 저장 불가 (쓰기 권한 없음): {annotation_storage_dir(self.filename_a)}"
             )
             return False
+        ids_before = self._annotation_ids()
         try:
             path = self.annotation_store.save()
-            self._update_annotation_storage_label(path)
-            return True
         except paths.PathMapError as exc:
             # (Mac) 주석 파일에 적을 영상 경로를 정하지 못함 (제자리가 아닌 곳에 붙은 공유) → 저장하지 않음. 자동 저장은
             # 주석을 바꿀 때마다 불리므로 창은 (영상, 까닭)마다 한 번
             self.annotationStorageLabel.setText(f"⚠ 주석 저장 실패: {exc}")
-            shown = self.__dict__.setdefault("_annotation_path_problems_shown", set())
-            if (self.filename_a, str(exc)) not in shown:
-                shown.add((self.filename_a, str(exc)))
-                QMessageBox.critical(
-                    self, "주석 저장 실패",
-                    f"주석 파일에 적을 영상 경로를 정하지 못해 주석을 저장하지 않았습니다:\n{self.filename_a}\n\n{exc}",
-                )
+            self._show_annotation_problem_once(
+                "주석 저장 실패", str(exc),
+                f"주석 파일에 적을 영상 경로를 정하지 못해 주석을 저장하지 않았습니다:\n{self.filename_a}\n\n{exc}",
+            )
+            return False
+        except AnnotationFileError as exc:
+            # 저장하려고 다시 읽는 중에 파일이 깨졌거나 읽을 수 없게 됨 (다른 창·PC가 쓰다 만 파일 등) → 그 파일은 그대로 두고 저장하지 않음
+            traceback.print_exc()
+            self.annotationStorageLabel.setText(f"⚠ 주석 저장 실패: {exc}")
+            self._show_annotation_problem_once(
+                "주석 저장 실패", str(exc),
+                f"주석 파일을 읽지 못해 주석을 저장하지 않았습니다 (파일은 그대로 두었습니다):\n{exc}",
+            )
             return False
         except Exception as exc:
-            self.annotationStorageLabel.setText(f"⚠ 주석 저장 실패: {exc}")
+            # 쓰기 실패(NAS 연결 끊김·권한·디스크 가득 등): 원래 파일은 그대로, 로그에 스택 트레이스, 창은 (영상, 까닭)마다 한 번
+            detail = f"{type(exc).__name__}: {exc}"
+            traceback.print_exc()
+            self.annotationStorageLabel.setText(f"⚠ 주석 저장 실패: {detail}")
+            self._show_annotation_problem_once(
+                "주석 저장 실패", detail,
+                f"주석을 저장하지 못했습니다 (원래 파일은 그대로입니다):\n{annotation_file_path(self.filename_a)}\n\n{detail}",
+            )
             return False
+        self._update_annotation_storage_label(path)
+        self._report_annotation_share_problem()
+        if self._annotation_ids() != ids_before:
+            # 저장하며 합친 결과로 다른 창이 넣거나 지운 항목이 바뀜 → 목록·화면에 반영
+            self.refresh_annotation_ui(redraw=True)
+        return True
+
+    def _annotation_ids(self):
+        return {item.get("id") for _start, _end, _anchor, item in self.annotation_store.all_items_sorted()}
+
+    def _show_annotation_problem_once(self, title, reason, text):
+        """주석 저장 문제를 창으로 ((영상, 까닭)마다 한 번 — 자동 저장은 주석을 바꿀 때마다 불림)."""
+        shown = self.__dict__.setdefault("_annotation_problems_shown", set())
+        if (self.filename_a, reason) in shown:
+            return
+        shown.add((self.filename_a, reason))
+        QMessageBox.critical(self, title, text)
+
+    def _report_annotation_share_problem(self):
+        """내가 만든 주석 폴더의 권한을 바꾸지 못했으면 창으로 (폴더마다 한 번): 이 PC에서는 저장하지만 다른 NAS 계정의 PC는 못 쓸 수 있음."""
+        folder = annotation_storage_dir(self.filename_a)
+        problem = annotation_share_problem(folder)
+        if problem:
+            self._show_annotation_problem_once(
+                "주석 폴더 권한",
+                f"{folder}\n{problem}",
+                "주석 폴더의 권한을 바꾸지 못했습니다. 이 PC에서는 주석을 저장하지만, 다른 NAS 계정을 쓰는 PC(Windows 등)는 "
+                f"이 폴더에 저장하지 못할 수 있습니다.\n{folder}\n이유: {problem}",
+            )
 
     def _update_annotation_storage_label(self, json_path=None):
         if not self.filename_a:
@@ -642,12 +703,30 @@ class PlayerAnnotationsMixin:
             fps = float(self.cap_a.get(cv2.CAP_PROP_FPS) or 0.0)
         self.annotation_store.set_video(video_path, fps)
         self._last_annotation_frame_idx = None
-        loaded = self.annotation_store.load()
+        self._annotation_unreadable_video = None
+        try:
+            loaded = self.annotation_store.load()
+        except AnnotationFileError as exc:
+            # 주석 파일이 있는데 읽지 못함(깨짐·권한·NAS 오류) → 창으로 알리고 이 영상은 주석을 저장하지 않음
+            # (비어 있는 줄 알고 저장하다 그 파일을 덮어 지우지 않게)
+            traceback.print_exc()
+            loaded = False
+            self._annotation_unreadable_video = video_path
+            QMessageBox.critical(
+                self, "주석 파일을 읽지 못함",
+                f"이 영상의 주석 파일을 읽지 못해 주석을 불러오지 않았고, 이 영상의 주석은 저장하지 않습니다 "
+                f"(파일은 그대로 둡니다):\n{exc}\n\n파일을 고치거나 옮긴 뒤 영상을 다시 열어 주세요.",
+            )
         self._set_draft_range_to_current_frame()
         self._push_range_spins_from_draft()
         self.refresh_annotation_ui(redraw=False)
         self._update_annotation_storage_label()
-        if loaded:
+        if self._annotation_unreadable_video:
+            self.annotationStorageLabel.setText(
+                f"⚠ 주석 저장 안 함 (주석 파일을 읽지 못함): {annotation_file_path(video_path)}"
+            )
+            self.annotationStatusLabel.setText("⚠ 주석 파일을 읽지 못함 — 이 영상은 주석을 저장하지 않음")
+        elif loaded:
             count = self.annotation_store.total_count()
             self.annotationStatusLabel.setText(
                 f"주석 {count}개 자동 로드 · 서버 공유 JSON"

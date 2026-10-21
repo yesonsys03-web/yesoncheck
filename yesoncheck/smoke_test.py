@@ -6,7 +6,8 @@
 (빌드된 앱 시험이면 기대 버전 expect_version도 — 앱이 읽은 build_info.json의 버전과 창 제목을 확인).
 대화상자는 띄우지 않고 기록하며, 오류·경고 대화상자가 하나라도 나오면 실패로 본다.
 시나리오(smoke_config의 scenario): 없음(기본), "auto_connect"(공유 설정·변환표 자동 설정), "update"(빌드된 앱이 NAS 흉내
-폴더의 새 버전을 받아 업데이트 도우미에 넘김 — ci/update_e2e.py가 그 뒤 도우미·새 앱을 확인).
+폴더의 새 버전을 받아 업데이트 도우미에 넘김 — ci/update_e2e.py가 그 뒤 도우미·새 앱을 확인. close_others면 같은 설치의 다른
+창이 켜진 채 — '다른 창도 닫고 업데이트' 확인 창에 [모두 닫고 업데이트]로 답하고 결과의 answered에 남김, box_answer).
 """
 
 import dataclasses
@@ -82,6 +83,18 @@ def write_three_shot_clip(path):
     return path
 
 
+def box_answer(config, title):
+    """실행 시험이 exec_로 띄운 창(QMessageBox)에 누를 단추 — 없으면 None (기록하고 Ok): update 시나리오의 close_others(다른
+    창이 켜진 채 업데이트 — ci/update_e2e.py의 다른 창 경로)면 '다른 창도 닫고 업데이트' 확인 창에 [모두 닫고 업데이트](Yes)."""
+    from PyQt5.QtWidgets import QMessageBox
+
+    from yesoncheck.player_update import UPDATE_OTHERS_TITLE
+
+    if config.get("scenario") == "update" and config.get("close_others") and title == UPDATE_OTHERS_TITLE:
+        return QMessageBox.Yes
+    return None
+
+
 def show_like_launch(VideoPlayer, app):
     """app.launch처럼 공유 설정을 읽지 않고 창을 만들어 보임 → (player, 만들어 보이기까지 걸린 초)."""
     started = time.perf_counter()
@@ -141,7 +154,7 @@ def run(workdir):
         config = json.load(fh)
     out_dir = os.path.join(workdir, "out")
     os.makedirs(out_dir, exist_ok=True)
-    report = {"checks": [], "dialogs": []}
+    report = {"checks": [], "dialogs": [], "answered": []}  # answered: box_answer로 답한 창
 
     def record(kind, answer):
         def fake(parent, title, text, *args, **kwargs):
@@ -159,8 +172,14 @@ def run(workdir):
     def record_box(box):
         details = box.detailedText()
         title = box.windowTitle() or box.property("ycTitle") or ""  # macOS의 QMessageBox는 창 제목을 버림
-        report["dialogs"].append({"kind": box_kinds.get(box.icon(), "information"), "title": title,
-                                  "text": f"{box.text()}\n\n{details}" if details else box.text()})
+        text = f"{box.text()}\n\n{details}" if details else box.text()
+        answer = box_answer(config, title)
+        if answer is not None:
+            button = box.button(answer)
+            report["answered"].append({"title": title, "text": text,
+                                       "answer": button.text() if button is not None else f"(단추 없음: {answer})"})
+            return answer
+        report["dialogs"].append({"kind": box_kinds.get(box.icon(), "information"), "title": title, "text": text})
         return QMessageBox.Ok
 
     QMessageBox.exec_ = record_box

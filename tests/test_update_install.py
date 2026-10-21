@@ -4,12 +4,15 @@ NAS는 그냥 파일 복사를 흉내 내고(tmp_path), GitHub는 http_server(co
 Mac 전용(hdiutil·xattr) 시험은 darwin이 아니면 건너뛴다.
 """
 
+import dataclasses
+import datetime
 import hashlib
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import requests
@@ -121,12 +124,156 @@ def test_refuse_reason_mac():
 
 
 def test_startup_result_paths(tmp_state_dir):
-    write_pending(Pending("1.1.1", "1.1.0", "windows", "2026-10-20T10:00:00"))
-    assert startup_result("1.1.2") is None and read_pending()  # 다른 버전: 그대로 둠
-    assert startup_result("1.1.1")[0] == "ok" and read_pending() is None
+    p = Pending("1.1.1", "1.1.0", "windows", "2026-10-20T10:00:00", token="t1")
+    write_pending(p)
+    assert startup_result("1.1.2", "t1") is None and read_pending()  # 다른 버전: 그대로 둠
+    assert startup_result("1.1.1", "t1")[0] == "ok" and read_pending() is None
     assert json.load(open(ok_marker_path()))["version"] == "1.1.1"
-    write_pending(Pending("1.1.1", "1.1.0", "windows", "2026-10-20T10:00:00"))
-    assert startup_result("1.1.0")[0] == "failed" and read_pending() is None
+    write_pending(p)
+    assert startup_result("1.1.0", "t1")[0] == "failed" and read_pending() is None
+
+
+# ---- 업데이트 결과는 도우미가 켠 앱만 (토큰) ----
+
+
+def _sleeper():
+    """도우미 흉내: 잠깐 도는 프로세스."""
+    return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+
+
+@pytest.fixture
+def live_helper(tmp_state_dir):
+    """도는 도우미 흉내 — started: 띄우기 바로 전에 업데이트 기록에 적을 시각 (_hand_off와 같은 순서), pid: 글자."""
+    started = timestamp()
+    proc = _sleeper()
+    yield SimpleNamespace(proc=proc, pid=str(proc.pid), started=started)
+    proc.kill()
+    proc.wait(10)
+
+
+def _ago(seconds):
+    """지금보다 seconds초 전의 timestamp() 형식 시각."""
+    return (datetime.datetime.now() - datetime.timedelta(seconds=seconds)).isoformat(timespec="seconds")
+
+
+def test_startup_result_ignores_launch_without_matching_token(live_helper):
+    """업데이트 중(도우미가 돎)에 사용자가 켠 앱(토큰 없음·다른 토큰)은 기록을 판정하지도 지우지도 않음 — 진짜 새 앱이 '잘
+    켜짐'을 쓰게."""
+    p = Pending("1.1.1", "1.1.0", "windows", live_helper.started, token="a1b2c3d4e5f60718", helper_pid=live_helper.pid,
+                app_pid="4100")
+    write_pending(p)
+    for version in ("1.1.0", "1.1.1"):
+        for token in (None, "ffffffffffffffff"):
+            assert startup_result(version, token) is None
+    assert read_pending() == p and not os.path.exists(ok_marker_path())
+
+
+def test_startup_result_accepts_matching_token(tmp_state_dir):
+    p = Pending("1.1.1", "1.1.0", "windows", "2026-10-20T10:00:00", token="a1b2c3d4e5f60718", helper_pid="4242",
+                app_pid="4100")
+    write_pending(p)
+    assert startup_result("1.1.1", "a1b2c3d4e5f60718") == ("ok", p)
+    assert read_pending() is None
+    with open(ok_marker_path(), encoding="utf-8") as fh:
+        assert json.load(fh) == {"version": "1.1.1"}
+    write_pending(p)
+    assert startup_result("1.1.0", "a1b2c3d4e5f60718") == ("failed", p) and read_pending() is None
+
+
+def test_legacy_pending_without_token_keeps_old_rule(tmp_state_dir):
+    """이 버전으로 올리는 첫 업데이트: 1.1.x 앱이 쓴 기록(토큰·pid 없음)을 1.1.x 도우미가 토큰 없이 켠 새 앱이 판정해야 함
+    (안 하면 '잘 켜짐'이 없어 180초 뒤 되돌림 — 영영 업데이트하지 못함). 그 기록으로는 '업데이트 중'도 아님."""
+    legacy = {"target": "1.1.2", "previous": "1.1.1", "platform_key": "mac-arm64", "started": "2026-10-20T10:00:00"}
+    with open(os.path.join(tmp_state_dir, update_install.PENDING_FILE_NAME), "w", encoding="utf-8") as fh:
+        json.dump(legacy, fh)
+    p = read_pending()
+    assert p == Pending("1.1.2", "1.1.1", "mac-arm64", "2026-10-20T10:00:00")
+    assert (p.token, p.helper_pid, p.app_pid) == ("", "", "")
+    assert update_install.update_in_progress() is False
+    assert startup_result("1.1.2", None) == ("ok", p)  # 새 앱, --update-result 없이 켜짐
+    assert read_pending() is None
+    with open(ok_marker_path(), encoding="utf-8") as fh:
+        assert json.load(fh) == {"version": "1.1.2"}
+
+
+@pytest.mark.parametrize("field, value", [("token", 1), ("helper_pid", "abc"), ("app_pid", 12)])
+def test_read_pending_rejects_bad_new_fields(tmp_state_dir, field, value):
+    data = {"target": "1.1.2", "previous": "1.1.1", "platform_key": "windows", "started": "2026-10-20T10:00:00",
+            field: value}
+    with open(os.path.join(tmp_state_dir, update_install.PENDING_FILE_NAME), "w", encoding="utf-8") as fh:
+        json.dump(data, fh)
+    with pytest.raises(UpdateError, match="형식이 다릅니다"):
+        read_pending()
+
+
+def test_update_in_progress_alive_and_dead_helper(tmp_state_dir):
+    assert update_install.update_in_progress() is False  # 기록 없음
+    started = timestamp()
+    proc = _sleeper()
+    try:
+        p = Pending("1.1.1", "1.1.0", "windows", started, token="t", app_pid=str(os.getpid()))
+        write_pending(p)
+        assert update_install.update_in_progress() is True  # 도우미 pid를 다시 쓰기 전 (_hand_off) — 막 쓴 기록
+        write_pending(dataclasses.replace(p, helper_pid=str(proc.pid)))
+        assert update_install.update_in_progress() is True
+        # pid를 물려받은 다른 프로세스: 기록을 쓴 때보다 한참 뒤에 시작함 → 도우미가 아님
+        write_pending(dataclasses.replace(p, helper_pid=str(proc.pid), started="2020-01-01T00:00:00"))
+        assert update_install.update_in_progress() is False
+        write_pending(dataclasses.replace(p, helper_pid=str(proc.pid)))
+    finally:
+        proc.kill()
+        proc.wait(10)
+    assert update_install.update_in_progress() is False  # 도우미가 끝남
+    clear_pending()
+    assert update_install.update_in_progress() is False
+
+
+def test_dead_helper_lets_any_launch_judge(live_helper):
+    """도우미가 다시 켜지 않고 끝남(앱이 끝나지 않아 그만둠·로그아웃 뒤 되살림·충돌) → 토큰 없이 켠 앱도 판정하고 지움 —
+    실패를 알리지 않은 채 기록이 남지 않게."""
+    p = Pending("1.1.1", "1.1.0", "windows", live_helper.started, token="a1b2c3d4e5f60718", helper_pid=live_helper.pid,
+                app_pid="4100")
+    write_pending(p)
+    assert startup_result("1.1.0", None) is None and read_pending() == p  # 도우미가 돎
+    live_helper.proc.kill()
+    live_helper.proc.wait(10)
+    assert update_install.update_in_progress() is False
+    assert startup_result("1.1.0", None) == ("failed", p) and read_pending() is None
+    write_pending(p)
+    assert startup_result("1.1.1", None) == ("ok", p) and read_pending() is None  # 바꾼 뒤 도우미가 끝남
+    assert os.path.exists(ok_marker_path())
+
+
+def test_record_before_helper_pid_is_in_progress(tmp_state_dir):
+    """_hand_off는 토큰으로 기록을 쓰고 도우미를 띄운 뒤에야 도우미 pid를 더해 다시 씀 — 그 사이 켠 앱이 '실패'로 판정해
+    기록을 지우면 도우미가 켤 새 앱이 '잘 켜짐'을 못 써 되돌림. 막 쓴 기록은 업데이트 중, 오래된 것(도우미를 띄우지 못하고
+    기록도 못 지움)은 아님."""
+    p = Pending("1.1.1", "1.1.0", "windows", timestamp(), token="a1b2c3d4e5f60718", app_pid="4100")
+    write_pending(p)
+    assert update_install.update_in_progress() is True
+    assert startup_result("1.1.0", None) is None and read_pending() == p
+    old = dataclasses.replace(p, started=_ago(update_install.HELPER_START_WINDOW_S + 5))
+    write_pending(old)
+    assert update_install.update_in_progress() is False
+    assert startup_result("1.1.0", None) == ("failed", old) and read_pending() is None
+
+
+def test_update_in_progress_capped_by_record_age(tmp_state_dir, monkeypatch):
+    """pid를 물려받은 오래 도는 프로세스가 기록을 쓴 때 부근에 시작했더라도, 도우미가 가장 오래 도는 시간보다 오래된 기록은
+    업데이트 중이 아님 (앱이 계속 켜지지 않는 일이 없게) — 그때는 아무 앱이나 판정."""
+    from yesoncheck import instances
+
+    # 그 pid의 프로세스가 기록을 쓴 바로 뒤에 시작함 (도우미 또는 그 pid를 물려받은 프로세스)
+    monkeypatch.setattr(instances, "process_start_time",
+                        lambda pid: datetime.datetime.fromisoformat(read_pending().started).timestamp() + 1)
+    recent = Pending("1.1.1", "1.1.0", "windows", _ago(10 * 60), token="t", helper_pid="4242", app_pid="4100")
+    write_pending(recent)
+    assert update_install.update_in_progress() is True
+    old = dataclasses.replace(recent, started=_ago(update_install.HELPER_MAX_LIFETIME_S + 60))
+    write_pending(old)
+    assert update_install.update_in_progress() is False
+    assert startup_result("1.1.0", None) == ("failed", old) and read_pending() is None
+    assert update_install.HELPER_MAX_LIFETIME_S >= 300 + 1800 + 180  # 앱 기다림 + 설치 파일 기다림 + '잘 켜짐' 기다림
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="Mac 다운로드 격리 표시")
@@ -308,11 +455,45 @@ def test_log_appends_with_timestamp_and_prints(tmp_state_dir, capsys):
     with open(log_path(), encoding="utf-8") as fh:
         lines = fh.readlines()
     assert len(lines) == 2
-    assert lines[0].endswith("시험 줄 1\n") and lines[1].endswith("시험 줄 2\n")
+    assert lines[0].endswith(f" [pid {os.getpid()}] 시험 줄 1\n") and lines[1].endswith("시험 줄 2\n")
     ts = lines[0].split(" ", 1)[0]
     assert len(ts) == 19 and ts[4] == "-" and ts[13] == ":"  # ISO 8601 (초 단위)
     out = capsys.readouterr().out
     assert "시험 줄 1" in out and "시험 줄 2" in out
+
+
+def test_log_lines_have_pid_and_tail_filters_other_windows(tmp_state_dir):
+    """여러 창이 같은 업데이트 기록에 씀 → 실패 창의 기록은 그 업데이트를 건 창(pid)과 도우미의 줄만."""
+    me = os.getpid()
+    with open(log_path(), "a", encoding="utf-8") as fh:
+        fh.write("2026-10-19T09:59:59 [pid 4100] 지난 줄\n")
+        fh.write("2026-10-19T10:00:00 [pid 4100] 업데이트 1.1.1: 업데이트 기록을 남김\n")
+        fh.write("2026-10-19T10:00:01 [pid 5300] 업데이트 확인: 다른 창의 줄\n")
+        fh.write("Traceback (most recent call last):\n")  # 다른 창 줄에 이어진 줄도 빠짐
+        fh.write("RuntimeError: 다른 창의 오류\n")
+        fh.write("2026-10-19T10:00:02 도우미: 시작: 대상 버전 1.1.1\n")
+        fh.write("2026-10-19T10:00:03 [pid 4100] 업데이트 1.1.1: 실패\n")
+        fh.write("Traceback (most recent call last):\n")
+        fh.write("RuntimeError: 이 창의 오류\n")
+        fh.write("2026-10-19T10:00:04 [pid 41000] 업데이트 확인: pid가 앞부분만 같은 창\n")
+        fh.write("2026-10-19T10:00:05 [pid 5300] 도우미: 다른 창이 남긴, 도우미처럼 보이는 줄\n")
+    tail = log_tail_since("2026-10-19T10:00:00", 4100)
+    assert tail.splitlines() == [
+        "2026-10-19T10:00:00 [pid 4100] 업데이트 1.1.1: 업데이트 기록을 남김",
+        "2026-10-19T10:00:02 도우미: 시작: 대상 버전 1.1.1",
+        "2026-10-19T10:00:03 [pid 4100] 업데이트 1.1.1: 실패",
+        "Traceback (most recent call last):",
+        "RuntimeError: 이 창의 오류",
+    ]
+    assert log_tail_since("2026-10-19T10:00:00", "4100") == tail  # 업데이트 기록의 app_pid는 글자
+    # pid가 없으면(옛 기록 — 1.1.x 앱이 씀) 모든 줄
+    assert "다른 창의 오류" in log_tail_since("2026-10-19T10:00:00", None)
+    # log()가 쓴 줄은 이 프로세스의 pid로 거름. 도우미 시작 줄 찾기는 그대로
+    offset = update_install.log_size()
+    log("업데이트 1.1.2: 이 창의 줄")
+    assert f"[pid {me}] 업데이트 1.1.2: 이 창의 줄" in log_tail_since("2026-10-19T10:00:00", me)
+    assert "이 창의 줄" not in log_tail_since("2026-10-19T10:00:00", 4100)
+    assert not update_install.helper_start_logged(offset)
 
 
 def test_helper_start_logged_looks_only_after_offset(tmp_state_dir):
@@ -333,7 +514,7 @@ def test_helper_start_logged_looks_only_after_offset(tmp_state_dir):
 
 
 def test_log_tail_since_missing_file_is_empty(tmp_state_dir):
-    assert log_tail_since("2026-10-19T10:00:00") == ""
+    assert log_tail_since("2026-10-19T10:00:00", None) == ""
 
 
 def test_log_tail_since_filters_and_limits(tmp_state_dir):
@@ -344,11 +525,11 @@ def test_log_tail_since_filters_and_limits(tmp_state_dir):
         fh.write("2026-10-19T10:00:01 이후 줄1\n")
         fh.write("2026-10-19T10:00:02 이후 줄2\n")
 
-    tail = log_tail_since("2026-10-19T10:00:00", max_lines=80)
+    tail = log_tail_since("2026-10-19T10:00:00", None, max_lines=80)
     assert "이전 줄" not in tail
     assert "기준 줄" in tail and "이후 줄1" in tail and "이후 줄2" in tail
 
-    tail2 = log_tail_since("2026-10-19T10:00:00", max_lines=2)
+    tail2 = log_tail_since("2026-10-19T10:00:00", None, max_lines=2)
     assert "기준 줄" not in tail2 and "이후 줄1" in tail2 and "이후 줄2" in tail2
 
 
@@ -379,7 +560,7 @@ def test_log_tail_since_keeps_traceback_lines_and_drops_stale_run(tmp_state_dir)
         fh.write('    raise RuntimeError("새 오류")\n')
         fh.write("RuntimeError: 새 오류\n")
 
-    tail = log_tail_since("2026-10-19T10:00:00")
+    tail = log_tail_since("2026-10-19T10:00:00", None)
     assert "이전 실행" not in tail and "예전 오류" not in tail
     assert "기준 실행 시작" in tail
     assert 'File "y.py"' in tail and "새 오류" in tail
@@ -390,7 +571,7 @@ def test_log_tail_since_truncates_started_to_second_precision(tmp_state_dir):
     """started에 초보다 더 정밀한 값(마이크로초)이 들어와도 같은 초의 줄을 빼먹지 않음."""
     with open(log_path(), "a", encoding="utf-8") as fh:
         fh.write("2026-10-19T10:00:00 같은 초\n")
-    tail = log_tail_since("2026-10-19T10:00:00.123456")
+    tail = log_tail_since("2026-10-19T10:00:00.123456", None)
     assert "같은 초" in tail
 
 
@@ -400,6 +581,10 @@ def test_log_tail_since_truncates_started_to_second_precision(tmp_state_dir):
 def test_pending_roundtrip_and_clear(tmp_state_dir):
     assert read_pending() is None
     p = Pending("1.1.1", "1.1.0", "windows", "2026-10-19T10:00:00")
+    write_pending(p)
+    assert read_pending() == p
+    p = Pending("1.1.1", "1.1.0", "windows", "2026-10-19T10:00:00", token="0123456789abcdef", helper_pid="4242",
+                app_pid="4100")
     write_pending(p)
     assert read_pending() == p
     clear_pending()

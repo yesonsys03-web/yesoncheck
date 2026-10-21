@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 
-def generate_web_report(segments, video_path, fps, total_frames, ocr_mode='titmouse'):
+def generate_web_report(segments, video_path, fps, total_frames, ocr_mode='titmouse', ws_url: str | None = None):
     """
     OCR 분석 결과를 웹 페이지로 생성합니다.
 
@@ -19,6 +19,8 @@ def generate_web_report(segments, video_path, fps, total_frames, ocr_mode='titmo
         fps: 프레임률
         total_frames: 전체 프레임 수
         ocr_mode: OCR 모드 ('king', 'titmouse', 'bento', 'animatic', 'animatic2')
+        ws_url: 이 보고서가 실시간 동기화로 접속할 OCR 검토 창의 주소(창마다 다른 포트·토큰).
+            None이면 접속하지 않고 "실시간 동기화 꺼짐"으로 표시
 
     Returns:
         str: 생성된 HTML 파일 경로
@@ -56,7 +58,7 @@ def generate_web_report(segments, video_path, fps, total_frames, ocr_mode='titmo
     video_absolute_path = os.path.abspath(video_path) if video_path else None
 
     # HTML 생성
-    html_content = _generate_html(segments, video_name, fps, total_frames, ocr_mode, video_absolute_path)
+    html_content = _generate_html(segments, video_name, fps, total_frames, ocr_mode, video_absolute_path, ws_url=ws_url)
 
     # 파일 저장
     try:
@@ -69,7 +71,7 @@ def generate_web_report(segments, video_path, fps, total_frames, ocr_mode='titmo
         return None
 
 
-def _generate_html(segments, video_name, fps, total_frames, ocr_mode, video_path=None):
+def _generate_html(segments, video_name, fps, total_frames, ocr_mode, video_path=None, ws_url=None):
     """HTML 콘텐츠를 생성합니다."""
 
     # 세그먼트를 프레임 순서대로 정렬
@@ -81,6 +83,7 @@ def _generate_html(segments, video_name, fps, total_frames, ocr_mode, video_path
 
     # 세그먼트 데이터를 JSON으로 변환 (JavaScript에서 사용)
     import json
+    ws_url_json = json.dumps(ws_url)  # 주소 문자열 또는 null
     segments_json = json.dumps([{
         'start_frame': seg.get('start_frame', 0),
         'end_frame': seg.get('end_frame', 0),
@@ -197,6 +200,20 @@ def _generate_html(segments, video_name, fps, total_frames, ocr_mode, video_path
             font-size: 28px;
             border-bottom: 2px solid #ffae00;
             padding-bottom: 10px;
+        }}
+
+        .sync-status {{
+            margin-left: auto;
+            font-size: 13px;
+            color: #888;
+        }}
+
+        .sync-status.on {{
+            color: #6fcf6f;
+        }}
+
+        .sync-status.off {{
+            color: #ff7b72;
         }}
 
         .info-section {{
@@ -924,6 +941,7 @@ def _generate_html(segments, video_name, fps, total_frames, ocr_mode, video_path
                 </label>
                 <button class="btn" id="exportSelectedBtn" title="선택된 구간만 내보냅니다">선택한 항목만 내보내기</button>
                 <button class="btn" id="exportAllBtn" title="전체 내보내기">전체 내보내기</button>
+                <span id="syncStatus" class="sync-status" title="OCR 검토 창과의 실시간 동기화 상태"></span>
             </div>
         </div>
 
@@ -958,24 +976,47 @@ def _generate_html(segments, video_name, fps, total_frames, ocr_mode, video_path
         const FPS = {fps};
         let segments = {segments_json};
 
-        // WebSocket 실시간 동기화
+        // WebSocket 실시간 동기화 — 주소는 이 보고서를 만든 OCR 검토 창이 알려 준 것 (null이면 동기화 끔)
+        const WS_URL = {ws_url_json};
         let ws = null;
         let wsConnected = false;
 
+        function setSyncStatus(state, text) {{
+            const el = document.getElementById('syncStatus');
+            el.className = 'sync-status ' + state;
+            el.textContent = text;
+        }}
+
+        function alertNotConnected() {{
+            if (WS_URL === null) {{
+                alert('실시간 동기화가 꺼져 있어 데스크탑으로 보낼 수 없습니다.');
+            }} else {{
+                alert('데스크탑과 연결이 끊어졌습니다. 페이지를 새로고침하세요.');
+            }}
+        }}
+
         function connectWebSocket() {{
+            setSyncStatus('', '실시간 동기화 연결 중…');
             try {{
-                ws = new WebSocket('ws://localhost:8765');
+                ws = new WebSocket(WS_URL);
 
                 ws.onopen = function() {{
                     console.log('[WebSocket] 연결 성공');
                     wsConnected = true;
+                    setSyncStatus('on', '실시간 동기화 연결됨');
                     // 초기 동기화 요청
                     ws.send(JSON.stringify({{ type: 'request_sync' }}));
                 }};
 
-                ws.onclose = function() {{
-                    console.log('[WebSocket] 연결 종료');
+                ws.onclose = function(event) {{
+                    console.log('[WebSocket] 연결 종료 (code=' + event.code + ')');
                     wsConnected = false;
+                    if (event.code === 1008) {{
+                        // 토큰이 맞지 않아 창이 닫음 — 다시 시도해도 같으므로 멈춤
+                        setSyncStatus('off', '실시간 동기화 거부됨 — 이 보고서를 다시 만드세요');
+                        return;
+                    }}
+                    setSyncStatus('off', '실시간 동기화 끊김 — 다시 연결하는 중');
                     // 5초 후 재연결 시도
                     setTimeout(connectWebSocket, 5000);
                 }};
@@ -996,6 +1037,7 @@ def _generate_html(segments, video_name, fps, total_frames, ocr_mode, video_path
             }} catch (e) {{
                 console.error('[WebSocket] 연결 실패:', e);
                 wsConnected = false;
+                setSyncStatus('off', '실시간 동기화 끊김 — 다시 연결하는 중');
                 // 5초 후 재연결 시도
                 setTimeout(connectWebSocket, 5000);
             }}
@@ -1141,8 +1183,12 @@ def _generate_html(segments, video_name, fps, total_frames, ocr_mode, video_path
             console.log('[WebSocket] 서버로', currentSegments.length, '개 세그먼트 전송 (selected_index=' + selectedIndex + ')');
         }}
 
-        // WebSocket 연결 시작
-        connectWebSocket();
+        // WebSocket 연결 시작 (주소가 없으면 접속하지 않음)
+        if (WS_URL !== null) {{
+            connectWebSocket();
+        }} else {{
+            setSyncStatus('off', '실시간 동기화 꺼짐');
+        }}
 
         // DOM 요소
         const searchBox = document.getElementById('searchBox');
@@ -2207,7 +2253,7 @@ def _generate_html(segments, video_name, fps, total_frames, ocr_mode, video_path
                 // 데스크탑에서 분할이 완료되면 broadcast_segments_change()가 호출되어
                 // 웹UI에 변경사항이 자동으로 반영됨
             }} else {{
-                alert('데스크탑과 연결이 끊어졌습니다. 페이지를 새로고침하세요.');
+                alertNotConnected();
             }}
         }});
 
@@ -2234,7 +2280,7 @@ def _generate_html(segments, video_name, fps, total_frames, ocr_mode, video_path
                 ws.send(JSON.stringify(message));
                 console.log('[WebSocket] 선택 항목만 내보내기 명령 전송:', message);
             }} else {{
-                alert('데스크탑과 연결이 끊어졌습니다. 페이지를 새로고침하세요.');
+                alertNotConnected();
             }}
         }});
 
@@ -2250,7 +2296,7 @@ def _generate_html(segments, video_name, fps, total_frames, ocr_mode, video_path
                 ws.send(JSON.stringify(message));
                 console.log('[WebSocket] 전체 내보내기 명령 전송:', message);
             }} else {{
-                alert('데스크탑과 연결이 끊어졌습니다. 페이지를 새로고침하세요.');
+                alertNotConnected();
             }}
         }});
 

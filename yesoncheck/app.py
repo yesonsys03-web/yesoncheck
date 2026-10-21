@@ -1,6 +1,7 @@
 """Application entry helpers."""
 
 import datetime
+import fnmatch
 import os
 import sys
 import time
@@ -14,30 +15,84 @@ if __package__ in (None, ""):
     # Allow running the file directly (python yesoncheck/app.py)
     sys.path.append(os.path.dirname(os.path.dirname(__file__)))
     from yesoncheck.main_window import VideoPlayer  # type: ignore  # pylint: disable=import-error
-    from yesoncheck import mac_mounts, paths, timing_log  # type: ignore  # pylint: disable=import-error
-    from yesoncheck.player_base import wait_for_released_workers  # type: ignore  # pylint: disable=import-error
+    from yesoncheck import (  # type: ignore  # pylint: disable=import-error
+        build_info, launch_args, mac_mounts, paths, timing_log, update_install,
+    )
+    from yesoncheck.player_base import EXIT_WAIT_S, wait_for_released_workers  # type: ignore  # pylint: disable=import-error
+    from yesoncheck.player_update import BOX_TITLE_PROPERTY  # type: ignore  # pylint: disable=import-error
 else:
     from .main_window import VideoPlayer
-    from . import mac_mounts, paths, timing_log
-    from .player_base import wait_for_released_workers
+    from . import build_info, launch_args, mac_mounts, paths, timing_log, update_install
+    from .player_base import EXIT_WAIT_S, wait_for_released_workers
+    from .player_update import BOX_TITLE_PROPERTY
+
+APP_TITLE = "YesonCheck"
+UPDATE_IN_PROGRESS_TEXT = "업데이트 중입니다 — 끝난 뒤 다시 열어 주세요"
+# "업데이트 중" 창이 저절로 닫히는 시간 (ms) — 닫히면 이 프로세스가 끝남. 도우미는 모든 YesonCheck 프로세스가 끝나기를
+# 기다렸다 바꾸므로(시간이 지나면 업데이트를 그만둠), 창을 띄운 채 자리를 비워도 업데이트를 막지 않게
+UPDATE_IN_PROGRESS_CLOSE_MS = 8000
+LOG_KEEP_DAYS = 30  # 이보다 오래 안 쓴 앱 기록(yesoncheck_*.log)은 시작할 때 지움
+LOG_FILE_PATTERN = "yesoncheck_*.log"
 
 
-def setup_windows_logging():
-    """Windows 빌드 앱(창 모드): stdout·stderr가 없으므로 로그 파일로 보내고, 잡히지 않은 예외를 로그+오류 창으로.
+def app_log_dir(platform):
+    """앱 기록 폴더: Windows %LOCALAPPDATA%\\YesonCheck\\logs, Mac ~/Library/Logs/YesonCheck (업데이트 기록 update.log와 같은 폴더).
+    그 밖의 플랫폼은 None."""
+    if platform == "win32":
+        return os.path.join(os.environ["LOCALAPPDATA"], "YesonCheck", "logs")
+    if platform == "darwin":
+        return os.path.join(os.path.expanduser("~"), "Library", "Logs", "YesonCheck")
+    return None
 
-    로그: %LOCALAPPDATA%\\YesonCheck\\logs\\yesoncheck_<날짜>.log. 그 외 환경에서는 아무것도 안 하고 None.
+
+def remove_old_logs(log_dir, now=None):
+    """log_dir의 LOG_KEEP_DAYS일(마지막 수정 기준) 지난 yesoncheck_*.log를 지움 — update.log 등 다른 파일은 건드리지 않음.
+
+    사용자 자료가 아니라 정리일 뿐이므로 지우지 못해도(Windows에서 다른 창이 연 파일 등) 시작을 막지 않고,
+    파일마다 스택 트레이스째 기록(print)하고 다음으로 넘어감. 다른 창이 먼저 지운 파일(FileNotFoundError)은 정상.
     """
-    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+    cutoff = (time.time() if now is None else now) - LOG_KEEP_DAYS * 24 * 60 * 60
+    try:
+        names = sorted(os.listdir(log_dir))
+    except OSError:
+        print(f"[기록] 오래된 기록을 정리하지 못함 (폴더를 읽지 못함, 건너뜀): {log_dir}", file=sys.stderr)
+        traceback.print_exc()
+        return
+    for name in names:
+        if not fnmatch.fnmatchcase(name, LOG_FILE_PATTERN):
+            continue
+        path = os.path.join(log_dir, name)
+        try:
+            if os.path.isfile(path) and os.path.getmtime(path) < cutoff:
+                os.remove(path)
+        except FileNotFoundError:
+            continue  # 다른 창이 먼저 지움
+        except OSError:
+            print(f"[기록] 오래된 기록을 지우지 못함 (건너뜀): {path}", file=sys.stderr)
+            traceback.print_exc()
+
+
+def setup_app_logging(platform=sys.platform):
+    """빌드 앱(frozen, Windows·Mac): 콘솔이 없으므로 stdout·stderr를 기록 파일로 보내고, 잡히지 않은 예외를 기록+오류 창으로.
+
+    기록: app_log_dir(platform)/yesoncheck_<날짜>_<pid>.log — 창(프로세스)마다 따로라 여러 창의 기록이 섞이지 않음.
+    LOG_KEEP_DAYS일 지난 yesoncheck_*.log는 지움. Mac은 예외 창이 없으면 슬롯의 예외가 앱을 끝냄(PyQt 5.15 기본).
+    소스 실행(frozen 아님)과 그 밖의 플랫폼은 아무것도 안 하고 None.
+    """
+    if not getattr(sys, "frozen", False):
         return None
-    log_dir = os.path.join(os.environ["LOCALAPPDATA"], "YesonCheck", "logs")
+    log_dir = app_log_dir(platform)
+    if log_dir is None:
+        return None
     os.makedirs(log_dir, exist_ok=True)
-    log_path = os.path.join(log_dir, f"yesoncheck_{datetime.date.today():%Y%m%d}.log")
+    log_path = os.path.join(log_dir, f"yesoncheck_{datetime.date.today():%Y%m%d}_{os.getpid()}.log")
     stream = open(log_path, "a", encoding="utf-8", buffering=1)
     sys.stdout = stream
     sys.stderr = stream
-    print(f"===== YesonCheck 시작 {datetime.datetime.now():%Y-%m-%d %H:%M:%S} =====")
+    print(f"===== YesonCheck 시작 {datetime.datetime.now():%Y-%m-%d %H:%M:%S} (pid {os.getpid()}) =====")
 
     sys.excepthook = make_excepthook(log_path)
+    remove_old_logs(log_dir)  # 기록 파일로 보낸 뒤에 — 정리 중의 문제도 기록에 남게
     return log_path
 
 
@@ -154,11 +209,42 @@ def open_startup_file(player, file_path):
         print(f"File does not exist: {file_path}")
 
 
-# 창을 닫은 뒤 끝나지 않은 작업(예: TensorFlow 추론 중인 애니매틱2)을 기다리는 최대 시간 (초).
-# 넘으면 로그를 남기고 프로세스를 강제로 끝냄 (finish_released_workers)
-EXIT_WAIT_S = 30
+def update_in_progress_at_start():
+    """(빌드된 앱이 켜질 때, 창을 만들기 전) 다른 창이 넘긴 업데이트가 진행 중인지 — update_install.update_in_progress
+    (기록의 도우미가 아직 돎). 소스 실행은 업데이트하지 않으므로 보지 않음(False).
+
+    기록이 깨졌으면(UpdateError) False — 창을 보인 뒤 handle_update_startup이 그 기록을 보이고 지움. 확인하다 난 예상 못 한
+    오류는 트레이스백째 오류 창(과 stderr)에 보인 뒤 False: 확인을 못 해 앱을 영영 켜지 못하게 되지 않게 (그사이 업데이트가
+    돌고 있었어도 결과 판정은 토큰으로 지켜짐 — update_install.startup_result)."""
+    if build_info.current() is None:
+        return False
+    try:
+        return update_install.update_in_progress()
+    except update_install.UpdateError as exc:
+        print(f"[업데이트] 업데이트 기록이 깨져 업데이트 중인지 알 수 없음 — 켜고 창을 보인 뒤 알림\n{exc}", flush=True)
+        return False
+    except Exception:
+        text = traceback.format_exc()
+        print(f"[업데이트] 업데이트 중인지 확인하지 못함 — 그대로 켬\n{text}", file=sys.stderr, flush=True)
+        QMessageBox.critical(None, "YesonCheck 오류",
+                             f"업데이트 중인지 확인하지 못했습니다 — 그대로 켭니다.\n\n{text[-3000:]}")
+        return False
 
 
+def show_update_in_progress():
+    """"업데이트 중" 정보 창 — [OK]를 누르거나 UPDATE_IN_PROGRESS_CLOSE_MS가 지나면 닫힘 (그 뒤 launch가 끝남)."""
+    box = QMessageBox(QMessageBox.Information, APP_TITLE, UPDATE_IN_PROGRESS_TEXT, QMessageBox.Ok)
+    box.setProperty(BOX_TITLE_PROPERTY, APP_TITLE)  # macOS는 QMessageBox의 제목을 버림 (player_update.show_details_box와 같음)
+    timer = QTimer(box)  # 창과 함께 지워짐
+    timer.setSingleShot(True)
+    timer.timeout.connect(box.accept)
+    timer.start(UPDATE_IN_PROGRESS_CLOSE_MS)
+    box.exec_()
+
+
+# 창을 닫은 뒤 끝나지 않은 작업을 기다리는 최대 시간 EXIT_WAIT_S(초, 넘으면 로그를 남기고 강제 종료)는 player_base에 둠 —
+# 다른 창의 업데이트가 닫히는 창을 기다리는 한도(player_update.CLOSE_OTHERS_TIMEOUT_S)도 그 값으로 셈 (player_update는 이
+# 모듈을 불러올 수 없음: 이 모듈이 player_update를 부름)
 def finish_released_workers(timeout_s):
     """창을 닫을 때 붙잡아 둔 작업을 timeout_s초까지 기다리고, 그래도 안 끝나면 로그를 남긴 뒤 os._exit(0).
 
@@ -170,13 +256,19 @@ def finish_released_workers(timeout_s):
     print(f"[닫기] 작업 {len(still_running)}개가 {timeout_s:g}초 안에 끝나지 않아 강제로 종료합니다: "
           f"{', '.join(still_running)}", flush=True)
     sys.stdout.flush()
-    sys.stderr.flush()  # Windows 빌드 앱은 stdout·stderr가 로그 파일 (setup_windows_logging)
+    sys.stderr.flush()  # 빌드 앱은 stdout·stderr가 로그 파일 (setup_app_logging)
     os._exit(0)
 
 
 def launch(argv=None):
-    """Create and run the QApplication event loop."""
+    """Create and run the QApplication event loop.
+
+    argv: sys.argv 그대로 (launch_args.parse — 첫 파일은 영상 A, `--update-result TOKEN`은 지난 업데이트의 결과 판정에).
+    다른 창이 넘긴 업데이트가 진행 중이면(update_in_progress_at_start — 도우미가 켠 앱은 빼고) 스플래시·창을 만들지 않고
+    "업데이트 중" 창만 보인 뒤(저절로도 닫힘 — show_update_in_progress) 0으로 끝냄: 이 앱이 업데이트(앱 바꾸기·결과 판정)를
+    헷갈리게 하지 않게."""
     argv = list(sys.argv if argv is None else argv)
+    args = launch_args.parse(argv)
 
     # 시작 시간 기록: 느릴 수 있는 단계마다 앞뒤로 찍음 → 멈추면 로그의 마지막 줄이 그 단계 (timing_log)
     app = QApplication.instance()
@@ -186,6 +278,10 @@ def launch(argv=None):
         timing_log.startup("QApplication 만드는 중…")
         app = create_application(argv)
     timing_log.startup("QApplication 준비")
+    if args.update_token is None and update_in_progress_at_start():
+        print(f"[업데이트] {UPDATE_IN_PROGRESS_TEXT} — 창을 만들지 않고 끝냄 (받은 인자 {argv[1:]!r})", flush=True)
+        show_update_in_progress()
+        return 0
     timing_log.startup(screen_report(app.primaryScreen()))
     # (Mac) 공유를 다른 곳에 붙인 Mac: 공유 설정 폴더·작품 경로를 열기 전에 이 Mac에서 공유가 붙은 곳을 읽음
     # (스플래시 전에 — 예상 못 한 오류 창이 항상 위인 스플래시에 가려지지 않게)
@@ -220,14 +316,19 @@ def launch(argv=None):
     timing_log.startup("창 표시")
     # 지난 업데이트의 결과(이 컴퓨터의 기록 파일만 — NAS·인터넷 없음): 창을 보인 뒤 맨 먼저 — 새 버전이면 "잘 켜짐" 표시를
     # 바로 남겨 업데이트 도우미가 기다림을 끝냄
-    QTimer.singleShot(0, player.handle_update_startup)
+    QTimer.singleShot(0, lambda: player.handle_update_startup(args.update_token))
+    # 창 기록·창 사이 연결 서버: 다른 창의 업데이트가 이 창을 세고 상태를 묻고 닫기를 요청할 수 있게
+    # (기록은 창을 닫을 때·프로세스가 끝날 때 지움 — instances)
+    QTimer.singleShot(0, player.start_instance_link)
+    # 시작할 때 읽은 사용자 파일(북마크·오버레이·내보내기 폴더 설정)에 문제가 있었으면 알림 (스플래시가 닫힌 뒤라 가려지지 않음)
+    QTimer.singleShot(0, player.show_user_file_problems)
     # 공유 설정(설정 폴더·작품 경로·변환표)은 창을 보인 뒤 백그라운드에서 읽고, 끝나면 문제를 알림
     # (스플래시가 닫힌 뒤라 대화상자가 가려지지 않음)
     QTimer.singleShot(0, player.start_shared_config_load)
-    if len(argv) > 1:
+    if args.files:
         # 명령줄로 받은 파일도 창을 보인 뒤에 엶: 여는 중 소리 재생기를 만들고(처음에는 수 초), 오류 창이
         # 스플래시에 가려지지 않게. 공유 설정 불러오기를 먼저 시작해 두어 그동안 백그라운드에서 읽음
-        file_path = argv[1]
+        file_path = args.files[0]
         QTimer.singleShot(0, lambda: open_startup_file(player, file_path))
 
     if owns_app:
@@ -240,12 +341,13 @@ def launch(argv=None):
 
 
 def main():
-    """CLI entrypoint. --smoke-test <작업 폴더>: 실행 시험 (yesoncheck/smoke_test.py)."""
-    setup_windows_logging()
-    if len(sys.argv) >= 3 and sys.argv[1] == "--smoke-test":
+    """CLI entrypoint. --smoke-test <작업 폴더>: 실행 시험 (yesoncheck/smoke_test.py). 인자는 launch_args."""
+    setup_app_logging()
+    args = launch_args.parse(sys.argv)
+    if args.smoke_test is not None:
         from yesoncheck.smoke_test import run
 
-        return run(sys.argv[2])
+        return run(args.smoke_test)
     return launch(sys.argv)
 
 

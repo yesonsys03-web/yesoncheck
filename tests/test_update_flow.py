@@ -1,24 +1,31 @@
 """알림 띠의 '업데이트'를 누른 뒤 (offscreen): 작업 중 묻기·여유 공간·받기 진행·취소·실패 창·도우미에 넘기고 끝내기,
-그리고 다시 켜진 앱의 결과 알림 (handle_update_startup).
+다른 YesonCheck 창을 묻고 닫기, 그리고 다시 켜진 앱의 결과 알림 (handle_update_startup).
 
 NAS는 임시 폴더, GitHub는 시험용 HTTP 서버 — 인터넷에 닿지 않는다. 도우미(launch_helper_mac/windows)·Mac dmg 준비
 (stage_mac)·앱 위치(running_app_location)·앱 끝내기(QApplication.quit)는 가짜로 바꿔 끼움 (hdiutil·실제 도우미를
-돌리지 않음). 플랫폼은 build_info.platform_key를 바꿔 정함 — Mac·Windows 경로를 두 CI 모두에서 시험.
+돌리지 않음). 다른 창(instances·instance_link)은 FakeWindows가 흉내 (프로세스·소켓 없음). 플랫폼은
+build_info.platform_key를 바꿔 정함 — Mac·Windows 경로를 두 CI 모두에서 시험.
 """
 
 import hashlib
 import os
+import re
 import subprocess
+import sys
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
-from PyQt5.QtWidgets import QApplication, QMessageBox
+from PyQt5.QtCore import QTimer
+from PyQt5.QtWidgets import QApplication, QDialog, QMessageBox, QPushButton, QWidget
 
-from yesoncheck import build_info, player_base, update_install, updates
+from yesoncheck import build_info, instance_link, instances, player_base, player_update, update_install, updates
 from yesoncheck.update_install import Pending, ok_marker_path, read_pending, write_pending
 from tests.test_fast_startup import wait_until
-from tests.test_update_ui import _settle, check_now, error, fake_check, found, player_with_build  # noqa: F401 (fixture)
+from tests.test_update_ui import (  # noqa: F401 (fixture)
+    _built_app, _settle, check_now, error, fake_check, found, player_with_build,
+)
 from tests.test_work_paths_ui import new_player  # noqa: F401 (fixture)
 
 INSTALLER = bytes(range(256)) * 4096 * 3  # 3 MB → 받기는 1 MB씩 세 번 (중간에 멈추는 시험)
@@ -113,11 +120,11 @@ class FakeHelpers:
     def args(self):
         return self.calls[-1]
 
-    def windows(self, installer, install_dir, target):
-        return self._record("windows", installer=installer, install_dir=install_dir, target=target)
+    def windows(self, installer, install_dir, target, token):
+        return self._record("windows", installer=installer, install_dir=install_dir, target=target, token=token)
 
-    def mac(self, staged_app, app_path, target):
-        return self._record("mac", staged_app=staged_app, app_path=app_path, target=target)
+    def mac(self, staged_app, app_path, target, token):
+        return self._record("mac", staged_app=staged_app, app_path=app_path, target=target, token=token)
 
     def _record(self, kind, **kwargs):
         if self.raises is not None:
@@ -212,6 +219,143 @@ def fake_running_worker(player, attr):
     job = FakeJob()
     setattr(player, attr, job)
     return job
+
+
+WINDOW_TITLE = "Yeson Checker 1.1.0"
+
+
+class FakeWindow:
+    """다른 창 하나 (FakeWindows가 흉내). video·jobs·unsaved: 물으면 답하는 상태. responds: False면 상태 묻기·닫기 요청에
+    답하지 않음 (InstanceLinkError — 프로세스는 그대로 돎). closes: 닫기 요청을 받으면 끝남 (False — 닫기 버튼처럼 기록은
+    지우지만 프로세스가 끝나지 않음). exits_after: 기록을 지운 뒤 is_running에 몇 번 더 살아 있다고 보일지 (창 닫기가 작업을
+    멈추는 동안 프로세스는 돎). on_close: 닫기 요청을 받을 때 부름."""
+
+    def __init__(self, pid, video="", jobs=(), unsaved=False, responds=True, closes=True, exits_after=0):
+        self.record = instances.InstanceRecord(pid, "(시험 앱 자리)", 1_700_000_000.0 + pid, f"yesoncheck-test-{pid}")
+        self.video = video
+        self.jobs = list(jobs)
+        self.unsaved = unsaved
+        self.responds = responds
+        self.closes = closes
+        self.exits_after = exits_after
+        self.on_close = None
+        self.registered = True  # 창 기록이 있음 (others()에 보임)
+        self.alive = True  # 프로세스가 돎
+        self.queries = 0
+        self.close_requests = 0
+
+    @property
+    def pid(self):
+        return self.record.pid
+
+    def status(self):
+        return {"pid": self.pid, "title": WINDOW_TITLE, "video": self.video, "jobs": list(self.jobs),
+                "unsaved_ocr": self.unsaved}
+
+    def no_answer(self, timeout_ms):
+        return instance_link.InstanceLinkError(
+            f"창이 {timeout_ms / 1000:g}초 안에 답하지 않았습니다 ({self.record.server_name}): 시험")
+
+
+class FakeWindows:
+    """instances.others·is_running·other_user_processes와 instance_link.query_status·request_close 대신 — 다른 창들
+    (windows)과 다른 사용자의 같은 앱(users: [(pid, 사용자)]). gate를 정하면 다른 사용자 확인(맨 처음 하는 일)에서 그 Event를
+    기다림. app_paths: others·other_user_processes에 넘어온 앱 자리."""
+
+    def __init__(self):
+        self.windows = []
+        self.users = []
+        self.gate = None
+        self.scanning = threading.Event()
+        self.app_paths = []
+
+    def add(self, pid, **kwargs):
+        window = FakeWindow(pid, **kwargs)
+        self.windows.append(window)
+        return window
+
+    def _by_server(self, server_name):
+        [window] = [w for w in self.windows if w.record.server_name == server_name]
+        return window
+
+    def others(self, app_path):
+        self.app_paths.append(app_path)
+        return [w.record for w in self.windows if w.registered]
+
+    def is_running(self, record):
+        [window] = [w for w in self.windows if w.record == record]
+        if window.alive and not window.registered and window.closes:
+            if window.exits_after > 0:
+                window.exits_after -= 1
+            else:
+                window.alive = False
+        return window.alive
+
+    def other_user_processes(self, app_path):
+        self.app_paths.append(app_path)
+        self.scanning.set()
+        if self.gate is not None:
+            assert self.gate.wait(10), "시험의 gate가 10초 안에 열리지 않음"
+        return list(self.users)
+
+    def query_status(self, server_name, timeout_ms=3000):
+        window = self._by_server(server_name)
+        window.queries += 1
+        if not window.responds:
+            raise window.no_answer(timeout_ms)
+        return window.status()
+
+    def request_close(self, server_name, timeout_ms=3000):
+        window = self._by_server(server_name)
+        window.close_requests += 1
+        if window.on_close is not None:
+            window.on_close()
+        if not window.responds:
+            raise window.no_answer(timeout_ms)
+        window.registered = False  # 닫기 버튼처럼 기록부터 지움 (프로세스는 작업을 멈춘 뒤 끝남)
+
+
+@pytest.fixture
+def other_windows(monkeypatch):
+    fake = FakeWindows()
+    monkeypatch.setattr(instances, "others", fake.others)
+    monkeypatch.setattr(instances, "is_running", fake.is_running)
+    monkeypatch.setattr(instances, "other_user_processes", fake.other_user_processes)
+    monkeypatch.setattr(instance_link, "query_status", fake.query_status)
+    monkeypatch.setattr(instance_link, "request_close", fake.request_close)
+    return fake
+
+
+@pytest.fixture
+def fast_close_poll(monkeypatch):
+    """다른 창이 닫혔는지 0.05초마다 확인 (시험이 0.5초 간격을 여러 번 기다리지 않게)."""
+    monkeypatch.setattr(player_update, "CLOSE_OTHERS_POLL_MS", 50)
+
+
+@pytest.fixture
+def quick_close_wait(fast_close_poll, monkeypatch):
+    """다른 창이 닫히기를 기다리는 한도를 0.4초로 (시험이 90초를 기다리지 않게)."""
+    monkeypatch.setattr(player_update, "CLOSE_OTHERS_TIMEOUT_S", 0.4)
+
+
+def wait_scanned(player):
+    """'업데이트'를 누른 뒤 다른 창 확인(뒤 스레드)이 끝나고 그 결과(확인 창·받기 시작)를 처리할 때까지."""
+    wait_until(lambda: player._update_others is None)
+    _settle()
+
+
+def banner_texts(player):
+    """띠의 진행 글을 차례로 남김 (지나가는 글 — "다른 창을 닫는 중…" 등 — 도 보게)."""
+    texts = []
+    banner = player.update_banner
+    show_progress = banner.show_progress
+
+    def recording(done, total, text, cancellable=True):
+        texts.append(text)
+        show_progress(done, total, text, cancellable)
+
+    banner.show_progress = recording
+    return texts
 
 
 @pytest.fixture
@@ -358,6 +502,7 @@ def test_busy_jobs_ask_first(player_offer, dialogs, downloads, fake_helpers):
     fake_running_worker(player_offer, "merge_worker")
     dialogs.answer_question(QMessageBox.No)
     player_offer.start_update()
+    wait_scanned(player_offer)
     assert dialogs.questions[0].endswith("진행 중인 작업(영상 병합)을 멈추고 업데이트할까요?")
     assert not download_started(downloads)
     assert player_offer.update_banner.mode() == "offer" and player_offer.update_banner.full_text() == OFFER_TEXT
@@ -387,6 +532,9 @@ def test_success_hands_off_and_quits(player_offer, fake_helpers, quits, download
     assert pending.target == "1.1.1" and fake_helpers.args.target == "1.1.1"
     assert (pending.previous, pending.platform_key) == ("1.1.0", "windows")
     assert pending.started >= started and len(pending.started) == len(started)  # log_tail_since가 비교하는 형식
+    # 도우미가 다시 켤 앱만 결과를 판정하는 토큰(도우미에 넘김), 업데이트 중인지 볼 도우미 pid, 기록을 거를 이 창의 pid
+    assert re.fullmatch(r"[0-9a-f]{16}", pending.token) and fake_helpers.args.token == pending.token
+    assert pending.helper_pid == str(FakeHelperProc.pid) and pending.app_pid == str(os.getpid())
     installer = os.path.join(downloads_dir(), "YesonCheck_Setup_1.1.1.exe")
     assert fake_helpers.args.kind == "windows"
     assert fake_helpers.args.installer == installer and fake_helpers.args.install_dir == install_dir
@@ -407,6 +555,7 @@ def test_busy_jobs_yes_updates_and_close_stops_them(player_offer, dialogs, fake_
     visible_when_stopped = []
     merge.on_stop = lambda: visible_when_stopped.append(player_offer.isVisible())
     player_offer.start_update()  # 대답은 기본 Yes
+    wait_until(lambda: dialogs.questions)
     assert len(dialogs.questions) == 1
     wait_until(lambda: fake_helpers.called)
     assert len(dialogs.questions) == 1  # 이미 멈추기로 한 작업은 다시 묻지 않음
@@ -438,6 +587,7 @@ def test_progress_shown_and_cancel_restores_offer(player_offer, downloads, fake_
 def test_cancel_after_download_finished_does_not_hand_off(player_offer, downloads, fake_helpers, quits):
     """다 받은 뒤 결과 신호가 처리되기 전에 '취소'를 누름 → 넘기지 않고 받은 파일을 지움."""
     player_offer.start_update()
+    wait_until(lambda: player_offer._update_run is not None)
     download = player_offer._update_run.download
     assert download.wait(10000)  # 이벤트를 처리하지 않고 기다림 → ready가 대기열에 있음
     player_offer.update_banner.cancel_button.click()
@@ -521,6 +671,7 @@ def test_download_failure_checks_again_and_banner_shows_what_is_there(make_offer
 def test_not_enough_space_shows_failure(player_offer, dialogs, downloads, monkeypatch):
     monkeypatch.setitem(update_install.NEEDED_BYTES, "windows", 10 ** 18)
     player_offer.start_update()
+    wait_scanned(player_offer)
     [(kind, title, text)] = dialogs.messages
     assert (kind, title) == ("critical", "업데이트 실패") and "여유 공간이 모자랍니다" in text
     assert not download_started(downloads) and player_offer.update_banner.mode() == "offer"
@@ -555,6 +706,28 @@ def test_helper_failure_and_record_not_cleared_shows_both(player_offer, fake_hel
     assert "OSError: 시험용 도우미 실행 실패" in text and "PermissionError: 시험용 기록 지우기 실패" in text
     assert logged_before_clear == [True]
     assert player_offer.isVisible() and quits == [] and player_offer.update_banner.mode() == "offer"
+
+
+def test_helper_pid_not_recorded_stops_helper(player_offer, fake_helpers, dialogs, quits, monkeypatch):
+    """도우미를 띄운 뒤 업데이트 기록에 그 pid를 다시 쓰지 못함 → 도우미를 끝내고 기록을 지운 뒤 실패 창, 앱은 그대로
+    (그 사이 켜진 앱이 '업데이트 중'을 알 수 없는 채로 넘기지 않음)."""
+    real_write = update_install.write_pending
+
+    def write_without_helper_pid(p):
+        if p.helper_pid:
+            raise OSError("시험용 기록 쓰기 실패")
+        real_write(p)
+
+    monkeypatch.setattr(update_install, "write_pending", write_without_helper_pid)
+    player_offer.start_update()
+    wait_until(lambda: dialogs.criticals)
+    _settle()
+    [(kind, title, text)] = dialogs.messages
+    assert (kind, title) == ("critical", "업데이트 실패")
+    assert "업데이트 기록에 도우미(pid 4242)를 적지 못했습니다" in text and "OSError: 시험용 기록 쓰기 실패" in text
+    assert fake_helpers.procs[0].killed and read_pending() is None
+    assert player_offer.isVisible() and player_offer.isEnabled() and quits == []
+    assert player_offer.update_banner.mode() == "offer"
 
 
 def test_log_failure_at_start_shows_failure_and_does_not_download(player_offer, broken_log, dialogs, downloads,
@@ -770,6 +943,351 @@ def test_close_during_download_leaves_no_pending(player_offer, downloads, fake_h
     assert downloaded_files() == [] and quits == []
 
 
+# ---- 다른 YesonCheck 창 (설계 3-4) ----
+
+CLOSE_BUTTONS = {"모두 닫고 업데이트", "취소"}
+
+
+def others_title():
+    """다른 창을 닫을지 묻는 확인 창의 제목."""
+    return player_update.UPDATE_OTHERS_TITLE
+
+
+def video(name):
+    return f"/Volumes/Mainnas/test/{name}"
+
+
+def stopped_text(*windows):
+    return "업데이트를 멈췄습니다 — 이 창이 닫히지 않았습니다: " + ", ".join(windows)
+
+
+def test_update_lists_other_windows_jobs_and_unsaved_in_one_dialog(player_offer, other_windows, dialogs, downloads,
+                                                                   fake_helpers):
+    """다른 창이 있으면 확인 창 하나: 닫을 창 수, 작업 중인 창(이 창의 작업도 같은 창에)과 그 작업, 저장 안 한 결과가 있는 창.
+    [취소] → 받지 않고 띠는 다시 알림, 어느 창에도 닫기를 요청하지 않음."""
+    merge = fake_running_worker(player_offer, "merge_worker")
+    busy = other_windows.add(101, video=video("FL_901.mov"), jobs=["OCR 분석·컷 감지"])
+    unsaved = other_windows.add(102, video=video("FL_902.mov"), unsaved=True)
+    idle = other_windows.add(103)
+    dialogs.answer_question(QMessageBox.Cancel)
+    player_offer.start_update()
+    wait_scanned(player_offer)
+    [box] = dialogs.boxes
+    assert (box.kind, box.title) == ("question", others_title()) and set(box.buttons) == CLOSE_BUTTONS
+    lines = box.text.splitlines()
+    assert lines[0] == "다른 YesonCheck 창 3개도 닫힙니다."
+    assert "- 이 창: 영상 병합" in lines
+    assert f"- {WINDOW_TITLE} — FL_901.mov (pid 101): OCR 분석·컷 감지" in lines
+    assert "작업 중인 창의 작업은 멈춥니다." in lines
+    assert f"- {WINDOW_TITLE} — FL_902.mov (pid 102)" in lines
+    assert "닫으면 저장 안 한 결과는 사라집니다." in lines
+    assert "pid 103" not in box.text  # 할 일이 없는 창은 수에만
+    assert len(dialogs.messages) == 1  # 이 창의 "진행 중인 작업…" 질문을 따로 띄우지 않음
+    assert not download_started(downloads) and not fake_helpers.called and read_pending() is None
+    assert player_offer.update_banner.mode() == "offer" and player_offer.update_banner.full_text() == OFFER_TEXT
+    assert [w.close_requests for w in (busy, unsaved, idle)] == [0, 0, 0] and not merge.stopped
+    assert other_windows.app_paths and set(other_windows.app_paths) == {instances.current_app_path()}
+    log = update_log()
+    assert "다른 창 3개" in log and "pid 101" in log and "업데이트하지 않음" in log
+
+
+def test_no_other_windows_keeps_single_window_flow(player_offer, other_windows, dialogs, fake_helpers, quits):
+    texts = banner_texts(player_offer)
+    player_offer.start_update()
+    wait_until(lambda: fake_helpers.called)
+    assert dialogs.messages == [] and quits == ["quit"]
+    assert texts[0] == "다른 창 확인 중…" and "다른 창을 닫는 중…" not in texts
+
+
+def test_update_refuses_when_other_user_runs_app(player_offer, other_windows, dialogs, downloads, fake_helpers):
+    """같은 앱 자리에서 다른 사용자의 YesonCheck가 돌면 그 창은 닫으라고 요청할 수 없음 → 받기 전에 멈추고 창."""
+    other_windows.users = [(4321, "studio01")]
+    mine = other_windows.add(101)
+    player_offer.start_update()
+    wait_scanned(player_offer)
+    assert dialogs.messages == [("warning", "업데이트할 수 없음",
+                                 "다른 사용자(studio01)가 YesonCheck를 쓰고 있어 업데이트할 수 없습니다")]
+    assert not download_started(downloads) and not fake_helpers.called
+    assert mine.queries == 0 and mine.close_requests == 0
+    assert player_offer.update_banner.mode() == "offer" and player_offer.update_banner.full_text() == OFFER_TEXT
+    assert "pid 4321 (studio01)" in update_log()
+
+
+def test_other_user_appearing_during_download_stops_before_hand_off(player_offer, other_windows, dialogs, downloads,
+                                                                   fake_helpers, quits):
+    """넘기기 직전에 다시 확인 — 받는 동안 다른 사용자가 켰으면 받은 파일을 지우고 멈춤."""
+    downloads.gate = threading.Event()
+    player_offer.start_update()
+    wait_until(lambda: downloads.entered.is_set())
+    other_windows.users = [(4321, "studio01"), (4322, "studio01")]
+    downloads.gate.set()
+    wait_offer_again(player_offer)
+    assert dialogs.warnings == ["다른 사용자(studio01)가 YesonCheck를 쓰고 있어 업데이트할 수 없습니다"]
+    assert downloaded_files() == [] and not fake_helpers.called and quits == [] and read_pending() is None
+
+
+def test_update_closes_others_then_hands_off(player_offer, other_windows, dialogs, fake_helpers, quits, monkeypatch,
+                                             fast_close_poll):
+    """[모두 닫고 업데이트] → 받은 뒤 다른 창마다 정상 종료 요청 → 기록을 지운 뒤에도 프로세스가 끝날 때까지 기다림 →
+    모두 끝나면 도우미에 넘김."""
+    first = other_windows.add(101, video=video("FL_901.mov"))
+    slow = other_windows.add(102, exits_after=4)  # 기록은 바로 지우지만 작업을 멈추느라 프로세스는 조금 더 돎
+    alive_at_hand_off = []
+    launch = fake_helpers.windows
+
+    def launch_after_others(*args):
+        alive_at_hand_off.append([w.alive for w in other_windows.windows])
+        return launch(*args)
+
+    monkeypatch.setattr(update_install, "launch_helper_windows", launch_after_others)
+    texts = banner_texts(player_offer)
+    player_offer.start_update()
+    wait_until(lambda: fake_helpers.called)
+    [box] = dialogs.boxes
+    assert box.text.splitlines()[0] == "다른 YesonCheck 창 2개도 닫힙니다." and dialogs.messages == [
+        ("question", others_title(), box.text)]
+    assert [first.close_requests, slow.close_requests] == [1, 1]
+    assert alive_at_hand_off == [[False, False]]  # 기록이 아니라 프로세스가 끝나기를 기다림
+    assert "다른 창을 닫는 중…" in texts
+    assert player_offer.isHidden() and quits == ["quit"]
+    log = update_log()
+    assert "닫기를 요청" in log and "pid 101" in log and "pid 102" in log
+
+
+@pytest.mark.parametrize("platform", ["windows", "mac"])
+def test_update_stops_and_discards_when_window_does_not_close(platform, request, other_windows, dialogs, fake_helpers,
+                                                              quits, quick_close_wait, mac_app):
+    """정해진 시간 안에 끝나지 않는 창 → 앱을 바꾸지 않음: 받은 파일(Mac은 앱 옆에 준비한 새 앱)을 지우고 "업데이트를
+    멈췄습니다" 창, 누른 창은 그대로·쓸 수 있음, 띠는 다시 알림."""
+    player = request.getfixturevalue("player_offer" if platform == "windows" else "player_offer_mac")
+    stuck = other_windows.add(101, video=video("FL_901.mov"), closes=False)
+    player.start_update()
+    wait_until(lambda: dialogs.warnings)
+    _settle()
+    [text] = dialogs.warnings
+    assert text.startswith(stopped_text(f"{WINDOW_TITLE} — FL_901.mov (pid 101)"))
+    assert stuck.close_requests == 1 and not fake_helpers.called and quits == [] and read_pending() is None
+    assert downloaded_files() == []
+    staged = os.path.join(os.path.dirname(mac_app), ".YesonCheck_Autocut_Intel.app.update-1.1.1")
+    assert not os.path.exists(staged)
+    assert player.isVisible() and player.isEnabled()
+    assert player.update_banner.mode() == "offer" and player.update_banner.full_text() == OFFER_TEXT
+    assert player._update_others is None and not player._update_others_timer.isActive()
+    assert "닫히지 않은 창" in update_log()
+
+
+def test_new_empty_window_during_download_closed_without_asking(player_offer, other_windows, dialogs, downloads,
+                                                                fake_helpers, quits, fast_close_poll):
+    """받는 동안 새로 켜진 빈 창(작업 없음·저장 안 한 결과 없음)은 다시 묻지 않고 함께 닫음."""
+    first = other_windows.add(101)
+    downloads.gate = threading.Event()
+    player_offer.start_update()
+    wait_until(lambda: downloads.entered.is_set())
+    new = other_windows.add(102)
+    downloads.gate.set()
+    wait_until(lambda: fake_helpers.called)
+    assert len(dialogs.messages) == 1  # 받기 전의 확인 창 하나
+    assert [first.close_requests, new.close_requests] == [1, 1] and quits == ["quit"]
+    assert "새로 켜진 빈 창" in update_log()
+
+
+@pytest.mark.parametrize("change", ["new busy window", "approved window started work", "approved window has results"])
+def test_new_busy_window_during_download_asks_again(change, player_offer, other_windows, dialogs, downloads,
+                                                    fake_helpers, quits):
+    """받는 동안 작업을 시작했거나 저장 안 한 결과가 생긴 창(새 창 포함)이 있으면 넘기기 전에 확인 창을 다시 —
+    [취소]면 어느 창도 닫지 않고 받은 파일을 지움, 띠는 다시 알림."""
+    first = other_windows.add(101, video=video("FL_901.mov"))
+    downloads.gate = threading.Event()
+    player_offer.start_update()
+    wait_until(lambda: downloads.entered.is_set())
+    if change == "new busy window":
+        other_windows.add(102, video=video("FL_902.mov"), jobs=["영상 병합"])
+        expected_line = f"- {WINDOW_TITLE} — FL_902.mov (pid 102): 영상 병합"
+    elif change == "approved window started work":
+        first.jobs = ["OCR 구간 내보내기"]
+        expected_line = f"- {WINDOW_TITLE} — FL_901.mov (pid 101): OCR 구간 내보내기"
+    else:
+        first.unsaved = True
+        expected_line = f"- {WINDOW_TITLE} — FL_901.mov (pid 101)"
+    dialogs.answer_question(QMessageBox.Cancel)
+    downloads.gate.set()
+    wait_offer_again(player_offer)
+    assert [b.title for b in dialogs.boxes] == [others_title()] * 2
+    assert expected_line in dialogs.boxes[1].text.splitlines()
+    assert all(w.close_requests == 0 for w in other_windows.windows)
+    assert downloaded_files() == [] and not fake_helpers.called and quits == [] and read_pending() is None
+    assert player_offer.update_banner.full_text() == OFFER_TEXT
+
+
+def test_own_new_job_with_other_windows_asks_in_the_same_dialog(player_offer, other_windows, dialogs, downloads,
+                                                                fake_helpers, quits, fast_close_poll):
+    """받는 동안 이 창에서 시작한 작업도 다른 창이 있으면 같은 확인 창으로 다시 물음 (창을 두 번 띄우지 않음)."""
+    other_windows.add(101)
+    downloads.gate = threading.Event()
+    player_offer.start_update()
+    wait_until(lambda: downloads.entered.is_set())
+    export = fake_running_worker(player_offer, "ocr_export_worker")
+    downloads.gate.set()
+    wait_until(lambda: fake_helpers.called)  # 다시 물은 창에 기본 대답(모두 닫고 업데이트)
+    assert [b.title for b in dialogs.boxes] == [others_title()] * 2 and len(dialogs.messages) == 2
+    assert "- 이 창: OCR 구간 내보내기" in dialogs.boxes[1].text.splitlines()
+    assert export.stopped and quits == ["quit"]
+
+
+def test_unresponsive_window_listed_as_no_response(player_offer, other_windows, dialogs, fake_helpers, quits,
+                                                   quick_close_wait):
+    """상태를 묻는 데 답하지 않는 창은 "응답 없음"으로 목록에. [모두 닫고 업데이트] 뒤에도 닫기를 요청하고, 정해진 시간에
+    끝나지 않으면 업데이트를 멈춤 (앱은 멈추지 않음)."""
+    frozen = other_windows.add(101, responds=False)
+    idle = other_windows.add(102)
+    player_offer.start_update()
+    wait_until(lambda: dialogs.warnings)
+    _settle()
+    first = dialogs.boxes[0]
+    assert first.title == others_title() and first.text.splitlines()[0] == "다른 YesonCheck 창 2개도 닫힙니다."
+    assert "- pid 101 — 응답 없음" in first.text.splitlines()
+    assert [b.title for b in dialogs.boxes].count(others_title()) == 1  # 받은 뒤에도 그대로 응답 없음 → 다시 묻지 않음
+    assert frozen.close_requests == 1 and idle.close_requests == 1 and not idle.alive
+    assert dialogs.warnings[0].startswith(stopped_text("pid 101 — 응답 없음"))
+    assert downloaded_files() == [] and not fake_helpers.called and quits == []
+    assert player_offer.isEnabled() and player_offer.update_banner.mode() == "offer"
+    log = update_log()
+    assert "응답 없음" in log and "답하지 않았습니다" in log
+
+
+def test_window_opened_while_closing_others_is_closed_too(player_offer, other_windows, dialogs, fake_helpers, quits,
+                                                          fast_close_poll):
+    """닫기를 기다리는 동안 새로 켜진 창도 묻지 않고 닫기를 요청하고, 그 창이 끝난 뒤에 넘김."""
+    first = other_windows.add(101, exits_after=2)
+    late = []
+    first.on_close = lambda: late.append(other_windows.add(102, exits_after=2))
+    player_offer.start_update()
+    wait_until(lambda: fake_helpers.called)
+    [new] = late
+    assert first.close_requests == 1 and new.close_requests == 1 and not new.alive
+    assert len(dialogs.messages) == 1 and quits == ["quit"]
+
+
+def test_close_others_timeout_covers_a_closing_windows_longest_exit():
+    """닫기를 요청한 창이 끝나기를 기다리는 한도는 그 창이 정상적으로 닫히며 기다릴 수 있는 시간의 합보다 넉넉해야 함: 작업마다
+    멈추기를 기다림(JOB_CLOSE_WAIT_MS × RUNNING_JOB_ATTRS) + 공유 설정 불러오기(SHARED_CONFIG_CLOSE_WAIT_MS) + 앱이 끝나기
+    전에 붙잡아 둔 작업(app.EXIT_WAIT_S — 단계 사이에서만 멈추는 애니매틱2 추론). 짧으면 닫히는 중인 창 때문에 업데이트를
+    멈추고 받은 것(수백 MB)을 지움."""
+    from yesoncheck import app
+
+    base = player_base.VideoPlayerBase
+    longest_exit = (base.JOB_CLOSE_WAIT_MS / 1000 * len(base.RUNNING_JOB_ATTRS)
+                    + base.SHARED_CONFIG_CLOSE_WAIT_MS / 1000 + app.EXIT_WAIT_S)
+    assert player_update.CLOSE_OTHERS_TIMEOUT_S >= longest_exit + 10, (player_update.CLOSE_OTHERS_TIMEOUT_S, longest_exit)
+
+
+def test_close_wait_starts_when_the_close_request_is_answered(player_offer, other_windows, dialogs, fake_helpers, quits,
+                                                              quick_close_wait):
+    """끝나기를 기다리는 한도는 닫기 요청을 보내고 답을 받은 뒤부터 (Windows 파이프 연결은 창마다 몇 초 걸릴 수 있음) — 요청을
+    보내는 데 한도보다 오래 걸려도, 그 뒤 곧 끝나는 창 때문에 업데이트를 멈추지 않음."""
+    slow = other_windows.add(101, exits_after=2)
+    slow.on_close = lambda: time.sleep(1.0)  # 요청에 1초 (뒤 스레드) — 한도 0.4초보다 김
+    player_offer.start_update()
+    wait_until(lambda: fake_helpers.called or dialogs.warnings)
+    assert dialogs.warnings == [] and fake_helpers.called and quits == ["quit"]
+    assert slow.close_requests == 1 and not slow.alive
+    log = update_log()
+    assert log.index("닫기 요청의 답") < log.index("다른 창이 끝남"), log
+
+
+def test_scan_error_shows_failure_and_keeps_offer(player_offer, other_windows, dialogs, downloads, monkeypatch):
+    """다른 창을 확인하다 예상 못 한 오류(ps 실패 등) → 받지 않고 실패 창(트레이스백째), 띠는 다시 알림."""
+
+    def broken(app_path):
+        raise RuntimeError("시험용 ps 실패")
+
+    monkeypatch.setattr(instances, "other_user_processes", broken)
+    player_offer.start_update()
+    wait_until(lambda: dialogs.criticals)
+    _settle()
+    [box] = dialogs.boxes
+    assert box.title == "업데이트 실패" and "RuntimeError: 시험용 ps 실패" in box.text
+    assert "Traceback" in box.details
+    assert not download_started(downloads) and player_offer.update_banner.mode() == "offer"
+    assert player_offer._update_others is None
+
+
+def test_close_while_checking_others_releases_the_thread(player_offer, other_windows, dialogs, downloads):
+    other_windows.gate = threading.Event()
+    player_offer.start_update()
+    assert other_windows.scanning.wait(5)
+    _settle()
+    assert player_offer.update_banner.full_text() == "다른 창 확인 중…"
+    assert not player_offer.update_banner.cancel_button.isVisible()
+    work = player_offer._update_others.work
+    player_offer.close()
+    try:
+        assert work in player_base._RELEASED_WORKERS and player_offer._update_others is None
+    finally:
+        other_windows.gate.set()
+    assert player_base.wait_for_released_workers(5) == []
+    _settle()
+    assert dialogs.messages == [] and not download_started(downloads)
+
+
+def test_close_while_waiting_for_others_removes_download(player_offer, other_windows, fake_helpers, quits):
+    stuck = other_windows.add(101, closes=False)
+    player_offer.start_update()
+    wait_until(lambda: player_offer._update_others is not None and player_offer._update_others_timer.isActive())
+    assert not player_offer.isEnabled()  # 기다리는 동안 새 작업을 시작하지 않게
+    player_offer.close()
+    assert not player_offer._update_others_timer.isActive() and player_offer._update_others is None
+    assert player_base.wait_for_released_workers(5) == []
+    assert downloaded_files() == [] and not fake_helpers.called and quits == [] and stuck.close_requests == 1
+    assert "넘기지 않고 받은 것을 지움" in update_log()
+
+
+def test_others_work_talks_to_a_real_window_server_from_its_thread(qapp, monkeypatch):
+    """뒤 스레드(OthersWork)가 그 스레드에서 만든 소켓으로 진짜 창 서버(이 프로세스의 GUI 스레드에서 답함)에 상태를 묻고
+    닫기를 요청함 — 가짜 없이 instance_link를 지나는 길."""
+    status = {"pid": 4242, "title": WINDOW_TITLE, "video": video("FL_901.mov"), "jobs": ["영상 병합"],
+              "unsaved_ocr": True}
+    closed = []
+    server = instance_link.InstanceServer(lambda: status, lambda: closed.append(True))
+    record = instances.InstanceRecord(4242, "(시험 앱 자리)", 1.0, server.start())
+    monkeypatch.setattr(instances, "other_user_processes", lambda app_path: [])
+    monkeypatch.setattr(instances, "others", lambda app_path: [record])
+
+    def run_in_thread(work):
+        results = []
+        thread = player_update.OthersWork(work)
+        thread.done.connect(results.append)
+        thread.failed.connect(results.append)
+        thread.start()
+        wait_until(lambda: results)
+        thread.wait()
+        return results[0]
+
+    try:
+        scan = run_in_thread(lambda: player_update.scan_other_windows("(시험 앱 자리)"))
+        assert scan.users == [] and [(w.record, w.status, w.error) for w in scan.windows] == [(record, status, None)]
+        [window] = scan.windows
+        assert run_in_thread(lambda: player_update.request_close_all([window])) == [(window, None)]
+        wait_until(lambda: closed)
+    finally:
+        server.close()
+
+
+def test_status_reports_update_download_as_job(player_offer, downloads):
+    """다른 창의 업데이트가 묻는 상태에 이 창의 업데이트 받기도 작업으로 (설계 3-4의 작업 목록)."""
+    assert player_offer.instance_status()["jobs"] == []
+    downloads.gate = threading.Event()
+    player_offer.start_update()
+    wait_until(lambda: downloads.entered.is_set())
+    try:
+        assert player_offer.instance_status()["jobs"] == ["업데이트 받기"]
+        player_offer.cancel_update()
+    finally:
+        downloads.gate.set()
+    wait_offer_again(player_offer)
+    assert player_offer.instance_status()["jobs"] == []
+
+
 # ---- Mac ----
 
 
@@ -817,6 +1335,7 @@ def test_mac_stages_then_hands_off(player_offer_mac, fake_stage, fake_helpers, q
     assert downloaded_files() == []  # 새 앱을 꺼낸 dmg는 지움
     pending = read_pending()
     assert (pending.target, pending.previous, pending.platform_key) == ("1.1.1", "1.1.0", "mac-x86_64")
+    assert pending.token and fake_helpers.args.token == pending.token and pending.helper_pid == str(FakeHelperProc.pid)
     assert player_offer_mac.isHidden() and quits == ["quit"] and dialogs.messages == []
 
 
@@ -838,7 +1357,7 @@ def test_mac_close_while_staging_removes_staged_app(player_offer_mac, fake_stage
 def test_startup_ok_shows_message(tmp_state_dir, player_with_build, dialogs):
     write_pending(Pending("1.1.1", "1.1.0", "windows", now()))
     p = player_with_build("1.1.1")
-    p.handle_update_startup()
+    p.handle_update_startup(None)
     assert p.update_banner.full_text() == "1.1.1로 업데이트했습니다" and p.update_banner.mode() == "message"
     assert os.path.exists(ok_marker_path())
     assert read_pending() is None and dialogs.messages == []
@@ -853,7 +1372,7 @@ def test_startup_ok_removes_downloaded_installer(tmp_state_dir, player_with_buil
             fh.write(b"installer")
     write_pending(Pending("1.1.1", "1.1.0", "windows", now()))
     p = player_with_build("1.1.1")
-    p.handle_update_startup()
+    p.handle_update_startup(None)
     assert downloaded_files() == [] and dialogs.messages == []
     assert p.update_banner.full_text() == "1.1.1로 업데이트했습니다"
     assert "받은 것을 지움" in update_log()
@@ -872,7 +1391,7 @@ def test_startup_ok_download_removal_failure_is_logged_only(tmp_state_dir, playe
     monkeypatch.setattr(player_update, "remove_prepared", locked)
     write_pending(Pending("1.1.1", "1.1.0", "windows", now()))
     p = player_with_build("1.1.1")
-    p.handle_update_startup()
+    p.handle_update_startup(None)
     assert dialogs.messages == [] and p.update_banner.full_text() == "1.1.1로 업데이트했습니다"
     log = update_log()
     assert "받은 것을 지우지 못함" in log and "PermissionError: 시험용 지우기 실패" in log
@@ -882,7 +1401,7 @@ def test_startup_failed_shows_log(tmp_state_dir, player_with_build, dialogs):
     write_pending(Pending("1.1.1", "1.1.0", "windows", now()))
     update_install.log("설치 실패: 예시")
     p = player_with_build("1.1.0")
-    p.handle_update_startup()
+    p.handle_update_startup(None)
     assert "설치 실패: 예시" in dialogs.criticals[0]
     [(kind, title, text)] = dialogs.messages
     assert title == "업데이트 실패" and "1.1.1" in text and update_install.log_path() in text
@@ -895,7 +1414,7 @@ def test_startup_failed_long_log_goes_to_details(tmp_state_dir, player_with_buil
     for i in range(120):
         update_install.log(f"도우미: 긴 기록 {i:03d}")
     p = player_with_build("1.1.0")
-    p.handle_update_startup()
+    p.handle_update_startup(None)
     [box] = dialogs.boxes
     assert (box.kind, box.title) == ("critical", "업데이트 실패")
     assert "1.1.1로 업데이트하지 못했습니다" in box.text and update_install.log_path() in box.text
@@ -914,7 +1433,7 @@ def test_startup_failed_shows_helper_output_missing_from_log(tmp_state_dir, play
     with open(update_install.helper_console_path(), "w", encoding="utf-8") as fh:
         fh.write(f"{logged}\n{error}\n")
     p = player_with_build("1.1.0")
-    p.handle_update_startup()
+    p.handle_update_startup(None)
     [(kind, title, text)] = dialogs.messages
     assert (kind, title) == ("critical", "업데이트 실패")
     assert error in text and update_install.helper_console_path() in text and text.count(logged) == 1
@@ -925,7 +1444,7 @@ def test_startup_corrupt_record_shows_dialog(tmp_state_dir, player_with_build, d
     with open(os.path.join(tmp_state_dir, update_install.PENDING_FILE_NAME), "w", encoding="utf-8") as fh:
         fh.write("{깨진")
     p = player_with_build("1.1.1")
-    p.handle_update_startup()
+    p.handle_update_startup(None)
     [(kind, title, text)] = dialogs.messages
     assert (kind, title) == ("critical", "업데이트 실패") and "업데이트 기록을 읽지 못했습니다" in text
     assert read_pending() is None  # 보인 뒤 지움 (켤 때마다 같은 창이 뜨지 않게)
@@ -933,10 +1452,274 @@ def test_startup_corrupt_record_shows_dialog(tmp_state_dir, player_with_build, d
 
 def test_startup_without_record_or_in_source_run_does_nothing(tmp_state_dir, player_with_build, dialogs, monkeypatch):
     p = player_with_build("1.1.1")
-    p.handle_update_startup()
+    p.handle_update_startup(None)
     assert dialogs.messages == [] and p.update_banner.mode() == "hidden"
     write_pending(Pending("1.1.1", "1.1.0", "windows", now()))
     monkeypatch.setattr(build_info, "current", lambda: None)
-    p.handle_update_startup()
+    p.handle_update_startup(None)
     assert dialogs.messages == [] and read_pending() is not None  # 소스 실행은 기록을 건드리지 않음
     assert not os.path.exists(ok_marker_path())
+
+
+# ---- 업데이트 결과는 도우미가 켠 앱만 (토큰) ----
+
+TOKEN = "a1b2c3d4e5f60718"
+
+
+@pytest.fixture
+def live_helper(tmp_state_dir):
+    """도는 도우미 흉내 — started: 띄우기 바로 전에 업데이트 기록에 적을 시각 (_hand_off와 같은 순서), pid: 글자."""
+    started = now()
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    yield SimpleNamespace(proc=proc, pid=str(proc.pid), started=started)
+    proc.kill()
+    proc.wait(10)
+
+
+def test_startup_with_token_only_helper_launched_app_judges(live_helper, player_with_build, dialogs):
+    """업데이트 중(도우미가 돎)에 사용자가 켠 앱(토큰 없음)은 기록을 건드리지 않음 — 도우미가 토큰과 함께 켠 새 앱이 '잘
+    켜짐'을 씀."""
+    pending = Pending("1.1.1", "1.1.0", "windows", live_helper.started, token=TOKEN, helper_pid=live_helper.pid,
+                      app_pid="4100")
+    write_pending(pending)
+    p = player_with_build("1.1.0")
+    p.handle_update_startup(None)
+    p.handle_update_startup("ffffffffffffffff")
+    assert dialogs.messages == [] and read_pending() == pending and not os.path.exists(ok_marker_path())
+    p.handle_update_startup(TOKEN)  # 옛 버전이 토큰과 함께 켜짐 = 도우미가 되돌림
+    [(kind, title, text)] = dialogs.messages
+    assert (kind, title) == ("critical", "업데이트 실패") and read_pending() is None
+    write_pending(pending)
+    q = player_with_build("1.1.1")
+    q.handle_update_startup(TOKEN)
+    assert q.update_banner.full_text() == "1.1.1로 업데이트했습니다" and os.path.exists(ok_marker_path())
+    assert read_pending() is None and len(dialogs.messages) == 1
+
+
+def test_startup_after_helper_ended_reports_failure_in_any_launch(live_helper, player_with_build, dialogs):
+    """도우미가 옛 앱을 다시 켜지 않고 끝남(앱이 끝나지 않아 그만둠·로그아웃 뒤 되살림 등) → 사용자가 켠 옛 앱이 실패를
+    알리고 기록을 지움."""
+    write_pending(Pending("1.1.1", "1.1.0", "windows", live_helper.started, token=TOKEN, helper_pid=live_helper.pid,
+                          app_pid="4100"))
+    live_helper.proc.kill()
+    live_helper.proc.wait(10)
+    p = player_with_build("1.1.0")
+    p.handle_update_startup(None)
+    [(kind, title, text)] = dialogs.messages
+    assert (kind, title) == ("critical", "업데이트 실패") and "1.1.1로 업데이트하지 못했습니다" in text
+    assert read_pending() is None
+
+
+def test_startup_failed_shows_only_lines_of_updating_window_and_helper(tmp_state_dir, player_with_build, dialogs):
+    started = now()
+    write_pending(Pending("1.1.1", "1.1.0", "windows", started, token=TOKEN, helper_pid="4242", app_pid="4100"))
+    with open(update_install.log_path(), "a", encoding="utf-8") as fh:
+        fh.write(f"{started} [pid 4100] 업데이트 1.1.1: 도우미를 띄움\n")
+        fh.write(f"{started} [pid 5300] 업데이트 확인: 다른 창의 줄\n")
+        fh.write(f"{started} 도우미: 설치 실패: 예시\n")
+    p = player_with_build("1.1.0")
+    p.handle_update_startup(TOKEN)
+    [box] = dialogs.boxes
+    assert "[pid 4100] 업데이트 1.1.1: 도우미를 띄움" in box.details and "도우미: 설치 실패: 예시" in box.details
+    assert "다른 창의 줄" not in box.details
+
+
+class LaunchedPlayer(QWidget):
+    """app.launch가 만드는 창 대신 — 지난 업데이트의 결과 판정에 넘어온 토큰을 남김."""
+
+    created = []
+
+    def __init__(self, **kwargs):
+        super().__init__()
+        self.update_tokens = []
+        LaunchedPlayer.created.append(self)
+
+    def start_shared_config_load(self):
+        pass
+
+    def handle_update_startup(self, update_token):
+        self.update_tokens.append(update_token)
+
+    def show_user_file_problems(self):
+        pass
+
+    def start_instance_link(self):
+        pass
+
+
+@pytest.fixture
+def launched(monkeypatch):
+    from yesoncheck import app as app_module
+
+    LaunchedPlayer.created = []
+    monkeypatch.setattr(app_module, "VideoPlayer", LaunchedPlayer)
+    yield LaunchedPlayer.created
+    for player in LaunchedPlayer.created:
+        player.close()
+
+
+@pytest.fixture
+def helper_running(live_helper):
+    """다른 창이 넘긴 업데이트의 도우미가 도는 중 (업데이트 기록 + 살아 있는 도우미 프로세스)."""
+    write_pending(Pending("1.1.1", "1.1.0", build_info.platform_key(), live_helper.started, token=TOKEN,
+                          helper_pid=live_helper.pid, app_pid="4100"))
+    return live_helper
+
+
+def test_launch_exits_with_message_when_update_in_progress(qapp, helper_running, launched, dialogs, monkeypatch,
+                                                           tmp_path):
+    from yesoncheck import app as app_module
+
+    _built_app(monkeypatch, "1.1.0")
+
+    def no_splash(*args, **kwargs):
+        raise AssertionError("업데이트 중인데 스플래시를 만듦")
+
+    monkeypatch.setattr(app_module, "QSplashScreen", no_splash)
+    video = str(tmp_path / "장면 #1.mov")
+    assert app_module.launch(["yesoncheck", video]) == 0
+    assert dialogs.messages == [("information", "YesonCheck", "업데이트 중입니다 — 끝난 뒤 다시 열어 주세요")]
+    assert launched == []  # 창을 만들지 않음
+    assert read_pending().token == TOKEN  # 기록은 그대로 (도우미가 켤 앱이 판정)
+
+
+class _OkDialog(QDialog):
+    """show_update_in_progress의 QMessageBox 대신 넣는 평범한 QDialog — 같은 만들기 인자, [OK](QMessageBox.Ok)는 accept.
+    Windows offscreen에서는 QMessageBox를 띄우면 Qt가 access violation으로 죽음 (시험 환경 문제 — 실제 Windows 실행은
+    offscreen이 아님, test_instance_link._question_and_exec_dialog와 같음)."""
+
+    Information = QMessageBox.Information
+    Ok = QMessageBox.Ok
+
+    def __init__(self, icon, title, text, buttons, parent=None):
+        super().__init__(parent)
+        assert (icon, buttons) == (QMessageBox.Information, QMessageBox.Ok)
+        self.setWindowTitle(title)
+        self._text = text
+        self._ok = QPushButton("OK", self)
+        self._ok.clicked.connect(self.accept)
+
+    def text(self):
+        return self._text
+
+    def button(self, which):
+        assert which == QMessageBox.Ok
+        return self._ok
+
+
+# "qdialog": 창을 _OkDialog로 바꿔 (모든 플랫폼) 타이머·accept·exec_가 끝나는 흐름을, "qmessagebox": 실제 QMessageBox (Windows 밖)
+UPDATE_BOX_KINDS = [
+    "qdialog",
+    pytest.param("qmessagebox", marks=pytest.mark.skipif(
+        sys.platform == "win32", reason="Windows offscreen에서 QMessageBox는 Qt를 죽임 (시험 환경)")),
+]
+
+
+def _update_box_class(app_module, kind, monkeypatch):
+    if kind == "qdialog":
+        monkeypatch.setattr(app_module, "QMessageBox", _OkDialog)
+        return _OkDialog
+    return QMessageBox
+
+
+class _BoxWatch:
+    """시험 중 실제로 뜬(exec_) box_class 창을 after_ms 뒤에 찾아 action(box)을 함 — 창이 저절로 닫히지 않아도 시험이 멈추지
+    않게 (seen: 그때 떠 있던 창의 글)."""
+
+    def __init__(self, after_ms, action, box_class):
+        self.seen = []
+        self.box_class = box_class
+        self.timer = QTimer()
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(lambda: self._act(action))
+        self.timer.start(after_ms)
+
+    def _act(self, action):
+        for widget in QApplication.topLevelWidgets():
+            if isinstance(widget, self.box_class) and widget.isVisible():
+                self.seen.append(widget.text())
+                action(widget)
+
+
+@pytest.mark.parametrize("kind", UPDATE_BOX_KINDS)
+def test_update_in_progress_box_closes_itself(qapp, helper_running, launched, monkeypatch, kind):
+    """'업데이트 중' 창을 띄운 채 자리를 비워도 곧 닫히고 프로세스가 끝남 — 도우미는 모든 앱 프로세스가 끝나기를 기다림."""
+    from yesoncheck import app as app_module
+
+    _built_app(monkeypatch, "1.1.0")
+    assert 1000 <= app_module.UPDATE_IN_PROGRESS_CLOSE_MS <= 15000  # 읽을 만큼은 보이고, 도우미의 기다림보다 훨씬 짧게
+    monkeypatch.setattr(app_module, "UPDATE_IN_PROGRESS_CLOSE_MS", 300)
+    box_class = _update_box_class(app_module, kind, monkeypatch)
+    stuck = _BoxWatch(5000, lambda box: box.done(QMessageBox.Ok), box_class)  # 저절로 닫히지 않으면 5초 뒤 대신 닫음
+    started = time.monotonic()
+    try:
+        assert app_module.launch(["yesoncheck"]) == 0
+    finally:
+        stuck.timer.stop()
+    assert stuck.seen == [] and time.monotonic() - started < 4 and launched == []
+
+
+@pytest.mark.parametrize("kind", UPDATE_BOX_KINDS)
+def test_update_in_progress_box_closes_at_once_on_ok(qapp, helper_running, launched, monkeypatch, kind):
+    from yesoncheck import app as app_module
+
+    _built_app(monkeypatch, "1.1.0")
+    monkeypatch.setattr(app_module, "UPDATE_IN_PROGRESS_CLOSE_MS", 60000)
+    box_class = _update_box_class(app_module, kind, monkeypatch)
+    ok = _BoxWatch(100, lambda box: box.button(QMessageBox.Ok).click(), box_class)
+    started = time.monotonic()
+    try:
+        assert app_module.launch(["yesoncheck"]) == 0
+    finally:
+        ok.timer.stop()
+    assert ok.seen == ["업데이트 중입니다 — 끝난 뒤 다시 열어 주세요"] and time.monotonic() - started < 10
+    assert launched == []
+
+
+def test_launch_with_update_token_starts_during_update(qapp, helper_running, launched, dialogs, monkeypatch):
+    """도우미가 토큰과 함께 켠 앱은 '업데이트 중'이어도 켜지고, 그 토큰으로 결과를 판정."""
+    from yesoncheck import app as app_module
+
+    _built_app(monkeypatch, "1.1.1")
+    assert app_module.launch(["yesoncheck", "--update-result", TOKEN]) == 0
+    assert dialogs.messages == []
+    [player] = launched
+    wait_until(lambda: player.update_tokens)
+    assert player.update_tokens == [TOKEN]
+
+
+def test_launch_in_source_run_does_not_check_update(qapp, helper_running, launched, dialogs, monkeypatch):
+    """소스 실행은 업데이트하지 않음 → 빌드된 앱의 업데이트 중에도 켜짐 (결과도 판정하지 않음 — handle_update_startup)."""
+    from yesoncheck import app as app_module
+
+    monkeypatch.setattr(build_info, "current", lambda: None)
+    assert app_module.launch(["yesoncheck"]) == 0
+    assert dialogs.messages == [] and len(launched) == 1
+
+
+def test_launch_shows_error_when_update_check_fails_and_starts(qapp, tmp_state_dir, launched, dialogs, monkeypatch):
+    """업데이트 중인지 확인하다 예상 못 한 오류 → 트레이스백째 창, 앱은 켬 (확인을 못 해 앱을 못 쓰게 되지 않게)."""
+    from yesoncheck import app as app_module
+
+    _built_app(monkeypatch, "1.1.0")
+
+    def broken():
+        raise RuntimeError("시험용 확인 실패")
+
+    monkeypatch.setattr(update_install, "update_in_progress", broken)
+    assert app_module.launch(["yesoncheck"]) == 0
+    [(kind, title, text)] = dialogs.messages
+    assert kind == "critical" and "Traceback" in text and "RuntimeError: 시험용 확인 실패" in text
+    assert len(launched) == 1
+
+
+def test_launch_with_corrupt_record_starts_and_leaves_it_to_startup_result(qapp, tmp_state_dir, launched, dialogs,
+                                                                         monkeypatch):
+    """업데이트 기록이 깨졌으면 '업데이트 중'인지 알 수 없음 → 켬 (창을 보인 뒤 handle_update_startup이 보이고 지움)."""
+    from yesoncheck import app as app_module
+
+    _built_app(monkeypatch, "1.1.0")
+    with open(os.path.join(tmp_state_dir, update_install.PENDING_FILE_NAME), "w", encoding="utf-8") as fh:
+        fh.write("{깨진")
+    assert app_module.launch(["yesoncheck"]) == 0
+    assert dialogs.messages == [] and len(launched) == 1

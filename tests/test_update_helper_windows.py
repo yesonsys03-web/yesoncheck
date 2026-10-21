@@ -5,18 +5,24 @@ C# 프로그램 하나(FAKE_EXE_SOURCE)를 시험 세션마다 한 번 .NET Fram
 — 도우미는 되돌릴 때 실행 파일 경로(설치 폴더 아래)로 새 앱 프로세스를 찾아 끝내므로 진짜 exe여야 한다(.cmd는 cmd.exe로
 돌아 프로세스 경로가 System32가 됨). 같은 exe가 두 역할을 한다:
 
-- 인자 없이 켜면 가짜 앱. 옆의 kind.txt에 따라 "old"(옛 앱 — 흔적만 남기고 끝남), "new"(시험이 YC_TEST_OK_FILE로 알려 준
+- 인자 없이, 또는 `--update-result TOKEN`(도우미가 켜는 앱의 인자)으로 켜면 가짜 앱. 옆의 kind.txt에 따라 "old"(옛 앱 —
+  흔적만 남기고 끝남), "new"(시험이 YC_TEST_OK_FILE로 알려 준
   '잘 켜짐' 표시에 {"version": "1.1.1"}을 임시 파일 + 이름 바꾸기로 씀), "silent"(표시 없이 계속 살아 있음),
   "silent_child"(silent + 작업 폴더가 설치 폴더인 cmd.exe 자식 — ping으로 약 5분 살아 있음, 흔적 child_started), "crash"(표시 없이 1초 뒤 종료 코드 3).
   켜질 때 흔적 파일(YC_TEST_TRACE_DIR/<old|new>_started, YC_TEST_TRACE_AS로 이름을 바꿀 수 있음)에
-  자기 pid를 남기고, YC_TEST_HOLD_S가 있으면 그만큼 살아 있다(끝나기를 기다리는 "지금 앱" 흉내).
+  자기 pid를, <old|new>_args에 받은 인자(켤 때마다 한 줄, 탭으로 나눔)를 남기고, YC_TEST_HOLD_S가 있으면 그만큼 살아 있다
+  (끝나기를 기다리는 "지금 앱"·"다른 창" 흉내). YC_TEST_EXIT_AFTER_HOLD=1이면 그 뒤 흔적 <이름>_ended를 남기고 스스로 끝남
+  (도우미가 끝냈으면 남지 않음).
 - /DIR=… 같은 인자로 켜면 가짜 설치 파일. 받은 인자를 흔적 폴더의 installer_args.txt에 적고, /LOG=에 가짜 기록을 쓰고,
   /DIR= 폴더에 자기를 YesonCheck_Autocut.exe로 복사하고 kind.txt(YC_TEST_NEW_KIND)·_internal/new.txt를 만든 뒤
-  YC_TEST_INSTALLER_EXIT(없으면 0)로 끝난다 — 0이 아니면 반쯤 깔린 폴더를 남기고 실패한 셈. YC_TEST_INSTALLER_HANG=1이면
+  YC_TEST_INSTALLER_EXIT(없으면 0)로 끝난다 — 0이 아니면 반쯤 깔린 폴더를 남기고 실패한 셈. YC_TEST_INSTALLER_SPAWN_APP이
+  있으면 끝나기 전에 /DIR=의 exe를 그 이름의 흔적으로 YC_TEST_SPAWN_HOLD_S초 동안 띄움(도우미가 새 앱을 켜기 전부터 설치
+  폴더에서 도는 창 — 업데이트 중에 사용자가 켠 창 흉내, 스스로 끝남). YC_TEST_INSTALLER_HANG=1이면
   그 뒤 작업 폴더가 /DIR=인 cmd.exe 자식(흔적 installer_child_started)을 띄우고 끝나지 않는다(멈춘 설치 파일 흉내).
 
 도우미에게 넘기는 앱 pid는 보통 이 시험 프로세스(python.exe)의 것 — 살아 있지만 설치 폴더의 exe가 아니므로 도우미가
-기다리지 않는다. 출력은 파일로 받는다(파이프로 받으면 도우미가 켠 가짜 앱이 파이프를 물려받아 끝을 기다리다 멈출 수 있음).
+기다리지 않는다. 도우미는 앱처럼 -Token TOKEN을 받는다(helper_cmd의 token=None이면 넘기지 않음).
+출력은 파일로 받는다(파이프로 받으면 도우미가 켠 가짜 앱이 파이프를 물려받아 끝을 기다리다 멈출 수 있음).
 종료 코드 2의 알림 창은 YC_UPDATE_NO_MESSAGEBOX=1로 띄우지 않는다(시험이 멈추지 않게). 도우미는 앱처럼 상태 폴더에 둔
 복사본을 실행하고(되살림 정보 파일이 그 옆에 생김), 다음 로그인의 되살림은 진짜 RunOnce가 아니라 시험마다 다른
 HKCU\Software\YesonCheckTest\RunOnce-<…> 키에 등록한다(YC_UPDATE_RUNONCE_KEY, 시험이 끝나면 지움).
@@ -43,6 +49,7 @@ ROOT = Path(__file__).resolve().parent.parent
 HELPER = ROOT / "yesoncheck" / "update_helper_windows.ps1"
 SPEC = ROOT / "YesonCheck_Autocut.spec"
 TARGET = "1.1.1"
+TOKEN = "0123456789abcdef"  # 앱이 넘기는 업데이트 토큰 (도우미가 다시 켜는 앱만 결과를 판정 — update_install.Pending)
 EXE_NAME = "YesonCheck_Autocut.exe"
 LOG_LINE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2} ")  # update_install.log()와 같은 줄 앞 시각
 POWERSHELL = update_install._windows_powershell()
@@ -77,7 +84,9 @@ static class FakeYesonCheck
         try
         {
             string self = Assembly.GetEntryAssembly().Location;
-            return args.Length > 0 ? Install(self, args) : RunApp(self);
+            // the helper starts the app with no arguments or with "--update-result TOKEN"; the installer gets /DIR= etc.
+            bool app = args.Length == 0 || args[0] == "--update-result";
+            return app ? RunApp(self, args) : Install(self, args);
         }
         catch (Exception e)
         {
@@ -89,15 +98,22 @@ static class FakeYesonCheck
         }
     }
 
-    static int RunApp(string self)
+    static int RunApp(string self, string[] args)
     {
         string kind = File.ReadAllText(Path.Combine(Path.GetDirectoryName(self), "kind.txt"), Utf8).Trim();
         string traceName = Environment.GetEnvironmentVariable("YC_TEST_TRACE_AS");
         if (string.IsNullOrEmpty(traceName)) traceName = kind == "old" ? "old" : "new";
-        File.AppendAllText(Path.Combine(Env("YC_TEST_TRACE_DIR"), traceName + "_started"),
-                           Process.GetCurrentProcess().Id + "\n", Utf8);
+        string trace = Env("YC_TEST_TRACE_DIR");
+        // one line per launch: the arguments joined by tabs (an empty line: no arguments) - before _started
+        File.AppendAllText(Path.Combine(trace, traceName + "_args"), string.Join("\t", args) + "\n", Utf8);
+        File.AppendAllText(Path.Combine(trace, traceName + "_started"), Process.GetCurrentProcess().Id + "\n", Utf8);
         string hold = Environment.GetEnvironmentVariable("YC_TEST_HOLD_S");
         if (!string.IsNullOrEmpty(hold)) Thread.Sleep(int.Parse(hold) * 1000);
+        if (Environment.GetEnvironmentVariable("YC_TEST_EXIT_AFTER_HOLD") == "1")
+        {
+            File.AppendAllText(Path.Combine(trace, traceName + "_ended"), Process.GetCurrentProcess().Id + "\n", Utf8);
+            return 0;
+        }
         if (kind == "new")
         {
             string ok = Env("YC_TEST_OK_FILE");
@@ -136,6 +152,8 @@ static class FakeYesonCheck
         File.Copy(self, Path.Combine(dir, "YesonCheck_Autocut.exe"), true);
         File.WriteAllText(Path.Combine(dir, "kind.txt"), Env("YC_TEST_NEW_KIND"), Utf8);
         File.WriteAllText(Path.Combine(dir, "_internal", "new.txt"), "new", Utf8);
+        string spawn = Environment.GetEnvironmentVariable("YC_TEST_INSTALLER_SPAWN_APP");
+        if (!string.IsNullOrEmpty(spawn)) StartInstalledApp(dir, spawn);
         if (Environment.GetEnvironmentVariable("YC_TEST_INSTALLER_HANG") == "1")
         {
             StartDirHolder(dir, "installer_child");
@@ -143,6 +161,19 @@ static class FakeYesonCheck
         }
         string code = Environment.GetEnvironmentVariable("YC_TEST_INSTALLER_EXIT");
         return string.IsNullOrEmpty(code) ? 0 : int.Parse(code);
+    }
+
+    // a window the user opened from the install folder while the update runs (started before the helper launches the
+    // new app): lives YC_TEST_SPAWN_HOLD_S seconds, then leaves <traceName>_ended and exits by itself
+    static void StartInstalledApp(string dir, string traceName)
+    {
+        ProcessStartInfo psi = new ProcessStartInfo(Path.Combine(dir, "YesonCheck_Autocut.exe"));
+        psi.WorkingDirectory = Env("YC_TEST_TRACE_DIR");
+        psi.UseShellExecute = false;
+        psi.EnvironmentVariables["YC_TEST_TRACE_AS"] = traceName;
+        psi.EnvironmentVariables["YC_TEST_HOLD_S"] = Env("YC_TEST_SPAWN_HOLD_S");
+        psi.EnvironmentVariables["YC_TEST_EXIT_AFTER_HOLD"] = "1";
+        Process.Start(psi);
     }
 
     // a child outside the install folder whose working directory is the install folder (like a cmd.exe or
@@ -272,11 +303,22 @@ def wait_until(condition, timeout_s=15.0):
     return condition()
 
 
-def trace_pids(case, name):
-    path = case.trace / f"{name}_started"
+def trace_pids(case, name, event="started"):
+    """가짜 프로세스가 남긴 흔적 <name>_<event>(started·ended)의 pid들."""
+    path = case.trace / f"{name}_{event}"
     if not path.exists():
         return []
     return [int(x) for x in path.read_text(encoding="utf-8").split()]
+
+
+def trace_args(case, name):
+    """가짜 앱이 켜질 때마다 받은 인자 [[인자, …], …] (흔적 <name>_args — 켤 때마다 한 줄, 탭으로 나눔, 빈 줄은 인자 없음)."""
+    path = case.trace / f"{name}_args"
+    if not path.exists():
+        return []
+    lines = path.read_text(encoding="utf-8").split("\n")
+    assert lines[-1] == "", lines  # 줄마다 끝에 \n
+    return [line.split("\t") if line else [] for line in lines[:-1]]
 
 
 def installer_args(case):
@@ -444,6 +486,7 @@ def update_case(tmp_path, fake_exe):
         env.pop("YC_UPDATE_OK_TIMEOUT_S", None)
         env.pop("YC_UPDATE_PID_TIMEOUT_S", None)
         env.pop("YC_UPDATE_INSTALL_TIMEOUT_S", None)
+        env.pop("YC_OTHERS_TIMEOUT", None)
         # CI는 pytest를 PowerShell 7(pwsh)에서 띄우므로 PS7의 모듈 경로가 섞여 있음 — 5.1이 그 모듈을 불러오다 실패하지
         # 않게, 앱이 띄울 때(탐색기에서 켠 앱의 환경)처럼 5.1 기본 모듈 경로를 쓰게 함 (Windows의 os.environ 키는 대문자)
         for key in [k for k in env if k.upper() == "PSMODULEPATH"]:
@@ -482,8 +525,9 @@ def update_case(tmp_path, fake_exe):
                 pass  # 그 사이에 끝남
 
 
-def helper_cmd(case, pid, timeout_s):
-    """도우미 명령. timeout_s가 None이면 -TimeoutSeconds를 넘기지 않음(YC_UPDATE_OK_TIMEOUT_S·180초가 기본)."""
+def helper_cmd(case, pid, timeout_s, token=TOKEN):
+    """도우미 명령 (앱처럼 -Token TOKEN — token이 None이면 넘기지 않음). timeout_s가 None이면 -TimeoutSeconds를 넘기지
+    않음(YC_UPDATE_OK_TIMEOUT_S·180초가 기본)."""
     cmd = [
         POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(case.script),
         "-AppPid", str(pid),
@@ -495,6 +539,8 @@ def helper_cmd(case, pid, timeout_s):
     ]
     if timeout_s is not None:
         cmd += ["-TimeoutSeconds", str(timeout_s)]
+    if token is not None:
+        cmd += ["-Token", token]
     return cmd
 
 
@@ -504,9 +550,9 @@ def start_helper(case, cmd):
         return subprocess.Popen(cmd, env=case.env, cwd=str(case.base), stdin=subprocess.DEVNULL, stdout=out, stderr=err)
 
 
-def run_helper(case, pid=None, timeout_s=4, cmd=None, limit_s=180):
+def run_helper(case, pid=None, timeout_s=4, cmd=None, limit_s=180, token=TOKEN):
     """도우미를 끝까지 돌리고 종료 코드를 돌려줌 (limit_s초 안에). pid가 없으면 이 시험 프로세스의 것(이 앱이 아님)."""
-    proc = start_helper(case, cmd or helper_cmd(case, os.getpid() if pid is None else pid, timeout_s))
+    proc = start_helper(case, cmd or helper_cmd(case, os.getpid() if pid is None else pid, timeout_s, token))
     try:
         return proc.wait(timeout=limit_s)
     except subprocess.TimeoutExpired:
@@ -713,7 +759,7 @@ def test_helper_refuses_when_stale_backup_cannot_be_removed(update_case):
 
 
 @windows_only
-@pytest.mark.parametrize("flag, value", [("-AppPid", "abc"), ("-Target", None)])
+@pytest.mark.parametrize("flag, value", [("-AppPid", "abc"), ("-Target", None), ("-Token", "a b")])
 def test_helper_rejects_bad_arguments(update_case, flag, value):
     case = update_case("new")
     cmd = helper_cmd(case, os.getpid(), 4)
@@ -813,6 +859,141 @@ def test_helper_fails_loudly_when_app_missing(update_case):
     assert installer_args(case) is None and siblings(case) == ["YesonCheck"]
     text = log_text(case)
     assert "설치 폴더에 지금 앱이 없음" in text and "알림 창은 띄우지 않음" in text
+
+
+# ---- 다른 창·자기가 켠 앱·결과 판정 토큰 (여러 창) ----
+
+
+def start_second_window(case, hold_s):
+    """같은 설치의 다른 창 흉내: 설치 폴더의 exe(옛 앱)를 hold_s초 동안 띄움 (흔적 second_started) → Popen. 켜질 때까지
+    기다림."""
+    proc = subprocess.Popen(
+        [str(case.exe)], env=dict(case.env, YC_TEST_HOLD_S=str(hold_s), YC_TEST_TRACE_AS="second"), cwd=str(case.base),
+    )
+    assert wait_until(lambda: trace_pids(case, "second"), 30), "다른 창 흉내가 켜지지 않음\n" + failure_details(case, None)
+    return proc
+
+
+WAITING_FOR_OTHERS = "다른 YesonCheck 창이 끝나기를 기다림"
+
+
+@windows_only
+def test_waits_for_second_instance_before_rename(update_case):
+    """누른 창(-AppPid)이 끝난 뒤에도 같은 설치의 다른 창(실행 파일이 설치 폴더 아래)이 돌면 그 창이 끝나기를 기다린 뒤에
+    이름을 바꿈 — 끝내지는 않음 (전에는 바로 이름을 바꿔 보다 파일이 잡혀 실패해 업데이트하지 못함)."""
+    case = update_case("new")
+    second = start_second_window(case, 15)
+    try:
+        helper = start_helper(case, helper_cmd(case, os.getpid(), 10))
+        try:
+            assert wait_until(lambda: WAITING_FOR_OTHERS in log_so_far(case) or helper.poll() is not None, 60), (
+                failure_details(case, helper.poll()))
+            assert WAITING_FOR_OTHERS in log_so_far(case), failure_details(case, helper.poll())
+            assert second.poll() is None, "다른 창이 도우미가 기다리기 전에 끝남 (시험이 너무 늦음)"
+            assert helper.poll() is None and installer_args(case) is None, failure_details(case, helper.poll())
+            assert app_kind(case.install_dir) == "old" and not case.backup.exists()
+            assert second.wait(timeout=60) == 0  # 스스로 끝남 (도우미가 끝냈으면 0이 아님)
+            code = helper.wait(timeout=180)
+        finally:
+            helper.kill()
+    finally:
+        second.kill()
+    assert code == 0, failure_details(case, code)
+    assert app_kind(case.install_dir) == "new" and siblings(case) == ["YesonCheck"]
+    text = log_text(case)
+    waited = next(line for line in text.splitlines() if WAITING_FOR_OTHERS in line)
+    # 실행 파일 경로로 찾음 (경로를 읽지 못하는 같은 이름의 프로세스가 아님 — 같은 사용자의 창)
+    assert f"pid {second.pid} (" in waited and "경로를 읽지 못함" not in waited, waited
+    assert text.index("다른 YesonCheck 창이 모두 끝남") < text.index("설치 폴더를 백업 이름으로 바꿈"), text
+
+
+@windows_only
+def test_no_rename_when_second_instance_keeps_running(update_case):
+    """다른 창이 YC_OTHERS_TIMEOUT초 안에 끝나지 않으면 이름을 바꾸지 않고(설치하지 않음, 되살림도 등록하지 않음) 그 창은
+    그대로 둔 채 옛 앱을 토큰과 함께 다시 켬 — 그 앱이 '업데이트 실패' 창에 이 기록을 보임."""
+    case = update_case("new")
+    case.env["YC_OTHERS_TIMEOUT"] = "2"
+    second = start_second_window(case, 120)
+    try:
+        started = time.monotonic()
+        code = run_helper(case)
+        elapsed = time.monotonic() - started
+        alive = second.poll() is None
+    finally:
+        second.kill()
+        second.wait()
+    assert code == 1, failure_details(case, code)
+    assert alive, "도우미가 다른 창을 끝냄\n" + failure_details(case, code)
+    assert elapsed >= 2
+    assert installer_args(case) is None and app_kind(case.install_dir) == "old" and not case.backup.exists()
+    assert siblings(case) == ["YesonCheck"]
+    text = log_text(case)
+    assert f"다른 YesonCheck 창이 끝나지 않아 바꾸지 않음: pid {second.pid} (" in text and "(2초 기다림)" in text, text
+    assert "다음 로그인에서 되살리도록 등록함" not in text and runonce_value(case) is None
+    assert wait_until(lambda: trace_pids(case, "old")), "옛 앱이 다시 켜지지 않음\n" + failure_details(case, code)
+    assert trace_args(case, "old") == [["--update-result", TOKEN]]
+    assert not trace_pids(case, "new")
+
+
+@windows_only
+def test_stop_new_app_keeps_preexisting_instance(update_case):
+    """되돌릴 때는 도우미가 켠 새 앱(과 그 뒤에 생긴 프로세스)만 끝냄 — 새 앱을 켜기 전부터 설치 폴더의 exe로 돌던 창(업데이트
+    중에 사용자가 켠 창: '업데이트 중' 창을 보이고 스스로 끝남)은 끝내지 않음. 이 창은 작업 폴더가 설치 폴더 밖이라 되돌리기의
+    이름 바꾸기는 되지만(실행 중인 exe는 이름은 바뀌어도 지울 수 없음) 치운 새 버전을 바로 지우지 못함 → 옛 앱을 먼저 켜고,
+    그 창이 스스로 끝나기를 기다렸다 치운 것을 지움 (남기지 않음)."""
+    case = update_case("silent")
+    case.env.update(YC_TEST_INSTALLER_SPAWN_APP="preexisting", YC_TEST_SPAWN_HOLD_S="15")
+    code = run_helper(case, timeout_s=4)
+    assert code == 1, failure_details(case, code)
+    assert app_kind(case.install_dir) == "old" and siblings(case) == ["YesonCheck"], failure_details(case, code)
+    preexisting = trace_pids(case, "preexisting")
+    silent = trace_pids(case, "new")
+    assert preexisting and silent, failure_details(case, code)
+    text = log_text(case)
+    killed = kill_line_pids(text, "새 앱")
+    assert silent[0] in killed and preexisting[0] not in killed, failure_details(case, code)
+    assert f"새 앱을 켜기 전부터 돌던 프로세스는 끝내지 않음: pid {preexisting[0]}" in text, failure_details(case, code)
+    assert silent[0] not in processes_under(case.base), "새 앱이 끝나지 않음\n" + failure_details(case, code)
+    assert trace_pids(case, "preexisting", "ended") == preexisting, (
+        "켜기 전부터 돌던 창이 스스로 끝나지 않음 (도우미가 끝냄)\n" + failure_details(case, code))
+    assert wait_until(lambda: trace_pids(case, "old")), "옛 앱이 다시 켜지지 않음\n" + failure_details(case, code)
+    assert "되돌리기 실패" not in text, failure_details(case, code)
+    # 치운 새 버전: 바로 못 지움 → 옛 앱을 켬 → 그 창이 끝나기를 기다림(끝내지 않음) → 지움
+    order = [text.find(part) for part in (
+        "치운 새 버전을 아직 지우지 못함: ",
+        "되돌림: 옛 앱을 다시 켬",
+        f"새 앱을 켜기 전부터 돌던 프로세스가 끝나기를 기다림 (최대 60초 — 끝내지 않음): pid {preexisting[0]}",
+        "새 앱을 켜기 전부터 돌던 프로세스가 모두 끝남",
+        "치운 새 버전을 지움: ",
+    )]
+    assert -1 not in order and order == sorted(order), f"{order}\n" + failure_details(case, code)
+
+
+@windows_only
+@pytest.mark.parametrize("launched", ["new_app", "rolled_back_old_app"])
+def test_start_app_passes_token(update_case, launched):
+    """도우미가 켜는 앱(새 앱, 되돌린 옛 앱)에 --update-result TOKEN — 그 앱만 지난 업데이트의 결과를 판정 (launch_args,
+    update_install.startup_result)."""
+    case = update_case("new", installer_exit=0 if launched == "new_app" else 3)
+    code = run_helper(case)
+    assert code == (0 if launched == "new_app" else 1), failure_details(case, code)
+    name = "new" if launched == "new_app" else "old"
+    assert wait_until(lambda: trace_pids(case, name)), failure_details(case, code)
+    assert trace_args(case, name) == [["--update-result", TOKEN]], failure_details(case, code)
+    assert "-Token이 없음" not in log_text(case)
+
+
+@windows_only
+@pytest.mark.parametrize("launched", ["new_app", "rolled_back_old_app"])
+def test_start_app_without_token_passes_no_arguments(update_case, launched):
+    """-Token이 없으면(토큰을 모르는 옛 앱이 띄움) 켜는 앱에 인자를 넘기지 않음 — 빈 --update-result는 앱이 거절함."""
+    case = update_case("new", installer_exit=0 if launched == "new_app" else 3)
+    code = run_helper(case, token=None)
+    assert code == (0 if launched == "new_app" else 1), failure_details(case, code)
+    name = "new" if launched == "new_app" else "old"
+    assert wait_until(lambda: trace_pids(case, name)), failure_details(case, code)
+    assert trace_args(case, name) == [[]], failure_details(case, code)
+    assert "-Token이 없음 — 켜는 앱에 결과 판정 인자(--update-result)를 넘기지 않음" in log_text(case)
 
 
 # ---- 다음 로그인의 되살림 (-Recover) ----
@@ -1009,7 +1190,7 @@ def test_launch_helper_windows_copies_script_and_passes_arguments(tmp_state_dir,
     _RecordingPopen.calls = []
     monkeypatch.setattr(update_install.subprocess, "Popen", _RecordingPopen)
     installer = "C:\\Users\\studio01\\AppData\\Local\\YesonCheck\\updates\\YesonCheck_Setup_1.1.1.exe"
-    update_install.launch_helper_windows(installer, "C:\\YesonCheck", "1.1.1")
+    update_install.launch_helper_windows(installer, "C:\\YesonCheck", "1.1.1", TOKEN)
     copy = os.path.join(update_install.state_dir(), "update_helper_windows.ps1")
     console = _RecordingPopen.calls[0][1].pop("stdout")  # 도우미 출력 파일 (아래에서 따로 확인)
     assert console.name == update_install.helper_console_path() and console.closed
@@ -1024,6 +1205,7 @@ def test_launch_helper_windows_copies_script_and_passes_arguments(tmp_state_dir,
             "-Target", "1.1.1",
             "-OkFile", update_install.ok_marker_path(),
             "-Log", update_install.log_path(),
+            "-Token", TOKEN,
         ],
         {
             # CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW (Win32 값 — Mac의 subprocess에는 없음). DETACHED_PROCESS(0x8)는
@@ -1054,7 +1236,7 @@ def test_launch_helper_windows_resets_pyinstaller_environment_for_relaunched_app
     monkeypatch.delenv("PYINSTALLER_RESET_ENVIRONMENT", raising=False)
     _RecordingPopen.calls = []
     monkeypatch.setattr(update_install.subprocess, "Popen", _RecordingPopen)
-    update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1")
+    update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1", TOKEN)
     env = _RecordingPopen.calls[0][1]["env"]
     assert env["PYINSTALLER_RESET_ENVIRONMENT"] == "1" and env["YC_UPDATE_NO_MESSAGEBOX"] == "1"
     assert "PYINSTALLER_RESET_ENVIRONMENT" not in os.environ
@@ -1089,7 +1271,7 @@ def test_launch_helper_windows_starts_a_fresh_console_file(tmp_state_dir, monkey
         fh.write("지난 도우미의 출력\n")
     _RecordingPopen.calls = []
     monkeypatch.setattr(update_install.subprocess, "Popen", _RecordingPopen)
-    update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1")
+    update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1", TOKEN)
     assert Path(update_install.helper_console_path()).read_bytes() == b""
 
 
@@ -1122,7 +1304,7 @@ def test_real_launch_helper_windows_writes_start_line_with_ps7_module_path(tmp_s
     update_install.log("업데이트 1.1.1: 업데이트 기록을 남김 (앱의 줄)")
     offset = update_install.log_size()
     try:
-        proc = update_install.launch_helper_windows(str(tmp_path / "YesonCheck_Setup_1.1.1.exe"), str(install_dir), "1.1.1")
+        proc = update_install.launch_helper_windows(str(tmp_path / "YesonCheck_Setup_1.1.1.exe"), str(install_dir), "1.1.1", TOKEN)
     finally:
         # launch는 띄운 뒤 DLL 찾는 곳을 (가짜) _MEIPASS로 되돌림 — 이 시험 프로세스(빌드된 앱이 아님)는 원래대로 기본
         update_install._set_dll_directory(None)
@@ -1145,7 +1327,7 @@ def test_real_launch_helper_windows_records_early_powershell_failure(tmp_state_d
     monkeypatch.setattr(update_install, "_bundled_file", lambda name: str(broken))
     monkeypatch.setenv("YC_UPDATE_NO_MESSAGEBOX", "1")
     proc = update_install.launch_helper_windows(str(tmp_path / "Setup.exe"), str(tmp_path / "Programs" / "YesonCheck"),
-                                                "1.1.1")
+                                                "1.1.1", TOKEN)
     code, text, console = _wait_real_helper(proc)
     details = f"종료 코드 {code}\n기록:\n{text}\n도우미 출력:\n{console}"
     assert code != 0 and "yc-early-failure-marker" in console, details
@@ -1183,7 +1365,7 @@ def test_launch_helper_windows_launches_with_default_dll_search_when_frozen(tmp_
     events = []
     monkeypatch.setattr(update_install, "_kernel32", lambda: _FakeKernel32(events))
     monkeypatch.setattr(update_install.subprocess, "Popen", lambda args, **kwargs: events.append(("Popen", args[0])))
-    update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1")
+    update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1", TOKEN)
     assert events == [("SetDllDirectoryW", None), ("Popen", update_install._windows_powershell()),
                       ("SetDllDirectoryW", meipass)]
 
@@ -1196,7 +1378,7 @@ def test_launch_helper_windows_launches_with_default_dll_search_when_frozen(tmp_
 
     monkeypatch.setattr(update_install.subprocess, "Popen", failing_popen)
     with pytest.raises(OSError, match="PowerShell을 실행하지 못함"):
-        update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1")
+        update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1", TOKEN)
     assert events[-1] == ("SetDllDirectoryW", meipass)
 
 
@@ -1207,7 +1389,7 @@ def test_launch_helper_windows_does_not_launch_when_dll_search_reset_fails(tmp_s
     monkeypatch.setattr(update_install, "_last_windows_error", lambda: 87)
     monkeypatch.setattr(update_install.subprocess, "Popen", lambda args, **kwargs: events.append(("Popen", args[0])))
     with pytest.raises(OSError, match=r"SetDllDirectoryW\(None\)가 실패했습니다 \(Windows 오류 87\)"):
-        update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1")
+        update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1", TOKEN)
     assert events == [("SetDllDirectoryW", None)]
 
 
@@ -1217,7 +1399,7 @@ def test_launch_helper_windows_does_not_swallow_popen_failure(tmp_state_dir, mon
 
     monkeypatch.setattr(update_install.subprocess, "Popen", failing_popen)
     with pytest.raises(OSError, match="PowerShell을 실행하지 못함"):
-        update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1")
+        update_install.launch_helper_windows("C:\\Temp\\YesonCheck_Setup_1.1.1.exe", "C:\\YesonCheck", "1.1.1", TOKEN)
 
 
 def helper_code():
@@ -1279,6 +1461,63 @@ def test_helper_recover_command_fits_runonce_limit_or_is_not_registered():
     assert body.count("-le $RunOnceMaxChars") == 2 and "return $null" in body
     register = code[code.index("function Register-Recover"):code.index("function Clear-Recover")]
     assert "if ($null -eq $command) {" in register and "-gt 260" not in register
+
+
+def test_helper_waits_for_every_app_process_right_before_rename():
+    """누른 창이 끝난 뒤, 설치 폴더의 이름을 바꾸기 바로 전(지난 백업을 지운 뒤, 지난 표시 지우기·되살림 등록 전)에 같은 설치의
+    다른 프로세스 — 실행 파일이 설치 폴더 아래인 것과 경로를 읽지 못하는 같은 이름의 것(다른 사용자의 창일 수 있음) — 가 모두
+    끝나기를 기다림 (YC_OTHERS_TIMEOUT, 기본 60초 — Mac 도우미와 같은 이름). 넘거나 확인하지 못하면 되돌리기 길로 (바꾸지 않고
+    옛 앱을 다시 켬)."""
+    code = helper_code()
+    order = [code.index(part) for part in (
+        "$exited = Wait-AppExit",
+        "$script:FailReason = '지난 업데이트의 백업을 지우지 못함",
+        "$othersDone = Wait-AllAppProcesses",
+        "if (-not (Remove-OkMarker '되살림 등록 전",
+        "Move-Dir $InstallDir $Backup $RetryCount",
+    )]
+    assert order == sorted(order), order
+    assert "if (-not $othersDone) { Exit-Rollback }" in code
+    body = code[code.index("function Get-AppProcesses"):code.index("function Start-App")]
+    assert "$p.MainModule.FileName" in body and "$path.StartsWith($prefix" in body
+    assert "if ($p.ProcessName -ine $ExeBaseName) { continue }" in body  # 경로를 읽지 못하면 이름으로
+    assert "$gone = $p.HasExited" in body  # 끝났지만 핸들이 남은 프로세스(기다린 앱 등)는 빼고
+    assert "$sw.Elapsed.TotalSeconds -ge $OthersTimeoutS" in body
+    assert "$OthersTimeoutText = $env:YC_OTHERS_TIMEOUT" in code
+    assert "if (-not $OthersTimeoutText) { $OthersTimeoutText = '60' }" in code
+
+
+def test_helper_stop_new_app_spares_processes_started_before_launch():
+    """되돌릴 때 끝내는 것: 도우미가 켠 새 앱의 프로세스 트리 + 실행 파일이 설치 폴더 아래이고 새 앱을 켠 뒤에 시작한 것만
+    (앱 경로로 모두 끝내지 않음)."""
+    code = helper_code()
+    body = code[code.index("function Stop-NewApp"):code.index("function Invoke-Installer")]
+    assert "Add-ProcessTree $targets $script:NewProc $script:NewProcStart" in body
+    assert "$started = $p.StartTime" in body and "if ($started -ge $script:NewProcStart) {" in body
+    main = code[code.index("$exited = Wait-AppExit"):]
+    assert main.index("$script:NewProcStart = [DateTime]::Now") < main.index("$script:NewProc = Start-App '새 앱'")
+    # 끝내지 않은 프로세스가 치운 새 버전을 잡고 있으면: 옛 앱을 켠 뒤 그 프로세스가 끝나기를(시간 한도) 기다렸다 지움
+    assert "Add-Target $script:Spared $p" in body
+    rollback = code[code.index("function Exit-Rollback"):code.index("if ($ExtraArgs.Count -gt 0)")]
+    assert rollback.index("Start-App '옛 앱'") < rollback.index("Remove-LeftoverAfterSpared") < rollback.index("exit 1\n}")
+    leftover = code[code.index("function Remove-LeftoverAfterSpared"):code.index("function Exit-Rollback")]
+    assert "$p.WaitForExit($leftMs)" in leftover and "$OthersTimeoutS" in leftover and ".Kill(" not in leftover
+    assert "$script:FailedLeftover = $failed" in code[code.index("function Restore-Backup"):code.index(
+        "function Remove-LeftoverAfterSpared")]
+
+
+def test_helper_start_app_passes_update_result_token():
+    """도우미가 켜는 앱은 모두 Start-App으로 — 토큰이 있으면 `--update-result TOKEN` (launch_args와 같은 옵션). 토큰은 따옴표
+    없이 명령 줄에 넣으므로 영문·숫자·_·-만 받음 (앱의 토큰은 secrets.token_hex)."""
+    from yesoncheck import launch_args
+
+    code = helper_code()
+    body = code[code.index("function Start-App"):code.index("function Get-Descendants")]
+    assert f"if ($Token) {{ $psi.Arguments = '{launch_args.UPDATE_RESULT_OPTION} ' + $Token }}" in body
+    assert "if ($Token -and ($Token -notmatch '^[0-9A-Za-z_-]{1,128}$')) {" in code
+    launches = re.findall(r"Start-App '([^']+)'", code)
+    assert sorted(set(launches)) == ["새 앱", "옛 앱"], launches
+    assert code.count("[System.Diagnostics.Process]::Start(") == 2  # Start-App과 설치 파일뿐 — 앱을 다른 길로 켜지 않음
 
 
 def test_spec_bundles_windows_helper_only_on_windows():
