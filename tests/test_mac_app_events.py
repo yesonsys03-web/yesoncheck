@@ -489,3 +489,103 @@ def test_open_startup_file_missing_video_shows_error_window_naming_it(new_player
     [(kind, title, text)] = dialogs.messages
     assert kind in ("critical", "warning") and missing in text
     assert player.filename_a in (None, "")
+
+
+# ---- 오류 알림 (error_window — 빌드 앱은 앱의 예외 창) ----
+
+
+def test_open_failure_reaches_apps_error_window_with_log_path(qapp, calls, fake_register, dialogs, monkeypatch,
+                                                              tmp_path, capsys):
+    """미룬 콜백(첫 파일 열기 등)의 예상 못 한 예외: 빌드 앱이면 앱의 예외 창(app._ErrorDialog — 제목, 기록 파일 경로, 한 번에
+    하나만)으로. 트레이스백이 길어도 무엇이 실패했는지(앞의 글)는 그대로, 기록에는 트레이스백 전부."""
+    from yesoncheck import app as app_module, error_window
+
+    log_path = str(tmp_path / "yesoncheck_20261022_123.log")
+    monkeypatch.setattr(sys, "excepthook", app_module.make_excepthook(log_path))
+    a = str(tmp_path / "a.mov")
+    long_message = "열다 실패 " * 1000
+
+    def failing_open(path):
+        raise RuntimeError(f"{long_message}끝")
+
+    _, router = make_router(calls, [a])
+    router.ready(failing_open)
+    wait_until(lambda: dialogs.messages)
+    process_events()
+    [(kind, title, text)] = dialogs.messages
+    assert (kind, title) == ("critical", error_window.TITLE)
+    assert text.startswith(f"영상을 열지 못했습니다: {a}\n\n")
+    assert text.endswith(f"끝\n\n\n로그: {log_path}")
+    err = capsys.readouterr().err
+    assert f"[앱 이벤트] 영상을 열지 못했습니다: {a}" in err and long_message in err
+    assert not hasattr(mac_app_events, "ERROR_TITLE")  # 제목은 error_window.TITLE 하나
+
+
+def test_repeated_failures_do_not_stack_error_windows(qapp, calls, fake_register, monkeypatch, tmp_path, capsys):
+    """같은 실패가 되풀이돼도(파일 열기 이벤트가 연달아 실패) 앱의 예외 창은 한 번에 하나 — 열려 있는 동안 온 것은 기록에만."""
+    from yesoncheck import app as app_module
+    from PyQt5.QtWidgets import QMessageBox
+
+    shown = []
+
+    def modal_critical(parent, title, text, *args, **kwargs):
+        shown.append(text)
+        if len(shown) == 1:  # 첫 창이 떠 있는 동안(모달의 중첩 루프) 두 번째 실패가 옴
+            app.deliver(FileOpenEvent("", url="yesoncheck://second"))
+            process_events()
+        return QMessageBox.Ok
+
+    monkeypatch.setattr(QMessageBox, "critical", modal_critical)
+    monkeypatch.setattr(sys, "excepthook", app_module.make_excepthook(str(tmp_path / "x.log")))
+    app, router = make_router(calls, [])
+    router.ready(calls.here.append)
+    app.deliver(FileOpenEvent("", url="yesoncheck://first"))
+    wait_until(lambda: shown)
+    process_events()
+    assert len(shown) == 1 and "yesoncheck://first" in shown[0]
+    err = capsys.readouterr().err
+    assert "yesoncheck://second" in err and "오류 창이 이미 열려 있어" in err
+
+
+def test_failure_while_reporting_is_written_to_original_stderr(qapp, calls, fake_register, dialogs, monkeypatch):
+    """알리다 또 실패해도(기록 파일 쓰기 실패·오류 창 실패) eventFilter·Qt 루프 밖으로 내보내지 않고(PyQt5는 프로세스를 끝냄)
+    원래 stderr(sys.__stderr__)에 남김."""
+    import io
+
+    from yesoncheck import error_window
+
+    class BrokenStream:
+        def write(self, text):
+            raise OSError(28, "No space left on device")
+
+        def flush(self):
+            raise OSError(28, "No space left on device")
+
+    original = io.StringIO()
+    escaped = []
+    monkeypatch.setattr(sys, "excepthook", lambda *exc_info: escaped.append(exc_info))  # PyQt5가 abort 대신 부름
+    monkeypatch.setattr(sys, "__stderr__", original)
+    app, router = make_router(calls, [])
+    router.ready(calls.here.append)
+
+    # 1) 기록(stderr)부터 실패 — eventFilter 안
+    monkeypatch.setattr(sys, "stderr", BrokenStream())
+    assert app.deliver(FileOpenEvent("", url="yesoncheck://broken-log")) is True  # 밖으로 예외가 나가지 않음
+    monkeypatch.setattr(sys, "stderr", io.StringIO())
+    process_events()
+    text = original.getvalue()
+    assert mac_app_events.FILE_OPEN_FAILED_TEXT in text and "yesoncheck://broken-log" in text and "No space left" in text
+
+    # 2) 오류 창이 실패 — Qt 루프의 미룬 일 안
+    original.seek(0)
+    original.truncate()
+
+    def broken_window(text):
+        raise RuntimeError("창을 띄우지 못함 (시험)")
+
+    monkeypatch.setattr(error_window, "show_window", broken_window)
+    app.deliver(FileOpenEvent("", url="yesoncheck://broken-window"))
+    process_events()
+    text = original.getvalue()
+    assert "yesoncheck://broken-window" in text and "창을 띄우지 못함 (시험)" in text
+    assert escaped == []

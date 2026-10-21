@@ -16,16 +16,16 @@ if __package__ in (None, ""):
     sys.path.append(os.path.dirname(os.path.dirname(__file__)))
     from yesoncheck.main_window import VideoPlayer  # type: ignore  # pylint: disable=import-error
     from yesoncheck import (  # type: ignore  # pylint: disable=import-error
-        build_info, default_app, file_associations, launch_args, mac_app_events, mac_mounts, new_window, paths,
-        timing_log, update_install,
+        build_info, default_app, error_window, file_associations, launch_args, mac_app_events, mac_mounts, new_window,
+        paths, timing_log, update_install,
     )
     from yesoncheck.player_base import EXIT_WAIT_S, wait_for_released_workers  # type: ignore  # pylint: disable=import-error
     from yesoncheck.player_update import BOX_TITLE_PROPERTY  # type: ignore  # pylint: disable=import-error
 else:
     from .main_window import VideoPlayer
     from . import (
-        build_info, default_app, file_associations, launch_args, mac_app_events, mac_mounts, new_window, paths,
-        timing_log, update_install,
+        build_info, default_app, error_window, file_associations, launch_args, mac_app_events, mac_mounts, new_window,
+        paths, timing_log, update_install,
     )
     from .player_base import EXIT_WAIT_S, wait_for_released_workers
     from .player_update import BOX_TITLE_PROPERTY
@@ -116,13 +116,19 @@ class _ErrorDialog(QObject):
 
     @pyqtSlot(str)
     def show_error(self, text):
+        """잡히지 않은 예외(excepthook — text는 트레이스백만): 끝 error_window.DETAILS_LIMIT 글자(예외 글이 끝에 있음)."""
+        self.show_text(text[-error_window.DETAILS_LIMIT:])
+
+    def show_text(self, text):
+        """text를 자르지 않고 + 기록 파일 경로 (error_window.show_window — 무엇이 실패했는지가 앞에 있는 글). 한 번에 하나만."""
         if self.is_open:
             # 창 안의 이벤트 루프에서 같은 오류가 또 나면(타이머 등) 창이 겹겹이 쌓이다 스택이 넘침 → 로그에만
-            print("(오류 창이 이미 열려 있어 위 예외는 로그에만 남깁니다)", file=sys.stderr)
+            first_line = text.strip().splitlines()[0] if text.strip() else ""
+            print(f"(오류 창이 이미 열려 있어 이 오류는 로그에만 남깁니다: {first_line})", file=sys.stderr, flush=True)
             return
         self.is_open = True
         try:
-            QMessageBox.critical(None, "YesonCheck 오류", f"{text[-3000:]}\n\n로그: {self.log_path}")
+            QMessageBox.critical(None, error_window.TITLE, f"{text}\n\n로그: {self.log_path}")
         finally:
             self.is_open = False
 
@@ -145,7 +151,8 @@ def make_excepthook(log_path):
         else:
             dialog.requested.emit(text)  # GUI 스레드의 이벤트 루프에서 show_error 실행
 
-    # 시험·GC 방지용 참조 — 예상된 실패의 오류 창도 이 창으로 (error_window.show_error — default_app·file_associations)
+    # 시험·GC 방지용 참조 — 다른 모듈의 오류 창도 이 창으로 (error_window.show_window — default_app·file_associations·
+    # mac_app_events)
     excepthook.dialog = dialog
     return excepthook
 

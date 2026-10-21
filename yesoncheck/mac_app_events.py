@@ -13,9 +13,11 @@
 - Mac이 아니면 파일만 나눈다(이벤트 필터도 Apple Event도 없음 — Objective-C 런타임을 불러오지 않음). Windows에서 여러
   파일을 한 명령으로 받은 경우도 첫 파일은 이 창, 나머지는 새 창.
 - 콜백(open_here·on_open_files·on_reopen)은 Qt 루프에서 부른다(QTimer.singleShot(0) — 모달 대화 상자가 떠 있어도 그 안에서
-  돎). 실패하면 기록(stderr)과 오류 창에 트레이스백(new_window의 RuntimeError면 명령·출력)을 보이고, 이 창은 그대로.
-  PyQt5는 eventFilter 같은 가상 함수에서 빠져나간 예외로 프로세스를 끝내고(qFatal), ctypes는 IMP에서 빠져나간 예외를 한 줄
-  남기고 버리므로, 둘 다 안에서 잡아 같은 방법으로 보인다.
+  돎). 실패하면 바로 기록(stderr — 빌드 앱은 기록 파일)에 트레이스백(new_window의 RuntimeError면 명령·출력)을 남기고, 오류 창은
+  Qt 루프에서 error_window로(빌드 앱은 앱의 예외 창 — 기록 파일 경로가 붙고 한 번에 하나만, 트레이스백은 끝 부분만이고 무엇이
+  실패했는지는 그대로) — 이 창은 그대로. PyQt5는 eventFilter 같은 가상 함수·Qt 루프의 일에서 빠져나간 예외로 프로세스를
+  끝내고(qFatal — 소스 실행), ctypes는 IMP에서 빠져나간 예외를 한 줄 남기고 버리므로, 모두 안에서 잡아 같은 방법으로 보인다.
+  알리다 또 실패하면(기록 파일 쓰기·오류 창) 원래 stderr(sys.__stderr__)에 남긴다(_report_error·_last_resort).
 
 Step 1 실험 (2026-10-21, macOS 26.2 x86_64, PyQt5 5.15.11 / Qt 5.15.14, PyInstaller 6.14.1 onedir `argv_emulation`, 진짜 앱
 spec 모양의 실험 앱 — 빌드 앱과 소스 실행):
@@ -32,7 +34,9 @@ spec 모양의 실험 앱 — 빌드 앱과 소스 실행):
 - 등록 시점: AppKit은 `-[NSApplication finishLaunching]`(Qt의 첫 이벤트 처리 — launch의 스플래시 `processEvents` 안)에서 자기
   'rapp' 처리기를 등록한다. 그 전에 등록하면 오류 없이 덮여 콜백이 0번이다(덮였는지 알려 주는 API도 없음). 그래서 창을 보인
   뒤 ready 안에서 동기로 등록한다 — 이 모양(스플래시 processEvents → 창 → 동기 등록)을 빌드 앱에서 확인함. 창을 만드는 동안
-  온 rapp는 Apple Event 큐에서 기다렸다 등록 뒤 처리될 것으로 봄(추론 — 그때 Dock을 누르면 새 창이 하나 더 뜸).
+  온 rapp는 Apple Event 큐에서 기다린다(추론 — 확인 안 함): 보통은 그다음 이벤트 처리(splash.finish가 창이 보이기를 기다리는
+  동안)에서 아직 남아 있는 AppKit 기본 처리기가 처리해 새 창이 뜨지 않고, ready가 이 처리기를 등록할 때까지 큐에 남아 있었다면
+  등록 뒤 처리돼 새 창이 하나 더 뜬다 — 타이밍에 따라 다름.
 - 여러 프로세스: Dock 타일이 프로세스마다 하나씩 생기고 타일은 자기 프로세스에만 rapp, `open -a`는 먼저 켜진 프로세스에
   rapp → 모든 프로세스가 등록해야 함. `open -n <번들> --args <파일>`(새 창 띄우기)은 새 프로세스의 argv로만 가고 옛
   프로세스에는 아무 이벤트도 없음.
@@ -61,9 +65,10 @@ from ctypes import CFUNCTYPE, c_bool, c_char_p, c_size_t, c_uint32, c_void_p
 from typing import Callable
 
 from PyQt5.QtCore import QEvent, QObject, QTimer
-from PyQt5.QtWidgets import QMessageBox
 
-ERROR_TITLE = "YesonCheck 오류"
+from yesoncheck import error_window
+
+LOG_PREFIX = "[앱 이벤트]"  # 기록 줄의 머리 (_report_error)
 REOPEN_FAILED_TEXT = "Dock 클릭·앱 다시 열기로 새 YesonCheck 창을 띄우지 못했습니다."
 REGISTER_FAILED_TEXT = "Dock 클릭·앱 다시 열기로 새 창을 띄우는 기능을 켜지 못했습니다 (이 창은 그대로 쓸 수 있습니다)."
 FILE_OPEN_FAILED_TEXT = "파일 열기(Finder 더블클릭·다음으로 열기)를 처리하지 못했습니다."
@@ -173,11 +178,37 @@ def _run_guarded(context: str, fn: Callable, *args) -> None:
 
 
 def _report_error(context: str) -> None:
-    """지금 처리 중인 예외를 트레이스백째 기록(stderr — 빌드 앱은 기록 파일)하고 오류 창으로 (Qt 루프에서 — Apple Event·
-    이벤트 처리 안에서 모달 창을 열지 않게)."""
-    details = traceback.format_exc()
-    print(f"[앱 이벤트] {context}\n{details}", file=sys.stderr, flush=True)
-    QTimer.singleShot(0, lambda: QMessageBox.critical(None, ERROR_TITLE, f"{context}\n\n{details[-3000:]}"))
+    """(except 블록 안에서) 지금 처리 중인 예외를 바로 트레이스백째 기록(stderr — 빌드 앱은 기록 파일)하고, 오류 창은 Qt 루프에서
+    (Apple Event·이벤트 처리 안에서 모달 창을 열지 않게) error_window로 — 빌드 앱은 앱의 예외 창(기록 파일 경로, 한 번에 하나만),
+    글은 context 그대로 + 트레이스백의 끝 부분.
+
+    eventFilter·IMP·미룬 콜백의 except 블록에서 불리므로 예외를 내보내지 않는다: 알리다 또 실패하면 _last_resort."""
+    try:
+        details = traceback.format_exc()
+        print(f"{LOG_PREFIX} {context}\n{details}", file=sys.stderr, flush=True)
+        text = error_window.with_details(context, details)
+        QTimer.singleShot(0, lambda: _show_error_window(text))
+    except BaseException:
+        _last_resort(context)
+
+
+def _show_error_window(text: str) -> None:
+    """(Qt 루프에서) 오류 창 — 실패해도 Qt 루프로 내보내지 않음 (_last_resort)."""
+    try:
+        error_window.show_window(text)
+    except BaseException:
+        _last_resort(text)
+
+
+def _last_resort(message: str) -> None:
+    """(except 블록 안에서) 오류를 알리다 또 실패함: 원래 stderr(sys.__stderr__ — setup_app_logging이 기록 파일로 바꾸기 전)에
+    message와 지금 처리 중인 예외(알리던 예외가 앞에 이어진 트레이스백)를 씀. 원래 stderr가 없으면(Windows 창 앱) 그 예외를 그대로
+    올림 — 조용히 삼키지 않음."""
+    stream = sys.__stderr__
+    if stream is None:
+        raise
+    stream.write(f"{LOG_PREFIX} 오류를 알리지 못했습니다 — {message}\n{traceback.format_exc()}\n")
+    stream.flush()
 
 
 # ---- Mac: 'aevt'/'rapp' 처리기 (ctypes — PyObjC 없음) ----
