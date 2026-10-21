@@ -374,6 +374,20 @@ jobs:
           else
             echo "smoke_result.json 없음"
           fi
+          # 빌드 앱은 출력을 기록 파일로 보냄 (app.setup_app_logging — ~/Library/Logs/YesonCheck/yesoncheck_<날짜>_<pid>.log)
+          # → 성공·실패 모두 가장 새 기록의 끝을 보임 (update.log는 아님). pipefail이라 ls | head 대신 글롭으로 고름
+          APP_LOG=""
+          for f in "$HOME/Library/Logs/YesonCheck"/yesoncheck_*.log; do
+            if [ -f "$f" ] && { [ -z "$APP_LOG" ] || [ "$f" -nt "$APP_LOG" ]; }; then
+              APP_LOG="$f"
+            fi
+          done
+          if [ -n "$APP_LOG" ]; then
+            echo "===== 앱 기록 (끝 400줄): $APP_LOG"
+            tail -n 400 "$APP_LOG"
+          else
+            echo "앱 기록 없음 ($HOME/Library/Logs/YesonCheck/yesoncheck_*.log)"
+          fi
           if [ "$STATUS" -eq 142 ]; then
             echo "실행 시험이 ${LIMIT}초 안에 끝나지 않았습니다 (대화상자에서 멈췄을 수 있음)"
             exit 1

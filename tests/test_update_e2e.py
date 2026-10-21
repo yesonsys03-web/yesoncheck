@@ -284,3 +284,22 @@ def test_check_second_window_closed_needs_a_clean_exit(monkeypatch, tmp_path):
     (tmp_path / "5300.json").write_text("{}", encoding="utf-8")  # 정상 종료면 창 기록을 지움
     with pytest.raises(AssertionError, match="창 기록이 남아"):
         update_e2e.check_second_window_closed(None, second, log)
+
+
+def test_app_logs_are_every_windows_log_next_to_update_log(tmp_path):
+    """진단: 이 경우의 앱 기록(app.setup_app_logging — 창마다 yesoncheck_<날짜>_<pid>.log: 옛 앱·다른 창·도우미가 다시 켠 앱)은
+    업데이트 기록(update.log)과 같은 폴더(Windows <LOCALAPPDATA>\\YesonCheck\\logs, Mac <HOME>/Library/Logs/YesonCheck)에서 —
+    update.log는 빼고, 오래된 것부터."""
+    case = SimpleNamespace(user_dir=str(tmp_path / "user"))
+    folder = os.path.dirname(update_e2e.state_files(case)["log"])
+    expected_folder = (os.path.join(case.user_dir, "YesonCheck", "logs") if update_e2e.WINDOWS
+                       else os.path.join(case.user_dir, "Library", "Logs", "YesonCheck"))
+    assert update_e2e.same_path(folder, expected_folder)
+    names = ["yesoncheck_20261021_5300.log", "yesoncheck_20261021_4100.log", "update.log", "other.log"]
+    for age, name in enumerate(names):
+        path = os.path.join(folder, name)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(name)
+        os.utime(path, (1_700_000_000 - age * 60, 1_700_000_000 - age * 60))
+    assert [os.path.basename(p) for p in update_e2e.app_logs(case)] == [
+        "yesoncheck_20261021_4100.log", "yesoncheck_20261021_5300.log"]

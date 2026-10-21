@@ -18,9 +18,10 @@ if ($timedOut) {
 }
 $result = Join-Path $Workdir "smoke_result.json"
 if (Test-Path $result) { Get-Content $result -Encoding utf8 | Write-Host } else { Write-Host "smoke_result.json 없음" }
+# 앱 기록(yesoncheck_<날짜>_<pid>.log) 중 가장 새 것 — 같은 폴더의 update.log(업데이트 기록)는 아님
 $logDir = Join-Path $env:LOCALAPPDATA "YesonCheck\logs"
 if (Test-Path $logDir) {
-    Get-ChildItem $logDir -Filter *.log | Sort-Object LastWriteTime | Select-Object -Last 1 |
+    Get-ChildItem $logDir -Filter yesoncheck_*.log | Sort-Object LastWriteTime | Select-Object -Last 1 |
         ForEach-Object { Write-Host "===== 앱 로그: $($_.FullName)"; Get-Content $_.FullName -Encoding utf8 | Write-Host }
 }
 if ($timedOut) { throw "실행 시험이 $TimeoutSeconds초 안에 끝나지 않았습니다 (대화상자에서 멈췄을 수 있음)" }

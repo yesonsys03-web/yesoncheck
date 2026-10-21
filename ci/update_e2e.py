@@ -30,8 +30,11 @@ YC_UPDATE_DIRECT_LAUNCH=1, YC_UPDATE_OK_TIMEOUT_S=60, YC_UPDATE_NO_MESSAGEBOX=1,
 (Windows LOCALAPPDATA, Mac HOME). PYTHONUTF8은 뺌 (사용자 PC와 같게 — ci/run_smoke_test.ps1처럼).
 
 전체 제한 시간(--time-limit-min, 워크플로 단계의 timeout-minutes보다 몇 분 짧게)이 지나면 기다리던 단계가 실패해 단계가 끊기기
-전에 진단을 보인다. 단계마다 이름을 찍고, 실패하면 그 단계·트레이스백·도우미 기록(update.log)·도우미 출력(update_helper_console.txt)·앱 기록(Windows %LOCALAPPDATA%\\YesonCheck\\logs,
-Mac은 옛 앱의 stdout·stderr — 도우미가 다시 켠 앱의 출력은 update.log에)·smoke_result.json·설치 폴더 상태를 보이고 종료 코드 1.
+전에 진단을 보인다. 단계마다 이름을 찍고, 실패하면 그 단계·트레이스백·도우미 기록(update.log)·도우미 출력
+(update_helper_console.txt)·앱 기록(빌드 앱은 창(프로세스)마다 yesoncheck_<날짜>_<pid>.log — 옛 앱·다른 창·도우미가 다시 켠
+앱: Windows %LOCALAPPDATA%\\YesonCheck\\logs, Mac ~/Library/Logs/YesonCheck, 둘 다 경우의 사용자 폴더 아래 — app_logs; 기록
+파일을 열기 전의 출력은 옛 앱·다른 창의 stdout·stderr, Mac 도우미가 직접 켠 앱의 것은 update.log)·smoke_result.json·설치
+폴더 상태를 보이고 종료 코드 1.
 끝낼 때 작업 폴더 아래의 실행 파일로 도는 프로세스(앱·설치 파일)와 작업 폴더의 도우미 스크립트를 실행 중인 프로세스를 모두 끝냄.
 """
 
@@ -239,7 +242,7 @@ class Case:
         return os.path.join(self.root, "old_app_stderr.txt")
 
     @property
-    def second_stdout_path(self):  # 다른 창의 출력 (Windows 빌드 앱은 기록 폴더의 파일에 씀)
+    def second_stdout_path(self):  # 다른 창의 출력 — 빌드 앱은 기록 파일(app_logs)을 열기 전의 것만 (그 뒤는 기록 파일에)
         return os.path.join(self.root, "second_window_stdout.txt")
 
     @property
@@ -881,21 +884,32 @@ def show_file(title, path):
         print(f"===== {title}: 없음 ({path})", flush=True)
 
 
+APP_LOG_PATTERN = "yesoncheck_*.log"  # 빌드 앱의 기록 (app.LOG_FILE_PATTERN — 창(프로세스)마다 yesoncheck_<날짜>_<pid>.log)
+
+
+def app_logs(case):
+    """이 경우의 앱 기록 (app.setup_app_logging — 옛 앱·다른 창·도우미가 다시 켠 앱이 각각 하나): 업데이트 기록(update.log)과
+    같은 폴더(Windows <LOCALAPPDATA>\\YesonCheck\\logs, Mac <HOME>/Library/Logs/YesonCheck — 경우의 사용자 폴더 아래)의
+    yesoncheck_*.log, 오래된 것(수정 시각)부터."""
+    folder = os.path.dirname(state_files(case)["log"])
+    return sorted(glob.glob(os.path.join(folder, APP_LOG_PATTERN)), key=os.path.getmtime)
+
+
 def show_diagnostics(case):
     files = state_files(case)
-    show_file("업데이트 기록 (앱·도우미, Mac은 도우미가 다시 켠 앱의 출력도)", files["log"])
+    show_file("업데이트 기록 (앱·도우미 — Mac은 도우미가 직접 켠 앱이 기록 파일을 열기 전의 출력도)", files["log"])
     show_file("도우미 출력 (stdout·stderr — 기록을 쓰기 전의 실패도)", files["console"])
     show_file("도우미가 실행한 설치 파일의 기록", files["log"] + ".inno.txt")
-    if WINDOWS:
-        for path in sorted(glob.glob(os.path.join(case.user_dir, "YesonCheck", "logs", "*.log"))):
-            if not same_path(path, files["log"]):
-                show_file("앱 기록", path)
-    else:
-        show_file("옛 앱 stdout", case.stdout_path)
-        show_file("옛 앱 stderr", case.stderr_path)
+    logs = app_logs(case)
+    if not logs:
+        print(f"===== 앱 기록: 없음 ({os.path.join(os.path.dirname(files['log']), APP_LOG_PATTERN)})", flush=True)
+    for path in logs:
+        show_file("앱 기록 (옛 앱·다른 창·도우미가 다시 켠 앱 중 하나 — 첫 줄의 pid)", path)
+    show_file("옛 앱 stdout (기록 파일을 열기 전의 출력)", case.stdout_path)
+    show_file("옛 앱 stderr (기록 파일을 열기 전의 출력)", case.stderr_path)
     if case.other_window:
-        show_file("다른 창 stdout", case.second_stdout_path)
-        show_file("다른 창 stderr", case.second_stderr_path)
+        show_file("다른 창 stdout (기록 파일을 열기 전의 출력)", case.second_stdout_path)
+        show_file("다른 창 stderr (기록 파일을 열기 전의 출력)", case.second_stderr_path)
     show_file("실행 시험 결과", os.path.join(case.smoke_dir, "smoke_result.json"))
     show_file("업데이트 기록 파일 (pending)", files["pending"])
     show_file("'잘 켜짐' 표시", files["ok"])
