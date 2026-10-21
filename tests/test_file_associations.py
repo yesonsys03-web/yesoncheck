@@ -348,10 +348,35 @@ def test_platform_flag_matches_this_platform():
 # ---- 설치 파일 (installer/yesoncheck.iss) ----
 
 
-def _iss_text():
+def _iss_bytes():
     with open(ISS_PATH, "rb") as fh:
-        raw = fh.read()
-    return raw, raw.decode("utf-8-sig")
+        return fh.read()
+
+
+def _iss_lines():
+    """설치 파일의 줄들 — ISCC처럼 앞의 UTF-8 BOM은 버리고 줄 끝은 LF·CRLF 모두 (Windows의 git checkout은 CRLF — core.autocrlf;
+    re.M의 '$'나 split("\\n")은 줄 끝의 \\r을 남겨 #define·구역 이름을 못 찾음)."""
+    return _iss_bytes().decode("utf-8-sig").splitlines()
+
+
+def _iss_defines(lines):
+    """ISPP #define 이름 → 값 (따옴표로 묶은 글자만)."""
+    found = (re.fullmatch(r'#define (\w+) "([^"]*)"', line.strip()) for line in lines)
+    return dict(match.groups() for match in found if match)
+
+
+def _iss_sections(lines):
+    """구역 이름("[Setup]" 등) → 그 구역의 줄들 (앞뒤 공백 없이, 빈 줄·';' 주석·'#' 전처리 줄은 뺌)."""
+    sections, current = {}, None
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith((";", "#")):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            current = sections.setdefault(line, [])
+        elif current is not None:
+            current.append(line)
+    return sections
 
 
 def _iss_params(line):
@@ -392,21 +417,10 @@ def _iss_params(line):
 
 def _iss_registry():
     """[Registry] 항목들 ({이름: 값}) — ISPP의 {#이름}은 같은 파일의 #define 값으로 바꿈."""
-    _, text = _iss_text()
-    defines = dict(re.findall(r'^#define (\w+) "([^"]*)"$', text, re.M))
-    entries, section = [], None
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith(";"):
-            continue
-        if line.startswith("[") and line.endswith("]"):
-            section = line
-            continue
-        if section != "[Registry]":
-            continue
-        line = re.sub(r"\{#(\w+)\}", lambda m: defines[m.group(1)], line)
-        entries.append(_iss_params(line))
-    return entries
+    lines = _iss_lines()
+    defines = _iss_defines(lines)
+    return [_iss_params(re.sub(r"\{#(\w+)\}", lambda m: defines[m.group(1)], line))
+            for line in _iss_sections(lines).get("[Registry]", [])]
 
 
 def test_installer_registry_matches_association_entries():
@@ -439,21 +453,42 @@ def test_installer_registry_matches_association_entries():
     for key, key_flags in key_only.items():
         assert key in owned and key_flags == {"uninsdeletekey"}, key
 
-    _, text = _iss_text()
-    setup = text.split("[Setup]", 1)[1].split("\n[", 1)[0]
-    assert re.search(r"^ChangesAssociations=yes$", setup, re.M)
-    assert re.search(r'^#define MyAppExeName "YesonCheck_Autocut.exe"$', text, re.M)
-    assert re.search(r'^#define MyAppName "Yeson Checker"$', text, re.M)
+    lines = _iss_lines()
+    assert "ChangesAssociations=yes" in _iss_sections(lines)["[Setup]"]
+    defines = _iss_defines(lines)
+    assert defines["MyAppExeName"] == "YesonCheck_Autocut.exe" and defines["MyAppName"] == "Yeson Checker"
 
 
 def test_installer_script_is_utf8_with_bom():
     """ProgID 이름("Yeson Checker 동영상") 등 한글을 레지스트리에 씀 → ISCC가 UTF-8로 읽어야 함. Inno Setup 6.3부터는 BOM 없는
     UTF-8도 알아보지만(내용으로 판단), 그 전 6.x는 BOM이 없으면 ANSI(한국어 Windows는 949)로 읽어 글자가 깨짐 — 어느 ISCC로
     컴파일해도 같게 BOM을 둠 (CI는 설치 뒤 레지스트리의 값을 다시 읽어 확인 — test_installer_registers_open_with)."""
-    raw, text = _iss_text()
+    raw = _iss_bytes()
     assert raw.startswith(codecs.BOM_UTF8)
-    assert raw[len(codecs.BOM_UTF8):].decode("utf-8") == text
-    assert "Yeson Checker 동영상" in text
+    assert "Yeson Checker 동영상" in raw[len(codecs.BOM_UTF8):].decode("utf-8")  # BOM 뒤는 모두 UTF-8
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["LF", "CRLF"])
+def test_installer_parser_handles_crlf_and_bom(tmp_path, monkeypatch, newline):
+    """Windows CI의 checkout은 줄 끝이 CRLF(git core.autocrlf — 저장소에는 LF)이고 파일 앞에 BOM: 설치 파일 시험들이 같은 내용을
+    LF·CRLF 어느 쪽으로 받아도 같은 결과 (CRLF에서 #define을 못 찾아 KeyError로 깨졌었음 — CI 39615777321). BOM 바로 뒤 첫 줄의
+    #define, 따옴표 두 개("")·{#이름}·줄 끝의 \r이 값에 남지 않는지는 작은 글로."""
+    with open(ISS_PATH, "rb") as fh:
+        text = fh.read().decode("utf-8-sig").replace("\r\n", "\n")
+    path = tmp_path / "yesoncheck.iss"
+    path.write_bytes(codecs.BOM_UTF8 + text.replace("\n", newline).encode("utf-8"))
+    assert (b"\r\n" in path.read_bytes()) is (newline == "\r\n")
+    monkeypatch.setattr(sys.modules[__name__], "ISS_PATH", str(path))
+    test_installer_registry_matches_association_entries()
+    test_installer_script_is_utf8_with_bom()
+    assert len(_iss_registry()) == 14
+
+    tiny = ['#define MyAppExeName "a.exe"', "", "[Registry]", "; 주석",
+            'Root: HKCU; Subkey: "K\\{#MyAppExeName}"; ValueType: string; ValueName: ""; '
+            'ValueData: """x"" ""%1"""; Flags: uninsdeletekey', "", "[Run]", 'Filename: "y"']
+    path.write_bytes(codecs.BOM_UTF8 + newline.join(tiny).encode("utf-8") + newline.encode("ascii"))
+    assert _iss_registry() == [{"Root": "HKCU", "Subkey": "K\\a.exe", "ValueType": "string", "ValueName": "",
+                                "ValueData": '"x" "%1"', "Flags": "uninsdeletekey"}]
 
 
 # ---- 설치 파일이 실제로 쓴 레지스트리 (CI — Windows, 무음 설치·제거 바로 뒤) ----
