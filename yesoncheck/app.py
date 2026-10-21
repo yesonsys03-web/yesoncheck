@@ -221,6 +221,8 @@ def launch(argv=None):
     # 지난 업데이트의 결과(이 컴퓨터의 기록 파일만 — NAS·인터넷 없음): 창을 보인 뒤 맨 먼저 — 새 버전이면 "잘 켜짐" 표시를
     # 바로 남겨 업데이트 도우미가 기다림을 끝냄
     QTimer.singleShot(0, player.handle_update_startup)
+    # 시작할 때 읽은 사용자 파일(북마크·오버레이·내보내기 폴더 설정)에 문제가 있었으면 알림 (스플래시가 닫힌 뒤라 가려지지 않음)
+    QTimer.singleShot(0, player.show_user_file_problems)
     # 공유 설정(설정 폴더·작품 경로·변환표)은 창을 보인 뒤 백그라운드에서 읽고, 끝나면 문제를 알림
     # (스플래시가 닫힌 뒤라 대화상자가 가려지지 않음)
     QTimer.singleShot(0, player.start_shared_config_load)

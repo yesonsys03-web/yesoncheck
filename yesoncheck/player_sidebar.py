@@ -38,7 +38,8 @@ from PyQt5.QtWidgets import (
 from yesoncheck.workers import ThumbnailLoaderWorker, ThumbnailWorker
 import traceback
 
-from yesoncheck import build_info, path_map_setup, paths, shared_config, thumbnails, timing_log, video_list
+from yesoncheck import bookmarks, build_info, path_map_setup, paths, shared_config, thumbnails, timing_log, video_list
+from yesoncheck.user_files import UserFileError
 from yesoncheck.path_map_setup_dialog import PathMapSetupDialog
 
 LOADING_TITLE_SUFFIX = " — 공유 설정 불러오는 중…"  # 불러오는 동안 창 제목: build_info.title_base() 뒤에 붙임
@@ -433,17 +434,7 @@ class PlayerSidebarMixin:
             
             # 폴더가 포함된 경우 북마크에 자동 추가
             if folder_paths:
-                for folder_path in folder_paths:
-                    if not paths.contains_path(parent.bookmarks, folder_path):
-                        parent.bookmarks.append(folder_path)
-                        print(f"폴더가 북마크에 자동 추가됨: {folder_path}")
-                
-                # 북마크 저장
-                parent.save_bookmarks()
-                
-                # 사용자에게 알림 (폴더가 여러 개인 경우에만)
-                if len(folder_paths) > 1:
-                    QMessageBox.information(parent, "북마크 추가", f"{len(folder_paths)}개의 폴더가 북마크에 자동으로 추가되었습니다.")
+                parent.add_dropped_folders_to_bookmarks(folder_paths)
             
             # 비디오 파일 처리
             if has_folder:
@@ -1105,36 +1096,78 @@ class PlayerSidebarMixin:
             self.open_file('A', selected_items[0].toolTip())
 
     def load_bookmarks(self):
-        try:
-            if os.path.exists(self.bookmarks_file):
-                with open(self.bookmarks_file, 'r', encoding='utf-8') as f:
-                    self.bookmarks = json.load(f)
-            else:
-                self.bookmarks = []
-        except Exception as e:
-            print(f"Bookmark load error: {e}")
-            self.bookmarks = []
+        """북마크 파일을 읽어 self.bookmarks에. 읽지 못하면 빈 목록 + 기록(스택 트레이스) + 창 (파일은 건드리지 않음).
 
-    def save_bookmarks(self):
+        시작할 때 불리므로 창은 show_user_file_problems가 창을 보인 뒤에 알림.
+        """
         try:
-            with open(self.bookmarks_file, 'w', encoding='utf-8') as f:
-                json.dump(self.bookmarks, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"Bookmark save error: {e}")
+            self.bookmarks = bookmarks.load(self.bookmarks_file)
+        except UserFileError as exc:
+            traceback.print_exc()
+            self.bookmarks = []
+            self._report_user_file_problem("bookmarks-read", "북마크 파일을 읽지 못함", self._bookmarks_problem_text(exc))
+
+    def _bookmarks_problem_text(self, exc):
+        detail = str(exc) if isinstance(exc, UserFileError) else f"{self.bookmarks_file}\n{type(exc).__name__}: {exc}"
+        return f"북마크를 읽거나 바꾸지 못했습니다 (북마크 파일은 그대로 둡니다):\n{detail}\n\n파일을 고치거나 옮긴 뒤 다시 시도해 주세요."
+
+    def _refresh_bookmarks(self):
+        """다른 창이 그동안 더하거나 지웠을 수 있으므로 북마크 파일을 다시 읽어 self.bookmarks에. 읽지 못하면 창 + False."""
+        try:
+            self.bookmarks = bookmarks.load(self.bookmarks_file)
+        except UserFileError as exc:
+            traceback.print_exc()
+            QMessageBox.warning(self, "북마크 파일을 읽지 못함", self._bookmarks_problem_text(exc))
+            return False
+        return True
+
+    def _change_bookmarks(self, change, folders):
+        """folders를 차례로 북마크 파일에 반영하고 (change: bookmarks.add 또는 bookmarks.remove) self.bookmarks를 합친 목록으로.
+
+        읽지 못한 파일(UserFileError)은 덮어 지우지 않고, 잠그지 못하거나(TimeoutError) 쓰지 못한(OSError) 경우와 함께
+        기록 + 창으로 알리고 False.
+        """
+        try:
+            for folder in folders:
+                self.bookmarks = change(self.bookmarks_file, folder)
+        except (UserFileError, TimeoutError, OSError) as exc:
+            traceback.print_exc()
+            QMessageBox.warning(self, "북마크를 바꾸지 못함", self._bookmarks_problem_text(exc))
+            return False
+        return True
+
+    def add_dropped_folders_to_bookmarks(self, folder_paths):
+        """끌어다 놓은 폴더를 북마크에 자동 추가 (파일을 다시 읽고 더함)."""
+        before = list(self.bookmarks)
+        if not self._change_bookmarks(bookmarks.add, folder_paths):
+            return
+        for folder_path in folder_paths:
+            if not paths.contains_path(before, folder_path):
+                print(f"폴더가 북마크에 자동 추가됨: {folder_path}")
+
+        # 사용자에게 알림 (폴더가 여러 개인 경우에만)
+        if len(folder_paths) > 1:
+            QMessageBox.information(self, "북마크 추가", f"{len(folder_paths)}개의 폴더가 북마크에 자동으로 추가되었습니다.")
 
     def add_bookmark(self):
         # 현재 폴더를 북마크에 추가
+        if not self._refresh_bookmarks():  # 읽지 못하는 파일이면 폴더를 고르게 하기 전에 알림
+            return
         folder_path = QFileDialog.getExistingDirectory(self, "북마크할 폴더 선택")
         folder_path = paths.normalize_native(folder_path)
         if folder_path:
+            if not self._refresh_bookmarks():  # 고르는 동안 다른 창이 바꿨을 수 있음
+                return
             if not paths.contains_path(self.bookmarks, folder_path):
-                self.bookmarks.append(folder_path)
-                self.save_bookmarks()
+                if not self._change_bookmarks(bookmarks.add, [folder_path]):
+                    return
                 QMessageBox.information(self, "북마크 추가", f"{folder_path}\n폴더가 북마크에 추가되었습니다.")
             else:
                 QMessageBox.information(self, "이미 북마크됨", f"{folder_path}\n폴더는 이미 북마크에 있습니다.")
 
     def show_bookmarks(self):
+        if not self._refresh_bookmarks():  # 다른 창이 바꾼 것까지 보이게 열 때마다 다시 읽음
+            return
         if not self.bookmarks:
             QMessageBox.information(self, "북마크 없음", "저장된 북마크가 없습니다.")
             return
@@ -1233,10 +1266,9 @@ class PlayerSidebarMixin:
             )
             
             if reply == QMessageBox.Yes:
-                # 북마크에서 제거
-                if folder_path in self.bookmarks:
-                    self.bookmarks.remove(folder_path)
-                    self.save_bookmarks()
+                # 북마크에서 제거 (파일을 다시 읽고 지움 — 다른 창이 더한 것은 남음)
+                if not self._change_bookmarks(bookmarks.remove, [folder_path]):
+                    return
                 
                 # 리스트에서 제거
                 list_widget.takeItem(list_widget.row(current_item))

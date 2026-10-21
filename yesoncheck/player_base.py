@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import time
+import traceback
 
 # cv2는 lazy import로 변경 (실제 사용 시점에만 로드)
 # import cv2
@@ -65,9 +66,10 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck.video_widget import CustomVideoWidget
-from yesoncheck import build_info, external_tools, image_io, paths, shared_config, timing_log, video_list
+from yesoncheck import bookmarks, build_info, external_tools, image_io, paths, shared_config, timing_log, user_files, video_list
 from yesoncheck.slider_style import jump_to_click
 from yesoncheck.update_banner import UpdateBanner
+from yesoncheck.user_files import UserFileError
 from yesoncheck.window_layout import ElidedLabel, InfoRowLayout, VerticalScrollArea, startup_geometry
 # 무거운 모듈들은 lazy import로 변경 (실제 사용 시점에만 로드)
 # from yesoncheck.workers import OCRWorker, OCRExportWorker, SceneDetectWorker
@@ -180,6 +182,10 @@ class VideoPlayerBase(QMainWindow):
         """load_shared_config=False: 공유 설정(NAS)을 읽지 않고 빈 '불러오는 중' 상태로 만듦 — 창을 보인 뒤
         start_shared_config_load()로 백그라운드에서 읽음 (app.launch). 기본값은 예전처럼 여기서 바로 읽음."""
         super().__init__()
+        # 사용자 파일(북마크·오버레이·내보내기 폴더 설정)을 읽다 난 문제: 창이 보이기 전(시작)에는 모아 두었다가
+        # show_user_file_problems가 알림 (스플래시에 가리지 않게), 그 뒤에는 바로. 같은 문제는 창 세션에 한 번만
+        self._user_file_problems = []  # 알릴 (제목, 글) — None이면 창이 보이는 중
+        self._user_file_problem_keys = set()
         # 소리 재생기(QMediaPlayer)는 처음 쓸 때 만듦 (mediaPlayer 속성) — Windows에서 처음 만들 때 8초쯤 걸림
         self._media_player = None
         self._media_volume = 100  # 재생기를 만들기 전에 정한 볼륨 (QMediaPlayer 기본값과 같음)
@@ -199,7 +205,7 @@ class VideoPlayerBase(QMainWindow):
 
         # 북마크 관련 초기화
         self.bookmarks = []
-        self.bookmarks_file = os.path.join(os.path.expanduser("~"), ".yeson_bookmarks.json")
+        self.bookmarks_file = bookmarks.default_path()
         self.load_bookmarks()
 
         # 작품 경로: 공유 설정 폴더의 work_paths.json (문제는 창 표시 후 resolve_shared_config_problem이 알림)
@@ -1552,17 +1558,7 @@ QSlider::add-page:horizontal {
                 
                 # 폴더가 포함된 경우 북마크에 자동 추가
                 if folder_paths:
-                    for folder_path in folder_paths:
-                        if not paths.contains_path(self.bookmarks, folder_path):
-                            self.bookmarks.append(folder_path)
-                            print(f"폴더가 북마크에 자동 추가됨: {folder_path}")
-                    
-                    # 북마크 저장
-                    self.save_bookmarks()
-                    
-                    # 사용자에게 알림 (폴더가 여러 개인 경우에만)
-                    if len(folder_paths) > 1:
-                        QMessageBox.information(self, "북마크 추가", f"{len(folder_paths)}개의 폴더가 북마크에 자동으로 추가되었습니다.")
+                    self.add_dropped_folders_to_bookmarks(folder_paths)
                 
                 if video_files:
                     # 폴더가 포함된 경우 썸네일 폴더 설정
@@ -5007,88 +5003,120 @@ QMessageBox {
             self.save_overlay_settings()
             print("오버레이 컨트롤러 위치가 리셋되었습니다.")
 
+    def _report_user_file_problem(self, key, title, text):
+        """사용자 파일(북마크·설정)을 읽거나 쓰다 난 문제를 경고 창으로 알림: key마다 창 세션에 한 번.
+
+        창이 보이기 전(시작할 때 읽는 파일)에는 모아 두었다가 show_user_file_problems가 알림.
+        """
+        if key in self._user_file_problem_keys:
+            return
+        self._user_file_problem_keys.add(key)
+        if self._user_file_problems is not None:
+            self._user_file_problems.append((title, text))
+        else:
+            QMessageBox.warning(self, title, text)
+
+    def show_user_file_problems(self):
+        """시작할 때 모아 둔 사용자 파일 문제를 창으로 알림 (app.launch가 창을 보인 뒤 부름). 이후 문제는 바로 알림."""
+        pending, self._user_file_problems = self._user_file_problems or [], None
+        for title, text in pending:
+            QMessageBox.warning(self, title, text)
+
+    @staticmethod
+    def _overlay_pair(settings, key, path):
+        """설정의 key 값: 없으면 None, 숫자 두 개의 목록이어야 하며 아니면 UserFileError."""
+        value = settings.get(key)
+        if value is None:
+            return None
+        if (not isinstance(value, list) or len(value) != 2
+                or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value)):
+            raise UserFileError(f"오버레이 설정 파일 형식이 올바르지 않습니다: {path}\n'{key}'는 숫자 두 개의 목록이어야 합니다: {value!r}")
+        return value
+
     def load_overlay_settings(self):
-        """오버레이 설정을 파일에서 로드합니다."""
+        """오버레이 설정을 파일에서 로드합니다. 읽지 못하면 기본값 (기록에 스택 트레이스 + 창 한 번, 파일은 그대로)."""
+        self.overlay_saved_pos = None
+        self.overlay_saved_size = None
+        self.overlay_saved_parent_size = None
+        self.overlay_is_bottom_center = False
+        path = self.overlay_settings_file
         try:
-            if os.path.exists(self.overlay_settings_file):
-                with open(self.overlay_settings_file, 'r', encoding='utf-8') as f:
-                    settings = json.load(f)
-                    
-                    # 설정 로드
-                    self.overlay_saved_pos = settings.get('position', None)
-                    self.overlay_saved_size = settings.get('size', None)
-                    self.overlay_saved_parent_size = settings.get('parent_size', None)
-                    self.overlay_is_bottom_center = settings.get('is_bottom_center', False)
-                    
-                    # 유효성 검사
-                    if self.overlay_saved_pos and len(self.overlay_saved_pos) == 2:
-                        if self.overlay_saved_pos[0] < 0 or self.overlay_saved_pos[1] < 0:
-                            print("저장된 위치가 유효하지 않아 기본값으로 초기화합니다.")
-                            self.overlay_saved_pos = None
-                    
-                    if self.overlay_saved_parent_size and len(self.overlay_saved_parent_size) == 2:
-                        if self.overlay_saved_parent_size[0] <= 0 or self.overlay_saved_parent_size[1] <= 0:
-                            print("저장된 창 크기가 유효하지 않아 기본값으로 초기화합니다.")
-                            self.overlay_saved_parent_size = None
-                    
-                    print(f"오버레이 설정을 로드했습니다. 위치={self.overlay_saved_pos}, 창크기={self.overlay_saved_parent_size}, 하단중앙={self.overlay_is_bottom_center}")
-            else:
-                self.overlay_saved_pos = None
-                self.overlay_saved_size = None
-                self.overlay_saved_parent_size = None
-                self.overlay_is_bottom_center = False
-        except Exception as e:
-            print(f"오버레이 설정 로드 실패: {e}")
-            self.overlay_saved_pos = None
-            self.overlay_saved_size = None
-            self.overlay_saved_parent_size = None
-            self.overlay_is_bottom_center = False
+            settings = user_files.read_json(path, {})
+            if not isinstance(settings, dict):
+                raise UserFileError(f"오버레이 설정 파일 형식이 올바르지 않습니다 (설정 목록이어야 함): {path}")
+            saved_pos = self._overlay_pair(settings, 'position', path)
+            saved_size = self._overlay_pair(settings, 'size', path)
+            saved_parent_size = self._overlay_pair(settings, 'parent_size', path)
+        except UserFileError as exc:
+            traceback.print_exc()
+            self._report_user_file_problem(
+                "overlay-read", "오버레이 설정을 읽지 못함",
+                f"오버레이 컨트롤러의 저장된 위치를 읽지 못해 기본 위치를 씁니다 (파일은 그대로 둡니다):\n{exc}")
+            return
+
+        # 유효성 검사
+        if saved_pos and (saved_pos[0] < 0 or saved_pos[1] < 0):
+            print("저장된 위치가 유효하지 않아 기본값으로 초기화합니다.")
+            saved_pos = None
+        if saved_parent_size and (saved_parent_size[0] <= 0 or saved_parent_size[1] <= 0):
+            print("저장된 창 크기가 유효하지 않아 기본값으로 초기화합니다.")
+            saved_parent_size = None
+
+        self.overlay_saved_pos = saved_pos
+        self.overlay_saved_size = saved_size
+        self.overlay_saved_parent_size = saved_parent_size
+        self.overlay_is_bottom_center = bool(settings.get('is_bottom_center', False))
+        print(f"오버레이 설정을 로드했습니다. 위치={self.overlay_saved_pos}, 창크기={self.overlay_saved_parent_size}, 하단중앙={self.overlay_is_bottom_center}")
 
     def save_overlay_settings(self):
-        """오버레이 설정을 파일에 저장합니다."""
-        try:
-            if hasattr(self, 'overlayFrame'):
-                # 현재 실제 위치와 크기 가져오기
-                current_pos = [self.overlayFrame.x(), self.overlayFrame.y()]
-                current_size = [self.overlayFrame.width(), self.overlayFrame.height()]
-                current_parent_size = [self.width(), self.height()]
-                
-                # 유효성 검사
-                if current_parent_size[0] <= 0 or current_parent_size[1] <= 0:
-                    print("창 크기가 유효하지 않아 설정 저장을 건너뜁니다.")
-                    return
-                
-                # 하단 중앙 위치인지 확인 (더 정확한 감지)
-                x_ratio = current_pos[0] / current_parent_size[0]
-                y_ratio = current_pos[1] / current_parent_size[1]
-                
-                # 하단 중앙 판단 기준:
-                # 1. Y 위치가 화면 하단 10% 이내
-                # 2. X 위치가 화면 중앙에서 ±15% 이내
-                # 3. 또는 저장된 하단 중앙 플래그가 True인 경우
-                is_bottom_center = (
-                    (y_ratio >= 0.85 and abs(x_ratio - 0.5) < 0.15) or
-                    (hasattr(self, 'overlay_is_bottom_center') and self.overlay_is_bottom_center)
-                )
-                
-                settings = {
-                    'position': current_pos,
-                    'size': current_size,
-                    'parent_size': current_parent_size,
-                    'is_bottom_center': is_bottom_center
-                }
-                with open(self.overlay_settings_file, 'w', encoding='utf-8') as f:
-                    json.dump(settings, f, ensure_ascii=False, indent=2)
-                
-                # 메모리 변수도 업데이트
-                self.overlay_saved_pos = current_pos
-                self.overlay_saved_size = current_size
-                self.overlay_saved_parent_size = current_parent_size
-                self.overlay_is_bottom_center = is_bottom_center
-                
-                print(f"오버레이 설정 저장됨: 위치={current_pos}, 크기={current_size}, 창크기={current_parent_size}, 하단중앙={is_bottom_center}")
-        except Exception as e:
-            print(f"오버레이 설정 저장 실패: {e}")
+        """오버레이 설정을 파일에 저장합니다 (원자적으로 — 마지막에 쓴 창의 값이 남음). 쓰지 못하면 기록 + 창 한 번."""
+        if hasattr(self, 'overlayFrame'):
+            # 현재 실제 위치와 크기 가져오기
+            current_pos = [self.overlayFrame.x(), self.overlayFrame.y()]
+            current_size = [self.overlayFrame.width(), self.overlayFrame.height()]
+            current_parent_size = [self.width(), self.height()]
+
+            # 유효성 검사
+            if current_parent_size[0] <= 0 or current_parent_size[1] <= 0:
+                print("창 크기가 유효하지 않아 설정 저장을 건너뜁니다.")
+                return
+
+            # 하단 중앙 위치인지 확인 (더 정확한 감지)
+            x_ratio = current_pos[0] / current_parent_size[0]
+            y_ratio = current_pos[1] / current_parent_size[1]
+
+            # 하단 중앙 판단 기준:
+            # 1. Y 위치가 화면 하단 10% 이내
+            # 2. X 위치가 화면 중앙에서 ±15% 이내
+            # 3. 또는 저장된 하단 중앙 플래그가 True인 경우
+            is_bottom_center = (
+                (y_ratio >= 0.85 and abs(x_ratio - 0.5) < 0.15) or
+                (hasattr(self, 'overlay_is_bottom_center') and self.overlay_is_bottom_center)
+            )
+
+            settings = {
+                'position': current_pos,
+                'size': current_size,
+                'parent_size': current_parent_size,
+                'is_bottom_center': is_bottom_center
+            }
+            try:
+                user_files.write_json_atomic(self.overlay_settings_file, settings)
+            except OSError as exc:
+                traceback.print_exc()
+                self._report_user_file_problem(
+                    "overlay-write", "오버레이 설정을 저장하지 못함",
+                    f"오버레이 컨트롤러의 위치를 저장하지 못했습니다 (파일은 그대로 둡니다):\n"
+                    f"{self.overlay_settings_file}\n{type(exc).__name__}: {exc}")
+                return
+
+            # 메모리 변수도 업데이트
+            self.overlay_saved_pos = current_pos
+            self.overlay_saved_size = current_size
+            self.overlay_saved_parent_size = current_parent_size
+            self.overlay_is_bottom_center = is_bottom_center
+
+            print(f"오버레이 설정 저장됨: 위치={current_pos}, 크기={current_size}, 창크기={current_parent_size}, 하단중앙={is_bottom_center}")
 
     def position_overlay_controls(self):
         print("position_overlay_controls() 호출됨")  # 디버깅

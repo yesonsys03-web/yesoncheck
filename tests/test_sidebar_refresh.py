@@ -115,7 +115,6 @@ def open_job(new_player, work_area, monkeypatch, scenes=("001", "002", "003")):
         write_test_video(os.path.join(job, f"scene-{scene}", "frames", f"FL_{scene}.mov"))
     write_test_video(os.path.join(work_area.local, "S1", "job_02", "scene-001", "frames", "other.mov"))
     player = new_player(make_config(work_area.local, {"SMOKE": work_area.stored}, work_area.path_map))
-    monkeypatch.setattr(player, "save_bookmarks", lambda: None)  # 끌어다 놓은 폴더를 사용자의 북마크 파일에 쓰지 않게
     player.workComboBox.setCurrentText("SMOKE")
     player.seasonComboBox.setCurrentText("S1")
     player.jobComboBox.setCurrentText("job_01")

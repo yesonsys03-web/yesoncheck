@@ -1,6 +1,5 @@
 """Frame annotation UI and playback integration."""
 
-import json
 import os
 import traceback
 
@@ -30,7 +29,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from yesoncheck import external_tools, paths
+from yesoncheck import external_tools, paths, user_files
+from yesoncheck.user_files import UserFileError
 from yesoncheck.annotation_export import AnnotationExportWorker
 from yesoncheck.annotation_burn import burn_annotations_on_frame
 from yesoncheck.frame_annotations import (
@@ -232,23 +232,33 @@ class PlayerAnnotationsMixin:
         ]
 
     def _load_annotation_export_settings(self):
+        """내보내기 저장 폴더 설정을 읽음. 읽지 못하면 미지정 (기록에 스택 트레이스 + 창 한 번, 파일은 그대로)."""
         self.annotation_export_dir = ""
+        path = self.annotation_export_settings_file
         try:
-            if os.path.exists(self.annotation_export_settings_file):
-                with open(self.annotation_export_settings_file, "r", encoding="utf-8") as handle:
-                    data = json.load(handle)
-                export_dir = data.get("export_dir", "")
-                if export_dir and os.path.isdir(export_dir):
-                    self.annotation_export_dir = export_dir
-        except Exception:
-            self.annotation_export_dir = ""
+            data = user_files.read_json(path, {})
+            if not isinstance(data, dict) or not isinstance(data.get("export_dir", ""), str):
+                raise UserFileError(f"주석 내보내기 설정 파일 형식이 올바르지 않습니다 (export_dir 글자가 든 설정이어야 함): {path}")
+        except UserFileError as exc:
+            traceback.print_exc()
+            self._report_user_file_problem(
+                "annotation-export-read", "주석 내보내기 설정을 읽지 못함",
+                f"주석 내보내기 저장 폴더 설정을 읽지 못해 폴더를 미지정으로 둡니다 (파일은 그대로 둡니다):\n{exc}")
+            return
+        export_dir = data.get("export_dir", "")
+        if export_dir and os.path.isdir(export_dir):
+            self.annotation_export_dir = export_dir
 
     def _save_annotation_export_settings(self):
+        """내보내기 저장 폴더를 원자적으로 저장 (마지막에 쓴 창의 값이 남음). 쓰지 못하면 기록 + 창 한 번."""
         try:
-            with open(self.annotation_export_settings_file, "w", encoding="utf-8") as handle:
-                json.dump({"export_dir": self.annotation_export_dir}, handle, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+            user_files.write_json_atomic(self.annotation_export_settings_file, {"export_dir": self.annotation_export_dir})
+        except OSError as exc:
+            traceback.print_exc()
+            self._report_user_file_problem(
+                "annotation-export-write", "주석 내보내기 설정을 저장하지 못함",
+                f"주석 내보내기 저장 폴더를 저장하지 못했습니다 (파일은 그대로 둡니다):\n"
+                f"{self.annotation_export_settings_file}\n{type(exc).__name__}: {exc}")
 
     def _update_annotation_export_dir_label(self):
         if self.annotation_export_dir:

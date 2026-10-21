@@ -153,6 +153,16 @@ def _no_mac_mount_map(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _bookmarks_file_in_tmp(monkeypatch, tmp_path_factory):
+    """창이 북마크를 사용자의 ~/.yeson_bookmarks.json이 아니라 시험마다 새 임시 파일에서 읽고 쓰게 (끌어다 놓은 폴더가
+    진짜 북마크에 남지 않게). 한 시험 안의 여러 창은 같은 파일을 씀."""
+    from yesoncheck import bookmarks
+
+    path = str(tmp_path_factory.mktemp("bookmarks") / ".yeson_bookmarks.json")
+    monkeypatch.setattr(bookmarks, "default_path", lambda: path)
+
+
+@pytest.fixture(autouse=True)
 def _fresh_shortcut_cache():
     """바로 가기 대상 캐시는 프로세스 전체에 하나 → 시험마다 비움 (가짜 경로가 다른 시험의 결과를 쓰지 않게)."""
     from yesoncheck import path_map_setup

@@ -323,17 +323,7 @@ class CustomVideoWidget(QGraphicsView):
             
             # 폴더가 포함된 경우 북마크에 자동 추가
             if folder_paths:
-                for folder_path in folder_paths:
-                    if not paths.contains_path(parent.bookmarks, folder_path):
-                        parent.bookmarks.append(folder_path)
-                        print(f"폴더가 북마크에 자동 추가됨: {folder_path}")
-                
-                # 북마크 저장
-                parent.save_bookmarks()
-                
-                # 사용자에게 알림 (폴더가 여러 개인 경우에만)
-                if len(folder_paths) > 1:
-                    QMessageBox.information(parent, "북마크 추가", f"{len(folder_paths)}개의 폴더가 북마크에 자동으로 추가되었습니다.")
+                parent.add_dropped_folders_to_bookmarks(folder_paths)
             
             # 비디오 파일 처리
             if has_folder:

@@ -832,7 +832,6 @@ def test_folder_loads_clear_job_thumbnail_state(new_player, dialogs, tmp_path, m
     from PyQt5.QtGui import QDropEvent
 
     player = new_player(make_config(str(tmp_path), {}))
-    monkeypatch.setattr(player, "save_bookmarks", lambda: None)  # 끌어다 놓은 폴더를 사용자의 북마크 파일에 쓰지 않게
     folder = tmp_path / "clips"
     write_test_video(str(folder / "c.mov"))
 
@@ -1011,10 +1010,9 @@ def drop_folder(player, target, folder):
 
 
 def open_smoke_work(new_player, work_area, monkeypatch, select_job):
-    """작품 SMOKE·시즌 S1을 고르고 select_job이면 job_01까지 (북마크 파일은 쓰지 않게 가짜로)."""
+    """작품 SMOKE·시즌 S1을 고르고 select_job이면 job_01까지 (끌어다 놓은 폴더의 북마크는 conftest가 정한 시험용 임시 파일에)."""
     write_test_video(os.path.join(work_area.local, "S1", "job_01", "scene-001", "frames", "a.mov"))
     player = new_player(make_config(work_area.local, {"SMOKE": work_area.stored}, work_area.path_map))
-    monkeypatch.setattr(player, "save_bookmarks", lambda: None)
     player.workComboBox.setCurrentText("SMOKE")
     player.seasonComboBox.setCurrentText("S1")
     if select_job:
@@ -1105,7 +1103,6 @@ def open_tjs_work(new_player, work_area, monkeypatch, job=None):
     works = os.path.join(work_area.local, "works")
     write_test_video(os.path.join(works, "TJS_921", "a.mov"))
     player = new_player(make_config(work_area.local, {"TJS_Animatic": work_area.stored + "/works"}, work_area.path_map))
-    monkeypatch.setattr(player, "save_bookmarks", lambda: None)  # 끌어다 놓은 폴더를 사용자의 북마크 파일에 쓰지 않게
     player.workComboBox.setCurrentText("TJS_Animatic")
     if job:
         player.jobComboBox.setCurrentText(job)
