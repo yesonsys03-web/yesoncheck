@@ -30,6 +30,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -48,9 +49,14 @@ HELPER_CONSOLE_FILE_NAME = "update_helper_console.txt"  # 도우미의 stdout·s
 HELPER_START_TEXT = " 도우미: 시작: "
 # 도우미가 쓰는 기록 줄의 시각 뒤 글 ("<시각> 도우미: …" — pid 없음). 앱의 줄은 "<시각> [pid N] …" (log)
 HELPER_LINE_TEXT = " 도우미:"
-# 도우미 pid가 업데이트 기록을 쓴 때(Pending.started)부터 이 초 안에 시작한 프로세스일 때만 그 도우미로 봄 (update_in_progress
-# — pid는 끝난 뒤 다른 프로세스가 물려받음, Windows는 특히 빨리). 앱은 기록을 쓰고 1초 안팎에 도우미를 띄움
+# 도우미 pid가 업데이트 기록을 쓴 때(Pending.started)부터 이 초 안에 시작한 프로세스일 때만 그 도우미로 봄 (_helper_alive
+# — pid는 끝난 뒤 다른 프로세스가 물려받음, Windows는 특히 빨리). 앱은 기록을 쓰고 1초 안팎에 도우미를 띄우고 그 pid를 더해
+# 다시 씀 — 도우미 pid가 아직 없는 기록도 이 초 동안은 업데이트 중으로 봄 (_hand_off가 다시 쓰기 전)
 HELPER_START_WINDOW_S = 60
+# 도우미가 가장 오래 도는 시간보다 넉넉히: 앱이 끝나기 기다림 300초 + (Windows) 설치 파일 기다림 1800초 + '잘 켜짐' 기다림
+# 180초 + 되돌리기. 기록이 이보다 오래되었으면 그 도우미는 더는 앱을 다시 켜지 않음 — 업데이트 중이 아님(pid를 물려받은
+# 오래 도는 프로세스 때문에 앱이 계속 켜지지 않는 일이 없게)
+HELPER_MAX_LIFETIME_S = 45 * 60
 
 # Windows 도우미를 띄우는 플래그: 창 없는 자기 콘솔(CREATE_NO_WINDOW — 창 모드 앱에는 콘솔이 없음), 새 프로세스 그룹.
 # 프로세스는 부모가 끝나도 남으므로 앱이 끝난 뒤에도 돈다. DETACHED_PROCESS는 쓰지 않음: 콘솔이 아예 없으면 Windows
@@ -768,9 +774,11 @@ def write_ok_marker(version: str) -> None:
 def startup_result(current_version: str, update_token: str | None) -> tuple[str, Pending] | None:
     """앱이 시작할 때 부름: 업데이트 기록이 있으면 현재 버전과 비교해 판정하고 기록을 지운다.
 
-    기록이 없으면 None. 기록에 토큰이 있으면 도우미가 그 토큰과 함께 켠 앱(update_token이 같음)만 판정 — 다르거나 없으면
-    (업데이트 중에 사용자가 켠 앱) 기록을 그대로 두고 None: 진짜 새 앱이 '잘 켜짐'을 쓰게. 토큰 없는 옛 기록(1.1.x 앱이
-    씀 — 1.1.x 도우미는 토큰 없이 켬, 이 버전으로 올리는 첫 업데이트)은 update_token과 상관없이 예전 규칙 그대로.
+    기록이 없으면 None. 기록에 토큰이 있고 그 도우미가 아직 앱을 다시 켤 수 있으면(_helper_may_relaunch) 도우미가 그 토큰과
+    함께 켠 앱(update_token이 같음)만 판정 — 다르거나 없으면(업데이트 중에 사용자가 켠 앱) 기록을 그대로 두고 None: 진짜 새
+    앱이 '잘 켜짐'을 쓰게. 도우미가 다시 켜지 않고 끝났으면(앱이 끝나지 않아 그만둠·로그아웃 뒤 되살림·충돌 등) 아무 앱이나
+    판정 — 실패를 알리지 않은 채 기록이 남지 않게. 토큰 없는 옛 기록(1.1.x 앱이 씀 — 1.1.x 도우미는 토큰 없이 켬, 이
+    버전으로 올리는 첫 업데이트)은 update_token과 상관없이 예전 규칙 그대로.
     current_version == target이면 ok 표시를 쓰고 기록을 지운 뒤 ("ok", 기록).
     current_version == previous(업데이트가 실패해 옛 버전이 그대로 켜짐)면 기록을 지운 뒤 ("failed", 기록).
     그 밖(업데이트를 거는 동안 다른 버전 — 예: 아직 바꾸는 중)이면 기록을 그대로 두고 None.
@@ -778,7 +786,7 @@ def startup_result(current_version: str, update_token: str | None) -> tuple[str,
     p = read_pending()
     if p is None:
         return None
-    if p.token and update_token != p.token:
+    if p.token and update_token != p.token and _helper_may_relaunch(p):
         return None
     if current_version == p.target:
         write_ok_marker(p.target)
@@ -790,22 +798,42 @@ def startup_result(current_version: str, update_token: str | None) -> tuple[str,
     return None
 
 
-def update_in_progress() -> bool:
-    """다른 창이 넘긴 업데이트가 진행 중인지 — 업데이트 기록이 있고 그 도우미(helper_pid)가 아직 돎. 토큰 없는 옛 기록(1.1.x
-    앱이 씀 — helper_pid 없음)과 도우미를 띄우기 전의 기록은 False.
+def _record_time(p: Pending) -> float:
+    """기록을 쓴 시각(started — 시간대 없는 지역 시각, timestamp())을 epoch 초로."""
+    return datetime.datetime.fromisoformat(p.started).timestamp()
 
-    pid는 끝난 뒤 다른 프로세스가 물려받을 수 있으므로(도우미가 기록을 남긴 채 끝난 뒤 — 컴퓨터를 끔 등) 그 pid의 프로세스가
-    기록을 쓴 때(started)부터 HELPER_START_WINDOW_S 안에 시작했을 때만 도우미로 봄 — 물려받은 프로세스 때문에 앱이 영영
-    켜지지 않는 일이 없게. 기록이 깨졌으면 UpdateError, 프로세스를 확인하다 난 오류는 그대로 올림.
-    """
+
+def _helper_alive(p: Pending) -> bool:
+    """기록의 도우미(helper_pid)가 아직 도는지 — 그 pid의 프로세스가 살아 있고 기록을 쓴 때부터 HELPER_START_WINDOW_S 안에
+    시작했음 (pid를 물려받은 다른 프로세스가 아님). 시작 시각은 Mac ps가 초 단위(버림), started도 초 단위(버림) → 1초 여유.
+    프로세스를 확인하다 난 오류는 그대로 올림."""
     from yesoncheck import instances  # instances가 이 모듈을 불러오므로 여기서
 
-    p = read_pending()
-    if p is None or not p.helper_pid:
-        return False
     helper_started = instances.process_start_time(int(p.helper_pid))
     if helper_started is None:
         return False  # 도우미가 끝남
-    written = datetime.datetime.fromisoformat(p.started).timestamp()  # 시간대 없는 지역 시각 (timestamp())
-    # 시작 시각은 Mac ps가 초 단위(버림), started도 초 단위(버림) → 1초 여유
+    written = _record_time(p)
     return written - 1 <= helper_started <= written + HELPER_START_WINDOW_S
+
+
+def _helper_may_relaunch(p: Pending) -> bool:
+    """토큰 있는 기록의 도우미가 아직 앱을 (토큰과 함께) 다시 켤 수 있는지 — 업데이트 중. 기록이 HELPER_MAX_LIFETIME_S보다
+    오래되었으면 아님. 도우미 pid가 있으면 그 도우미가 돎(_helper_alive), 없으면 기록이 HELPER_START_WINDOW_S 안에 쓰임
+    (_hand_off가 도우미를 띄우고 그 pid를 다시 쓰기 전 — 이때 켠 앱이 '실패'로 판정해 기록을 지우면 도우미가 켤 새 앱이 '잘
+    켜짐'을 쓰지 못해 되돌림). 토큰 없는 옛 기록은 아님 (1.1.x 도우미가 토큰 없이 켜는 새 앱이 판정해야 함)."""
+    if not p.token:
+        return False
+    age = time.time() - _record_time(p)
+    if age > HELPER_MAX_LIFETIME_S:
+        return False
+    if not p.helper_pid:
+        return age <= HELPER_START_WINDOW_S
+    return _helper_alive(p)
+
+
+def update_in_progress() -> bool:
+    """다른 창이 넘긴 업데이트가 진행 중인지 — 토큰 있는 업데이트 기록이 있고 그 도우미가 아직 앱을 다시 켤 수 있음
+    (_helper_may_relaunch: 도우미가 돎, 또는 도우미 pid를 아직 쓰기 전). 토큰 없는 옛 기록(1.1.x 앱이 씀)은 False.
+    기록이 깨졌으면 UpdateError, 프로세스를 확인하다 난 오류는 그대로 올림."""
+    p = read_pending()
+    return p is not None and _helper_may_relaunch(p)

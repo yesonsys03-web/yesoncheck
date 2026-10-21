@@ -13,9 +13,11 @@ import re
 import subprocess
 import sys
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
+from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QApplication, QMessageBox, QWidget
 
 from yesoncheck import build_info, instance_link, instances, player_base, player_update, update_install, updates
@@ -1437,9 +1439,21 @@ def test_startup_without_record_or_in_source_run_does_nothing(tmp_state_dir, pla
 TOKEN = "a1b2c3d4e5f60718"
 
 
-def test_startup_with_token_only_helper_launched_app_judges(tmp_state_dir, player_with_build, dialogs):
-    """업데이트 중에 사용자가 켠 앱(토큰 없음)은 기록을 건드리지 않음 — 도우미가 토큰과 함께 켠 새 앱이 '잘 켜짐'을 씀."""
-    pending = Pending("1.1.1", "1.1.0", "windows", now(), token=TOKEN, helper_pid="4242", app_pid="4100")
+@pytest.fixture
+def live_helper(tmp_state_dir):
+    """도는 도우미 흉내 — started: 띄우기 바로 전에 업데이트 기록에 적을 시각 (_hand_off와 같은 순서), pid: 글자."""
+    started = now()
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    yield SimpleNamespace(proc=proc, pid=str(proc.pid), started=started)
+    proc.kill()
+    proc.wait(10)
+
+
+def test_startup_with_token_only_helper_launched_app_judges(live_helper, player_with_build, dialogs):
+    """업데이트 중(도우미가 돎)에 사용자가 켠 앱(토큰 없음)은 기록을 건드리지 않음 — 도우미가 토큰과 함께 켠 새 앱이 '잘
+    켜짐'을 씀."""
+    pending = Pending("1.1.1", "1.1.0", "windows", live_helper.started, token=TOKEN, helper_pid=live_helper.pid,
+                      app_pid="4100")
     write_pending(pending)
     p = player_with_build("1.1.0")
     p.handle_update_startup(None)
@@ -1453,6 +1467,20 @@ def test_startup_with_token_only_helper_launched_app_judges(tmp_state_dir, playe
     q.handle_update_startup(TOKEN)
     assert q.update_banner.full_text() == "1.1.1로 업데이트했습니다" and os.path.exists(ok_marker_path())
     assert read_pending() is None and len(dialogs.messages) == 1
+
+
+def test_startup_after_helper_ended_reports_failure_in_any_launch(live_helper, player_with_build, dialogs):
+    """도우미가 옛 앱을 다시 켜지 않고 끝남(앱이 끝나지 않아 그만둠·로그아웃 뒤 되살림 등) → 사용자가 켠 옛 앱이 실패를
+    알리고 기록을 지움."""
+    write_pending(Pending("1.1.1", "1.1.0", "windows", live_helper.started, token=TOKEN, helper_pid=live_helper.pid,
+                          app_pid="4100"))
+    live_helper.proc.kill()
+    live_helper.proc.wait(10)
+    p = player_with_build("1.1.0")
+    p.handle_update_startup(None)
+    [(kind, title, text)] = dialogs.messages
+    assert (kind, title) == ("critical", "업데이트 실패") and "1.1.1로 업데이트하지 못했습니다" in text
+    assert read_pending() is None
 
 
 def test_startup_failed_shows_only_lines_of_updating_window_and_helper(tmp_state_dir, player_with_build, dialogs):
@@ -1504,15 +1532,11 @@ def launched(monkeypatch):
 
 
 @pytest.fixture
-def helper_running(tmp_state_dir):
+def helper_running(live_helper):
     """다른 창이 넘긴 업데이트의 도우미가 도는 중 (업데이트 기록 + 살아 있는 도우미 프로세스)."""
-    started = now()
-    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
-    write_pending(Pending("1.1.1", "1.1.0", build_info.platform_key(), started, token=TOKEN, helper_pid=str(proc.pid),
-                          app_pid="4100"))
-    yield proc
-    proc.kill()
-    proc.wait(10)
+    write_pending(Pending("1.1.1", "1.1.0", build_info.platform_key(), live_helper.started, token=TOKEN,
+                          helper_pid=live_helper.pid, app_pid="4100"))
+    return live_helper
 
 
 def test_launch_exits_with_message_when_update_in_progress(qapp, helper_running, launched, dialogs, monkeypatch,
@@ -1530,6 +1554,55 @@ def test_launch_exits_with_message_when_update_in_progress(qapp, helper_running,
     assert dialogs.messages == [("information", "YesonCheck", "업데이트 중입니다 — 끝난 뒤 다시 열어 주세요")]
     assert launched == []  # 창을 만들지 않음
     assert read_pending().token == TOKEN  # 기록은 그대로 (도우미가 켤 앱이 판정)
+
+
+class _BoxWatch:
+    """시험 중 실제로 뜬(exec_) QMessageBox를 after_ms 뒤에 찾아 action(box)을 함 — 창이 저절로 닫히지 않아도 시험이 멈추지
+    않게 (seen: 그때 떠 있던 창의 글)."""
+
+    def __init__(self, after_ms, action):
+        self.seen = []
+        self.timer = QTimer()
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(lambda: self._act(action))
+        self.timer.start(after_ms)
+
+    def _act(self, action):
+        for widget in QApplication.topLevelWidgets():
+            if isinstance(widget, QMessageBox) and widget.isVisible():
+                self.seen.append(widget.text())
+                action(widget)
+
+
+def test_update_in_progress_box_closes_itself(qapp, helper_running, launched, monkeypatch):
+    """'업데이트 중' 창을 띄운 채 자리를 비워도 곧 닫히고 프로세스가 끝남 — 도우미는 모든 앱 프로세스가 끝나기를 기다림."""
+    from yesoncheck import app as app_module
+
+    _built_app(monkeypatch, "1.1.0")
+    assert 1000 <= app_module.UPDATE_IN_PROGRESS_CLOSE_MS <= 15000  # 읽을 만큼은 보이고, 도우미의 기다림보다 훨씬 짧게
+    monkeypatch.setattr(app_module, "UPDATE_IN_PROGRESS_CLOSE_MS", 300)
+    stuck = _BoxWatch(5000, lambda box: box.done(QMessageBox.Ok))  # 저절로 닫히지 않으면 5초 뒤 대신 닫음
+    started = time.monotonic()
+    try:
+        assert app_module.launch(["yesoncheck"]) == 0
+    finally:
+        stuck.timer.stop()
+    assert stuck.seen == [] and time.monotonic() - started < 4 and launched == []
+
+
+def test_update_in_progress_box_closes_at_once_on_ok(qapp, helper_running, launched, monkeypatch):
+    from yesoncheck import app as app_module
+
+    _built_app(monkeypatch, "1.1.0")
+    monkeypatch.setattr(app_module, "UPDATE_IN_PROGRESS_CLOSE_MS", 60000)
+    ok = _BoxWatch(100, lambda box: box.button(QMessageBox.Ok).click())
+    started = time.monotonic()
+    try:
+        assert app_module.launch(["yesoncheck"]) == 0
+    finally:
+        ok.timer.stop()
+    assert ok.seen == ["업데이트 중입니다 — 끝난 뒤 다시 열어 주세요"] and time.monotonic() - started < 10
+    assert launched == []
 
 
 def test_launch_with_update_token_starts_during_update(qapp, helper_running, launched, dialogs, monkeypatch):

@@ -18,13 +18,18 @@ if __package__ in (None, ""):
         build_info, launch_args, mac_mounts, paths, timing_log, update_install,
     )
     from yesoncheck.player_base import wait_for_released_workers  # type: ignore  # pylint: disable=import-error
+    from yesoncheck.player_update import BOX_TITLE_PROPERTY  # type: ignore  # pylint: disable=import-error
 else:
     from .main_window import VideoPlayer
     from . import build_info, launch_args, mac_mounts, paths, timing_log, update_install
     from .player_base import wait_for_released_workers
+    from .player_update import BOX_TITLE_PROPERTY
 
 APP_TITLE = "YesonCheck"
 UPDATE_IN_PROGRESS_TEXT = "업데이트 중입니다 — 끝난 뒤 다시 열어 주세요"
+# "업데이트 중" 창이 저절로 닫히는 시간 (ms) — 닫히면 이 프로세스가 끝남. 도우미는 모든 YesonCheck 프로세스가 끝나기를
+# 기다렸다 바꾸므로(시간이 지나면 업데이트를 그만둠), 창을 띄운 채 자리를 비워도 업데이트를 막지 않게
+UPDATE_IN_PROGRESS_CLOSE_MS = 8000
 
 
 def setup_windows_logging():
@@ -181,6 +186,17 @@ def update_in_progress_at_start():
         return False
 
 
+def show_update_in_progress():
+    """"업데이트 중" 정보 창 — [OK]를 누르거나 UPDATE_IN_PROGRESS_CLOSE_MS가 지나면 닫힘 (그 뒤 launch가 끝남)."""
+    box = QMessageBox(QMessageBox.Information, APP_TITLE, UPDATE_IN_PROGRESS_TEXT, QMessageBox.Ok)
+    box.setProperty(BOX_TITLE_PROPERTY, APP_TITLE)  # macOS는 QMessageBox의 제목을 버림 (player_update.show_details_box와 같음)
+    timer = QTimer(box)  # 창과 함께 지워짐
+    timer.setSingleShot(True)
+    timer.timeout.connect(box.accept)
+    timer.start(UPDATE_IN_PROGRESS_CLOSE_MS)
+    box.exec_()
+
+
 # 창을 닫은 뒤 끝나지 않은 작업(예: TensorFlow 추론 중인 애니매틱2)을 기다리는 최대 시간 (초).
 # 넘으면 로그를 남기고 프로세스를 강제로 끝냄 (finish_released_workers)
 EXIT_WAIT_S = 30
@@ -206,7 +222,8 @@ def launch(argv=None):
 
     argv: sys.argv 그대로 (launch_args.parse — 첫 파일은 영상 A, `--update-result TOKEN`은 지난 업데이트의 결과 판정에).
     다른 창이 넘긴 업데이트가 진행 중이면(update_in_progress_at_start — 도우미가 켠 앱은 빼고) 스플래시·창을 만들지 않고
-    "업데이트 중" 창만 보인 뒤 0으로 끝냄: 이 앱이 업데이트(앱 바꾸기·결과 판정)를 헷갈리게 하지 않게."""
+    "업데이트 중" 창만 보인 뒤(저절로도 닫힘 — show_update_in_progress) 0으로 끝냄: 이 앱이 업데이트(앱 바꾸기·결과 판정)를
+    헷갈리게 하지 않게."""
     argv = list(sys.argv if argv is None else argv)
     args = launch_args.parse(argv)
 
@@ -220,7 +237,7 @@ def launch(argv=None):
     timing_log.startup("QApplication 준비")
     if args.update_token is None and update_in_progress_at_start():
         print(f"[업데이트] {UPDATE_IN_PROGRESS_TEXT} — 창을 만들지 않고 끝냄 (받은 인자 {argv[1:]!r})", flush=True)
-        QMessageBox.information(None, APP_TITLE, UPDATE_IN_PROGRESS_TEXT)
+        show_update_in_progress()
         return 0
     timing_log.startup(screen_report(app.primaryScreen()))
     # (Mac) 공유를 다른 곳에 붙인 Mac: 공유 설정 폴더·작품 경로를 열기 전에 이 Mac에서 공유가 붙은 곳을 읽음

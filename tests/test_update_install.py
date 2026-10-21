@@ -5,12 +5,14 @@ Mac 전용(hdiutil·xattr) 시험은 darwin이 아니면 건너뛴다.
 """
 
 import dataclasses
+import datetime
 import hashlib
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import requests
@@ -134,9 +136,30 @@ def test_startup_result_paths(tmp_state_dir):
 # ---- 업데이트 결과는 도우미가 켠 앱만 (토큰) ----
 
 
-def test_startup_result_ignores_launch_without_matching_token(tmp_state_dir):
-    """업데이트 중에 사용자가 켠 앱(토큰 없음·다른 토큰)은 기록을 판정하지도 지우지도 않음 — 진짜 새 앱이 '잘 켜짐'을 쓰게."""
-    p = Pending("1.1.1", "1.1.0", "windows", "2026-10-20T10:00:00", token="a1b2c3d4e5f60718", helper_pid="4242",
+def _sleeper():
+    """도우미 흉내: 잠깐 도는 프로세스."""
+    return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+
+
+@pytest.fixture
+def live_helper(tmp_state_dir):
+    """도는 도우미 흉내 — started: 띄우기 바로 전에 업데이트 기록에 적을 시각 (_hand_off와 같은 순서), pid: 글자."""
+    started = timestamp()
+    proc = _sleeper()
+    yield SimpleNamespace(proc=proc, pid=str(proc.pid), started=started)
+    proc.kill()
+    proc.wait(10)
+
+
+def _ago(seconds):
+    """지금보다 seconds초 전의 timestamp() 형식 시각."""
+    return (datetime.datetime.now() - datetime.timedelta(seconds=seconds)).isoformat(timespec="seconds")
+
+
+def test_startup_result_ignores_launch_without_matching_token(live_helper):
+    """업데이트 중(도우미가 돎)에 사용자가 켠 앱(토큰 없음·다른 토큰)은 기록을 판정하지도 지우지도 않음 — 진짜 새 앱이 '잘
+    켜짐'을 쓰게."""
+    p = Pending("1.1.1", "1.1.0", "windows", live_helper.started, token="a1b2c3d4e5f60718", helper_pid=live_helper.pid,
                 app_pid="4100")
     write_pending(p)
     for version in ("1.1.0", "1.1.1"):
@@ -183,11 +206,6 @@ def test_read_pending_rejects_bad_new_fields(tmp_state_dir, field, value):
         read_pending()
 
 
-def _sleeper():
-    """도우미 흉내: 잠깐 도는 프로세스."""
-    return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
-
-
 def test_update_in_progress_alive_and_dead_helper(tmp_state_dir):
     assert update_install.update_in_progress() is False  # 기록 없음
     started = timestamp()
@@ -195,7 +213,7 @@ def test_update_in_progress_alive_and_dead_helper(tmp_state_dir):
     try:
         p = Pending("1.1.1", "1.1.0", "windows", started, token="t", app_pid=str(os.getpid()))
         write_pending(p)
-        assert update_install.update_in_progress() is False  # 도우미를 띄우기 전 (helper_pid 없음)
+        assert update_install.update_in_progress() is True  # 도우미 pid를 다시 쓰기 전 (_hand_off) — 막 쓴 기록
         write_pending(dataclasses.replace(p, helper_pid=str(proc.pid)))
         assert update_install.update_in_progress() is True
         # pid를 물려받은 다른 프로세스: 기록을 쓴 때보다 한참 뒤에 시작함 → 도우미가 아님
@@ -208,6 +226,54 @@ def test_update_in_progress_alive_and_dead_helper(tmp_state_dir):
     assert update_install.update_in_progress() is False  # 도우미가 끝남
     clear_pending()
     assert update_install.update_in_progress() is False
+
+
+def test_dead_helper_lets_any_launch_judge(live_helper):
+    """도우미가 다시 켜지 않고 끝남(앱이 끝나지 않아 그만둠·로그아웃 뒤 되살림·충돌) → 토큰 없이 켠 앱도 판정하고 지움 —
+    실패를 알리지 않은 채 기록이 남지 않게."""
+    p = Pending("1.1.1", "1.1.0", "windows", live_helper.started, token="a1b2c3d4e5f60718", helper_pid=live_helper.pid,
+                app_pid="4100")
+    write_pending(p)
+    assert startup_result("1.1.0", None) is None and read_pending() == p  # 도우미가 돎
+    live_helper.proc.kill()
+    live_helper.proc.wait(10)
+    assert update_install.update_in_progress() is False
+    assert startup_result("1.1.0", None) == ("failed", p) and read_pending() is None
+    write_pending(p)
+    assert startup_result("1.1.1", None) == ("ok", p) and read_pending() is None  # 바꾼 뒤 도우미가 끝남
+    assert os.path.exists(ok_marker_path())
+
+
+def test_record_before_helper_pid_is_in_progress(tmp_state_dir):
+    """_hand_off는 토큰으로 기록을 쓰고 도우미를 띄운 뒤에야 도우미 pid를 더해 다시 씀 — 그 사이 켠 앱이 '실패'로 판정해
+    기록을 지우면 도우미가 켤 새 앱이 '잘 켜짐'을 못 써 되돌림. 막 쓴 기록은 업데이트 중, 오래된 것(도우미를 띄우지 못하고
+    기록도 못 지움)은 아님."""
+    p = Pending("1.1.1", "1.1.0", "windows", timestamp(), token="a1b2c3d4e5f60718", app_pid="4100")
+    write_pending(p)
+    assert update_install.update_in_progress() is True
+    assert startup_result("1.1.0", None) is None and read_pending() == p
+    old = dataclasses.replace(p, started=_ago(update_install.HELPER_START_WINDOW_S + 5))
+    write_pending(old)
+    assert update_install.update_in_progress() is False
+    assert startup_result("1.1.0", None) == ("failed", old) and read_pending() is None
+
+
+def test_update_in_progress_capped_by_record_age(tmp_state_dir, monkeypatch):
+    """pid를 물려받은 오래 도는 프로세스가 기록을 쓴 때 부근에 시작했더라도, 도우미가 가장 오래 도는 시간보다 오래된 기록은
+    업데이트 중이 아님 (앱이 계속 켜지지 않는 일이 없게) — 그때는 아무 앱이나 판정."""
+    from yesoncheck import instances
+
+    # 그 pid의 프로세스가 기록을 쓴 바로 뒤에 시작함 (도우미 또는 그 pid를 물려받은 프로세스)
+    monkeypatch.setattr(instances, "process_start_time",
+                        lambda pid: datetime.datetime.fromisoformat(read_pending().started).timestamp() + 1)
+    recent = Pending("1.1.1", "1.1.0", "windows", _ago(10 * 60), token="t", helper_pid="4242", app_pid="4100")
+    write_pending(recent)
+    assert update_install.update_in_progress() is True
+    old = dataclasses.replace(recent, started=_ago(update_install.HELPER_MAX_LIFETIME_S + 60))
+    write_pending(old)
+    assert update_install.update_in_progress() is False
+    assert startup_result("1.1.0", None) == ("failed", old) and read_pending() is None
+    assert update_install.HELPER_MAX_LIFETIME_S >= 300 + 1800 + 180  # 앱 기다림 + 설치 파일 기다림 + '잘 켜짐' 기다림
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="Mac 다운로드 격리 표시")
