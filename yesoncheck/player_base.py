@@ -474,6 +474,7 @@ QMessageBox {
         self.ocr_review_dialog = None
         self.ocr_status_message = ""
         self.last_ocr_segments = []
+        self._ocr_results_unsaved = False  # 'OCR 저장'을 누르지 않은 결과가 있음 (업데이트 확인 창용)
         self.ocr_cancelled = False
         self.pending_ocr_metadata = None
         self.ocr_export_worker = None
@@ -2217,10 +2218,15 @@ QMessageBox {
         self.ocrTrackingCheckBox.setChecked(False)
         self.update_ocr_status_label()
 
+    def has_unsaved_ocr_results(self):
+        """'OCR 저장'을 누르지 않은 OCR·애니매틱 검토 결과가 있는지 (업데이트로 창을 닫으면 사라짐)."""
+        return self._ocr_results_unsaved
+
     def reset_ocr_state(self):
         """Clear OCR state when media changes."""
         self.ocr_roi = None
         self.last_ocr_segments = []
+        self._ocr_results_unsaved = False
         self.saved_edited_segments = None  # 저장된 편집 상태도 초기화
         self.pending_ocr_metadata = None
         if hasattr(self, "ocrStatusLabel"):
@@ -2314,6 +2320,7 @@ QMessageBox {
             self.pending_ocr_metadata = None
             self.saved_edited_segments = None
             self.last_ocr_segments = []
+            self._ocr_results_unsaved = False
             # 기존 다이얼로그도 닫기
             if hasattr(self, 'ocr_review_dialog') and self.ocr_review_dialog is not None:
                 if self.ocr_review_dialog.isVisible():
@@ -2327,6 +2334,7 @@ QMessageBox {
             self.saved_edited_segments = None
             # 새로운 분석 시작 시 이전 결과도 클리어
             self.last_ocr_segments = []
+            self._ocr_results_unsaved = False
         
         # OCR 모드 저장 (reopen_ocr_result에서 사용)
         self._last_ocr_mode = ocr_mode
@@ -2545,6 +2553,7 @@ QMessageBox {
             self.pending_ocr_metadata = None
             self.saved_edited_segments = None
             self.last_ocr_segments = []
+            self._ocr_results_unsaved = False
             # 기존 다이얼로그도 닫기
             if hasattr(self, 'ocr_review_dialog') and self.ocr_review_dialog is not None:
                 if self.ocr_review_dialog.isVisible():
@@ -2779,6 +2788,7 @@ QMessageBox {
                 print(f"[선택구간 분석] 병합 후 총 세그먼트 개수: {len(merged_segments)}")
                 self.saved_edited_segments = merged_segments
                 self.last_ocr_segments = merged_segments
+                self._ocr_results_unsaved = True
                 
                 # 저장 버튼 활성화
                 if hasattr(self, 'ocrSaveResultButton'):
@@ -2818,6 +2828,7 @@ QMessageBox {
                 print(f"[선택구간 분석] 모드 불일치: 이전={prev_mode}, 현재={current_ocr_mode}, 이전 결과 무시 및 초기화")
                 self.saved_edited_segments = None
                 self.last_ocr_segments = []
+                self._ocr_results_unsaved = False
                 # 새로운 분석 결과만 사용 (existing_segments는 None으로 유지)
             
             if existing_segments:
@@ -2833,10 +2844,12 @@ QMessageBox {
                 merged_segments.sort(key=sort_key)
                 segments = merged_segments
                 self.last_ocr_segments = segments
+                self._ocr_results_unsaved = True
                 self.saved_edited_segments = segments  # 저장 시 최신 상태 반영
             else:
                 # 기존 결과가 없으면 새 결과만 사용
                 self.last_ocr_segments = segments
+                self._ocr_results_unsaved = True
                 self.saved_edited_segments = segments  # 저장 시 최신 상태 반영
                 self.pending_ocr_metadata = result
             
@@ -2979,6 +2992,7 @@ QMessageBox {
         # 씬 감지 완료 후 썸네일 미리 추출 (애니매틱/애니매틱2)
         self._preload_scene_thumbnails(segments)
         self.last_ocr_segments = segments
+        self._ocr_results_unsaved = bool(segments) and not was_cancelled  # 취소한 분석의 일부 결과는 보여 주지 않음
 
         if was_cancelled:
             QMessageBox.information(self, "OCR 취소", "사용자가 OCR 분석을 취소했습니다.")
@@ -3454,6 +3468,7 @@ QMessageBox {
             
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(save_data, f, ensure_ascii=False, indent=2)
+            self._ocr_results_unsaved = False  # 파일을 썼음 (이미지 일부 실패는 아래에서 알림)
             
             if image_failures:
                 QMessageBox.warning(
@@ -3652,6 +3667,7 @@ QMessageBox {
             
             # 로드된 segments를 저장
             self.last_ocr_segments = segments
+            self._ocr_results_unsaved = False  # 저장된 파일에서 읽은 결과
             self.saved_edited_segments = segments
             
             # pending_ocr_metadata 설정 (reopen_ocr_result에서 사용)
