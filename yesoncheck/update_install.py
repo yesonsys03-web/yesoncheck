@@ -30,7 +30,7 @@ import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from yesoncheck import build_info, paths
+from yesoncheck import build_info, paths, user_files
 from yesoncheck.updates import FileEntry
 
 PENDING_FILE_NAME = "pending_update.json"
@@ -700,25 +700,8 @@ def _pending_path():
     return os.path.join(state_dir(), PENDING_FILE_NAME)
 
 
-def _write_json_atomic(path, data):
-    """임시 파일 + os.replace로 씀 (쓰는 중에 읽는 쪽이 반쪽짜리 파일을 보지 않게)."""
-    folder = os.path.dirname(path)
-    os.makedirs(folder, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=folder, prefix=".tmp-")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, ensure_ascii=False)
-        os.replace(tmp_path, path)
-    except Exception:
-        try:
-            os.remove(tmp_path)
-        except FileNotFoundError:
-            pass
-        raise
-
-
 def write_pending(p: Pending) -> None:
-    _write_json_atomic(_pending_path(), dataclasses.asdict(p))
+    user_files.write_json_atomic(_pending_path(), dataclasses.asdict(p), indent=None)
 
 
 def read_pending() -> Pending | None:
@@ -749,7 +732,7 @@ def ok_marker_path() -> str:
 
 
 def write_ok_marker(version: str) -> None:
-    _write_json_atomic(ok_marker_path(), {"version": version})
+    user_files.write_json_atomic(ok_marker_path(), {"version": version}, indent=None)
 
 
 def startup_result(current_version: str) -> tuple[str, Pending] | None:
