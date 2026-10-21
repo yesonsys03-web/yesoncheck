@@ -1,4 +1,8 @@
-; YesonCheck Windows 설치 파일 (Inno Setup 6)
+﻿; YesonCheck Windows 설치 파일 (Inno Setup 6)
+;
+; 이 파일은 UTF-8 + BOM으로 둔다: [Registry]가 한글 값("Yeson Checker 동영상")을 레지스트리에 쓰므로 ISCC가 UTF-8로 읽어야 함.
+; Inno Setup 6.3부터는 BOM이 없어도 내용으로 UTF-8을 알아보지만, 그 전 6.x는 BOM이 없으면 ANSI(한국어 Windows는 949)로 읽어
+; 글자가 깨짐 — 어느 ISCC로 컴파일해도 같도록 (tests/test_file_associations.py가 BOM을 확인, CI는 설치 뒤 레지스트리 값을 다시 읽음)
 ;
 ; CI(windows-build.yml)가 PyInstaller onedir 빌드(dist\YesonCheck_Autocut)를 만든 뒤
 ; 이 스크립트로 Setup.exe 하나로 묶는다. 버전 정보는 CI가 커맨드라인에서 넘긴다 (tools/write_build_info.py의
@@ -47,6 +51,9 @@ PrivilegesRequired=lowest
 CloseApplications=yes
 RestartApplications=no
 
+; [Registry]가 동영상 파일 연결(연결 프로그램 목록)을 바꾸므로 설치·제거 끝에 Windows(탐색기)에 알림 (SHChangeNotify)
+ChangesAssociations=yes
+
 Compression=lzma2
 SolidCompression=yes
 ; 압축이 너무 느리면 여기를 lzma2/fast로 바꾸는 것을 가장 먼저 고려할 것
@@ -89,11 +96,34 @@ Type: filesandordirs; Name: "{app}\_internal"
 Name: "{userprograms}\Yeson Checker"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
 Name: "{userdesktop}\Yeson Checker"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
 
+[Registry]
+; 동영상(.mov·.mp4)의 '연결 프로그램'과 Windows 기본 앱 설정에 YesonCheck가 보이게 — 이 사용자(HKCU)에, 관리자 권한 없이.
+; Windows 10·11은 앱·설치 파일이 기본 앱을 바꾸지 못하게 하므로 목록에 올리기만 하고, 기본 앱은 사용자가 한 번 '항상'으로 고름
+; (앱의 Help → "동영상 기본 앱 설정 열기…"). yesoncheck/file_associations.py의 association_entries와 같아야 함 —
+; tests/test_file_associations.py가 이 구역을 읽어 비교. 앱도 켤 때 같은 내용을 그 계정에 등록함(같은 PC의 다른 계정).
+; 지울 때: 우리 키는 통째로(uninsdeletekey — file_associations.OWNED_KEYS), 다른 앱과 함께 쓰는 키는 우리 값만(uninsdeletevalue).
+; 따옴표 안의 ""는 따옴표 하나 → 명령은 "<설치 폴더>\YesonCheck_Autocut.exe" "%1"
+Root: HKCU; Subkey: "Software\Classes\YesonCheck.Video"; ValueType: string; ValueName: ""; ValueData: "Yeson Checker 동영상"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\YesonCheck.Video\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"
+Root: HKCU; Subkey: "Software\Classes\YesonCheck.Video\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
+Root: HKCU; Subkey: "Software\Classes\.mov\OpenWithProgids"; ValueType: string; ValueName: "YesonCheck.Video"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.mp4\OpenWithProgids"; ValueType: string; ValueName: "YesonCheck.Video"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}\SupportedTypes"; ValueType: string; ValueName: ".mov"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}\SupportedTypes"; ValueType: string; ValueName: ".mp4"; ValueData: ""
+Root: HKCU; Subkey: "Software\YesonCheck"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\YesonCheck\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "{#MyAppName}"
+Root: HKCU; Subkey: "Software\YesonCheck\Capabilities"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "동영상 A/B 비교·검토"
+Root: HKCU; Subkey: "Software\YesonCheck\Capabilities\FileAssociations"; ValueType: string; ValueName: ".mov"; ValueData: "YesonCheck.Video"
+Root: HKCU; Subkey: "Software\YesonCheck\Capabilities\FileAssociations"; ValueType: string; ValueName: ".mp4"; ValueData: "YesonCheck.Video"
+Root: HKCU; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "YesonCheck"; ValueData: "Software\YesonCheck\Capabilities"; Flags: uninsdeletevalue
+
 [Run]
 ; 설치 끝 화면의 선택적 체크박스. /VERYSILENT 같은 무음 설치에서는 skipifsilent 덕분에 실행되지 않는다
 ; (CI가 설치 직후 바로 앱을 실행 시험하므로, 설치 프로그램이 따로 앱을 띄우면 안 됨)
 Filename: "{app}\{#MyAppExeName}"; Description: "Yeson Checker 실행"; Flags: nowait postinstall skipifsilent
 
-; 제거 프로그램은 {app}(설치 폴더) 안의 파일만 지운다.
+; 제거 프로그램은 {app}(설치 폴더) 안의 파일과 위 [Registry]의 이 사용자 등록만 지운다 (같은 PC의 다른 계정에 앱이 켤 때
+; 등록한 것은 그 계정의 HKCU라 지우지 못함).
 ; %APPDATA%\YesonCheck\settings.json (PC별 설정)과 %LOCALAPPDATA%\YesonCheck\logs(로그)는
 ; 이 스크립트의 어떤 섹션도 건드리지 않으므로 제거 뒤에도 그대로 남는다 — 의도된 동작이다.

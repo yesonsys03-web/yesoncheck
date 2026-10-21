@@ -16,16 +16,16 @@ if __package__ in (None, ""):
     sys.path.append(os.path.dirname(os.path.dirname(__file__)))
     from yesoncheck.main_window import VideoPlayer  # type: ignore  # pylint: disable=import-error
     from yesoncheck import (  # type: ignore  # pylint: disable=import-error
-        build_info, default_app, launch_args, mac_app_events, mac_mounts, new_window, paths, timing_log,
-        update_install,
+        build_info, default_app, file_associations, launch_args, mac_app_events, mac_mounts, new_window, paths,
+        timing_log, update_install,
     )
     from yesoncheck.player_base import EXIT_WAIT_S, wait_for_released_workers  # type: ignore  # pylint: disable=import-error
     from yesoncheck.player_update import BOX_TITLE_PROPERTY  # type: ignore  # pylint: disable=import-error
 else:
     from .main_window import VideoPlayer
     from . import (
-        build_info, default_app, launch_args, mac_app_events, mac_mounts, new_window, paths, timing_log,
-        update_install,
+        build_info, default_app, file_associations, launch_args, mac_app_events, mac_mounts, new_window, paths,
+        timing_log, update_install,
     )
     from .player_base import EXIT_WAIT_S, wait_for_released_workers
     from .player_update import BOX_TITLE_PROPERTY
@@ -145,7 +145,8 @@ def make_excepthook(log_path):
         else:
             dialog.requested.emit(text)  # GUI 스레드의 이벤트 루프에서 show_error 실행
 
-    excepthook.dialog = dialog  # 시험·GC 방지용 참조 — 예상된 실패의 오류 창도 이 창으로 (default_app._show_error)
+    # 시험·GC 방지용 참조 — 예상된 실패의 오류 창도 이 창으로 (default_app·file_associations의 _show_error)
+    excepthook.dialog = dialog
     return excepthook
 
 
@@ -350,6 +351,10 @@ def launch(argv=None):
     # 공유 설정(설정 폴더·작품 경로·변환표)은 창을 보인 뒤 백그라운드에서 읽고, 끝나면 문제를 알림
     # (스플래시가 닫힌 뒤라 대화상자가 가려지지 않음)
     QTimer.singleShot(0, player.start_shared_config_load)
+    # (Windows 빌드 앱) 동영상(.mov·.mp4)의 '연결 프로그램'·기본 앱 설정에 이 계정을 등록 — 설치한 계정은 설치 파일이 이미
+    # 했으므로 읽기만, 같은 PC의 다른 계정은 여기서 처음 등록 (file_associations — 창을 보인 뒤라 시작을 늦추지 않음, 실패는 오류 창)
+    if file_associations.registers_on_start():
+        QTimer.singleShot(0, file_associations.register_at_start)
     # 받은 파일(명령줄 + 시작 중에 온 파일 열기)의 첫 파일은 이 창의 A, 나머지는 파일마다 새 창 — 창을 보인 뒤 위의 일 다음에
     # (여는 중 소리 재생기를 만들고(처음에는 수 초), 오류 창이 스플래시에 가려지지 않게. 공유 설정 불러오기를 먼저 시작해
     # 두어 그동안 백그라운드에서 읽음). (Mac) 여기서 Dock 클릭·앱 다시 열기(reopen) 처리기를 등록 — 스플래시의

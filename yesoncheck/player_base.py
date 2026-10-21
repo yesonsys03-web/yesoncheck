@@ -66,8 +66,8 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck.video_widget import CustomVideoWidget
-from yesoncheck import bookmarks, build_info, default_app, external_tools, image_io, instance_link, instances, paths, \
-    shared_config, timing_log, user_files, video_list
+from yesoncheck import bookmarks, build_info, default_app, external_tools, file_associations, image_io, instance_link, \
+    instances, paths, shared_config, timing_log, user_files, video_list
 from yesoncheck.slider_style import jump_to_click
 from yesoncheck.update_banner import UpdateBanner
 from yesoncheck.user_files import UserFileError
@@ -4022,6 +4022,10 @@ QMessageBox {
         if default_app.IS_MAC:
             default_app_action = help_menu.addAction(default_app.MENU_TEXT)
             default_app_action.triggered.connect(lambda: default_app.set_default_from_menu(self))
+        # (Windows) 기본 앱은 앱이 바꿀 수 없음(Windows 10·11) → Windows 기본 앱 설정 화면의 YesonCheck 항목을 엶 (file_associations)
+        if file_associations.IS_WINDOWS:
+            default_apps_settings_action = help_menu.addAction(file_associations.MENU_TEXT)
+            default_apps_settings_action.triggered.connect(lambda: file_associations.open_default_apps_settings())
 
         # About 액션
         about_action = help_menu.addAction('정보')

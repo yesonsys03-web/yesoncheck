@@ -25,7 +25,7 @@ from tests.conftest import ROOT
 from tests.test_fast_startup import wait_until
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 from yesoncheck import app as app_module  # sys.frozen을 바꾸기 전에 (불러올 때 frozen이면 _MEIPASS를 찾음)
-from yesoncheck import default_app, update_install
+from yesoncheck import default_app, file_associations, update_install
 from yesoncheck.user_files import UserFileError
 
 MAC_ONLY = pytest.mark.skipif(
@@ -119,10 +119,12 @@ def make_bundle(folder, name, bundle_id=BUNDLE_ID):
 
 @pytest.fixture
 def mac_app(monkeypatch, tmp_path):
-    """Mac 빌드 앱처럼: sys.frozen, 자기 번들(update_install.running_app_location)은 tmp의 YesonCheck_Autocut_Intel.app."""
+    """Mac 빌드 앱처럼: sys.frozen, 자기 번들(update_install.running_app_location)은 tmp의 YesonCheck_Autocut_Intel.app.
+    Windows 파일 연결 등록(file_associations — Windows 빌드 앱만)은 없음: Windows CI에서 launch()가 진짜 레지스트리에 쓰지 않게."""
     app = make_bundle(tmp_path / "Applications", "YesonCheck_Autocut_Intel.app")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(default_app, "IS_MAC", True)
+    monkeypatch.setattr(file_associations, "IS_WINDOWS", False)
     monkeypatch.setattr(update_install, "running_app_location", lambda: app)
     return app
 
