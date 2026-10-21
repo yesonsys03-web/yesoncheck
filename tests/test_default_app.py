@@ -4,7 +4,7 @@
 - LaunchServices는 대역(FakeLaunchServices)으로 바꿔 끼움 — 이 Mac의 기본 앱을 바꾸지 않음. 진짜 API는 읽기만 하는
   test_current_handler_real_api_returns_str_or_none (Mac에서만).
 - 결과·오류 창은 dialogs 픽스처가 기록. 묻는 창(default_app._ask)은 흐름 시험에서는 대역(ask 픽스처 — 차례로 답함), 창 자체는
-  진짜 QMessageBox로(단추 누르기·Esc·닫기·reject) — 단추를 누른 것만 답.
+  진짜 QMessageBox로(단추 누르기·Esc·⌘.·닫기·reject) — 단추를 누른 것만 답.
 - Info.plist의 CFBundleDocumentTypes는 spec 파일의 BUNDLE(info_plist=…)을 그대로 읽어 확인 (빌드 앱의 Info.plist는 CI의
   plutil 확인 단계).
 """
@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 from PyQt5.QtCore import QEvent, Qt, QTimer
-from PyQt5.QtGui import QKeyEvent
+from PyQt5.QtGui import QKeyEvent, QKeySequence
 from PyQt5.QtWidgets import QApplication, QDialog, QMessageBox, QWidget
 
 from tests.conftest import ROOT
@@ -366,16 +366,22 @@ def _answer_box_with(action):
 
 @REAL_BOX
 def test_ask_counts_only_button_presses(qapp):
-    """[예]·[아니요]를 누른 것만 답(True·False). Esc는 Qt가 [아니요]를 누름(→ False). 단추 없이 닫히면 None: reject()(다른 창의
-    닫기 요청 — close_for_update)와 창 닫기(QCloseEvent — 앱 끝내기·로그아웃; Qt의 결과는 [아니요]지만 누르지 않음)."""
+    """[예]·[아니요]를 누른 것만 답(True·False). 단추를 누르지 않고 닫히면 None (기록하지 않음 — Ruling 26): 취소 키(Esc, Mac은
+    ⌘.도 — Qt 기본은 [아니요]를 누르지만 이 창은 누르지 않고 닫음), reject()(다른 창의 닫기 요청 — close_for_update), 창
+    닫기(QCloseEvent — 앱 끝내기·로그아웃; Qt의 결과는 [아니요]지만 누르지 않음)."""
     esc = QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier)
     cases = [
         (lambda box: box.button(QMessageBox.Yes).click(), True),
         (lambda box: box.button(QMessageBox.No).click(), False),
-        (lambda box: QApplication.sendEvent(box, esc), False),
+        (lambda box: QApplication.sendEvent(box, esc), None),
         (lambda box: box.close(), None),
         (lambda box: box.reject(), None),
     ]
+    # ⌘.(Qt는 Mac의 ⌘를 ControlModifier로): 취소 키인지는 화면 플러그인의 키 묶음이 정함 — Cocoa는 Esc·⌘., 시험의 offscreen은
+    # Esc만. 이 화면에서 취소 키일 때만 (창은 Qt와 같은 QKeyEvent.matches(QKeySequence.Cancel)로 가림)
+    command_period = QKeyEvent(QEvent.KeyPress, Qt.Key_Period, Qt.ControlModifier)
+    if command_period.matches(QKeySequence.Cancel):
+        cases.append((lambda box: QApplication.sendEvent(box, command_period), None))
     for action, expected in cases:
         answer, seen = _answer_box_with(action)
         assert answer is expected

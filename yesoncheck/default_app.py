@@ -7,8 +7,8 @@
   종류 중 하나라도 기본 앱이 YesonCheck가 아니면(should_ask) ASK_TEXT [예]/[아니요].
   - [예]·[아니요] 단추를 누른 것만 기록한다(prefs.json의 "asked_default_video_app": true — 다시 묻지 않음, Help 메뉴로는
     언제든). 다른 창의 업데이트가 이 창에 닫기를 요청해 열린 대화 상자가 reject()로 닫히거나(player_base.close_for_update) 앱
-    끝내기·로그아웃으로 창이 닫히는 것처럼 단추 없이 닫히면 기록하지 않는다(다음에 켤 때 다시 물음 — _ask). Esc는 Qt가
-    [아니요] 단추를 누르므로(눌리는 것이 보임) 아니요로 기록.
+    끝내기·로그아웃으로 창이 닫히는 것처럼 단추 없이 닫히면 기록하지 않는다(다음에 켤 때 다시 물음 — _ask). 취소 키(Esc, Mac은
+    ⌘.도)도 [아니요]를 누르지 않고 닫으므로 기록하지 않음 (_AskBox — Qt 기본은 [아니요]를 누름).
   - 이미 기본 앱이면 묻지도 기록하지도 않는다(답한 것이 아님).
   - [예] → set_default → 같은 앱 ID의 다른 사본(other_copies)이 있으면 그 경로들과 지우라는 안내(지우지는 않음).
 - Help → MENU_TEXT(Mac만 — Windows 항목은 file_associations): 묻지 않고 같은 일 + 정했다는 창. 소스 실행은 안내만.
@@ -53,6 +53,7 @@ import traceback
 import xml.parsers.expat
 from ctypes import POINTER, byref, c_bool, c_char_p, c_int32, c_long, c_uint32, c_void_p, create_string_buffer
 
+from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import QMessageBox
 
 from yesoncheck import update_install, user_files
@@ -432,21 +433,37 @@ def _apply(parent, app_path, bundle_id, announce):
         QMessageBox.information(parent, TITLE, DONE_TEXT)
 
 
+class _AskBox(QMessageBox):
+    """묻는 창: 취소 키(QKeySequence.Cancel — Esc, Mac은 ⌘.)는 [아니요]를 누르지 않고 reject()로 닫음 (Qt 기본은 탈출 단추
+    [아니요]를 누름 → 답으로 기록될 것). [아니요]는 탈출 단추로 남겨 둠 — 창 닫기(QCloseEvent: 앱 끝내기·로그아웃)가 막히지
+    않게 (탈출 단추가 없으면 QMessageBox는 닫기를 무시함)."""
+
+    def keyPressEvent(self, event):  # noqa: N802 (Qt 가상 함수 이름)
+        if event.matches(QKeySequence.Cancel):
+            self.reject()
+            return
+        super().keyPressEvent(event)
+
+
 def _ask(parent) -> bool | None:
     """ASK_TEXT [예]/[아니요] (기본 [예]) → 누른 단추로 True·False. 단추를 누르지 않고 닫히면 None: 다른 창의 닫기 요청(reject),
-    앱 끝내기·로그아웃의 창 닫기(QCloseEvent — Qt는 exec_()의 결과를 [아니요]로 두지만 사용자가 답한 것이 아님). Esc는 Qt가
-    [아니요] 단추를 누름(눌리는 것이 보임) → False."""
-    box = QMessageBox(QMessageBox.Question, TITLE, ASK_TEXT, QMessageBox.Yes | QMessageBox.No, parent)
+    취소 키(Esc·⌘. — _AskBox), 앱 끝내기·로그아웃의 창 닫기(QCloseEvent — Qt는 exec_()의 결과를 [아니요]로 두지만 사용자가
+    답한 것이 아님)."""
+    box = _AskBox(QMessageBox.Question, TITLE, ASK_TEXT, QMessageBox.Yes | QMessageBox.No, parent)
     box.setProperty(_BOX_TITLE_PROPERTY, TITLE)
     box.button(QMessageBox.Yes).setText(YES_BUTTON)
     box.button(QMessageBox.No).setText(NO_BUTTON)
     box.setDefaultButton(QMessageBox.Yes)
     pressed = []
-    box.buttonClicked.connect(lambda button: pressed.append(box.standardButton(button)))
-    box.exec_()
-    if not pressed:
-        return None
-    return pressed[-1] == QMessageBox.Yes
+    # 연결한 함수가 box를 붙잡지 않게 (box ↔ 함수 순환이면 창이 나중의 아무 때나 — 다른 이벤트 처리 중에 — 순환 GC로 지워짐)
+    box.buttonClicked.connect(pressed.append)
+    try:
+        box.exec_()
+        if not pressed:
+            return None
+        return box.standardButton(pressed[-1]) == QMessageBox.Yes
+    finally:
+        box.deleteLater()  # 부모(창)가 있으면 그 창이 끝날 때까지 남지 않게 — 지금 이벤트 루프에서 지움
 
 
 def _log(line):
