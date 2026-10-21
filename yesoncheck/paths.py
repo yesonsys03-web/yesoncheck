@@ -445,3 +445,45 @@ def normalize_native(path):
     if not IS_WINDOWS or not path:
         return path
     return ntpath.normpath(path)
+
+
+def find_unicode_variant(path, lexists=os.path.lexists, listdir=os.listdir):
+    """path가 그대로는 없을 때, 이름의 유니코드 정규화(NFC·NFD — 한글이 자모로 나뉘었는지)만 다른 실제 경로 → 그 경로.
+    path가 있거나, 정규화로 달라질 글자가 없거나(디스크를 보지 않음), 그런 경로를 하나로 정하지 못하면 None.
+
+    왜: Mac이 넘기는 파일 경로는 NFD로 온다 — PyInstaller argv_emulation이 'odoc'의 URL을 CFURLCopyFileSystemPath →
+    CFStringGetFileSystemRepresentation으로 바꾸는데, 이것이 이름을 분해한다(2026-10-22 확인: NFC로 저장된 이름의 URL도 NFD
+    경로가 됨). 로컬 디스크(APFS)와 SMB 공유는 정규화를 가리지 않지만 NFS 공유는 이름을 바이트 그대로 비교해서, 이름이 NFC로
+    저장된 폴더·파일(Windows·NAS 쪽에서 만든 것)의 NFD 경로는 없다고 나온다(같은 날 이 Mac의 NFS 공유에서 NFC로 저장된 이름 —
+    NFD로는 FileNotFoundError, NFD로 저장된 이름 — NFC로는 FileNotFoundError 확인). 그래서 처음으로 있는 위 폴더부터 내려가며
+    이름마다 그 폴더 목록에서 NFC가 같은 이름을 하나만 찾음 — 한 경로 안에 NFC·NFD 이름이 섞여 있어도 됨. 둘 이상이면(같은
+    이름이 NFC·NFD로 따로 있음) 고르지 않음. 폴더를 읽지 못했거나 고르지 못한 까닭은 기록(stdout)에.
+    """
+    if unicodedata.normalize("NFC", path) == path == unicodedata.normalize("NFD", path):
+        return None
+    if lexists(path):
+        return None
+    missing = []
+    current = path
+    while not lexists(current):
+        parent, name = os.path.split(current)
+        if not name or parent == current:
+            return None
+        missing.append(name)
+        current = parent
+    for name in reversed(missing):
+        try:
+            names = listdir(current)
+        except OSError as exc:
+            print(f"[파일 열기] 이름의 정규화만 다른 경로를 찾다 폴더를 읽지 못함: {current} ({type(exc).__name__}: {exc})",
+                  flush=True)
+            return None
+        key = unicodedata.normalize("NFC", name)
+        matches = [candidate for candidate in names if unicodedata.normalize("NFC", candidate) == key]
+        if len(matches) != 1:
+            if matches:
+                print(f"[파일 열기] 이름의 정규화만 다른 이름이 {len(matches)}개라 고르지 않음: {current} {matches!r}",
+                      flush=True)
+            return None
+        current = os.path.join(current, matches[0])
+    return current

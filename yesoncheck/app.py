@@ -206,12 +206,17 @@ def screen_report(screen):
 
 
 def open_startup_file(player, file_path):
-    """켤 때 받은 파일(명령줄·시작 중의 파일 열기 — mac_app_events가 고른 첫 파일)을 영상 A로 엶 (없으면 로그만)."""
+    """켤 때 받은 파일(명령줄·시작 중의 파일 열기 — mac_app_events가 고른 첫 파일, 새 창이 받은 파일)을 영상 A로 엶.
+
+    Mac 더블클릭·다음으로 열기, Windows 연결 프로그램, 새 창이 모두 이 길로 옴. 열지 못하면 open_file이 무엇을 왜 못 열었는지
+    오류 창(디스크에 없음·확인하지 못함(NAS 연결 끊김·권한)·OpenCV가 읽지 못함 — 설계 3-2), 창은 그대로. 받은 경로가 그대로는
+    없고 이름의 정규화(NFC·NFD)만 다른 실제 경로가 있으면(NFS 공유 — paths.find_unicode_variant) 그 경로로 엶."""
     print(f"Opening file: {file_path}")
-    if os.path.isfile(file_path):
-        player.open_file("A", file_path)
-    else:
-        print(f"File does not exist: {file_path}")
+    found = paths.find_unicode_variant(file_path)
+    if found is not None:
+        print(f"[파일 열기] 받은 경로가 그대로는 없어 이름의 정규화(NFC·NFD)만 다른 실제 경로로 엶: {found}", flush=True)
+        file_path = found
+    player.open_file("A", file_path)
 
 
 def update_in_progress_at_start():

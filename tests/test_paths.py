@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import unicodedata
 
 import pytest
@@ -283,3 +284,89 @@ def test_with_preferred_aliases_puts_connected_share_first():
         for alias in entry["windows"]:  # Windows → Mac은 모든 별칭이 그대로
             assert preferred.windows_to_mac(alias + "\\x") == entry["mac"] + "/x"
     assert _alias_lists(original.with_preferred_aliases([])) == before
+
+
+# ---- 이름의 정규화(NFC·NFD)만 다른 실제 경로 (find_unicode_variant) ----
+
+
+class ByteExactFS:
+    """이름을 바이트 그대로 비교하는 파일 시스템(NFS 공유) 대역 — 넣은 경로와 그 위 폴더들만 있음. 부른 차례는 calls."""
+
+    def __init__(self, *paths_):
+        self.entries = {os.sep}
+        self.calls = []
+        self.unreadable = set()
+        for path in paths_:
+            while path not in self.entries:
+                self.entries.add(path)
+                path = os.path.dirname(path)
+
+    def lexists(self, path):
+        self.calls.append(("lexists", path))
+        return path in self.entries
+
+    def listdir(self, folder):
+        self.calls.append(("listdir", folder))
+        if folder in self.unreadable:
+            raise PermissionError(13, "Permission denied", folder)
+        if folder not in self.entries:
+            raise FileNotFoundError(2, "No such file or directory", folder)
+        return sorted(os.path.basename(e) for e in self.entries if e != folder and os.path.dirname(e) == folder)
+
+
+def _nfd(text):
+    return unicodedata.normalize("NFD", text)
+
+
+def _nfc(text):
+    return unicodedata.normalize("NFC", text)
+
+
+def test_find_unicode_variant_on_byte_exact_share():
+    """Mac이 넘긴 경로(NFD — argv_emulation의 CFStringGetFileSystemRepresentation)가 NFS 공유에서 이름이 NFC로 저장된 폴더를
+    지나면 그대로는 없음 → 이름마다 위 폴더 목록에서 NFC가 같은 것을 찾아 실제 경로로 (NFC·NFD 이름이 섞여 있어도)."""
+    share = os.path.join(os.sep, "nas", "usadata9")
+    folder_nfc = _nfc("FL_901 컷 모음")  # Windows·NAS에서 만든 폴더 — NFC로 저장됨
+    video_nfd = _nfd("장면 #3.mov")  # Mac에서 넣은 파일 — NFD로 저장됨
+    real = os.path.join(share, folder_nfc, video_nfd)
+    fs = ByteExactFS(real)
+    handed = _nfd(real)  # Mac이 넘긴 경로: 모두 NFD
+    assert handed != real and not fs.lexists(handed)
+    assert paths.find_unicode_variant(handed, lexists=fs.lexists, listdir=fs.listdir) == real
+    # 모두 NFC로 넘겨도 (open --args로 받은 경로 등)
+    assert paths.find_unicode_variant(_nfc(real), lexists=fs.lexists, listdir=fs.listdir) == real
+
+
+def test_find_unicode_variant_returns_none_when_nothing_to_find():
+    share = os.path.join(os.sep, "nas", "usadata9")
+    real = os.path.join(share, _nfc("가나"), "a.mov")
+    fs = ByteExactFS(real)
+    # 있는 경로는 그대로 쓰면 됨 → None
+    assert paths.find_unicode_variant(real, lexists=fs.lexists, listdir=fs.listdir) is None
+    # 정규화로 달라질 글자가 없으면 디스크를 보지 않고 None
+    fs.calls.clear()
+    assert paths.find_unicode_variant(os.path.join(share, "gone", "a.mov"), lexists=fs.lexists,
+                                      listdir=fs.listdir) is None
+    assert fs.calls == []
+    # 정말 없는 파일 (이름의 정규화를 바꿔도 없음)
+    assert paths.find_unicode_variant(os.path.join(share, _nfd("가나"), "b.mov"), lexists=fs.lexists,
+                                      listdir=fs.listdir) is None
+    assert paths.find_unicode_variant(os.path.join(share, _nfd("다라"), "a.mov"), lexists=fs.lexists,
+                                      listdir=fs.listdir) is None
+
+
+def test_find_unicode_variant_ambiguous_or_unreadable_is_none(capsys):
+    """NFC가 같은 이름이 둘 이상(NFC·NFD로 따로 저장된 두 폴더)이면 고르지 않음, 폴더를 읽지 못하면 None — 둘 다 기록에 까닭."""
+    share = os.path.join(os.sep, "nas", "usadata9")
+    both = ByteExactFS(os.path.join(share, _nfc("가각"), "a.mov"), os.path.join(share, _nfd("가각"), "a.mov"))
+    mixed = "가" + _nfd("각")  # 앞 글자는 NFC, 뒤 글자는 NFD — 어느 쪽과도 바이트가 다름
+    assert paths.find_unicode_variant(os.path.join(share, mixed, "a.mov"), lexists=both.lexists,
+                                      listdir=both.listdir) is None
+    assert "2개" in capsys.readouterr().out
+
+    fs = ByteExactFS(os.path.join(share, _nfc("가나"), "a.mov"))
+    fs.unreadable.add(share)
+    assert paths.find_unicode_variant(os.path.join(share, _nfd("가나"), "a.mov"), lexists=fs.lexists,
+                                      listdir=fs.listdir) is None
+    out = capsys.readouterr().out
+    assert share in out and "PermissionError" in out

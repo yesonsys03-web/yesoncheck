@@ -20,6 +20,7 @@ import pytest
 from PyQt5.QtCore import QEvent, QUrl
 from PyQt5.QtWidgets import QApplication, QSplashScreen, QWidget
 
+from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 from yesoncheck import mac_app_events, new_window
 
 MAC_ONLY = pytest.mark.skipif(
@@ -440,3 +441,51 @@ def test_launch_spawn_failure_shows_error_and_keeps_window(qapp, launch_env, dia
     assert paths[1] in text and "Traceback" in text and "명령: /usr/bin/open -n" in text
     [player] = launch_env.created
     assert player.isVisible() and ("open", "A", paths[0]) in launch_env.events
+
+
+# ---- 받은 첫 파일 열기 (app.open_startup_file) ----
+
+
+def test_launch_opens_missing_startup_file_through_open_file(qapp, launch_env, tmp_path):
+    """받은 파일이 그대로는 없어도 open_file로 넘김 — 열지 못하면 open_file이 무엇을 왜 못 열었는지 오류 창 (예전에는 기록에
+    한 줄만 남고 빈 창만 떴음 — 설계 3-2 "영상을 열지 못하면 오류 창")."""
+    missing = str(tmp_path / "없는 폴더" / "장면 #3.mov")
+    assert launch_env.app.launch(["yesoncheck", missing]) == 0
+    wait_until(lambda: ("open", "A", missing) in launch_env.events)
+
+
+def test_open_startup_file_uses_path_with_other_unicode_form(qapp, monkeypatch, tmp_path):
+    """받은 경로가 그대로는 없고 이름의 정규화(NFC·NFD)만 다른 실제 경로가 있으면(NFS 공유) 그 경로로 엶 (paths.find_unicode_variant)."""
+    from yesoncheck import app as app_module, paths
+
+    handed = unicodedata.normalize("NFD", "/nas/usadata9/FL_901 컷/장면.mov")
+    real = unicodedata.normalize("NFC", "/nas/usadata9/FL_901 컷/") + unicodedata.normalize("NFD", "장면.mov")
+    asked = []
+
+    def fake_find(path):
+        asked.append(path)
+        return real
+
+    monkeypatch.setattr(paths, "find_unicode_variant", fake_find)
+    opened = []
+    player = SimpleNamespace(open_file=lambda video_type, path: opened.append((video_type, path)))
+    app_module.open_startup_file(player, handed)
+    assert asked == [handed] and opened == [("A", real)]
+
+    # 찾지 못하면 받은 그대로 (open_file이 오류 창)
+    monkeypatch.setattr(paths, "find_unicode_variant", lambda path: None)
+    opened.clear()
+    app_module.open_startup_file(player, handed)
+    assert opened == [("A", handed)]
+
+
+def test_open_startup_file_missing_video_shows_error_window_naming_it(new_player, dialogs, tmp_path):
+    """진짜 창: 없는 영상을 받으면 그 경로가 든 오류 창 (open_file — 없음·확인 못 함을 가려서), 창은 그대로."""
+    from yesoncheck import app as app_module
+
+    player = new_player(make_config(str(tmp_path), {}))
+    missing = str(tmp_path / "없는 폴더" / "장면 #3.mov")
+    app_module.open_startup_file(player, missing)
+    [(kind, title, text)] = dialogs.messages
+    assert kind in ("critical", "warning") and missing in text
+    assert player.filename_a in (None, "")
