@@ -184,3 +184,103 @@ def test_one_app_process_fails_when_the_app_dies_after_starting(monkeypatch, fas
     monkeypatch.setattr(update_e2e, "app_processes", lambda case: next(seen))
     with pytest.raises(AssertionError, match=r"pid 7528\)가 10초 동안 혼자 떠 있지 않았습니다 — 지금: 없음"):
         update_e2e.one_app_process(CASE, "되돌린 옛 앱")
+
+
+# ---- 다른 창 경로 (같은 설치의 다른 창이 켜진 채 업데이트) ----
+
+
+def test_close_others_texts_match_the_app():
+    """드라이버가 확인하는 확인 창·기록의 글이 앱(player_update)의 것과 같음 (드라이버는 Qt를 불러오지 않아 따로 둠)."""
+    from yesoncheck import player_update
+
+    assert update_e2e.CLOSE_OTHERS_TITLE == player_update.UPDATE_OTHERS_TITLE
+    assert update_e2e.CLOSE_OTHERS_COUNT == player_update.OTHERS_COUNT.format(n=1)
+    assert update_e2e.CLOSE_ALL_BUTTON == player_update.CLOSE_ALL_BUTTON
+
+
+@pytest.mark.parametrize("windows", [True, False])
+def test_other_window_case_shares_the_success_package(monkeypatch, tmp_path, windows):
+    """경우 셋: success·other_window는 같은 꾸러미(99.0.0, 잘 켜짐)를 하나만 만들어 복사, rollback은 따로."""
+    monkeypatch.setattr(update_e2e, "WINDOWS", windows)
+    args = SimpleNamespace(share_root=str(tmp_path / "share"), unc=r"\\localhost\yc_test\yc_update",
+                           app_dist="/x/dist/YesonCheck_Autocut_Intel.app")
+    cases = update_e2e.make_cases(args, str(tmp_path / "work"))
+    assert [(c.name, c.other_window, c.broken) for c in cases] == [
+        ("success", False, False), ("other_window", True, False), ("rollback", False, True)]
+    groups = update_e2e.package_groups(cases)
+    assert [[c.name for c in group] for group in groups] == [["success", "other_window"], ["rollback"]]
+    success, other = groups[0]
+    os.makedirs(success.package_dir)
+    with open(os.path.join(success.package_dir, "YesonCheck_Setup_99.0.0.exe"), "wb") as fh:
+        fh.write(b"MZ setup")
+    assert update_e2e.share_package(groups[0]) == ["other_window"]
+    with open(os.path.join(other.package_dir, "YesonCheck_Setup_99.0.0.exe"), "rb") as fh:
+        assert fh.read() == b"MZ setup"
+    assert os.listdir(success.package_dir) == ["YesonCheck_Setup_99.0.0.exe"]  # 복사 (원본은 그대로)
+
+
+def app_log(*lines):
+    """업데이트 기록: 앱의 줄(update_install.log — "<시각> [pid N] …")과 도우미의 줄("<시각> 도우미: …")."""
+    return "".join(T + (line if line.startswith("도우미: ") else "[pid 4100] " + line) + "\n" for line in lines)
+
+
+CLOSE_OTHERS_LOG = [
+    "업데이트 99.0.0: 다른 창 확인 (받기 전, 앱 자리 C:\\yc_update\\other_window\\apps\\YesonCheck)",
+    "업데이트 99.0.0: 다른 창 확인 끝 — 다른 사용자의 프로세스 0개, 다른 창 1개",
+    "업데이트 99.0.0: 다른 창도 닫고 업데이트할지 물음",
+    "업데이트 99.0.0: → 모두 닫고 업데이트",
+    "업데이트 99.0.0: 받기 시작 → C:\\yc_update\\other_window\\user\\YesonCheck\\updates\\downloads",
+    "업데이트 99.0.0: 다른 창 확인 (넘기기 전, 앱 자리 …)",
+    "업데이트 99.0.0: 다른 창 1개에 닫기를 요청하고 프로세스가 끝나기를 기다림 (최대 40초): Yeson Checker (pid 5300)",
+    "업데이트 99.0.0: 다른 창이 끝남 — Yeson Checker (pid 5300)",
+    "업데이트 99.0.0: 닫기 요청의 답",
+    "업데이트 99.0.0: 다른 창 1개가 모두 끝남 — 도우미에 넘김",
+    "업데이트 99.0.0: 도우미를 띄움",
+    "도우미: 시작: 대상 버전 99.0.0, 설치 폴더 …",
+]
+
+
+def test_close_others_sequence_needs_close_request_before_hand_off():
+    update_e2e.assert_log_sequence(app_log(*CLOSE_OTHERS_LOG), update_e2e.close_others_sequence())
+    # 닫기를 요청하지 않고(다른 창이 저절로 끝남) 넘겼거나, 도우미가 다른 창이 끝나기 전에 시작했으면 통과가 아님
+    without_request = [line for line in CLOSE_OTHERS_LOG if "닫기를 요청" not in line]
+    with pytest.raises(AssertionError, match="닫기를 요청"):
+        update_e2e.assert_log_sequence(app_log(*without_request), update_e2e.close_others_sequence())
+    helper_first = [CLOSE_OTHERS_LOG[-1], *CLOSE_OTHERS_LOG[:-1]]
+    with pytest.raises(AssertionError, match="도우미: 시작"):
+        update_e2e.assert_log_sequence(app_log(*helper_first), update_e2e.close_others_sequence())
+
+
+ANSWERED = {"title": "다른 창도 닫고 업데이트", "text": "다른 YesonCheck 창 1개도 닫힙니다.", "answer": "모두 닫고 업데이트"}
+
+
+@pytest.mark.parametrize("other_window, answered, error", [
+    (True, [ANSWERED], None),
+    (True, [ANSWERED, ANSWERED], None),  # 받은 뒤 다시 물음
+    (True, [], "확인 창이 뜨지 않았습니다"),
+    (True, [dict(ANSWERED, text="다른 YesonCheck 창 2개도 닫힙니다.")], "1개를 알리지 않았습니다"),
+    (True, [dict(ANSWERED, answer="(단추 없음: 16384)")], "다른 확인 창에 답함"),
+    (False, [], None),
+    (False, [ANSWERED], "다른 창이 없는데"),
+])
+def test_check_close_others_answer(other_window, answered, error):
+    case = SimpleNamespace(other_window=other_window)
+    report = {"checks": [], "dialogs": [], "answered": answered}
+    if error is None:
+        assert update_e2e.check_close_others_answer(case, report) == answered
+    else:
+        with pytest.raises(AssertionError, match=error):
+            update_e2e.check_close_others_answer(case, report)
+
+
+def test_check_second_window_closed_needs_a_clean_exit(monkeypatch, tmp_path):
+    monkeypatch.setattr(update_e2e, "instance_record_path", lambda case, pid: str(tmp_path / f"{pid}.json"))
+    log = app_log(*CLOSE_OTHERS_LOG)
+    second = SimpleNamespace(pid=5300, poll=lambda: 0)
+    assert update_e2e.check_second_window_closed(None, second, log) == 0
+    for code, message in ((None, "아직 돕니다"), (1, "종료 코드 1")):
+        with pytest.raises(AssertionError, match=message):
+            update_e2e.check_second_window_closed(None, SimpleNamespace(pid=5300, poll=lambda c=code: c), log)
+    (tmp_path / "5300.json").write_text("{}", encoding="utf-8")  # 정상 종료면 창 기록을 지움
+    with pytest.raises(AssertionError, match="창 기록이 남아"):
+        update_e2e.check_second_window_closed(None, second, log)

@@ -4,7 +4,10 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File update_helper_windows.ps1
 #       -AppPid PID -InstallDir DIR -Installer EXE -Target VER -OkFile OK -Log LOG [-TimeoutSeconds S] [-ExeName NAME]
 #       [-Token TOKEN]
-#   (TOKEN: 앱의 업데이트 기록(pending_update.json)의 토큰 — 다시 켜는 앱만 결과를 판정하게 넘길 값. 지금은 받아 두기만 함)
+#   (TOKEN: 앱의 업데이트 기록(pending_update.json)의 토큰. 이 도우미가 켜는 앱(새 앱, 되돌리거나 바꾸지 않고 다시 켜는 옛 앱)에
+#   모두 '--update-result TOKEN'으로 넘김 — 그 앱만 지난 업데이트의 결과를 판정하고, 업데이트 중에 사용자가 켠 앱은 "업데이트
+#   중" 창만 보이고 끝남(launch_args, update_install.startup_result·update_in_progress). 없으면(토큰을 모르는 옛 앱이 띄움)
+#   인자 없이 켬. 명령 줄에 따옴표 없이 넣으므로 영문·숫자·_·-만 받음 — 앱의 토큰은 secrets.token_hex)
 #   powershell ... -File update_helper_windows.ps1 -Recover      (다음 로그인에서 — RunOnce가 부름, 아래 '되살림')
 #
 # 앱(update_install.launch_helper_windows)이 이 파일을 업데이트 상태 폴더로 복사해 창 없는 콘솔로 띄운 뒤 끝난다.
@@ -13,18 +16,24 @@
 #      그 pid의 실행 파일이 DIR\ExeName일 때만 기다린다.
 #   2. 지난번에 치워 둔 DIR.update-failed-*를 지워 봄(못 지워도 계속), 남은 DIR.update-backup을 지움(못 지우면 설치하지
 #      않음).
-#   3. 지난 OK를 지우고(못 지우면 바꾸지 않고 옛 앱을 다시 켬 — 남은 OK가 이번 업데이트의 것으로 보이면 다음 로그인의
+#   3. 같은 설치의 다른 프로세스가 모두 끝나기를 기다림(YC_OTHERS_TIMEOUT초): 실행 파일이 DIR 아래인 것(다른 창, 그 창이
+#      띄운 ffmpeg 등)과 실행 파일 경로를 읽지 못하는 같은 이름(ExeName)의 것(다른 사용자의 창일 수 있음 — 다른 사용자
+#      프로세스의 경로는 읽을 수 없음). 켜진 채로는 DIR의 이름을 바꿀 수 없음(안의 파일이 잡혀 있음). 앱은 넘기기 전에 이
+#      사용자의 다른 창을 닫고, 업데이트 중에 켜진 창은 몇 초 안에 스스로 끝남 — 이것은 그 뒤의 안전장치. 끝내지는 않는다.
+#      넘거나 확인하지 못하면 바꾸지 않고 아래 되돌리기처럼 옛 앱을 (토큰과 함께) 다시 켬.
+#   4. 지난 OK를 지우고(못 지우면 바꾸지 않고 옛 앱을 다시 켬 — 남은 OK가 이번 업데이트의 것으로 보이면 다음 로그인의
 #      되살림이 반쯤 깔린 DIR을 남길 수 있음) 다음 로그인의 되살림을 등록(아래)한 뒤 DIR을 DIR.update-backup으로 이름만
-#      바꿈(약 1 GB를 복사하지 않음). 안의 파일이 잡혀 있어 못 바꾸면 — 다른 YesonCheck 창이 켜져 있거나 백신 등이 파일을
-#      잡고 있음 — 설치하지 않고 옛 앱을 다시 켬.
-#   4. 설치 파일을 /VERYSILENT로 DIR에 설치(설치 파일 자체 기록은 LOG.inno.txt). 종료 코드 ≠ 0이면 되돌림. 30분 안에
+#      바꿈(약 1 GB를 복사하지 않음). 안의 파일이 잡혀 있어 못 바꾸면 — 그사이 다른 YesonCheck 창이 켜졌거나 백신 등이
+#      파일을 잡고 있음 — 설치하지 않고 옛 앱을 다시 켬.
+#   5. 설치 파일을 /VERYSILENT로 DIR에 설치(설치 파일 자체 기록은 LOG.inno.txt). 종료 코드 ≠ 0이면 되돌림. 30분 안에
 #      끝나지 않으면 설치 파일과 그 자손 프로세스(Inno의 is-*.tmp\Setup.tmp 등)를 끝내고 되돌림.
-#   5. OK를 지우고 DIR\ExeName을 켬(환경 변수는 이 도우미의 것 그대로, 작업 폴더는 DIR — 바로 가기와 같음).
-#   6. 새 앱이 창을 보인 뒤 쓰는 OK({"version": "VER"})를 -TimeoutSeconds초까지 기다림 → 되면 백업·되살림 등록·OK를 지움.
-# 중간에 실패하거나, 새 앱이 표시 없이 끝나거나, 시간이 지나면 되돌림: 새 앱과 그 자손 프로세스, 실행 파일이 DIR
-# 아래인 프로세스를 끝내고(이름으로는 찾지 않음), 반쯤 깔린 DIR을 옆 이름으로 치운 뒤 백업을 DIR로 되돌리고, 치운 것을
-# 지운 다음 옛 앱을 켠다. DIR에 앱이 없는 채로 끝내지 않는다 — 되돌리기마저 실패하면 두 오류를 모두 기록하고, 알림 창을
-# 띄우고(앱이 없으니 다음 실행에서 알릴 수 없음) 종료 코드 2.
+#   6. OK를 지우고 DIR\ExeName을 켬(환경 변수는 이 도우미의 것 그대로, 작업 폴더는 DIR — 바로 가기와 같음, 인자는 위 TOKEN).
+#   7. 새 앱이 창을 보인 뒤 쓰는 OK({"version": "VER"})를 -TimeoutSeconds초까지 기다림 → 되면 백업·되살림 등록·OK를 지움.
+# 중간에 실패하거나, 새 앱이 표시 없이 끝나거나, 시간이 지나면 되돌림: 이 도우미가 켠 새 앱과 그 자손 프로세스, 실행 파일이
+# DIR 아래이고 새 앱을 켠 뒤에 시작한 프로세스만 끝내고(이름으로는 찾지 않음 — 켜기 전부터 돌던 창, 곧 업데이트 중에 사용자가
+# 켠 창은 건드리지 않음: '업데이트 중' 창을 보이고 스스로 끝나며, 그동안 되돌리기의 이름 바꾸기는 다시 해 봄), 반쯤 깔린 DIR을
+# 옆 이름으로 치운 뒤 백업을 DIR로 되돌리고, 치운 것을 지운 다음 옛 앱을 켠다. DIR에 앱이 없는 채로 끝내지 않는다 — 되돌리기마저
+# 실패하면 두 오류를 모두 기록하고, 알림 창을 띄우고(앱이 없으니 다음 실행에서 알릴 수 없음) 종료 코드 2.
 #
 # 종료 코드: 0 업데이트 성공, 1 바꾸지 않았거나 되돌림(옛 앱을 켬), 2 되돌리기 실패·설치 폴더에 앱이 없음·잘못된 인자.
 #
@@ -52,6 +61,9 @@
 #   YC_UPDATE_OK_TIMEOUT_S       -TimeoutSeconds의 기본값 (없으면 180초)
 #   YC_UPDATE_PID_TIMEOUT_S      앱이 끝나기를 기다리는 시간 (없으면 300초)
 #   YC_UPDATE_INSTALL_TIMEOUT_S  설치 파일이 끝나기를 기다리는 시간 (없으면 1800초)
+#   YC_OTHERS_TIMEOUT            이름을 바꾸기 전에 같은 설치의 다른 프로세스가 모두 끝나기를 기다리는 시간 (없으면 60초 —
+#                                업데이트 중에 켜진 창이 "업데이트 중" 창을 보이고 스스로 끝나는 시간(app.
+#                                UPDATE_IN_PROGRESS_CLOSE_MS)보다 넉넉히. Mac 도우미와 같은 이름)
 #   YC_UPDATE_NO_MESSAGEBOX      1이면 종료 코드 2의 알림 창을 띄우지 않음 (시험이 멈추지 않게)
 #   YC_UPDATE_RUNONCE_KEY        되살림을 등록할 HKCU 아래 키 (없으면 Software\Microsoft\Windows\CurrentVersion\RunOnce —
 #                                시험은 진짜 RunOnce를 건드리지 않게 다른 키로)
@@ -83,7 +95,9 @@ $script:AppGone = $false   # 앱(PID)이 끝났음 — 그 전에는 옛 앱을 
 $script:Renamed = $false   # DIR을 백업 이름으로 바꿨음 — 그 뒤로 실패하면 백업을 되돌려야 함
 $script:Launched = $false  # 새 앱을 켜려고 했음 — 되돌릴 때 새 앱과 그 자손, DIR 아래 프로세스를 끝내야 함
 $script:NewProc = $null    # 켠 새 앱 프로세스
-$script:NewProcStart = [DateTime]::MinValue  # 새 앱을 켜기 바로 전 시각 (자손 프로세스를 가릴 때 씀)
+# 새 앱을 켜기 바로 전 시각 — 자손 프로세스와, 되돌릴 때 끝낼 DIR 아래 프로세스(이 뒤에 시작한 것만)를 가릴 때 씀. 처음 값이면
+# (새 앱을 켜지 않은 되살림) DIR 아래 프로세스 모두
+$script:NewProcStart = [DateTime]::MinValue
 $script:InstallerProc = $null  # 실행한 설치 파일 프로세스 — 되돌리기의 두 번째 이름 바꾸기 전에 그 자손을 다시 끝냄
 $script:InstallerStart = [DateTime]::MinValue
 $script:RecoverSet = $false  # 다음 로그인의 되살림을 등록했음 — 끝날 때 지워야 함
@@ -162,7 +176,7 @@ function Exit-Fatal([string]$Text) {
 
 function Exit-Usage([string]$Why) {
     Write-Log ('잘못된 인자: ' + $Why)
-    [Console]::Error.WriteLine('사용법: powershell -File update_helper_windows.ps1 -AppPid PID -InstallDir DIR -Installer EXE -Target VER -OkFile OK -Log LOG [-TimeoutSeconds S] [-ExeName NAME]')
+    [Console]::Error.WriteLine('사용법: powershell -File update_helper_windows.ps1 -AppPid PID -InstallDir DIR -Installer EXE -Target VER -OkFile OK -Log LOG [-TimeoutSeconds S] [-ExeName NAME] [-Token TOKEN]')
     Exit-Fatal ("업데이트 도우미를 시작하지 못했습니다 (잘못된 인자: " + $Why + ").`r`nYeson Checker를 다시 켜 주세요.")
 }
 
@@ -266,12 +280,70 @@ function Wait-AppExit {
     return $proc.WaitForExit($PidTimeoutS * 1000)
 }
 
+function Get-AppProcesses {
+    # 이름을 바꾸기 전에 기다릴 같은 설치의 프로세스 (이 도우미 자신은 빼고): 실행 파일이 DIR 아래인 것(다른 창, 그 창이 띄운
+    # ffmpeg 등)과, 실행 파일 경로를 읽지 못하는 같은 이름(ExeName)의 것 — 다른 사용자의 창일 수 있음(다른 사용자 프로세스의
+    # 경로는 읽을 수 없음 — 앱의 instances.other_user_processes도 이름으로만 찾음). 같은 이름이라도 끝났지만 누가 핸들을 쥐고
+    # 있어 남은 것(이 도우미가 기다린 앱 등 — 경로는 읽을 수 없음)은 뺌. 돌려줌: "pid N (경로 또는 읽지 못한 이유)"들
+    $found = New-Object System.Collections.ArrayList
+    $prefix = $InstallDir + '\'
+    foreach ($p in [System.Diagnostics.Process]::GetProcesses()) {
+        if ($p.Id -eq $PID) { continue }
+        $path = $null
+        $why = ''
+        try {
+            $path = $p.MainModule.FileName
+        } catch {
+            $why = Format-Err $_  # 시스템·다른 사용자의 프로세스, 끝났거나 막 켜지는 중 — 이름이 같을 때만 씀
+        }
+        if ($path) {
+            if ($path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $null = $found.Add('pid ' + $p.Id + ' (' + $path + ')')
+            }
+            continue
+        }
+        if ($p.ProcessName -ine $ExeBaseName) { continue }
+        $gone = $false
+        try {
+            $gone = $p.HasExited
+        } catch {
+            $why = $why + ' / 끝났는지도 알 수 없음: ' + (Format-Err $_)  # 다른 사용자의 프로세스 — 도는 것으로 봄
+        }
+        if (-not $gone) {
+            $null = $found.Add('pid ' + $p.Id + ' (' + $p.ProcessName + ' — 경로를 읽지 못함, 다른 사용자의 창일 수 있음: ' + $why + ')')
+        }
+    }
+    return $found
+}
+
+function Wait-AllAppProcesses {
+    # 같은 설치의 다른 프로세스(Get-AppProcesses)가 모두 끝나기를 OthersTimeoutS초까지 기다림 — 끝내지는 않음.
+    # $true: 모두 끝남(또는 처음부터 없음), $false: 남음 (이유는 $script:FailReason). 프로세스 목록을 읽지 못하면 예외
+    $found = @(Get-AppProcesses)
+    if ($found.Count -eq 0) { return $true }
+    Write-Log ('다른 YesonCheck 창이 끝나기를 기다림 (최대 ' + $OthersTimeoutS + '초): ' + ($found -join ', '))
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($found.Count -gt 0) {
+        if ($sw.Elapsed.TotalSeconds -ge $OthersTimeoutS) {
+            $script:FailReason = ('다른 YesonCheck 창이 끝나지 않아 바꾸지 않음: ' + ($found -join ', ') + ' (' + $OthersTimeoutS +
+                '초 기다림)')
+            return $false
+        }
+        Start-Sleep -Milliseconds 500
+        $found = @(Get-AppProcesses)
+    }
+    Write-Log '다른 YesonCheck 창이 모두 끝남'
+    return $true
+}
+
 function Start-App([string]$What) {
-    # DIR\ExeName을 켬 — 환경 변수는 이 도우미의 것 그대로, 작업 폴더는 DIR(바로 가기와 같음). 돌려줌: 프로세스
+    # DIR\ExeName을 켬 — 환경 변수는 이 도우미의 것 그대로, 작업 폴더는 DIR(바로 가기와 같음), 토큰이 있으면 인자
+    # --update-result TOKEN (맨 위 TOKEN 설명 — 영문·숫자 등만 받으므로 따옴표 없이). 돌려줌: 프로세스
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $ExePath
     $psi.WorkingDirectory = $InstallDir
     $psi.UseShellExecute = $false
+    if ($Token) { $psi.Arguments = '--update-result ' + $Token }
     $p = [System.Diagnostics.Process]::Start($psi)
     Write-Log "$($What)을 켬 (pid $($p.Id)): $ExePath"
     return $p
@@ -353,15 +425,31 @@ function Stop-Targets($List, [string]$What) {
 
 function Stop-NewApp {
     # 켠 새 앱과 그 자손(작업 폴더 DIR을 물려받은 cmd.exe·powershell.exe 등 — 실행 파일은 DIR 밖), 그리고 실행 파일이
-    # DIR 아래인 프로세스(새 앱이 띄운 ffmpeg 등)를 모두 끝냄. 이름으로는 찾지 않는다 — 다른 곳에 깔린 같은 이름의 앱은
-    # 건드리지 않음
+    # DIR 아래이고 새 앱을 켠 뒤(NewProcStart)에 시작한 프로세스(새 앱이 띄운 ffmpeg 등 — 부모가 먼저 끝나 자손으로 찾지
+    # 못한 것도)를 끝냄. 켜기 전부터 돌던 것(업데이트 중에 사용자가 켠 창 — '업데이트 중' 창을 보이고 스스로 끝남)은
+    # 끝내지 않고 기록만. 이름으로는 찾지 않는다 — 다른 곳에 깔린 같은 이름의 앱은 건드리지 않음
     $targets = New-Object System.Collections.ArrayList
     if ($null -ne $script:NewProc) { Add-ProcessTree $targets $script:NewProc $script:NewProcStart }
     $prefix = $InstallDir + '\'
+    $kept = New-Object System.Collections.ArrayList
     foreach ($p in [System.Diagnostics.Process]::GetProcesses()) {
         $path = $null
-        try { $path = $p.MainModule.FileName } catch { $path = $null }  # 시스템·다른 사용자 프로세스는 경로를 읽을 수 없음 — 우리 앱이 아님
-        if ($path -and $path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { Add-Target $targets $p }
+        try { $path = $p.MainModule.FileName } catch { $path = $null }  # 시스템·다른 사용자 프로세스는 경로를 읽을 수 없음 — 우리가 켠 앱이 아님
+        if (-not ($path -and $path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase))) { continue }
+        try {
+            $started = $p.StartTime
+        } catch {
+            Write-Log ("실행 파일이 설치 폴더 아래인 프로세스(pid $($p.Id))의 시작 시각을 읽지 못해 끝내지 않음: " + (Format-Err $_))
+            continue
+        }
+        if ($started -ge $script:NewProcStart) {
+            Add-Target $targets $p
+        } else {
+            $null = $kept.Add($p.Id)
+        }
+    }
+    if ($kept.Count -gt 0) {
+        Write-Log ('새 앱을 켜기 전부터 돌던 프로세스는 끝내지 않음: pid ' + ($kept -join ' ') + ' (스스로 끝나기를 기다림)')
     }
     Stop-Targets $targets '새 앱'
 }
@@ -699,7 +787,7 @@ if ($ExtraArgs.Count -gt 0) { Exit-Usage ('알 수 없는 인자: ' + ($ExtraArg
 # ---- 다음 로그인에서 되살림 (-Recover — RunOnce가 부름, 머리 설명의 '되살림') ----
 
 if ($Recover) {
-    foreach ($given in @($AppPid, $InstallDir, $Installer, $Target, $OkFile, $Log, $TimeoutSeconds)) {
+    foreach ($given in @($AppPid, $InstallDir, $Installer, $Target, $OkFile, $Log, $TimeoutSeconds, $Token)) {
         if ($given) { Exit-Usage '-Recover에는 다른 인자를 함께 쓰지 않음 (되살림 정보 파일에서 읽음)' }
     }
     try {
@@ -747,7 +835,9 @@ if ($Recover) {
     }
     Write-Log ("되살림: 끝나지 않은 업데이트 (컴퓨터가 꺼짐·로그아웃 등, '잘 켜짐' 표시: " + (Get-OkSummary $okVersion) +
         ') — 이전 버전을 되살림')
-    $script:Launched = $true  # 이름 바꾸기가 막히면 실행 파일이 설치 폴더 아래인 프로세스(반쯤 깔린 앱)를 끝내고 다시 해 봄
+    # 이름 바꾸기가 막히면 실행 파일이 설치 폴더 아래인 프로세스(반쯤 깔린 앱)를 끝내고 다시 해 봄 — NewProcStart가 처음 값이라
+    # 모두 (로그인 때라 이 업데이트 중에 사용자가 켠 창은 없음)
+    $script:Launched = $true
     $restored = $false
     try {
         $restored = Restore-Backup
@@ -790,10 +880,12 @@ $InstallTimeoutText = $env:YC_UPDATE_INSTALL_TIMEOUT_S
 if (-not $InstallTimeoutText) { $InstallTimeoutText = '1800' }
 $RunOnceMaxText = $env:YC_UPDATE_RUNONCE_MAX_CHARS
 if (-not $RunOnceMaxText) { $RunOnceMaxText = '260' }
+$OthersTimeoutText = $env:YC_OTHERS_TIMEOUT
+if (-not $OthersTimeoutText) { $OthersTimeoutText = '60' }
 $numbers = [ordered]@{
     '-AppPid' = $AppPid; '-TimeoutSeconds(YC_UPDATE_OK_TIMEOUT_S)' = $TimeoutSeconds
     'YC_UPDATE_PID_TIMEOUT_S' = $PidTimeoutText; 'YC_UPDATE_INSTALL_TIMEOUT_S' = $InstallTimeoutText
-    'YC_UPDATE_RUNONCE_MAX_CHARS' = $RunOnceMaxText
+    'YC_UPDATE_RUNONCE_MAX_CHARS' = $RunOnceMaxText; 'YC_OTHERS_TIMEOUT' = $OthersTimeoutText
 }
 foreach ($name in $numbers.Keys) {
     if ($numbers[$name] -notmatch '^[0-9]{1,9}$') { Exit-Usage ($name + ' 값은 숫자여야 함: ' + $numbers[$name]) }
@@ -803,6 +895,7 @@ $TimeoutS = [int]$TimeoutSeconds
 $PidTimeoutS = [int]$PidTimeoutText
 $InstallTimeoutS = [int]$InstallTimeoutText
 $RunOnceMaxChars = [int]$RunOnceMaxText  # RunOnce 명령 줄 한도 (Microsoft 문서: 260자)
+$OthersTimeoutS = [int]$OthersTimeoutText
 # 밀리초로 바꿔 WaitForExit(int)에 넘기므로 하루까지만
 if ($PidTimeoutS -gt 86400) { Exit-Usage ('YC_UPDATE_PID_TIMEOUT_S 값이 너무 큼: ' + $PidTimeoutS) }
 if ($InstallTimeoutS -gt 86400) { Exit-Usage ('YC_UPDATE_INSTALL_TIMEOUT_S 값이 너무 큼: ' + $InstallTimeoutS) }
@@ -811,6 +904,8 @@ foreach ($name in $paths.Keys) {
     if ($paths[$name] -notmatch '^(?:[A-Za-z]:\\|\\\\)') { Exit-Usage ($name + ' 값은 전체 경로여야 함: ' + $paths[$name]) }
 }
 if ($ExeName -match '[\\/:]') { Exit-Usage ('-ExeName 값은 파일 이름이어야 함: ' + $ExeName) }
+# 켜는 앱의 명령 줄에 따옴표 없이 넣음 (Start-App)
+if ($Token -and ($Token -notmatch '^[0-9A-Za-z_-]{1,128}$')) { Exit-Usage ('-Token 값은 영문·숫자·_·-여야 함: ' + $Token) }
 try {
     $InstallDir = [System.IO.Path]::GetFullPath($InstallDir).TrimEnd('\')
 } catch {
@@ -819,6 +914,7 @@ try {
 if (-not [System.IO.Path]::GetDirectoryName($InstallDir)) { Exit-Usage ('-InstallDir 값이 드라이브 맨 위임: ' + $InstallDir) }
 
 $ExePath = [System.IO.Path]::Combine($InstallDir, $ExeName)
+$ExeBaseName = [System.IO.Path]::GetFileNameWithoutExtension($ExeName)  # 프로세스 이름 (Get-AppProcesses)
 $Backup = $InstallDir + '.update-backup'
 $InnoLog = $Log + '.inno.txt'
 
@@ -837,6 +933,7 @@ try {
 # ---- 업데이트 ----
 
 Write-Log "시작: 대상 버전 $Target, 설치 폴더 $InstallDir, 설치 파일 $Installer"
+if (-not $Token) { Write-Log '-Token이 없음 — 켜는 앱에 결과 판정 인자(--update-result)를 넘기지 않음' }
 try {
     # 1. 앱이 끝나기를 기다림
     $exited = $false
@@ -875,7 +972,18 @@ try {
         }
     }
 
-    # 4. 설치 폴더를 백업 이름으로 (여기는 짧게 — 오래 잡혀 있으면 다른 창이 켜져 있는 것). 바로 전에 지난 '잘 켜짐' 표시를
+    # 4. 같은 설치의 다른 프로세스(다른 창 — 모든 사용자)가 모두 끝나기를 기다림 (머리 설명 3 — 이름을 바꾸기 바로 전에: 그
+    #    사이에 켜진 창도 기다리게). 넘거나 확인하지 못하면 바꾸지 않고 옛 앱을 (토큰과 함께) 다시 켜고 끝냄
+    $othersDone = $false
+    try {
+        $othersDone = Wait-AllAppProcesses
+    } catch {
+        $script:FailReason = '다른 YesonCheck 창이 있는지 확인하지 못해 바꾸지 않음: ' + (Format-Err $_)
+        Exit-Rollback
+    }
+    if (-not $othersDone) { Exit-Rollback }
+
+    # 5. 설치 폴더를 백업 이름으로 (여기는 짧게 — 오래 잡혀 있으면 그사이 다른 창이 켜진 것). 바로 전에 지난 '잘 켜짐' 표시를
     #    지우고(같은 버전을 다시 해 볼 때 지난번 것이 남아 있으면 다음 로그인의 되살림이 반쯤 깔린 설치 폴더를 새 버전으로
     #    봄 — 못 지우면 아무것도 바꾸지 않고 멈춤) 다음 로그인의 되살림을 등록: 여기부터 컴퓨터가 꺼지면 앱이 백업 이름에
     #    있거나 반쯤 깔린 채로 남음 (지난 백업을 지운 뒤라 남은 백업은 이번 것)
@@ -894,7 +1002,7 @@ try {
     $script:Renamed = $true
     Write-Log "설치 폴더를 백업 이름으로 바꿈: $InstallDir → $Backup"
 
-    # 5. 조용히 설치
+    # 6. 조용히 설치
     Write-Log "설치 파일을 조용히 실행: $Installer (설치 파일 기록: $InnoLog, 최대 $($InstallTimeoutS)초)"
     $code = $null
     try {
@@ -915,7 +1023,7 @@ try {
     }
     Write-Log '설치 파일이 끝남 (종료 코드 0)'
 
-    # 6. 지난 표시를 지우고 새 앱을 켬
+    # 7. 지난 표시를 지우고 새 앱을 켬 (그 전부터 DIR 아래에서 돌던 프로세스는 되돌릴 때 끝내지 않음 — Stop-NewApp)
     try {
         if ([System.IO.File]::Exists($OkFile)) { [System.IO.File]::Delete($OkFile) }
     } catch {
@@ -931,11 +1039,11 @@ try {
         Exit-Rollback
     }
 
-    # 7. 새 앱의 '잘 켜짐' 표시
+    # 8. 새 앱의 '잘 켜짐' 표시
     if (-not (Wait-OkMarker)) { Exit-Rollback }
     Write-Log "새 앱이 잘 켜짐 (버전 $Target)"
 
-    # 8. 정리 (실패해도 업데이트는 성공 — 남은 백업은 다음 업데이트가 먼저 지움)
+    # 9. 정리 (실패해도 업데이트는 성공 — 남은 백업은 다음 업데이트가 먼저 지움)
     try {
         Remove-Dir $Backup
         Write-Log "백업을 지움: $Backup"

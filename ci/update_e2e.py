@@ -1,5 +1,6 @@
 """업데이트 끝까지 시험 (CI — Windows·Mac Intel·Mac Apple Silicon): 빌드된 앱이 NAS 흉내 폴더의 새 버전으로 실제로
-업데이트하는지(성공 경로), 새 버전이 잘 켜지지 않으면 옛 버전으로 되돌리는지(되돌리기 경로).
+업데이트하는지(성공 경로), 같은 설치의 다른 창이 켜져 있어도 그 창을 정상 종료로 닫고 업데이트하는지(다른 창 경로), 새 버전이
+잘 켜지지 않으면 옛 버전으로 되돌리는지(되돌리기 경로).
 
   Windows: python ci/update_e2e.py --platform windows --app-dist dist\\YesonCheck_Autocut --installer <원래 설치 파일>
            --iscc <ISCC.exe> --share-root C:\\yc_share\\yc_update --unc \\\\localhost\\yc_test\\yc_update --work C:\\yc_update
@@ -10,11 +11,16 @@
 고쳐 codesign --force --sign -(ad-hoc)으로 다시 서명하고 build_app.sh처럼 hdiutil create. 옛 앱은 원래 빌드 그대로 — Windows:
 원래 설치 파일로 <경우>\\apps\\YesonCheck에 조용히 설치, Mac: <경우>/yc_apps/YesonCheck_Autocut_<라벨>.app에 ditto.
 make_test_data.py --update-dir이 가짜 공유 설정의 updates/에 꾸러미와 latest.json(version 99.0.0, 이 플랫폼 항목)을 둔다.
+같은 꾸러미를 쓰는 경우(success·other_window — package_groups)는 하나만 만들어 복사한다.
 
-경우 둘 (각각 <work>/<경우> 아래, 업데이트 상태 폴더도 따로):
+경우 셋 (각각 <work>/<경우> 아래, 업데이트 상태 폴더도 따로):
 - success: 꾸러미 99.0.0 → 옛 앱 --smoke-test(update 시나리오: 알림 → 받기 → 도우미에 넘김) → 도우미 기록 "업데이트 끝: 99.0.0",
   설치된 앱의 버전 99.0.0, 새 앱 프로세스가 떠 있음, 업데이트 기록(pending_update.json)이 지워짐, 백업 없음, (Windows) 다음
   로그인의 되살림이 남지 않음, 받은 설치 파일·dmg를 새 앱이 지움 → 새 앱을 끝냄.
+- other_window: success와 같은 꾸러미. 옛 앱을 먼저 하나 더 켜 두고(사용자가 켠 다른 창 — 창 기록이 생길 때까지 기다림) 옛 앱
+  --smoke-test(update 시나리오, make_test_data.py --close-others: '다른 창도 닫고 업데이트' 확인 창에 [모두 닫고 업데이트]) →
+  확인 창이 다른 창 1개를 알림, 업데이트 기록에 묻기 → 받기 → 다른 창에 닫기 요청(request_close) → 그 창이 끝남 → 도우미에
+  넘김 순서, 다른 창은 종료 코드 0(정상 종료), 그 뒤는 success와 같음 (켜진 앱은 새 앱 하나).
 - rollback: latest.json은 99.0.0인데 새 앱이 '잘 켜짐' 표시를 쓰지 않음 (Windows: 꾸러미 버전 98.0.0, Mac: 꾸러미의
   build_info는 99.0.0이고 실행 파일은 바로 exit 1 하는 스크립트) → 도우미 기록에 되돌림, 설치된 앱의 버전이 옛 것, 다시 켜진
   옛 앱이 60초 안에 업데이트 기록을 지움(실패를 알렸다는 뜻), 백업 없음 → 옛 앱을 끝냄.
@@ -44,7 +50,7 @@ from dataclasses import dataclass
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
-from yesoncheck import build_info, update_install  # noqa: E402
+from yesoncheck import build_info, instances, update_install  # noqa: E402
 
 WINDOWS = sys.platform == "win32"
 NEW_VERSION = "99.0.0"
@@ -65,6 +71,7 @@ ISCC_TIMEOUT_S = 1800  # 설치 파일 컴파일 (CI에서 약 7분 — 둘을 �
 SMOKE_TIMEOUT_S = 900  # 옛 앱 실행 시험 (받기·Mac 새 앱 준비 포함)
 HELPER_TIMEOUT_S = 900  # 도우미가 끝날 때까지 (Windows 조용한 설치 포함)
 PENDING_CLEARED_S = 60  # 되돌린 옛 앱이 업데이트 기록을 지울 때까지
+SECOND_WINDOW_START_S = 180  # 다른 창(옛 앱을 하나 더 켬)이 창 기록을 남길 때까지 (켜자마자 백신 검사 등으로 느릴 수 있음)
 KILL_WAIT_S = 15
 STAYS_RUNNING_S = 10  # 결과 확인: 켜진 앱이 이만큼 계속 떠 있어야 함 (켜진 뒤 메시지 창 등에서 죽으면 실패)
 # 전체 제한 시간 기본값 (분) — 워크플로 단계의 timeout-minutes(Windows 45, Mac 30)보다 짧게: 남은 시간에 진단·정리
@@ -76,6 +83,11 @@ DEFAULT_TIME_LIMIT_MIN = {"windows": 38, "mac": 24}
 # 없어(기본 nullptr) 실제 메시지 창을 띄우는 순간 앱이 죽는다 — 되돌린 옛 앱의 '업데이트 실패' 창(CI 39286794460: 앱 기록이
 # '실패 창' 줄에서 끝나고 몇 초 안에 프로세스가 사라짐). 실행 시험은 메시지 창을 바꿔 끼워 띄우지 않아 이 문제가 없었음
 QT_PLATFORM = "windows" if WINDOWS else "offscreen"
+# 다른 창 경로: 옛 앱이 묻는 확인 창(player_update — 실행 시험이 [모두 닫고 업데이트]로 답함)과 그 첫 줄 (다른 창 1개)
+CLOSE_OTHERS_TITLE = "다른 창도 닫고 업데이트"  # player_update.UPDATE_OTHERS_TITLE
+CLOSE_OTHERS_COUNT = "다른 YesonCheck 창 1개도 닫힙니다."  # player_update.OTHERS_COUNT.format(n=1)
+CLOSE_ALL_BUTTON = "모두 닫고 업데이트"  # player_update.CLOSE_ALL_BUTTON
+
 # 옛 앱(그리고 도우미가 물려받아 다시 켜는 앱)의 환경
 APP_ENV = {
     "YESONCHECK_UPDATE_URL": "off",
@@ -195,7 +207,7 @@ def executable(app):
 
 @dataclass
 class Case:
-    name: str  # "success" | "rollback"
+    name: str  # "success" | "other_window" | "rollback"
     root: str  # <work>/<name>
     share_root: str  # 가짜 공유 설정·작품 폴더를 만드는 이 컴퓨터의 경로
     config_dir: str  # 앱이 읽는 공유 설정 폴더 (Windows: UNC)
@@ -203,6 +215,7 @@ class Case:
     app: str  # 옛 앱 — Windows 설치 폴더, Mac .app
     package_version: str  # 꾸러미 안의 버전
     broken: bool  # 새 앱이 잘 켜지지 않는 꾸러미 (되돌리기 경로)
+    other_window: bool = False  # 같은 설치의 다른 창을 켜 둔 채 업데이트 (다른 창 경로)
     old_version: str = ""
 
     @property
@@ -225,10 +238,18 @@ class Case:
     def stderr_path(self):
         return os.path.join(self.root, "old_app_stderr.txt")
 
+    @property
+    def second_stdout_path(self):  # 다른 창의 출력 (Windows 빌드 앱은 기록 폴더의 파일에 씀)
+        return os.path.join(self.root, "second_window_stdout.txt")
+
+    @property
+    def second_stderr_path(self):
+        return os.path.join(self.root, "second_window_stderr.txt")
+
 
 def make_cases(args, work):
     cases = []
-    for name, broken in (("success", False), ("rollback", True)):
+    for name, broken, other_window in (("success", False, False), ("other_window", False, True), ("rollback", True, False)):
         root = os.path.join(work, name)
         if WINDOWS:
             share_root = os.path.join(args.share_root, name)
@@ -242,8 +263,29 @@ def make_cases(args, work):
             config_dir = os.path.join(share_root, ".yesoncheck")
             app = os.path.join(root, "yc_apps", os.path.basename(args.app_dist.rstrip("/")))
             version = NEW_VERSION  # Mac 되돌리기: build_info는 99.0.0, 실행 파일이 바로 끝남
-        cases.append(Case(name, root, share_root, config_dir, unc, app, version, broken))
+        cases.append(Case(name, root, share_root, config_dir, unc, app, version, broken, other_window))
     return cases
+
+
+def package_groups(cases):
+    """같은 꾸러미(버전·잘 켜지는지)를 쓰는 경우끼리 [[처음 경우, …], …] — 처음 경우만 꾸러미를 만들고 나머지는 복사
+    (share_package). 순서는 cases의 순서."""
+    groups = {}
+    for case in cases:
+        groups.setdefault((case.package_version, case.broken), []).append(case)
+    return list(groups.values())
+
+
+def share_package(group):
+    """group의 처음 경우가 만든 꾸러미 파일(하나)을 나머지 경우의 package 폴더로 복사 → 복사한 경우 이름들."""
+    source = group[0]
+    names = os.listdir(source.package_dir)
+    assert len(names) == 1, f"[{source.name}] 꾸러미 폴더에 파일이 하나가 아닙니다: {source.package_dir} {names}"
+    for case in group[1:]:
+        os.makedirs(case.package_dir)
+        shutil.copyfile(os.path.join(source.package_dir, names[0]), os.path.join(case.package_dir, names[0]))
+        print(f"[{case.name}] 꾸러미: [{source.name}]의 {names[0]}을(를) 복사", flush=True)
+    return [case.name for case in group[1:]]
 
 
 @contextlib.contextmanager
@@ -396,7 +438,8 @@ def kill(procs):
 
 
 def build_windows_installers(args, cases, work):
-    """경우마다 dist 복사본의 버전을 바꿔 설치 파일을 컴파일 (둘을 함께 — 하나에 약 7분) → 경우의 package 폴더로."""
+    """경우마다(cases — 꾸러미를 만드는 경우만, package_groups) dist 복사본의 버전을 바꿔 설치 파일을 컴파일 (둘을 함께 —
+    하나에 약 7분) → 경우의 package 폴더로."""
     trees = []
     for case in cases:
         tree = os.path.join(work, "iss", case.name)
@@ -517,16 +560,47 @@ def install_old_app(args, case):
 
 
 def make_shared_config(case, platform_key):
-    """가짜 공유 설정·작품 폴더 + updates/(꾸러미 + latest.json) + 실행 시험 설정 (make_test_data.py --update-dir)."""
+    """가짜 공유 설정·작품 폴더 + updates/(꾸러미 + latest.json) + 실행 시험 설정 (make_test_data.py --update-dir, 다른 창
+    경로는 --close-others — 확인 창에 [모두 닫고 업데이트])."""
     cmd = [sys.executable, os.path.join(REPO, "ci", "make_test_data.py"), "--share-root", case.share_root,
            "--mac-root", WINDOWS_MAC_ROOT if WINDOWS else case.share_root, "--workdir", case.smoke_dir,
            "--update-dir", case.package_dir, "--update-version", NEW_VERSION, "--update-platform", platform_key]
     if case.unc:
         cmd += ["--unc", case.unc]
+    if case.other_window:
+        cmd += ["--close-others"]
     run(cmd, timeout=600)
     manifest = os.path.join(case.share_root, ".yesoncheck", "updates", "latest.json")
     with open(manifest, encoding="utf-8") as fh:
         print(f"{manifest}:\n{fh.read()}", flush=True)
+
+
+def instance_record_path(case, pid):
+    """이 경우의 앱이 남기는 창 기록 (instances.register — Windows LOCALAPPDATA, Mac HOME 아래)."""
+    with user_dir_env(case):
+        return os.path.join(instances.registry_dir(), f"{pid}.json")
+
+
+def start_second_window(case):
+    """같은 설치의 다른 창: 옛 앱을 인자 없이(사용자가 켠 것처럼 — 실행 시험이 아님) 켜고 그 창 기록(다른 창의 업데이트가 이
+    창을 세고 상태를 묻고 닫기를 요청하는 곳)이 생기기를 기다림 → Popen. 기록 전에 끝나면 실패."""
+    exe = executable(case.app)
+    print("$ " + subprocess.list2cmdline([exe]), flush=True)
+    with open(case.second_stdout_path, "wb") as out, open(case.second_stderr_path, "wb") as err:
+        # 옛 앱처럼: Windows는 바로 가기처럼 작업 폴더를 설치 폴더로
+        proc = subprocess.Popen([exe], env=app_env(case), cwd=case.app if WINDOWS else case.root, stdout=out, stderr=err)
+    record = instance_record_path(case, proc.pid)
+    started = time.monotonic()
+    limit = DEADLINE.left(SECOND_WINDOW_START_S)
+    while not os.path.isfile(record):
+        code = proc.poll()
+        if code is not None:
+            raise AssertionError(f"다른 창(pid {proc.pid})이 창 기록을 남기기 전에 끝났습니다 (종료 코드 {code})")
+        if time.monotonic() - started > limit:
+            raise TimeoutError(f"다른 창(pid {proc.pid})이 {limit:.0f}초 안에 창 기록을 남기지 않았습니다: {record}")
+        time.sleep(0.5)
+    print(f"다른 창: pid {proc.pid}, 창 기록 {record} ({time.monotonic() - started:.1f}초)\n{read_text(record)}", flush=True)
+    return proc
 
 
 def run_old_app(case):
@@ -562,6 +636,22 @@ def run_old_app(case):
     return report
 
 
+def check_close_others_answer(case, report):
+    """실행 시험이 답한 창(smoke_test의 report["answered"]): 다른 창 경로만 '다른 창도 닫고 업데이트' 확인 창 — 다른 창 1개를
+    알리고 [모두 닫고 업데이트]로 답함 (받은 뒤 다시 물었으면 둘). 다른 경우에는 없어야 함 (다른 창이 없음)."""
+    answered = report.get("answered")
+    assert answered is not None, "실행 시험 결과에 answered가 없습니다 (smoke_test가 이 시험과 다름)"
+    if not case.other_window:
+        assert not answered, f"다른 창이 없는데 확인 창에 답했습니다: {answered}"
+        return answered
+    assert answered, f"'{CLOSE_OTHERS_TITLE}' 확인 창이 뜨지 않았습니다 (다른 창을 세지 못함)"
+    for box in answered:
+        assert box["title"] == CLOSE_OTHERS_TITLE and box["answer"] == CLOSE_ALL_BUTTON, f"다른 확인 창에 답함: {box}"
+        assert box["text"].startswith(CLOSE_OTHERS_COUNT), f"확인 창이 다른 창 1개를 알리지 않았습니다: {box['text']!r}"
+    print(f"확인 창 {len(answered)}번: {answered[0]['text']!r} → [{CLOSE_ALL_BUTTON}]", flush=True)
+    return answered
+
+
 def wait_helper(case, files):
     """도우미(state 폴더의 스크립트 복사본을 실행 중인 프로세스)가 끝나기를 기다림 → 업데이트 기록(update.log) 글."""
     started = time.monotonic()
@@ -595,15 +685,24 @@ def helper_lines(log_text):
     return [line.split(" 도우미: ", 1)[1] for line in log_text.splitlines() if " 도우미: " in line]
 
 
-def assert_helper_sequence(log_text, expected):
-    """도우미 줄에 expected의 글이 이 순서로 (각각 앞의 것보다 뒤의 줄에) 있는지."""
-    lines = helper_lines(log_text)
+def _assert_in_order(lines, expected, what):
+    """lines에 expected의 글이 이 순서로 (각각 앞의 것보다 뒤의 줄에) 있는지."""
     position = 0
     for part in expected:
         found = next((i for i in range(position, len(lines)) if part in lines[i]), None)
-        assert found is not None, (f"도우미 기록에 {part!r}이(가) (앞 단계 뒤에) 없습니다\n기대 순서: {expected}\n"
-                                   "도우미 줄:\n" + "\n".join(lines))
+        assert found is not None, (f"{what}에 {part!r}이(가) (앞 단계 뒤에) 없습니다\n기대 순서: {expected}\n"
+                                   f"{what}:\n" + "\n".join(lines))
         position = found + 1
+
+
+def assert_helper_sequence(log_text, expected):
+    """도우미 줄에 expected의 글이 이 순서로 (각각 앞의 것보다 뒤의 줄에) 있는지."""
+    _assert_in_order(helper_lines(log_text), expected, "도우미 기록")
+
+
+def assert_log_sequence(log_text, expected):
+    """업데이트 기록 전체(앱·도우미 줄)에 expected의 글이 이 순서로 있는지."""
+    _assert_in_order(log_text.splitlines(), expected, "업데이트 기록")
 
 
 def one_app_process(case, what):
@@ -653,6 +752,28 @@ def rollback_sequence(windows):
         cleared = []
         relaunched = "옛 앱을 켬 (직접 실행, pid"
     return [*launched, "되돌림 시작", "백업을 제자리로 되돌림", *cleared, "되돌림: 옛 앱을 다시 켬", relaunched]
+
+
+def close_others_sequence():
+    """다른 창 경로에서 업데이트 기록에 이 순서로 있어야 하는 글: 옛 앱(업데이트를 누른 창 — player_update의 _log_update)이
+    다른 창도 닫을지 묻고 → 모두 닫기로 → 받고 → 다른 창 1개에 닫기를 요청하고 → 그 창이 끝난 뒤 → 도우미에 넘김, 그다음
+    도우미가 시작."""
+    v = NEW_VERSION
+    return [f"업데이트 {v}: 다른 창도 닫고 업데이트할지 물음", f"업데이트 {v}: → {CLOSE_ALL_BUTTON}", f"업데이트 {v}: 받기 시작",
+            f"업데이트 {v}: 다른 창 1개에 닫기를 요청하고", f"업데이트 {v}: 다른 창이 끝남 — ",
+            f"업데이트 {v}: 다른 창 1개가 모두 끝남 — 도우미에 넘김", " 도우미: 시작: "]
+
+
+def check_second_window_closed(case, second, log_text):
+    """다른 창은 업데이트(옛 앱)의 닫기 요청으로 정상 종료했음: 그 프로세스가 종료 코드 0으로 끝났고, 업데이트 기록에
+    close_others_sequence가 이 순서로."""
+    code = second.poll()
+    assert code is not None, f"다른 창(pid {second.pid})이 아직 돕니다 — 업데이트가 닫지 않았습니다"
+    assert code == 0, f"다른 창(pid {second.pid})이 종료 코드 {code}로 끝났습니다 (정상 종료가 아님)"
+    assert_log_sequence(log_text, close_others_sequence())
+    assert not os.path.exists(instance_record_path(case, second.pid)), "다른 창의 창 기록이 남아 있습니다"
+    print(f"다른 창(pid {second.pid}): 닫기 요청으로 끝남 (종료 코드 0)", flush=True)
+    return code
 
 
 def check_recover_cleared(files):
@@ -730,11 +851,17 @@ def run_case(args, case, platform_key):
     step(case, "업데이트 상태 폴더의 여유 공간", check_state_free_space, files, platform_key)
     step(case, f"가짜 공유 설정 + updates/ (latest.json {NEW_VERSION}, 꾸러미 {case.package_version})",
          make_shared_config, case, platform_key)
-    step(case, "옛 앱 실행 시험 (update: 알림 → 받기 → 도우미에 넘김)", run_old_app, case)
+    second = None
+    if case.other_window:
+        second = step(case, "같은 설치의 다른 창을 켬 (사용자가 켠 것처럼 — 창 기록이 생길 때까지)", start_second_window, case)
+    report = step(case, "옛 앱 실행 시험 (update: 알림 → 받기 → 도우미에 넘김)", run_old_app, case)
+    step(case, "확인 창 (다른 창 경로만 '다른 창도 닫고 업데이트' → 모두 닫고 업데이트)", check_close_others_answer, case, report)
     log_text = step(case, "도우미가 끝나기를 기다림", wait_helper, case, files)
     if case.broken:
         step(case, "결과: 되돌림 — 옛 버전, 옛 앱이 실패를 알림", check_rollback, case, files, log_text)
     else:
+        if second is not None:
+            step(case, "결과: 다른 창은 업데이트의 닫기 요청으로 정상 종료", check_second_window_closed, case, second, log_text)
         step(case, f"결과: {NEW_VERSION}로 업데이트 — 새 앱이 켜짐", check_success, case, files, log_text)
     print(f"===== [{case.name}] 업데이트 기록 전체 ({files['log']})\n{read_text(files['log'])}", flush=True)
 
@@ -766,11 +893,19 @@ def show_diagnostics(case):
     else:
         show_file("옛 앱 stdout", case.stdout_path)
         show_file("옛 앱 stderr", case.stderr_path)
+    if case.other_window:
+        show_file("다른 창 stdout", case.second_stdout_path)
+        show_file("다른 창 stderr", case.second_stderr_path)
     show_file("실행 시험 결과", os.path.join(case.smoke_dir, "smoke_result.json"))
     show_file("업데이트 기록 파일 (pending)", files["pending"])
     show_file("'잘 켜짐' 표시", files["ok"])
     if WINDOWS:
         show_file("되살림 정보", files["recover"])
+    with user_dir_env(case):
+        registry = instances.registry_dir()
+    print(f"===== 창 기록 ({registry})", flush=True)
+    for name in sorted(os.listdir(registry)) if os.path.isdir(registry) else []:
+        print(f"  {name}: {read_text(os.path.join(registry, name))}", flush=True)
     parent = os.path.dirname(case.app)
     print(f"===== 설치 폴더 상태 ({parent})", flush=True)
     if os.path.isdir(parent):
@@ -868,13 +1003,17 @@ def main():
                 step(case, "지난 공유 폴더 지우기", shutil.rmtree, case.share_root)
             os.makedirs(case.share_root)
         step(None, "디스크 여유 (시작)", free_space, work, cases[0].share_root)
+        groups = package_groups(cases)
         if WINDOWS:
             step(None, f"새 버전 설치 파일 만들기 ({NEW_VERSION}·{BROKEN_WINDOWS_VERSION}, ISCC 둘을 함께)",
-                 build_windows_installers, args, cases, work)
+                 build_windows_installers, args, [group[0] for group in groups], work)
         else:
-            for case in cases:
-                what = "실행 파일이 바로 끝남" if case.broken else "잘 켜짐"
-                step(case, f"새 버전 dmg 만들기 ({case.package_version}, {what})", build_mac_dmg, args, case, work)
+            for group in groups:
+                what = "실행 파일이 바로 끝남" if group[0].broken else "잘 켜짐"
+                step(group[0], f"새 버전 dmg 만들기 ({group[0].package_version}, {what})", build_mac_dmg, args, group[0], work)
+        for group in groups:
+            if len(group) > 1:
+                step(group[0], "같은 꾸러미를 쓰는 경우에 복사: " + ", ".join(c.name for c in group[1:]), share_package, group)
         for index, case in enumerate(cases):
             current = case
             run_case(args, case, platform_key)
@@ -906,7 +1045,7 @@ def main():
     if failed:
         print("\n업데이트 끝까지 시험 실패", flush=True)
         return 1
-    print("\n업데이트 끝까지 시험 통과 (성공·되돌리기)", flush=True)
+    print("\n업데이트 끝까지 시험 통과 (성공·다른 창·되돌리기)", flush=True)
     return 0
 
 
