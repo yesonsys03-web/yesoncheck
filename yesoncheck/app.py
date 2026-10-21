@@ -16,13 +16,17 @@ if __package__ in (None, ""):
     sys.path.append(os.path.dirname(os.path.dirname(__file__)))
     from yesoncheck.main_window import VideoPlayer  # type: ignore  # pylint: disable=import-error
     from yesoncheck import (  # type: ignore  # pylint: disable=import-error
-        build_info, launch_args, mac_mounts, paths, timing_log, update_install,
+        build_info, default_app, error_window, file_associations, launch_args, mac_app_events, mac_mounts, new_window,
+        paths, timing_log, update_install,
     )
     from yesoncheck.player_base import EXIT_WAIT_S, wait_for_released_workers  # type: ignore  # pylint: disable=import-error
     from yesoncheck.player_update import BOX_TITLE_PROPERTY  # type: ignore  # pylint: disable=import-error
 else:
     from .main_window import VideoPlayer
-    from . import build_info, launch_args, mac_mounts, paths, timing_log, update_install
+    from . import (
+        build_info, default_app, error_window, file_associations, launch_args, mac_app_events, mac_mounts, new_window,
+        paths, timing_log, update_install,
+    )
     from .player_base import EXIT_WAIT_S, wait_for_released_workers
     from .player_update import BOX_TITLE_PROPERTY
 
@@ -112,13 +116,19 @@ class _ErrorDialog(QObject):
 
     @pyqtSlot(str)
     def show_error(self, text):
+        """잡히지 않은 예외(excepthook — text는 트레이스백만): 끝 error_window.DETAILS_LIMIT 글자(예외 글이 끝에 있음)."""
+        self.show_text(text[-error_window.DETAILS_LIMIT:])
+
+    def show_text(self, text):
+        """text를 자르지 않고 + 기록 파일 경로 (error_window.show_window — 무엇이 실패했는지가 앞에 있는 글). 한 번에 하나만."""
         if self.is_open:
             # 창 안의 이벤트 루프에서 같은 오류가 또 나면(타이머 등) 창이 겹겹이 쌓이다 스택이 넘침 → 로그에만
-            print("(오류 창이 이미 열려 있어 위 예외는 로그에만 남깁니다)", file=sys.stderr)
+            first_line = text.strip().splitlines()[0] if text.strip() else ""
+            print(f"(오류 창이 이미 열려 있어 이 오류는 로그에만 남깁니다: {first_line})", file=sys.stderr, flush=True)
             return
         self.is_open = True
         try:
-            QMessageBox.critical(None, "YesonCheck 오류", f"{text[-3000:]}\n\n로그: {self.log_path}")
+            QMessageBox.critical(None, error_window.TITLE, f"{text}\n\n로그: {self.log_path}")
         finally:
             self.is_open = False
 
@@ -141,7 +151,9 @@ def make_excepthook(log_path):
         else:
             dialog.requested.emit(text)  # GUI 스레드의 이벤트 루프에서 show_error 실행
 
-    excepthook.dialog = dialog  # 시험·GC 방지용 참조
+    # 시험·GC 방지용 참조 — 다른 모듈의 오류 창도 이 창으로 (error_window.show_window — default_app·file_associations·
+    # mac_app_events)
+    excepthook.dialog = dialog
     return excepthook
 
 
@@ -201,12 +213,17 @@ def screen_report(screen):
 
 
 def open_startup_file(player, file_path):
-    """명령줄로 받은 파일을 영상 A로 엶 (없으면 로그만)."""
+    """켤 때 받은 파일(명령줄·시작 중의 파일 열기 — mac_app_events가 고른 첫 파일, 새 창이 받은 파일)을 영상 A로 엶.
+
+    Mac 더블클릭·다음으로 열기, Windows 연결 프로그램, 새 창이 모두 이 길로 옴. 열지 못하면 open_file이 무엇을 왜 못 열었는지
+    오류 창(디스크에 없음·확인하지 못함(NAS 연결 끊김·권한)·OpenCV가 읽지 못함 — 설계 3-2), 창은 그대로. 받은 경로가 그대로는
+    없고 이름의 정규화(NFC·NFD)만 다른 실제 경로가 있으면(NFS 공유 — paths.find_unicode_variant) 그 경로로 엶."""
     print(f"Opening file: {file_path}")
-    if os.path.isfile(file_path):
-        player.open_file("A", file_path)
-    else:
-        print(f"File does not exist: {file_path}")
+    found = paths.find_unicode_variant(file_path)
+    if found is not None:
+        print(f"[파일 열기] 받은 경로가 그대로는 없어 이름의 정규화(NFC·NFD)만 다른 실제 경로로 엶: {found}", flush=True)
+        file_path = found
+    player.open_file("A", file_path)
 
 
 def update_in_progress_at_start():
@@ -242,6 +259,14 @@ def show_update_in_progress():
     box.exec_()
 
 
+def handle_update_startup_then_ask(player, update_token):
+    """창을 보인 뒤 첫 일: 지난 업데이트의 결과 판정(player.handle_update_startup — 실패 창이면 닫힐 때까지) → (Mac 빌드 앱,
+    도우미가 켠 앱이 아니면) 동영상 기본 앱 묻기를 Qt 루프에 — 그사이 줄 서 있던 시작 일(창 기록·공유 설정·받은 파일) 뒤에."""
+    player.handle_update_startup(update_token)
+    if default_app.asks_on_start(update_token):
+        QTimer.singleShot(0, lambda: default_app.ask_at_start(player))
+
+
 # 창을 닫은 뒤 끝나지 않은 작업을 기다리는 최대 시간 EXIT_WAIT_S(초, 넘으면 로그를 남기고 강제 종료)는 player_base에 둠 —
 # 다른 창의 업데이트가 닫히는 창을 기다리는 한도(player_update.CLOSE_OTHERS_TIMEOUT_S)도 그 값으로 셈 (player_update는 이
 # 모듈을 불러올 수 없음: 이 모듈이 player_update를 부름)
@@ -263,7 +288,9 @@ def finish_released_workers(timeout_s):
 def launch(argv=None):
     """Create and run the QApplication event loop.
 
-    argv: sys.argv 그대로 (launch_args.parse — 첫 파일은 영상 A, `--update-result TOKEN`은 지난 업데이트의 결과 판정에).
+    argv: sys.argv 그대로 (launch_args.parse — 첫 파일은 영상 A, 나머지 파일은 파일마다 새 창(new_window.spawn),
+    `--update-result TOKEN`은 지난 업데이트의 결과 판정에). Mac에서 켜진 뒤의 파일 열기·Dock 클릭(앱 다시 열기)은 새 창
+    (mac_app_events — QApplication 바로 다음에 install, 창을 보인 뒤 ready).
     다른 창이 넘긴 업데이트가 진행 중이면(update_in_progress_at_start — 도우미가 켠 앱은 빼고) 스플래시·창을 만들지 않고
     "업데이트 중" 창만 보인 뒤(저절로도 닫힘 — show_update_in_progress) 0으로 끝냄: 이 앱이 업데이트(앱 바꾸기·결과 판정)를
     헷갈리게 하지 않게."""
@@ -277,10 +304,20 @@ def launch(argv=None):
         # 고해상도 디스플레이 지원 (QApplication 생성 전에 설정해야 함, Windows는 배율 반올림 없이)
         timing_log.startup("QApplication 만드는 중…")
         app = create_application(argv)
+    # 받은 파일·앱 다시 열기(mac_app_events): QApplication 바로 다음 — (Mac) 업데이트 확인 창·스플래시의 processEvents
+    # 사이에 온 파일 열기도 받게 (늦게 달면 그 파일이 말없이 사라짐). 켜진 뒤의 파일 열기·Dock 클릭은 새 창(앱)
+    router = mac_app_events.install(
+        app,
+        on_reopen=lambda: new_window.spawn([]),
+        on_open_files=lambda files: new_window.spawn(files),
+        argv_files=args.files,
+    )
     timing_log.startup("QApplication 준비")
     if args.update_token is None and update_in_progress_at_start():
         print(f"[업데이트] {UPDATE_IN_PROGRESS_TEXT} — 창을 만들지 않고 끝냄 (받은 인자 {argv[1:]!r})", flush=True)
         show_update_in_progress()
+        if router.waiting_files() != args.files:
+            print(f"[업데이트] 업데이트 중이라 열지 않은 파일: {router.waiting_files()!r}", flush=True)
         return 0
     timing_log.startup(screen_report(app.primaryScreen()))
     # (Mac) 공유를 다른 곳에 붙인 Mac: 공유 설정 폴더·작품 경로를 열기 전에 이 Mac에서 공유가 붙은 곳을 읽음
@@ -315,8 +352,9 @@ def launch(argv=None):
     splash.finish(player)
     timing_log.startup("창 표시")
     # 지난 업데이트의 결과(이 컴퓨터의 기록 파일만 — NAS·인터넷 없음): 창을 보인 뒤 맨 먼저 — 새 버전이면 "잘 켜짐" 표시를
-    # 바로 남겨 업데이트 도우미가 기다림을 끝냄
-    QTimer.singleShot(0, lambda: player.handle_update_startup(args.update_token))
+    # 바로 남겨 업데이트 도우미가 기다림을 끝냄. 그 판정(실패 창을 닫기까지)이 끝난 뒤 (Mac 빌드 앱) 처음 한 번 동영상 기본 앱을
+    # 물음 — 아래의 시작 일들보다 뒤 (default_app.asks_on_start — 도우미가 켠 앱은 다음에 켤 때)
+    QTimer.singleShot(0, lambda: handle_update_startup_then_ask(player, args.update_token))
     # 창 기록·창 사이 연결 서버: 다른 창의 업데이트가 이 창을 세고 상태를 묻고 닫기를 요청할 수 있게
     # (기록은 창을 닫을 때·프로세스가 끝날 때 지움 — instances)
     QTimer.singleShot(0, player.start_instance_link)
@@ -325,11 +363,15 @@ def launch(argv=None):
     # 공유 설정(설정 폴더·작품 경로·변환표)은 창을 보인 뒤 백그라운드에서 읽고, 끝나면 문제를 알림
     # (스플래시가 닫힌 뒤라 대화상자가 가려지지 않음)
     QTimer.singleShot(0, player.start_shared_config_load)
-    if args.files:
-        # 명령줄로 받은 파일도 창을 보인 뒤에 엶: 여는 중 소리 재생기를 만들고(처음에는 수 초), 오류 창이
-        # 스플래시에 가려지지 않게. 공유 설정 불러오기를 먼저 시작해 두어 그동안 백그라운드에서 읽음
-        file_path = args.files[0]
-        QTimer.singleShot(0, lambda: open_startup_file(player, file_path))
+    # (Windows 빌드 앱) 동영상(.mov·.mp4)의 '연결 프로그램'·기본 앱 설정에 이 계정을 등록 — 설치한 계정은 설치 파일이 이미
+    # 했으므로 읽기만, 같은 PC의 다른 계정은 여기서 처음 등록 (file_associations — 창을 보인 뒤라 시작을 늦추지 않음, 실패는 오류 창)
+    if file_associations.registers_on_start():
+        QTimer.singleShot(0, file_associations.register_at_start)
+    # 받은 파일(명령줄 + 시작 중에 온 파일 열기)의 첫 파일은 이 창의 A, 나머지는 파일마다 새 창 — 창을 보인 뒤 위의 일 다음에
+    # (여는 중 소리 재생기를 만들고(처음에는 수 초), 오류 창이 스플래시에 가려지지 않게. 공유 설정 불러오기를 먼저 시작해
+    # 두어 그동안 백그라운드에서 읽음). (Mac) 여기서 Dock 클릭·앱 다시 열기(reopen) 처리기를 등록 — 스플래시의
+    # processEvents(AppKit finishLaunching) 뒤여야 AppKit 기본 처리기에 덮이지 않음
+    router.ready(lambda path: open_startup_file(player, path))
 
     if owns_app:
         code = app.exec_()

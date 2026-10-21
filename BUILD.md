@@ -128,7 +128,7 @@ git 저장소가 아닌 폴더(직접 복사한 폴더)에서는 버전을 정�
 - 빌드는 GitHub Actions의 `build (Windows·Mac)` 워크플로(파일 `.github/workflows/windows-build.yml`)의 `build` job이 합니다. Windows PC에서 직접 빌드할 필요는 없습니다.
 - 실행: GitHub 저장소 → Actions → build (Windows·Mac) → **Run workflow** (또는 `gh workflow run windows-build.yml --ref main`). `v*` 태그를 푸시해도 실행됩니다.
   한 번 실행하면 Windows와 Mac 두 종류(5절)를 함께 빌드합니다.
-- 하는 일: Windows lock 설치 → ffmpeg(gyan 9.0.2) 받기 → 시험용 SMB 공유를 만들어 경로 시험 → PyInstaller 빌드 → `_internal`에 msvcp140.dll·msvcp140_1.dll 확인 → 모듈 검사 → 빌드된 exe로 실행 시험(한글 UNC 경로의 작품 목록·ffprobe·OpenCV·OCR·애니매틱2·내보내기·병합) → 설치 파일 시험.
+- 하는 일: Windows lock 설치 → ffmpeg(gyan 9.0.2) 받기 → 시험용 SMB 공유를 만들어 경로 시험 → PyInstaller 빌드 → `_internal`에 msvcp140.dll·msvcp140_1.dll 확인 → 모듈 검사 → 빌드된 exe로 실행 시험(한글 UNC 경로의 작품 목록·ffprobe·OpenCV·OCR·애니매틱2·내보내기·병합) → 설치 파일 시험(무음 설치·제거와, 그 바로 뒤 동영상 연결 프로그램 등록·제거를 레지스트리에서 다시 읽어 확인 — 8-2절).
 - Windows lock은 `--override requirements-build-windows.overrides.txt`(protobuf 3.20.3)와 함께 설치해야 합니다:
   paddle 2.6.2 Windows 휠은 protobuf <=3.20.2를, TensorFlow 2.15는 >=3.20.3을 요구해 덮어쓰지 않으면 uv가 설치를 거부합니다.
 - TensorFlow는 import할 때 msvcp140.dll·msvcp140_1.dll을 찾습니다. spec이 두 DLL을 `_internal` 맨 위에 넣고(의존성 분석에 없으면 빌드 PC의 System32에서), 워크플로가 있는지 확인합니다.
@@ -147,6 +147,7 @@ git 저장소가 아닌 폴더(직접 복사한 폴더)에서는 버전을 정�
   (+ `requirements-test.txt`) → 소스 시험(pytest) → `PY=… ./build_app.sh`(빌드 정보·PyInstaller·`check_min_macos.py`·
   `check_frozen_imports.py`·라이선스·dmg) → 2절의 실행 시험(`--expect-version` 포함, 시험 자료는 러너 임시 폴더) → dmg 올리기.
   - 빌드 전에 작업 폴더가 깨끗한지 확인합니다 (커밋 안 된 변경이 있으면 버전 끝에 `.dirty`가 붙어 멈춤).
+  - 빌드 바로 뒤 `plutil`로 앱 `Info.plist`의 `CFBundleDocumentTypes`(.mov·.mp4 문서 종류)가 spec의 값 그대로인지 확인합니다 (8-1절).
   - 실행 시험은 25분 안에 끝나야 합니다 (Windows와 같음, macOS에는 `timeout` 명령이 없어 `perl`의 alarm으로 끊음).
     `smoke_result.json`은 성공해도 로그에 남습니다 — `애니매틱2 (TransNetV2)`의 `"cuts": [0, 30, 60]`을 여기서 확인할 수 있습니다.
   - 러너는 macOS 15지만 lock 설치가 `MACOSX_DEPLOYMENT_TARGET=12.0`으로 휠을 고르고 `check_min_macos.py`가 12.3 이하를
@@ -257,3 +258,108 @@ git 저장소가 아닌 폴더(직접 복사한 폴더)에서는 버전을 정�
 
 GitHub의 Intel Mac 러너(`macos-15-intel`)는 언젠가 없어질 수 있습니다(5절) — 그때는 Intel 빌드를 이 Mac에서
 `./build_app.sh`로 만든 뒤 배포 도구에 넘기는 방식으로 돌아갑니다.
+
+## 8. 동영상 열기·기본 앱 (Mac Info.plist · Windows 연결 프로그램)
+
+앱이 `.mov`·`.mp4`를 열 수 있다고 운영체제에 알리는 곳입니다. 대상 확장자는 `file_names.LISTED_VIDEO_EXTENSIONS`, Mac의 종류(UTI)는
+`com.apple.quicktime-movie`·`public.mpeg-4`(`default_app.VIDEO_UTIS`). 새 창을 띄우는 방식(Mac `open -n`)은 CLAUDE.md의
+'여러 창과 업데이트'를 보세요.
+
+### 8-1. Mac — Info.plist의 문서 종류
+
+`YesonCheck_Autocut.spec`의 `BUNDLE(info_plist=…)`에 있습니다 (PyInstaller의 `BUNDLE`은 dict만 병합합니다. 저장소 루트의
+`Info.plist` 파일은 번들의 Info.plist가 아니라 데이터로 복사만 되는 낡은 파일이므로, 바꿔도 번들에 반영되지 않습니다):
+
+```python
+'CFBundleDocumentTypes': [{'CFBundleTypeName': 'Video',
+                           'CFBundleTypeRole': 'Viewer',
+                           'LSHandlerRank': 'Alternate',
+                           'LSItemContentTypes': ['com.apple.quicktime-movie', 'public.mpeg-4']}]
+```
+
+- 효과: Finder의 우클릭 → **다음으로 열기**에 YesonCheck가 늘 보입니다.
+- `Viewer`는 영상을 보기만 하고 편집·저장하지 않는다는 뜻, **`Alternate`는 "열 수는 있지만 기본 앱으로 앞세우지는 말라"는 순위**입니다.
+  설치(앱을 Applications에 두는 것)만으로 사용자의 기본 앱(QuickTime Player 등)을 빼앗지 않기 위해서입니다. 기본 앱은 앱이
+  처음 켤 때 사용자에게 묻거나 Help → "동영상 기본 앱으로 정하기…"를 눌렀을 때만 바뀝니다(`yesoncheck/default_app.py`).
+- 시험: `tests/test_default_app.py::test_spec_declares_video_document_types`가 spec을 `ast`로 읽어 이 값을 그대로 비교합니다.
+  CI의 Mac job은 빌드 바로 뒤 `plutil -extract CFBundleDocumentTypes xml1 -o - <앱>/Contents/Info.plist`(키가 없으면 종료 코드 1)로
+  뽑고, Python `plistlib`로 읽은 값이 위와 같은지 확인합니다 (종류를 바꾸면 spec·`default_app.VIDEO_UTIS`·시험의
+  `EXPECTED_DOCUMENT_TYPES`·워크플로의 이 단계를 함께 고치세요). 로컬 빌드(`./build_app.sh`)는 이 확인을 하지 않습니다 — 필요하면
+  빌드한 앱에 같은 `plutil` 명령을 손으로 돌려 확인하세요.
+- 앱 ID는 `com.yeson.check` 그대로입니다. LaunchServices는 기본 앱을 **앱 ID로** 기억하므로, 같은 ID의 다른 사본(예: 예전 이름으로
+  Applications에 남은 낡은 사본, 버전 0.0.0)이 있으면 동영상 더블클릭이 그 사본을 열 수 있습니다. 이 앱은 Info.plist에 실제
+  버전이 있어 macOS가 더 높은 버전을 고르는 편이지만, 기본 앱을 정한 뒤 `other_copies`로 찾은 다른 사본의 경로를 창에 보여
+  지우도록 안내합니다 (지우지는 않음). 배포할 때 예전 사본 정리도 안내하세요.
+- 함정 (LaunchServices):
+  - LaunchServices가 돌려주는 앱 ID는 소문자일 수 있습니다 (Info.plist의 대문자가 섞인 앱 ID가 저장 파일에는 소문자로 있음) — 비교는 대소문자 무관(`_same_app`).
+  - **임시 폴더(`/tmp` 등)의 번들은 LaunchServices가 `in-temp-dir`로 표시해 앱 ID로 찾지 않습니다.** 기본 앱으로 정하기는 상태 코드
+    0인데 다시 읽으면 다른 앱이고 사본 목록도 비어 있습니다. 앱은 정한 뒤 다시 읽어 확인하므로 오류 창으로 드러납니다 —
+    기본 앱을 시험하려면 홈 폴더나 Applications에 둔 번들로 하세요.
+  - 같은 이유로 dmg 안(`/Volumes`)이나 격리 위치(`AppTranslocation`)에서 켠 앱은 기본 앱으로 정하지 않습니다
+    (`default_app.location_problem`) — Applications로 옮긴 뒤 켜게 안내합니다.
+
+### 8-2. Windows — 연결 프로그램 등록
+
+Windows 10·11은 앱·설치 파일이 기본 앱을 바꾸지 못하게 합니다. 그래서 YesonCheck를 `.mov`·`.mp4`를 여는 앱으로 **등록만** 하고
+(기본 앱은 사용자가 "연결 프로그램"에서 한 번 "항상"으로 고름), 등록은 이 사용자(HKCU — 설치가 `PrivilegesRequired=lowest`)에 합니다.
+
+- 등록 내용은 `yesoncheck/file_associations.py`의 `association_entries(exe_path)`가 정합니다 (모두 HKCU, REG_SZ, 12개 값):
+  - `Software\Classes\YesonCheck.Video` — 기본값 `Yeson Checker 동영상`(탐색기의 '유형'), `\DefaultIcon` `<exe>,0`(따옴표 없음),
+    `\shell\open\command` `"<exe>" "%1"`
+  - `Software\Classes\.mov\OpenWithProgids`·`.mp4\OpenWithProgids` — 값 `YesonCheck.Video`(빈 문자열)
+  - `Software\Classes\Applications\YesonCheck_Autocut.exe\SupportedTypes` — 값 `.mov`·`.mp4`
+  - `Software\YesonCheck\Capabilities`(`ApplicationName` `Yeson Checker`, `ApplicationDescription`) 와 `\FileAssociations`의
+    `.mov`·`.mp4` = `YesonCheck.Video`
+  - `Software\RegisteredApplications`의 `YesonCheck` = `Software\YesonCheck\Capabilities`
+    (Help → "동영상 기본 앱 설정 열기…"의 `ms-settings:defaultapps?registeredAppUser=YesonCheck`가 이 값 이름을 씀)
+- 등록하는 곳은 둘이고 **내용이 같아야** 합니다:
+  - 설치 파일 `installer/yesoncheck.iss`의 `[Registry]` — 설치한 계정. `tests/test_file_associations.py::test_installer_registry_matches_association_entries`가
+    이 구역을 읽어 `association_entries`와 비교하므로(Mac에서도 돎) 한쪽만 고치면 시험이 실패합니다.
+  - 앱이 켤 때(`file_associations.register_at_start` — 빌드한 Windows 앱만, 창을 보인 뒤) — HKCU 값을 읽어 없거나 다른 것만 쓰고,
+    쓴 것이 있으면 `SHChangeNotify(SHCNE_ASSOCCHANGED)`로 셸에 알림(같으면 읽기만). 같은 PC의 **다른 계정**과 설치 경로가 바뀐
+    경우를 위한 것입니다.
+- `[Setup]`의 `ChangesAssociations=yes`: 설치·제거가 끝나면 Windows에 파일 연결이 바뀌었다고 알립니다 (연결 프로그램 목록이 바로 고쳐지게).
+- 제거: 우리 키(`file_associations.OWNED_KEYS` 셋 — ProgID, `Applications\YesonCheck_Autocut.exe`, `Software\YesonCheck`)는 `uninsdeletekey`로
+  통째로, 다른 앱과 함께 쓰는 키(`.mov`·`.mp4`의 `OpenWithProgids`, `RegisteredApplications`)는 `uninsdeletevalue`로 우리 값만 지웁니다.
+- **`installer/yesoncheck.iss`는 UTF-8 + BOM으로 둡니다.** `[Registry]`가 한글("Yeson Checker 동영상", "동영상 A/B 비교·검토")을
+  레지스트리에 쓰기 때문입니다. Inno Setup 6.3부터는 BOM이 없어도 내용으로 UTF-8을 알아보지만, 그 전 6.x는 BOM이 없으면 ANSI
+  (한국어 Windows는 cp949)로 읽어 글자가 깨집니다 — 어느 ISCC(CI는 러너에 있는 것이나 choco로 받은 것 — 버전을 고정하지 않음, 스튜디오 PC도
+  다를 수 있음)로 컴파일해도 같도록 BOM을
+  유지합니다. 편집기가 저장하면서 BOM을 떼지 않게 하세요 (`test_installer_script_is_utf8_with_bom`이 확인).
+- CI (Windows job, 환경 변수가 있을 때만 도는 pytest 시험 — 변수가 있으면 건너뛰지 않고, Windows가 아니면 실패):
+  - 무음 설치 바로 뒤: `YC_INSTALLED_EXE=C:\yc_install\YesonCheck_Autocut.exe` →
+    `test_installer_registers_open_with` — 설치가 쓴 HKCU 값 12개를 모두 다시 읽어 `association_entries`와 같은지 (한글 이름 포함).
+  - 무음 제거 바로 뒤: `YC_UNINSTALLED_EXE` → `test_uninstaller_removes_open_with` — 우리 키가 없어지고 함께 쓰는 키의 우리 값만
+    지워졌는지 (제거 프로그램의 임시 사본이 마저 지우므로 최대 60초 기다림).
+- 알고 둔 한계:
+  - 제거 프로그램은 **제거하는 계정의 HKCU만** 지웁니다. 앱이 켤 때 다른 계정에 한 등록은 그 계정의 것이라 남고, 없어진 exe를
+    가리킵니다. 이 계정의 제거 프로그램은 다른 계정의 항목을 지울 수 없습니다 — 그 계정의 사용자는 자기 HKCU에서(예: regedit) 위의 값을
+    지울 수 있습니다 (Windows 설정 화면으로 지울 수 있는지는 확인하지 않았으므로 그렇게 안내하지 마세요).
+    그 계정에서 YesonCheck를 다시 설치하거나 켜면 항목이 새로 고쳐지고, 그 전에 사용자가 고르면 Windows가 앱을 찾을 수 없다고 알려 다른 앱을 고르게 됩니다.
+  - 설치하지 않은 빌드(폴더째 복사한 frozen 앱)를 켜면 `register_at_start`가 그 exe 경로(`sys.executable`)로 이 계정의 항목을
+    **다시 가리킵니다**(경로는 대소문자까지 문자열 그대로 비교). 설치한 앱을 다시 켜면 설치한 쪽으로 돌아옵니다. 설치 폴더 두 곳을
+    번갈아 쓰는 계정도 마지막에 켠 쪽을 가리킵니다.
+  - HKCU 쓰기가 막혀 있으면(그룹 정책 등) 빌드한 앱을 켤 때마다 오류 창으로 알립니다 (조용히 넘기지 않음).
+  - "연결 프로그램" 목록·"항상" 선택·더블클릭으로 열기·Help 항목은 CI가 아니라 일반 계정의 Windows PC에서 사람이 확인합니다 (CI는 레지스트리 값만 확인).
+
+### 8-3. 업데이트 e2e (`ci/update_e2e.py`)의 Mac 사례
+
+빌드한 Mac 앱은 처음 켤 때 모달 질문("동영상(.mov·.mp4)을 더블클릭하면 YesonCheck로 열까요?")을 띄웁니다. e2e가 보통으로 켜는 앱
+(다른 창 사례의 둘째 창)이 그 창에 멈추거나 러너의 LaunchServices를 읽지 않게, **사례마다** 사용자 폴더(HOME)의
+`Library/Application Support/YesonCheck/prefs.json`에 `{"asked_default_video_app": true}`를 미리 둡니다
+(`answer_default_app_ask` — 앱이 [예]·[아니요] 뒤에 쓰는 것과 같은 파일·키. 앱에 시험용 스위치는 두지 않음).
+다른 창 사례는 그 창의 기록(`yesoncheck_<날짜>_<pid>.log`)에 `[기본 앱] 이미 답함 — 묻지 않음` 줄이 있는지도 확인합니다
+(`check_default_app_not_asked` — 빌드 앱이 묻기 판단까지 갔고 심어 둔 파일을 읽었다는 뜻). 도우미가 다시 켜는 앱
+(`--update-result`)은 원래 묻지 않습니다. 드라이버는 Qt를 불러오지 않아 경로·키·줄 문구를 따로 두며, `tests/test_update_e2e.py`가
+앱의 값(`default_app`)과 같은지 비교합니다. Windows 사례는 질문이 없어 심지 않습니다 (빌드 앱이 켤 때 `register_at_start`를 부르지만
+설치가 같은 값을 써 두므로 보통 "이미 등록됨"으로 끝남).
+
+### 8-4. 사람이 확인할 것 (CI가 못 하는 것)
+
+- 몬터레이(12.3)에서 기본 앱 정하기가 확인 창 없이 되는지·다시 읽은 값이 맞는지, Finder 더블클릭이 YesonCheck를 여는지,
+  "다음으로 열기"에 보이는지, 처음 켤 때 묻는 창. 최신 macOS에서도 잠기지 않은 화면에서 확인 창이 없는지.
+- 실제 마우스로 Dock 클릭(맨 앞일 때·뒤일 때)·⌘Tab·창 클릭·Mission Control(→ 새 창 0개), 최소화한 창 + Dock 클릭(새 창만, 내려 둔
+  창은 그대로), 모달 대화 상자가 떠 있을 때 Dock 클릭, 다른 앱에서 돌아올 때 사이드바 다시 읽기. 화면이 잠겨 있으면 macOS가 앱을
+  앞으로 가져오지 않아 자동으로 확인할 수 없습니다.
+- Apple Silicon: LaunchServices·Objective-C(ctypes) 호출은 Apple Silicon 러너의 시험이 읽기 경로(기본 앱을 두 역할로 읽기, 같은 앱 ID의
+  사본 목록 — CFArray·CFURL, reopen 처리기 등록과 자기에게 보낸 'rapp')를 확인하고, 정하기(`set_default`)와 나머지는 사람이 확인합니다.

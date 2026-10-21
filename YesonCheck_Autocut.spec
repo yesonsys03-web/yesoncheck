@@ -412,9 +412,16 @@ if not IS_WINDOWS:
         name='YesonCheck_Autocut.app',
         icon='icon.icns',
         bundle_identifier='com.yeson.check',
-        # BUNDLE은 dict만 병합함 (파일 경로 문자열은 무시됨). 번들 버전은 build_info.json 버전의 X.Y.Z 부분
+        # BUNDLE은 dict만 병합함 (파일 경로 문자열은 무시됨). 번들 버전은 build_info.json 버전의 X.Y.Z 부분.
+        # CFBundleDocumentTypes: .mov·.mp4를 열 수 있다고 알림 → Finder "다음으로 열기"에 늘 보임 (Viewer, Alternate —
+        # 설치만으로 기본 앱을 빼앗지 않음. 기본 앱은 처음 켤 때 묻기·Help 메뉴 — yesoncheck/default_app.py의 VIDEO_UTIS와 같은
+        # 종류, tests/test_default_app.py가 이 값을 그대로 확인, CI Mac job이 빌드한 Info.plist를 plutil로 확인)
         info_plist={'LSMinimumSystemVersion': MIN_MACOS,
                     'CFBundleShortVersionString': BUILD_VERSION_XYZ,
-                    'CFBundleVersion': BUILD_VERSION_XYZ},
+                    'CFBundleVersion': BUILD_VERSION_XYZ,
+                    'CFBundleDocumentTypes': [{'CFBundleTypeName': 'Video',
+                                               'CFBundleTypeRole': 'Viewer',
+                                               'LSHandlerRank': 'Alternate',
+                                               'LSItemContentTypes': ['com.apple.quicktime-movie', 'public.mpeg-4']}]},
     )
 

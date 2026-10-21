@@ -181,6 +181,14 @@ jobs:
             throw
           }
 
+      - name: 설치 파일 시험 — 동영상 연결 프로그램 등록 (HKCU 레지스트리를 다시 읽음)
+        # 무음 설치가 이 사용자에 쓴 값이 yesoncheck/file_associations.py의 association_entries와 모두 같은지 — ProgID의 한글
+        # 이름(.iss를 UTF-8로 읽었는지)과 RegisteredApplications\YesonCheck 포함. YC_INSTALLED_EXE가 있으면 이 시험은 건너뛰지 않음
+        # (Windows가 아니면 실패), 이름이 바뀌어 시험을 못 찾으면 pytest가 실패
+        env:
+          YC_INSTALLED_EXE: C:\yc_install\YesonCheck_Autocut.exe
+        run: .venv\Scripts\python.exe -m pytest "tests/test_file_associations.py::test_installer_registers_open_with" -v -s -rs
+
       - name: 설치 파일 시험 — 설치된 exe 실행 시험
         run: ./ci/run_smoke_test.ps1 -Exe C:\yc_install\YesonCheck_Autocut.exe -Workdir C:\yc_smoke
 
@@ -225,6 +233,13 @@ jobs:
             if (Test-Path $log3) { Write-Host "===== 제거 로그 ($log3)"; Get-Content $log3 -Encoding utf8 | Write-Host }
             throw
           }
+
+      - name: 설치 파일 시험 — 제거 뒤 동영상 연결 프로그램 등록이 지워짐 (HKCU)
+        # 우리 키(file_associations.OWNED_KEYS)는 통째로, 함께 쓰는 키(.mov·.mp4의 OpenWithProgids, RegisteredApplications)는
+        # 우리 값만 지웠는지 — 제거 프로그램의 임시 사본이 마저 지우므로 시험이 최대 60초 기다리며 확인
+        env:
+          YC_UNINSTALLED_EXE: C:\yc_install\YesonCheck_Autocut.exe
+        run: .venv\Scripts\python.exe -m pytest "tests/test_file_associations.py::test_uninstaller_removes_open_with" -v -s -rs
 
       - name: 업데이트 끝까지 시험 — 설치한 앱이 99.0.0으로 업데이트, 잘 켜지지 않는 새 버전은 되돌림 (ci/update_e2e.py)
         # 새 버전 설치 파일 둘(99.0.0·98.0.0)을 ISCC로 함께 컴파일(약 7분) → 원래 설치 파일로 깐 옛 앱이 시험 공유의
@@ -318,6 +333,23 @@ jobs:
             exit 1
           fi
           PY="$VENV/bin/python" ./build_app.sh
+
+      - name: Info.plist — .mov·.mp4를 열 수 있다고 알림 (CFBundleDocumentTypes — Finder '다음으로 열기')
+        run: |
+          PLIST="dist/YesonCheck_Autocut_${LABEL}.app/Contents/Info.plist"
+          # 키가 없으면 plutil이 실패 (종료 코드 1)
+          plutil -extract CFBundleDocumentTypes xml1 -o - "$PLIST"
+          # spec(BUNDLE info_plist)의 값 그대로인지 — tests/test_default_app.py의 EXPECTED_DOCUMENT_TYPES와 같은 값
+          "$VENV/bin/python" - "$PLIST" <<'EOF'
+          import plistlib, sys
+          with open(sys.argv[1], "rb") as fh:
+              got = plistlib.load(fh).get("CFBundleDocumentTypes")
+          want = [{"CFBundleTypeName": "Video", "CFBundleTypeRole": "Viewer", "LSHandlerRank": "Alternate",
+                   "LSItemContentTypes": ["com.apple.quicktime-movie", "public.mpeg-4"]}]
+          if got != want:
+              sys.exit(f"Info.plist의 CFBundleDocumentTypes가 다릅니다: {got!r}")
+          print("CFBundleDocumentTypes 확인:", got)
+          EOF
 
       - name: 빌드 버전 (build/build_info.json → 파일 이름 꼬리)
         run: |

@@ -420,13 +420,13 @@ def test_launch_opens_command_line_file_after_window_is_shown(qapp, monkeypatch,
         wait_until(lambda: len(events) == 6)
         assert events == ["show", "update", "instances", "user_files", "load", ("open", "A", str(video))]
 
+        # 없는 파일도 open_file로 — 열지 못하면 open_file이 오류 창 (예전에는 기록 한 줄만 남기고 빈 창 — 설계 3-2)
         events.clear()
         missing = str(tmp_path / "없음.mov")
         assert app_module.launch(["yesoncheck", missing]) == 0
-        wait_until(lambda: "load" in events)
-        QApplication.processEvents()
-        assert events == ["show", "update", "instances", "user_files", "load"]
-        assert f"File does not exist: {missing}" in capsys.readouterr().out
+        wait_until(lambda: len(events) == 6)
+        assert events == ["show", "update", "instances", "user_files", "load", ("open", "A", missing)]
+        assert f"Opening file: {missing}" in capsys.readouterr().out
     finally:
         for player in created:
             player.close()
