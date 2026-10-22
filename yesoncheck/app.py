@@ -267,9 +267,9 @@ def handle_update_startup_then_ask(player, update_token):
         QTimer.singleShot(0, lambda: default_app.ask_at_start(player))
 
 
-# 창을 닫은 뒤 끝나지 않은 작업을 기다리는 최대 시간 EXIT_WAIT_S(초, 넘으면 로그를 남기고 강제 종료)는 player_base에 둠 —
-# 다른 창의 업데이트가 닫히는 창을 기다리는 한도(player_update.CLOSE_OTHERS_TIMEOUT_S)도 그 값으로 셈 (player_update는 이
-# 모듈을 불러올 수 없음: 이 모듈이 player_update를 부름)
+# 창을 닫은 뒤 끝나지 않은 작업을 기다리는 최대 시간 EXIT_WAIT_S(초, 넘으면 로그를 남기고 강제 종료)는 worker_lifecycle에 둠
+# (player_base가 다시 내보내므로 이 모듈은 거기서 불러 씀) — 다른 창의 업데이트가 닫히는 창을 기다리는 한도
+# (player_update.CLOSE_OTHERS_TIMEOUT_S)도 그 값으로 셈 (player_update는 이 모듈을 불러올 수 없음: 이 모듈이 player_update를 부름)
 def finish_released_workers(timeout_s):
     """창을 닫을 때 붙잡아 둔 작업을 timeout_s초까지 기다리고, 그래도 안 끝나면 로그를 남긴 뒤 os._exit(0).
 

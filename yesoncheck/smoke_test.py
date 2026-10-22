@@ -481,7 +481,7 @@ def run(workdir):
         assert "tensorflow" not in sys.modules, "애니매틱2 감지 전에 TensorFlow가 이미 불려 있습니다"
         path = write_three_shot_clip(os.path.join(workdir, "animatic2_three_shots.mp4"))
         result = {}
-        # 앱(player_base의 애니매틱2 분석)과 같은 설정
+        # 앱(player_ocr의 애니매틱2 분석)과 같은 설정
         worker = TransNetV2Worker(path, threshold=0.3, min_scene_len=10,
                                   detect_gradual_transitions=True, post_process_histogram=True)
         worker.completed.connect(lambda r: result.update(r))

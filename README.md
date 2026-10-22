@@ -203,9 +203,20 @@ YesonCheck는 **창 하나가 앱 하나**입니다. 창을 더 열면 앱이 �
 yesoncheck/
 ├─ app.py            # QApplication 부트스트랩 및 CLI 진입점
 ├─ main_window.py    # VideoPlayer 조립(믹스인 집합)
-├─ player_base.py    # 메인 윈도우 공통 UI/오버레이 로직
+├─ main_window_styles.py # 메인 창 스타일시트(어두운·밝은 테마) 문자열
+├─ player_base.py    # 메인 윈도우 공통 UI(테마·메뉴·창 닫기)
+├─ player_ocr.py     # OCR·씬 감지 분석 시작, 결과 저장/불러오기, 구간 내보내기 믹스인
+├─ player_overlay.py # 영상 위 오버레이 컨트롤 믹스인
+├─ worker_lifecycle.py # 놓아 준 백그라운드 워커를 끝날 때까지 붙잡아 두기
 ├─ player_playback.py # 재생·탐색·FFmpeg 제어 믹스인
-├─ player_sidebar.py  # 사이드바·썸네일·북마크 믹스인
+├─ player_sidebar.py  # 사이드바 믹스인(드롭·파일 넣기·작품/시즌/job) — 아래 sidebar_* 믹스인을 부모로 가짐
+├─ sidebar_bookmarks.py    # 북마크 믹스인
+├─ sidebar_playlist.py     # 선택 재생 믹스인
+├─ sidebar_config_paths.py # 공유 설정·작품 경로 믹스인
+├─ sidebar_refresh.py      # 목록 다시 읽기 믹스인
+├─ sidebar_thumbnails.py   # 썸네일 믹스인
+├─ sidebar_items.py        # 사이드바 항목 상수·ThumbnailContext
+├─ shared_config_load.py   # 공유 설정 읽기(창과 무관한 코드)
 ├─ player_timeline.py # OCR 타임라인 위젯 및 CollapsibleBox
 ├─ player_annotations.py # 수정 사항 주석 UI 및 재생 연동
 ├─ frame_annotations.py  # 주석 데이터 저장/로드
@@ -214,9 +225,13 @@ yesoncheck/
 ├─ player_review.py   # OCR 결과 검토 및 편집 다이얼로그 (WebSocket 서버 포함)
 ├─ web_info.py        # 웹UI HTML 생성 및 WebSocket 통신
 ├─ video_widget.py   # 맞춤형 영상 뷰어 및 인터랙션
-├─ workers.py        # FFmpeg/썸네일 백그라운드 워커
-├─ frame_utils.py    # 프레임/피트 계산 유틸리티
-└─ styles.py         # 스크롤바 등 커스텀 스타일
+├─ workers.py        # 아래 워커 모듈을 한곳에서 다시 내보내는 호환용 모듈
+├─ ocr_worker.py     # OCR 분석 워커(OCRWorker)
+├─ ocr_export_worker.py # OCR 구간 내보내기 워커
+├─ scene_workers.py  # 씬 감지 워커(애니매틱·애니매틱2)
+├─ thumbnail_workers.py # 썸네일 생성/로딩 워커
+├─ ffmpeg_worker.py  # 영상 병합 워커
+└─ frame_utils.py    # 프레임/피트 계산 유틸리티
 ```
 문서화 및 운영 가이드는 `AGENTS.md`에서 확인할 수 있습니다.
 

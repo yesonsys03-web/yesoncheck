@@ -25,11 +25,11 @@ def test_use_ascii_paddleocr_dir_patches_actual_module(monkeypatch, tmp_path):
     패키지가 아니라 paddleocr.py 모듈 자체로 풀리므로 paddleocr.paddleocr로 고정하면 안 됨)."""
     from paddleocr import PaddleOCR
 
-    from yesoncheck import workers
+    from yesoncheck import ocr_worker, workers  # use_ascii_paddleocr_dir가 읽는 paddleocr_base_dir는 ocr_worker의 전역
 
     target_module = sys.modules[PaddleOCR.__module__]
     fake_dir = str(tmp_path) + os.sep
-    monkeypatch.setattr(workers, "paddleocr_base_dir", lambda: fake_dir)
+    monkeypatch.setattr(ocr_worker, "paddleocr_base_dir", lambda: fake_dir)
     monkeypatch.setattr(target_module, "BASE_DIR", target_module.BASE_DIR)  # 원래 값 저장 → 자동 복원
 
     workers.use_ascii_paddleocr_dir()

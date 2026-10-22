@@ -304,12 +304,6 @@ class PlayerAnnotationsMixin:
         self.videoWidget.annotation_font_size = self.annotationFontSizeSpin.value()
         self.videoWidget.annotation_stroke_width = self.annotationStrokeWidthSpin.value()
 
-    def _default_annotation_style(self):
-        return {
-            "font_size": self.annotationFontSizeSpin.value(),
-            "stroke_width": self.annotationStrokeWidthSpin.value(),
-        }
-
     def _get_total_frames(self):
         if not self.cap_a:
             return 1

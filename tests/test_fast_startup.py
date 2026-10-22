@@ -511,7 +511,7 @@ EXIT_CHILD = r"""
 import sys, threading, time
 sys.path.insert(0, sys.argv[1])
 from PyQt5.QtCore import QTimer
-from yesoncheck import app as app_module, path_map_setup, player_sidebar
+from yesoncheck import app as app_module, path_map_setup, shared_config_load
 from yesoncheck.path_map_setup import Share
 from yesoncheck.player_base import VideoPlayerBase
 
@@ -531,7 +531,7 @@ def blocked_gather(find_works_not_opening=False):
     raise AssertionError("여기까지 오면 안 됨")
 
 
-player_sidebar.gather_shared_config = blocked_gather
+shared_config_load.gather_shared_config = blocked_gather
 real_player = app_module.VideoPlayer
 started = time.monotonic()
 

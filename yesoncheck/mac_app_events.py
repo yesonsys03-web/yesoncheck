@@ -52,7 +52,7 @@ spec 모양의 실험 앱 — 빌드 앱과 소스 실행):
   보지 못함(시험 test_reopen_handler_dispatch_calls_callback이 Apple Silicon CI에서 같은 경로를 탐).
 - 부작용: 처리기를 바꾸면 AppKit 기본 reopen 처리가 통째로 사라져, Qt의 `applicationShouldHandleReopen`이 불리지 않고 Dock
   클릭 때의 강제 `applicationStateChanged(ApplicationActive)`도 없어진다(사이드바 다시 읽기는 이 신호를 씀 —
-  player_sidebar._on_application_state_changed). 다른 앱에서 돌아오는 평범한 `Inactive→Active`는 그대로라 다시 읽기는
+  sidebar_refresh의 _on_application_state_changed). 다른 앱에서 돌아오는 평범한 `Inactive→Active`는 그대로라 다시 읽기는
   유지되고, 이미 앞인 창에서 Dock을 누르면 이제 새 창이 뜬다.
 """
 

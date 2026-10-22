@@ -1977,12 +1977,6 @@ class OCRReviewDialog(QDialog):
         
         return segments
 
-    def get_segments(self):
-        if self._result_segments is not None:
-            pass
-            return self._result_segments
-        return self.collect_segments()
-    
     def export_selected_only(self):
         """선택된 구간만 내보내기"""
         selected_rows = sorted({index.row() for index in self.table.selectionModel().selectedRows()})
@@ -5951,55 +5945,6 @@ class OCRReviewDialog(QDialog):
         finally:
             self.table.setUpdatesEnabled(True)
     
-    def _sync_segment_images_with_table(self):
-        """segment_images 리스트를 테이블의 현재 상태와 동기화"""
-        table_row_count = self.table.rowCount()
-        
-        # 새로운 리스트 생성 (테이블 row와 1:1 매핑)
-        new_segment_images = []
-        new_segment_detections = []
-        
-        for row in range(table_row_count):
-            pass
-            # 먼저 테이블의 썸네일 위젯에서 이미지 가져오기 시도
-            image = None
-            thumb_widget = self.table.cellWidget(row, 1)  # ROI 샘플 컬럼
-            if thumb_widget:
-                thumb_label = thumb_widget.findChild(QLabel)
-                if thumb_label and thumb_label.pixmap():
-                    pass
-                    # QPixmap을 QImage로 변환 후 PNG 바이트로 변환
-                    pixmap = thumb_label.pixmap()
-                    if pixmap:
-                        pass
-                        # 원본 크기로 복원하려면 비디오에서 다시 추출해야 함
-                        # 대신 segment_images에서 가져오거나 비디오에서 추출
-                        pass
-            
-            # 썸네일 위젯에서 가져오지 못했으면 기존 segment_images에서 가져오기
-            if not image and row < len(self.segment_images):
-                image = self.segment_images[row]
-            
-            # detections는 기존 리스트에서 가져오기
-            detections = self.segment_detections[row] if row < len(self.segment_detections) else []
-            
-            # 이미지가 없으면 비디오에서 추출
-            if not image and self.video_path and os.path.exists(self.video_path):
-                start_frame_item = self.table.item(row, 4)
-                if start_frame_item:
-                    start_frame = start_frame_item.data(Qt.UserRole)
-                    if start_frame is None:
-                        start_frame = self._safe_int(start_frame_item) - 1
-                    if start_frame is not None:
-                        image = self._extract_frame_thumbnail(self.video_path, start_frame)
-            
-            new_segment_images.append(image)
-            new_segment_detections.append(detections)
-        
-        # 리스트 교체
-        self.segment_images = new_segment_images
-        self.segment_detections = new_segment_detections
-    
     def _extract_frame_thumbnail(self, video_path, frame_number):
         """
         비디오에서 특정 프레임을 추출하여 PNG 바이트로 반환
@@ -6075,11 +6020,6 @@ class OCRReviewDialog(QDialog):
                 lines.append(f"{idx + 1}. {det}")
         return lines or ["세부 인식 없음"]
 
-    def closeEvent(self, event):
-        """다이얼로그 닫을 때 비디오 재생 정리"""
-        self._stop_preview_playback()
-        super().closeEvent(event)
-    
     def export_all(self):
         """전체 내보내기 - _result_segments를 초기화하여 모든 세그먼트를 내보냄"""
         # 선택 항목만 내보내기로 설정된 경우를 초기화
@@ -6532,23 +6472,6 @@ class OCRReviewDialog(QDialog):
         if end_row < len(segments):
             QTimer.singleShot(50, lambda: self._populate_remaining_thumbnails(segments, end_row))
     
-    def _get_visible_row_range(self):
-        """현재 보이는 행 범위를 반환"""
-        viewport = self.table.viewport()
-        top_index = self.table.indexAt(viewport.rect().topLeft())
-        bottom_index = self.table.indexAt(viewport.rect().bottomLeft())
-        
-        top = top_index.row() if top_index.isValid() else 0
-        bottom = bottom_index.row() if bottom_index.isValid() else self.table.rowCount() - 1
-        
-        # 유효하지 않은 경우 전체 범위 반환
-        if top < 0:
-            top = 0
-        if bottom < 0 or bottom >= self.table.rowCount():
-            bottom = max(0, self.table.rowCount() - 1)
-        
-        return (top, bottom)
-    
     def _populate_remaining_thumbnails(self, segments, start_row):
         """나머지 썸네일을 백그라운드에서 생성"""
         # WebSocket 업데이트 중에는 썸네일 로딩 일시 중지
@@ -6715,23 +6638,6 @@ class OCRReviewDialog(QDialog):
 
         # 캐시에 추가 (중요: 썸네일이 로드된 것으로 표시)
         self._thumbnail_cache[row] = True
-    
-    def _update_timeline_and_summary_async(self, data=None):
-        """타임라인과 summary를 비동기로 업데이트 (성능 최적화)"""
-        try:
-            pass
-            # _updating 플래그를 일시적으로 해제하여 collect_segments가 작동하도록
-            old_updating = self._updating
-            self._updating = False
-            
-            updated_segments = self.collect_segments()
-            self.timeline.set_segments(updated_segments)
-            self.update_summary()
-            
-            self._updating = old_updating
-        except Exception as e:
-            pass
-            # print(f"[비동기 타임라인 업데이트 오류] {e}")
     
     def _update_ui_async(self):
         """UI 업데이트를 비동기로 처리 (성능 최적화)"""

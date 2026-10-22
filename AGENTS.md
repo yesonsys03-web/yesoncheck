@@ -1,7 +1,7 @@
 # 저장소 가이드라인
 
 ## 프로젝트 구조 및 모듈 구성
-- `yesoncheck/` 디렉토리에 런타임 코드가 있습니다. `app.py`는 Qt를 부트스트랩하고, `main_window.py`는 `player_base.py`, `player_playback.py`, `player_sidebar.py`로부터 `VideoPlayer`를 조립합니다. `player_review.py`와 `player_timeline.py`는 OCR 검토 UI를 담당하며, `player_review.py`는 WebSocket 서버를 포함합니다. `web_info.py`는 웹UI HTML 생성 및 WebSocket 통신을 담당합니다. `video_widget.py`는 커스텀 뷰포트를 렌더링하고, `workers.py`는 FFmpeg 및 썸네일 스레드를 포함합니다. 헬퍼 함수들은 `frame_utils.py`와 `styles.py`에 있습니다.
+- `yesoncheck/` 디렉토리에 런타임 코드가 있습니다. `app.py`는 Qt를 부트스트랩하고, `main_window.py`는 `player_base.py`, `player_playback.py`, `player_sidebar.py`(그리고 `player_update.py`, `player_annotations.py`)로부터 `VideoPlayer`를 조립합니다. `player_base.py`는 `player_ocr.py`(OCR·씬 감지 분석)와 `player_overlay.py`(오버레이 컨트롤)를, `player_sidebar.py`는 `sidebar_bookmarks.py`·`sidebar_playlist.py`·`sidebar_config_paths.py`·`sidebar_refresh.py`·`sidebar_thumbnails.py`를 부모 믹스인으로 가집니다. `player_review.py`와 `player_timeline.py`는 OCR 검토 UI를 담당하며, `player_review.py`는 WebSocket 서버를 포함합니다. `web_info.py`는 웹UI HTML 생성 및 WebSocket 통신을 담당합니다. `video_widget.py`는 커스텀 뷰포트를 렌더링하고, 백그라운드 스레드는 `ocr_worker.py`, `ocr_export_worker.py`, `scene_workers.py`, `thumbnail_workers.py`, `ffmpeg_worker.py`에 있습니다(`workers.py`는 옛 import 경로를 위해 이들을 다시 내보내기만 합니다). 헬퍼 함수들은 `frame_utils.py`에 있습니다. 모듈별 역할은 `CLAUDE.md`에 있습니다.
 - `YesonCheck_Autocut.spec`이 PyInstaller를 제어합니다 (정적 ffmpeg는 `vendor/ffmpeg/`, TransNetV2 가중치는 `vendor/transnetv2-weights/`). 빌드 방법은 `BUILD.md`.
 - 썸네일은 job 폴더의 `.yesoncheck_thumb/`에 캐시되고 모든 Mac·Windows PC가 함께 씁니다(`yesoncheck/thumbnails.py`, 이름은 `paths.thumbnail_key` — Mac 경로의 md5). 영상이 썸네일보다 새것이면 다시 만듭니다.
 - 문서는 `README.md` (환경 설정), `BUILD.md` (빌드)와 이 가이드에 있습니다. 자동화된 시험은 `tests/` (pytest)에 있습니다.
@@ -19,8 +19,9 @@
 - 지속되는 사용자 설정에 매핑되지 않는 한 새로운 전역 상태를 피하고, 관련 믹스인 내의 범위가 지정된 헬퍼를 선호합니다.
 
 ## 테스트 가이드라인
-- 자동화된 테스트는 없습니다. 동작이 변경될 때마다 비디오 로드, 썸네일 생성, 오버레이 컨트롤, FFmpeg 내보내기를 포함한 수동 회귀 테스트를 수행하세요.
-- 테스트를 추가할 때는 테스트 대상 모듈 옆에 `*_test.py` 파일을 배치하고 `python -m pytest`로 실행하세요.
+- 자동 시험은 `tests/`(pytest, `test_*.py`)에 있고 CI가 Windows·Mac Apple Silicon·Mac Intel에서 매번 돌립니다. 코드를 바꾸면 `python -m pytest tests -q`로 먼저 돌리세요. 시험을 건너뛰거나 지워서 통과시키지 마세요.
+- 시험에서 모듈 전역을 바꿔치기(monkeypatch)할 때는 그 이름을 읽는 코드가 있는 모듈에서 바꾸세요(예: `sidebar_thumbnails.ThumbnailWorker`, `ocr_worker.paddleocr_base_dir`). 다른 모듈에 다시 내보낸 이름을 바꾸면 말없이 닿지 않습니다.
+- UI를 건드린 변경은 자동 시험 외에 소스 실행(`./run_app.sh`)으로 비디오 로드, 썸네일 생성, 오버레이 컨트롤, FFmpeg 내보내기를 포함한 수동 회귀 테스트를 수행하세요.
 - 리뷰어를 돕기 위해 PR 설명에 수동 테스트 입력(미디어 경로, OS, GPU 모드)을 문서화하세요.
 
 ## 커밋 및 Pull Request 가이드라인
@@ -29,8 +30,11 @@
 - 동작 변경의 경우 최소 한 명의 리뷰어를 요청하세요. 문서만 업데이트하는 경우 CI(추가되면)가 녹색을 유지하는 한 자체 검토 후 병합할 수 있습니다.
 
 ## 아키텍처 노트
-- `VideoPlayer`는 프레젠테이션(`player_base`)과 기능 슬라이스(`player_playback`, `player_sidebar`)를 믹스합니다. 응집력을 위해 관련 믹스인을 대상으로 편집하세요.
+- `VideoPlayer`는 프레젠테이션(`player_base`)과 기능 슬라이스(`player_playback`, `player_sidebar` 등)를 믹스합니다. 큰 슬라이스는 다시 부모 믹스인 모듈(`player_ocr`·`player_overlay`, `sidebar_*`)로 나뉘어 있으니, 응집력을 위해 해당 기능이 있는 모듈을 대상으로 편집하세요. 부모 믹스인 모듈은 상속받는 쪽(`player_base`·`player_sidebar`)을 모듈 수준에서 import하지 않습니다(순환).
 - 장기 실행 작업은 `QThread` 서브클래스를 사용합니다. 종료 경쟁을 피하기 위해 시그널을 발생시키기 전에 항상 `_is_running`을 확인하세요.
+
+## 최근 주요 변경 사항 (2026.10.22)
+- **코드 정리(동작 변경 없음)**: `workers.py`를 워커별 모듈로, `player_base.py`와 `player_sidebar.py`를 역할별 믹스인 모듈로 나누고 쓰이지 않는 코드를 제거했습니다. 구조와 줄 수는 `CLAUDE.md`를 참고하세요.
 
 ## 최근 주요 변경 사항 (2025.11.25)
 - **웹UI 실시간 동기화**: WebSocket을 통한 양방향 실시간 동기화 구현

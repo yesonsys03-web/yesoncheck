@@ -7,13 +7,13 @@
 
 from tests.conftest import write_test_video
 
-from yesoncheck import workers
+from yesoncheck import scene_workers, workers  # 워커가 읽는 전역(TRANSNETV2_AVAILABLE 등)은 scene_workers에 있음 — 바꿔치기는 그 모듈에서
 
 
 def test_run_emits_korean_user_message_and_logs_developer_hint_separately(tmp_path, capsys, monkeypatch):
-    monkeypatch.setattr(workers, "TRANSNETV2_AVAILABLE", False)
+    monkeypatch.setattr(scene_workers, "TRANSNETV2_AVAILABLE", False)
     missing = ["tensorflow 모듈 없음", "가중치 파일 없음: /x/transnetv2-weights/saved_model.pb"]
-    monkeypatch.setattr(workers, "transnetv2_missing", lambda: missing)
+    monkeypatch.setattr(scene_workers, "transnetv2_missing", lambda: missing)
     video = write_test_video(str(tmp_path / "v" / "a.mp4"))
     worker = workers.TransNetV2Worker(video)
 
@@ -38,7 +38,7 @@ def test_run_emits_korean_user_message_and_logs_developer_hint_separately(tmp_pa
 
 def test_run_still_works_when_transnetv2_available(tmp_path, monkeypatch):
     """안전망 메시지만 바뀌었을 뿐, TRANSNETV2_AVAILABLE이 True면 가드를 지나 실제 감지를 시도해야 한다."""
-    monkeypatch.setattr(workers, "TRANSNETV2_AVAILABLE", True)
+    monkeypatch.setattr(scene_workers, "TRANSNETV2_AVAILABLE", True)
 
     def fake_detect(*args, **kwargs):
         return [{
@@ -46,7 +46,7 @@ def test_run_still_works_when_transnetv2_available(tmp_path, monkeypatch):
             "text": "", "edited_text": "", "roi_preview": None, "detections": [],
         }]
 
-    monkeypatch.setattr(workers, "detect_scene_cuts_transnetv2", fake_detect)
+    monkeypatch.setattr(scene_workers, "detect_scene_cuts_transnetv2", fake_detect)
     video = write_test_video(str(tmp_path / "v" / "a.mp4"))
     worker = workers.TransNetV2Worker(video)
 
@@ -70,8 +70,8 @@ def test_worker_passes_stop_flag_and_reports_stop_as_cancelled(tmp_path, monkeyp
         seen["should_stop"] = kwargs["should_stop"]
         raise transnetv2_detector.TransNetV2Stopped("애니매틱2 컷 감지 중지됨 (프레임 추출 중 20/300)")
 
-    monkeypatch.setattr(workers, "TRANSNETV2_AVAILABLE", True)
-    monkeypatch.setattr(workers, "detect_scene_cuts_transnetv2", fake_detect)
+    monkeypatch.setattr(scene_workers, "TRANSNETV2_AVAILABLE", True)
+    monkeypatch.setattr(scene_workers, "detect_scene_cuts_transnetv2", fake_detect)
     video = write_test_video(str(tmp_path / "v" / "a.mp4"))
     worker = workers.TransNetV2Worker(video)
     completed, errors, statuses = [], [], []

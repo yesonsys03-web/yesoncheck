@@ -636,12 +636,12 @@ def test_unopenable_video_reported_once_per_folder(new_player, dialogs, tmp_path
 
 def test_thumbnail_worker_unexpected_error_reported_with_traceback(new_player, dialogs, tmp_path, monkeypatch, capsys):
     """썸네일 워커의 예상 못 한 오류: 로그에 스택 트레이스째 남기고 창으로 (예전에는 오류 한 줄만 로그에)."""
-    import yesoncheck.workers as workers_module
+    import yesoncheck.thumbnail_workers as thumbnail_workers_module  # 썸네일 워커가 읽는 QImage가 있는 모듈
 
     video = write_test_video(str(tmp_path / "job" / "a.mov"))
     player = new_player(make_config(str(tmp_path), {}))
     player.add_files_to_sidebar([video])
-    monkeypatch.setattr(workers_module, "QImage", BrokenQImage)
+    monkeypatch.setattr(thumbnail_workers_module, "QImage", BrokenQImage)
     capsys.readouterr()
 
     turn_on_thumbnail_mode(player)
@@ -670,13 +670,13 @@ def test_worker_finished_before_cleanup_still_delivers(new_player, dialogs, tmp_
     붙고 실패는 창으로. 예전에는 끝난 워커를 GUI 스레드가 신호를 받기 전에 놓아 partial·람다로 이은 신호가 QThread와 함께
     사라졌음 (빠른 실패에서 실패 창이 뜨지 않음 — 'failed'가 그 경우를 잡음. 메서드로 이은 아이콘 신호는 예전에도 전달돼
     'made'는 아이콘이 붙는지만 확인)."""
-    import yesoncheck.workers as workers_module
+    import yesoncheck.thumbnail_workers as thumbnail_workers_module  # 썸네일 워커가 읽는 QImage가 있는 모듈
 
     video = write_test_video(str(tmp_path / "job" / "a.mov"))
     player = new_player(make_config(str(tmp_path), {}))
     player.add_files_to_sidebar([video])
     if how == "failed":
-        monkeypatch.setattr(workers_module, "QImage", BrokenQImage)
+        monkeypatch.setattr(thumbnail_workers_module, "QImage", BrokenQImage)
     real_cleanup = player.cleanup_thumbnail_workers
 
     def cleanup_after_workers_end():
@@ -1261,16 +1261,16 @@ def test_folder_context_not_replaced_by_later_drop(new_player, dialogs, work_are
 
 def record_worker_starts(monkeypatch):
     """사이드바가 띄우는 썸네일 워커의 영상 경로를 차례로 기록하는 목록."""
-    import yesoncheck.player_sidebar as sidebar_module
+    from yesoncheck import sidebar_thumbnails
 
-    real_worker = sidebar_module.ThumbnailWorker
+    real_worker = sidebar_thumbnails.ThumbnailWorker
     started = []
 
     def counting_worker(file_path, *args):
         started.append(file_path)
         return real_worker(file_path, *args)
 
-    monkeypatch.setattr(sidebar_module, "ThumbnailWorker", counting_worker)
+    monkeypatch.setattr(sidebar_thumbnails, "ThumbnailWorker", counting_worker)
     return started
 
 

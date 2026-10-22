@@ -90,6 +90,22 @@ class VideoPlayer(PlayerUpdateMixin, PlayerAnnotationsMixin, PlayerSidebarMixin,
     pass
 ```
 
+큰 파일은 믹스인을 부모로 붙여 나눔 (코드는 옮기기만 했고 동작은 그대로):
+- `PlayerSidebarMixin`(`player_sidebar.py`)은 `SidebarBookmarksMixin`·`SidebarPlaylistMixin`·`SidebarConfigPathsMixin`·
+  `SidebarRefreshMixin`·`SidebarThumbnailsMixin` 5개를 상속
+- `VideoPlayerBase`(`player_base.py`)는 `PlayerOcrMixin`·`PlayerOverlayMixin` 2개와 `QMainWindow`를 상속
+
+그래서 `VideoPlayer.__mro__`는 `VideoPlayer > PlayerUpdateMixin > PlayerAnnotationsMixin > PlayerSidebarMixin > SidebarBookmarksMixin >
+SidebarPlaylistMixin > SidebarConfigPathsMixin > SidebarRefreshMixin > SidebarThumbnailsMixin > PlayerPlaybackMixin > VideoPlayerBase >
+PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 것:
+- 같은 이름의 메서드를 두 믹스인에 두지 않음 (MRO에서 먼저 나오는 쪽이 가림 — `PlayerSidebarMixin`의 `dragEnterEvent`·`dropEvent`는 `QMainWindow`의 가상 함수를 가림).
+  부모 믹스인 모듈(`sidebar_*`·`player_ocr`·`player_overlay`)은 상속받는 쪽(`player_sidebar`·`player_base`)을 모듈 수준에서 import하지 않음 (순환).
+  상태(`self.…`)는 `VideoPlayerBase.__init__`이 만들고 믹스인은 `self.`로 부름.
+- 시험이 모듈 전역을 바꿔치기할 때는 **그 이름을 읽는 코드가 있는 모듈**에서 바꿈 — 다른 모듈에 다시 내보낸 이름을 바꾸면 말없이 닿지 않음.
+  예: `sidebar_thumbnails.ThumbnailWorker`·`shared_config_load.gather_shared_config`·`sidebar_config_paths.PathMapSetupDialog`·`ocr_worker.paddleocr_base_dir`.
+- 옛 import 경로는 다시 내보내기로 남아 있음: `yesoncheck.workers`(워커 전부), `player_base`(`EXIT_WAIT_S`·`release_worker`·`wait_for_released_workers`),
+  `player_sidebar`(`SidebarScan`·`ThumbnailContext`·`gather_shared_config` 등).
+
 **주요 파일**:
 - `yesoncheck/app.py` (397줄): 애플리케이션 부트스트랩 및 CLI 진입점 — 빌드 앱은 `setup_app_logging`이 stdout·stderr를
   창(프로세스)마다 기록 파일 `yesoncheck_<날짜>_<pid>.log`로(Mac `~/Library/Logs/YesonCheck`, Windows
@@ -100,26 +116,53 @@ class VideoPlayer(PlayerUpdateMixin, PlayerAnnotationsMixin, PlayerSidebarMixin,
   켜진 뒤의 것은 새 창(`new_window`)으로 보내고, 창을 보인 뒤 Mac 빌드 앱은 처음 한 번 동영상 기본 앱을 묻고(`default_app`) Windows 빌드
   앱은 이 계정에 연결 프로그램을 등록(`file_associations`) —
   시작 순서는 아래 '여러 창과 업데이트'의 '새 창·동영상 열기·기본 앱'
-- `yesoncheck/main_window.py` (~10줄): 믹스인 구성
-- `yesoncheck/player_base.py` (5,422줄): 핵심 UI 및 윈도우 관리
-- `yesoncheck/player_playback.py` (2,575줄): 비디오 재생, 프레임 탐색 및 FFmpeg 작업
-- `yesoncheck/player_sidebar.py` (1,831줄): 사이드바 UI, 썸네일 및 북마크
-- `yesoncheck/player_review.py` (7,106줄): 3패널 레이아웃 및 세그먼트 편집 기능이 있는 OCR 리뷰 대화상자
-- `yesoncheck/player_timeline.py` (840줄): 접을 수 있는 컨트롤이 있는 OCR 타임라인 위젯
+- `yesoncheck/main_window.py` (12줄): 믹스인 구성 (`VideoPlayer`)
+- `yesoncheck/player_base.py` (1,740줄): 핵심 UI 및 윈도우 관리 — `VideoPlayerBase`(UI 만들기·메뉴·테마 전환·창 닫기·작업 정지·창 사이 연결).
+  OCR 묶음은 `player_ocr`, 오버레이 묶음은 `player_overlay`로 나눠 부모로 붙였고, 스타일시트 문자열은 `main_window_styles`, 붙잡아 둔 워커 정리는
+  `worker_lifecycle`로 옮김 (`worker_lifecycle`의 이름은 여기서 다시 내보냄)
+- `yesoncheck/player_ocr.py` (1,845줄): `PlayerOcrMixin` — ROI·분석 방식 UI 상태, 분석 시작(OCR·애니매틱·애니매틱2)과 진행·완료 콜백, 검토 창 수명,
+  결과 저장·불러오기, 구간 내보내기 (`VideoPlayerBase`의 부모)
+- `yesoncheck/player_overlay.py` (753줄): `PlayerOverlayMixin` — 영상 위 오버레이 컨트롤(V 키)의 위젯·위치·크기·설정 파일(`~/.yeson_overlay_settings.json`)
+  (`VideoPlayerBase`의 부모)
+- `yesoncheck/main_window_styles.py` (887줄): 어두운·밝은 테마 시트(`DARK_STYLESHEET`·`LIGHT_STYLESHEET`)와 큰 인라인 시트 상수 — 데이터만 있는 잎 모듈
+  (한 글자도 바뀌지 않게 `tests/test_stylesheet_freeze.py`가 해시로 지킴)
+- `yesoncheck/worker_lifecycle.py` (76줄): 놓아 준 `QThread` 워커를 끝날 때까지 붙잡아 두기 — `release_worker`·`wait_for_released_workers`·`EXIT_WAIT_S`(30초)
+- `yesoncheck/player_playback.py` (2,496줄): 비디오 재생, 프레임 탐색 및 FFmpeg 작업
+- `yesoncheck/player_annotations.py` (1,065줄): 수정 사항 주석(프레임별 텍스트·도형) UI와 재생 연동 (`PlayerAnnotationsMixin`)
+- `yesoncheck/player_sidebar.py` (518줄): `PlayerSidebarMixin` — 드롭·파일 넣기·폴더 불러오기, 우클릭 메뉴·파일 복사, 작품 → 시즌 → job 콤보,
+  선택한 영상을 A에 열기. 나머지는 아래 부모 믹스인 모듈에 있고 이 모듈은 옛 import 경로를 위해 일부 이름을 다시 내보냄
+  - `yesoncheck/sidebar_bookmarks.py` (216줄): `SidebarBookmarksMixin` — 북마크 읽기·더하기·지우기, 북마크 관리 창, 북마크 폴더 열기
+  - `yesoncheck/sidebar_playlist.py` (182줄): `SidebarPlaylistMixin` — 선택 재생(Play Selected) 재생목록 시작·차례대로 열기·없는 영상 건너뛰기
+  - `yesoncheck/sidebar_config_paths.py` (883줄): `SidebarConfigPathsMixin` — 공유 설정 읽기 시작·창에 넣기·문제 알림, (Windows) 변환표 자동 설정,
+    작품 경로 관리 창·`get_work_path`·관리 비밀번호
+  - `yesoncheck/sidebar_refresh.py` (496줄): `SidebarRefreshMixin`·`SidebarScan` — 목록 항목 모델(출처·세대·다시 읽기 보류)과 목록 다시 읽기·목록 문제 알림
+  - `yesoncheck/sidebar_thumbnails.py` (933줄): `SidebarThumbnailsMixin` — 목록/썸네일 모드·사이드바 폭, 썸네일 반복·워커 정리, 영상 단위 확인·만들기,
+    썸네일 폴더·문제 알림, 백그라운드 썸네일 읽기
+  - `yesoncheck/sidebar_items.py` (37줄): 사이드바 항목 상수(창 제목·안내 문구·항목 데이터 역할)와 `ThumbnailContext` — 잎 모듈
+  - `yesoncheck/shared_config_load.py` (308줄): 공유 설정 읽기 코드 — `gather_shared_config`·`SharedConfigState`·`SharedConfigLoad`(`QThread`)·
+    `list_works_not_opening`. 창·위젯을 건드리지 않음 (창에 넣는 일은 `SidebarConfigPathsMixin`)
+- `yesoncheck/player_review.py` (7,032줄): 3패널 레이아웃 및 세그먼트 편집 기능이 있는 OCR 리뷰 대화상자 (`OCRReviewDialog`)
+- `yesoncheck/player_timeline.py` (840줄): 접을 수 있는 컨트롤이 있는 OCR 타임라인 위젯 (`OCRTimelineWidget`·`CollapsibleBox`)
 - `yesoncheck/player_update.py` (1,408줄): 자동 업데이트 믹스인(`PlayerUpdateMixin`) — 확인 일정(켤 때 + 3시간마다
   + Help → 업데이트 확인…), 알림 띠 처리, '업데이트'를 누른 뒤 받기·다른 창 닫기·도우미에 넘기기, 다시 켜진 앱의 성공/실패
   판정 (여러 창일 때의 순서는 아래 '여러 창과 업데이트')
-- `yesoncheck/video_widget.py` (~584줄): 줌, 팬, ROI 선택 기능이 있는 커스텀 비디오 뷰포트
-- `yesoncheck/video_list.py` (~420줄): 사이드바 영상 목록 규칙 (job·폴더 읽기, 정렬, 다시 읽기 계획, 없어진 영상 판정 `check_gone`) — Qt 없음
+- `yesoncheck/video_widget.py` (869줄): 줌, 팬, ROI 선택 기능이 있는 커스텀 비디오 뷰포트
+- `yesoncheck/video_list.py` (427줄): 사이드바 영상 목록 규칙 (job·폴더 읽기, 정렬, 다시 읽기 계획, 없어진 영상 판정 `check_gone`) — Qt 없음
 - `yesoncheck/mac_mounts.py`: (Mac) 이 Mac에서 공유가 붙은 곳 — 자동 연결(autofs) 설정(`/etc/auto_master`와 간접 맵)과
   `/etc/fstab`을 읽어, 공유 설정의 앞부분(`/USA_DB`, path_map.json의 "mac", 제자리가 아닌 공유의 `/<이름>`)이 이 Mac에
   없으면 이름이 같은 공유를 열고, 제자리가 아닌 공유 아래 경로는 그 앞부분으로 되돌려 저장 (`paths.to_native`·`to_storage`
   등, 정하지 못하면 저장하지 않고 창). 시작할 때 `app.load_mount_map`이 공유 설정 폴더만, 공유 설정을 읽은 뒤 나머지를 정함
   — 로그 `[공유] /usadata2 → … (auto_nfs)` — Qt 없음
-- `yesoncheck/workers.py` (3,465줄): OCR, 내보내기, 썸네일 및 씬 감지를 위한 백그라운드 스레드
+- `yesoncheck/workers.py` (18줄): 옛 import 경로(`from yesoncheck.workers import X`)를 위해 아래 워커 모듈을 불러와 다시 내보내기만 하는 모듈 —
+  워커 코드는 여기에 없음 (자세한 것은 아래 'Workers')
+  - `yesoncheck/ocr_worker.py` (2,243줄): `OCRWorker`와 PaddleOCR 도우미 (`paddleocr_base_dir`·`use_ascii_paddleocr_dir`·`guard_paddle_buffer_growth`)
+  - `yesoncheck/ocr_export_worker.py` (293줄): `OCRExportWorker`
+  - `yesoncheck/scene_workers.py` (390줄): `SceneDetectWorker`·`TransNetV2Worker`
+  - `yesoncheck/thumbnail_workers.py` (234줄): `ThumbnailWorker`·`ThumbnailLoaderWorker`
+  - `yesoncheck/ffmpeg_worker.py` (60줄): `FFmpegWorker`
 - `yesoncheck/auto_trim.py` (637줄): 자동 씬 컷을 위한 PySceneDetect 통합
-- `yesoncheck/transnetv2_detector.py` (698줄): 점진적 전환 감지를 위한 TransNetV2 통합
-- `yesoncheck/web_info.py` (~330줄): OCR 분석 결과를 웹 페이지로 내보내기
+- `yesoncheck/transnetv2_detector.py` (809줄): 점진적 전환 감지를 위한 TransNetV2 통합
+- `yesoncheck/web_info.py` (2,647줄): OCR 분석 결과를 웹 페이지로 내보내기
 - `yesoncheck/user_files.py` (208줄): 사용자 파일(JSON)을 여러 창이 함께 써도 안전하게 — `write_json_atomic`(같은 폴더의
   임시 파일 + `os.replace`, Windows는 다른 프로세스가 연 동안 다시 시도), `read_json`(깨진 파일은 `UserFileError` — 빈 값으로
   치고 덮어쓰지 않음), `FileLock`(같은 PC의 프로세스 사이 잠금 — NAS 위 파일에는 쓰지 않음), `update_json`(`<파일>.lock`을
@@ -167,13 +210,12 @@ class VideoPlayer(PlayerUpdateMixin, PlayerAnnotationsMixin, PlayerSidebarMixin,
 - `yesoncheck/review_sync.py` (97줄): OCR 검토 창 ↔ 웹 보고서 실시간 동기화 서버(`ReviewSyncServer`) — 창마다 127.0.0.1의 빈 포트와
   무작위 토큰(`ws://127.0.0.1:포트/?token=…`), 토큰이 맞지 않는 연결은 닫고 기록. 보고서는 그 주소(`generate_web_report`의
   `ws_url`)로만 접속하고, 주소가 없으면(듣기 실패) 접속하지 않고 "실시간 동기화 꺼짐"
-- `yesoncheck/frame_utils.py` (~21줄): 영화 산업 표준 프레임 계산 (feet.frames 형식)
-- `yesoncheck/styles.py` (~22줄): 커스텀 UI 스타일
+- `yesoncheck/frame_utils.py` (21줄): 영화 산업 표준 프레임 계산 (feet.frames 형식)
 - `yesoncheck/build_info.py` (89줄): 빌드가 앱에 넣은 `build_info.json`(버전·커밋·빌드 시각·플랫폼)을 읽어 창
   제목·Help → 정보에 보임 — 소스 실행이면 버전 "개발(소스)" — Qt 없음
-- `yesoncheck/updates.py` (305줄): 업데이트 확인 핵심 — NAS·GitHub의 `latest.json`을 읽고 더 새 버전을 고름
+- `yesoncheck/updates.py` (308줄): 업데이트 확인 핵심 — NAS·GitHub의 `latest.json`을 읽고 더 새 버전을 고름
   (예상된 실패와 오류를 구분, REST API는 쓰지 않음) — Qt 없음
-- `yesoncheck/update_banner.py` (127줄): 창 맨 위 전체 너비 알림 띠(`UpdateBanner`) — 새 버전 알림·받는 중
+- `yesoncheck/update_banner.py` (129줄): 창 맨 위 전체 너비 알림 띠(`UpdateBanner`) — 새 버전 알림·받는 중
   진행 막대·잠깐 메시지 세 가지 모양
 - `yesoncheck/update_install.py` (839줄): 업데이트 설치 준비 — 받기(다운로드 + sha256 검사)·Mac dmg 준비
   (`hdiutil`+`ditto`)·업데이트 기록(`pending_update.json` — 무작위 토큰·건 창의 pid·도우미 pid)·도우미(아래) 띄우기·
@@ -288,7 +330,7 @@ class VideoPlayer(PlayerUpdateMixin, PlayerAnnotationsMixin, PlayerSidebarMixin,
   `c_uint32`. 처리기 클래스 `YesonCheckReopenHandler`는 이름당 한 번만 만들 수 있어 프로세스에 하나이고, `NSAppleEventManager`는 처리기를 붙잡아 주지 않으므로
   객체와 IMP(CFUNCTYPE)를 놓지 않음.
 - **처리기를 바꾸면 AppKit 기본 reopen 처리가 통째로 사라짐**: 최소화한 창을 올리지 않음(원하는 것). 그리고 Qt의 `applicationShouldHandleReopen`이 불리지 않아 Dock 클릭
-  때의 강제 `applicationStateChanged(ApplicationActive)`도 없음 — 사이드바 다시 읽기(`player_sidebar._on_application_state_changed`)가 이 신호를 쓰지만 다른 앱에서 돌아오는
+  때의 강제 `applicationStateChanged(ApplicationActive)`도 없음 — 사이드바 다시 읽기(`sidebar_refresh`의 `_on_application_state_changed`)가 이 신호를 쓰지만 다른 앱에서 돌아오는
   평범한 `Inactive→Active`는 그대로라 유지됨(아래 한계).
 - **LaunchServices가 돌려주는 앱 ID는 소문자일 수 있음**(Info.plist의 대문자가 섞인 앱 ID가 저장 파일에는 소문자로 있음을 확인) — 비교는 대소문자 무관(`_same_app`).
 - **임시 폴더(`/tmp` 등)의 번들은 LaunchServices가 `in-temp-dir`로 표시해 앱 ID로 찾지 않음**: 정하기는 OSStatus 0인데 다시 읽으면 다른 앱, 사본 목록도 빔 —
@@ -321,14 +363,23 @@ class VideoPlayer(PlayerUpdateMixin, PlayerAnnotationsMixin, PlayerSidebarMixin,
 
 ### 컴포넌트 역할
 
-**VideoPlayerBase** (`player_base.py`):
-- 메인 윈도우 초기화 및 UI 레이아웃
+**VideoPlayerBase** (`player_base.py`, 부모 `PlayerOcrMixin`·`PlayerOverlayMixin`·`QMainWindow`):
+- 메인 윈도우 초기화 및 UI 레이아웃, 어두운·밝은 테마 전환 (시트 문자열은 `main_window_styles.py`)
 - 4K 최적화를 위한 프레임 캐싱 시스템
-- 북마크 관리 및 작업 경로 설정
-- 오버레이 텍스트 렌더링 및 표시
+- 상태 변수 만들기: 북마크·작품 경로·오버레이·OCR 상태는 여기 `__init__`이 만들고 각 믹스인이 `self.`로 씀
 - 메뉴바 생성
-- OCR 모드 선택 (King, Titmouse, Animatic, Animatic2)
 - 핵심 재생 컨트롤 및 상태 표시
+- 창 닫기·작업 정지·창 사이 연결(`instance_link`)·사용자 파일 문제 알림
+
+**PlayerOcrMixin** (`player_ocr.py`):
+- OCR 모드 선택 처리(`on_ocr_mode_changed` — Titmouse, King, Bento, All, Animatic, Animatic2; 콤보 자체는 `VideoPlayerBase.initUI`가 만듦)와 ROI 선택 상태
+- 분석 시작(`run_ocr_analysis`·`run_ocr_analysis_range`)과 진행·완료·오류 콜백, 검토 창 수명
+- OCR 결과 저장·불러오기, 구간 내보내기(`start_ocr_export`)
+- 워커(`OCRWorker`·`SceneDetectWorker`·`TransNetV2Worker`·`OCRExportWorker`)는 메서드 안에서 `.workers`로 불러옴 (앱 시작 때 불러오지 않음)
+
+**PlayerOverlayMixin** (`player_overlay.py`):
+- 영상 위 오버레이 컨트롤(V 키로 컨트롤 패널을 숨기면 보임)의 위젯 만들기, 위치·크기(드래그·크기 조절·하단 중앙 재배치)
+- 설정 파일(`~/.yeson_overlay_settings.json`) 읽기·쓰기, 보이기·숨기기·값 갱신
 
 **PlayerPlaybackMixin** (`player_playback.py`):
 - 비디오 파일 로딩 및 OpenCV 캡처 관리
@@ -338,15 +389,25 @@ class VideoPlayer(PlayerUpdateMixin, PlayerAnnotationsMixin, PlayerSidebarMixin,
 - 재생 속도 및 오디오 제어
 - 프레임 탐색 (다음/이전 프레임, 프레임으로 이동)
 
-**PlayerSidebarMixin** (`player_sidebar.py`):
-- 파일 브라우저 및 재생목록이 있는 사이드바 UI
-- 썸네일 생성 및 캐싱
-- 북마크 생성 및 탐색
-- 파일 드래그 앤 드롭 처리
-- 컨텍스트 메뉴 작업
+**PlayerSidebarMixin** (`player_sidebar.py`, 부모 `SidebarBookmarksMixin`·`SidebarPlaylistMixin`·`SidebarConfigPathsMixin`·`SidebarRefreshMixin`·`SidebarThumbnailsMixin`):
+- 파일 브라우저가 있는 사이드바 UI — 파일 드래그 앤 드롭 처리, 폴더·파일을 목록에 넣기
+- 컨텍스트 메뉴 작업 (파일 복사 등)
 - 작품 → 시즌 → job 순서 (시즌이 없는 The_Johnsons·TJS_Animatic은 작품 → job): 시즌을 고르기 전에는 job 목록이 'job선택'만,
   job을 고르기 전에는 영상 목록을 읽지 않음. 고른 것은 콤보의 `currentIndex() > 0`으로 판단 (`_picked`·`_job_picked` — 0번은
   안내 항목, -1은 비우는 중: clear가 빈 글자로 currentIndexChanged를 보냄)
+- 나머지 사이드바 기능은 아래 부모 믹스인이 가짐 (이 모듈은 `SidebarScan`·`ThumbnailContext`·`gather_shared_config` 등을 옛 경로용으로 다시 내보냄)
+
+**SidebarBookmarksMixin** (`sidebar_bookmarks.py`):
+- 북마크 생성 및 탐색 — 북마크 파일 읽기·더하기·지우기, 북마크 관리 창, 북마크 폴더 열기(영상 불러오기 + 그 폴더의 썸네일 폴더 설정)
+
+**SidebarPlaylistMixin** (`sidebar_playlist.py`):
+- 선택 재생(Play Selected): 사이드바에서 고른 영상들을 차례로 열어 재생, 디스크에 없는 영상 건너뛰기, 현재 항목 강조 색 되돌리기
+
+**SidebarConfigPathsMixin** (`sidebar_config_paths.py`, 읽는 코드는 `shared_config_load.py`):
+- 앱이 켜질 때 공유 설정(작품 경로·변환표·마운트 맵)을 읽어 창에 넣기와 문제 알림, (Windows) 변환표 자동 설정
+- 작품 경로 관리 창, 작품 → 이 PC 경로(`get_work_path`), 관리 비밀번호
+
+**SidebarRefreshMixin** (`sidebar_refresh.py`):
 - 목록 다시 읽기: 다른 앱에서 돌아올 때·같은 job을 다시 고를 때·새로고침 버튼(F5)·없는 영상을 열 때. 항목마다 들어온 곳
   (`SIDEBAR_SOURCE_ROLE`: job·폴더)을 기억하고 그 규칙(`video_list`)으로 뒤에서(`SidebarScan`) 다시 읽어 없어진 영상은 빼고
   새 영상은 넣음. 지워졌다는 근거가 있을 때만 뺌 (공유가 떨어진 것은 남기고 창으로 알림)
@@ -358,10 +419,15 @@ class VideoPlayer(PlayerUpdateMixin, PlayerAnnotationsMixin, PlayerSidebarMixin,
   읽기에 실려(`SidebarScan.check_thumbnails`) 그 결과를 넣을 때 한 번: 읽는 중에 누르면 뒤이은 읽기에서, 결과를 버리고 다시
   읽으면(목록을 쓰는 중·폴더를 덧붙임) 요청으로 되돌림, 목록을 비우거나(job·폴더) 읽기가 예상 못 한 오류로 끝나면 버림.
   저절로 다시 읽을 때는 새 영상의 썸네일만
+- 목록 항목 모델(`_sidebar_sources`·`_sidebar_generation`·`_sidebar_scan` — 상태는 `VideoPlayerBase.__init__`이 만듦)과 목록 문제 알림 (읽지 못한 폴더·지워진 폴더·확인하지 못한 파일)
+
+**SidebarThumbnailsMixin** (`sidebar_thumbnails.py`):
+- 목록/썸네일 모드 바꾸기와 사이드바 폭, 썸네일 생성 및 캐싱 (`generate_thumbnail` — `ThumbnailWorker`), 저장된 썸네일 붙이기, 다시 만들기·지우기
 - 썸네일 반복(썸네일 버튼·새로고침·파일 넣기·`generate_thumbnail`의 기다림)은 목록이 바뀌거나 목록 모드로 바꾸거나 창을
   닫으면 멈춤 (`_thumbnail_pass_stopped`). 끝난 썸네일 워커는 그 finished를 받을 때만 목록에서 뺌 (먼저 놓으면 partial로 이은 failed 신호가 사라져 실패 창이 안 뜸)
+- 썸네일 폴더 정하기와 문제 알림, 목록의 썸네일 파일을 뒤 스레드(`ThumbnailLoaderWorker`)로 읽어 아이콘으로
 
-**PlayerReviewMixin** (`player_review.py`):
+**OCRReviewDialog** (`player_review.py`, `QDialog`):
 - 3패널 레이아웃(씬 목록, 상세정보, 미리보기)이 있는 OCR 리뷰 대화상자
 - 세그먼트 편집: 병합, 삭제, 이름 변경, 분할
 - 자동 씬 이름 지정 및 이름 변경
@@ -369,7 +435,7 @@ class VideoPlayer(PlayerUpdateMixin, PlayerAnnotationsMixin, PlayerSidebarMixin,
 - 품질 프리셋이 있는 내보내기 컨트롤
 - 재생 중 실시간 미리보기 업데이트
 
-**PlayerTimelineMixin** (`player_timeline.py`):
+**OCRTimelineWidget·CollapsibleBox** (`player_timeline.py`, `QWidget`):
 - 썸네일 미리보기가 있는 OCR 타임라인 위젯
 - 더 나은 UX를 위한 접을 수 있는 컨트롤 패널
 - 프레임 정확도의 세그먼트 탐색
@@ -383,16 +449,15 @@ class VideoPlayer(PlayerUpdateMixin, PlayerAnnotationsMixin, PlayerSidebarMixin,
 - OCR을 위한 ROI(관심 영역) 선택
 - 마우스 및 휠 이벤트 처리
 
-**Workers** (`workers.py`):
-- `OCRWorker`: PaddleOCR을 사용한 백그라운드 OCR 분석
-- `OCRExportWorker`: FFmpeg 기반 세그먼트 내보내기
-- `SceneDetectWorker`: 애니매틱 모드를 위한 PySceneDetect 래퍼
-- `TransNetV2Worker`: 점진적 전환 감지가 있는 향상된 애니매틱 모드를 위한 TransNetV2 래퍼
-- `ThumbnailWorker`: 캐싱이 있는 비동기 썸네일 생성
-- `ThumbnailLoaderWorker`: 파일 브라우저를 위한 비동기 썸네일 로딩
-- `FFmpegWorker`: 백그라운드 FFmpeg 비디오 병합 작업
-- `SingleExportWorker`: 단일 세그먼트 내보내기
-- `BatchExportWorker`: 다중 세그먼트 배치 내보내기
+**Workers** (워커별 모듈 + 옛 경로용 `workers.py`):
+- `ocr_worker.py`: `OCRWorker` — PaddleOCR을 사용한 백그라운드 OCR 분석 (PaddleOCR 도우미 `paddleocr_base_dir`·`use_ascii_paddleocr_dir`·`guard_paddle_buffer_growth`도 여기)
+- `ocr_export_worker.py`: `OCRExportWorker` — FFmpeg 기반 세그먼트 내보내기 (구간 목록을 받아 병렬로 내보냄 — 구간이 하나여도, 여럿이어도 이 워커)
+- `scene_workers.py`: `SceneDetectWorker` — 애니매틱 모드를 위한 PySceneDetect 래퍼, `TransNetV2Worker` — 점진적 전환 감지가 있는 향상된 애니매틱 모드를 위한 TransNetV2 래퍼
+- `thumbnail_workers.py`: `ThumbnailWorker` — 캐싱이 있는 비동기 썸네일 생성, `ThumbnailLoaderWorker` — 파일 브라우저를 위한 비동기 썸네일 로딩
+- `ffmpeg_worker.py`: `FFmpegWorker` — 백그라운드 FFmpeg 비디오 병합 작업
+- `workers.py`: 위 클래스를 불러와 다시 내보내기만 함 (`from yesoncheck.workers import X`가 그대로 동작, 앱 시작 때 `scene_workers`까지 불러 scenedetect·transnetv2_detector가
+  시작 때 불리는 것도 그대로 — TensorFlow는 첫 애니매틱2 분석 때). 시험에서 워커가 읽는 모듈 전역(`TRANSNETV2_AVAILABLE`·`QImage`·`paddleocr_base_dir` 등)을 바꿔치기할 때는
+  **그 이름을 읽는 워커 모듈**에서 바꿈 (`workers`에 다시 내보낸 이름을 바꿔도 워커에 닿지 않음)
 
 **씬 감지 모듈**:
 - `auto_trim.py`: PySceneDetect 통합이 있는 OpenCV 기반 씬 감지
@@ -531,7 +596,41 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 
 ## 테스트 전략
 
-**자동화된 테스트는 존재하지 않습니다.** 수동 테스트는 다음을 포함해야 합니다:
+### 자동 시험 (pytest)
+
+`tests/`에 시험 파일 57개 (수집 1,318개). `python -m pytest tests -q`로 돌리며(약 7분), 이 Mac의 소스 실행에서 1,273개가 통과하고 45개는 건너뜀 —
+다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-10-22 기준). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
+정적 빌드(`vendor/ffmpeg/`)를 씀 (`tests/conftest.py`). 시험을 건너뛰거나 지워서 통과시키지 말 것.
+
+시험 구성 (파일 이름 기준):
+- **업데이트**: `test_updates`·`test_update_install`·`test_update_flow`·`test_update_ui`·`test_update_helper_mac`·`test_update_helper_windows`·`test_update_e2e`
+- **새 창·기본 앱·창 사이 연결**: `test_new_window`·`test_mac_app_events`·`test_default_app`·`test_file_associations`·`test_launch_args`·`test_instances`·
+  `test_instance_link`·`test_error_window`·`test_app_logging`
+- **경로·공유 설정·작품**: `test_paths`·`test_paths_windows`·`test_mac_mounts`·`test_shared_config`·`test_path_map_setup`·`test_path_map_setup_dialog`·
+  `test_path_map_auto_ui`·`test_stored_paths`·`test_work_paths_ui`·`test_work_season_job`
+- **사이드바·썸네일·북마크**: `test_sidebar_refresh`·`test_video_list`·`test_thumbnails`·`test_bookmarks`
+- **워커·OCR·내보내기**: `test_workers_split`·`test_workers_transnetv2_guard`·`test_ocr_worker_lifetime`·`test_animatic2_availability`·`test_transnetv2_detect`·
+  `test_runtime`·`test_export`·`test_unsaved_ocr_flag`·`test_review_sync`
+- **창 모양**: `test_stylesheet_freeze`(테마 시트를 해시로 고정)·`test_scrollbar_style`·`test_slider_click`·`test_window_resize`·`test_high_dpi`·`test_force_focus`
+- **그 밖**: `test_smoke`·`test_fast_startup`·`test_files`·`test_user_files`·`test_frame_annotations_merge`·`test_external_tools`·`test_build_info`·
+  `test_check_frozen_imports`·`test_release_tool`·`test_print_crash_reports`·`test_screenshot_check`·`test_refactor_checks`
+
+CI(`.github/workflows/windows-build.yml`)는 세 플랫폼 — Windows(`windows-latest`), Mac Apple Silicon(`macos-15`), Mac Intel(`macos-15-intel`) — 에서
+Python 3.10 환경을 만들고 소스 시험(`pytest tests`)을 돌린 뒤 앱을 빌드해 번들 검사와 빌드된 앱의 실행 시험(`ci/`)까지 함.
+`test_paths_windows`·`test_update_helper_windows`처럼 한 OS에서만 도는 시험은 다른 OS에서 건너뛰므로, 어느 OS의 시험을 고쳤는지에 따라 CI에서 확인해야 함.
+
+**코드를 옮기기만 하는 변경(동작이 그대로여야 할 때)의 검증 도구**:
+- `ci/screenshot_check.py capture --out DIR` / `compare --baseline DIR --current DIR`: 장면 9개(처음 켠 창·밝은 테마·영상 A 열기·A/B 와이프·썸네일 모드·
+  접는 상자 펼침·오버레이·주석 모드·OCR 검토 창)를 오프스크린으로 찍어 PNG 바이트와 위젯 트리까지 견줌
+- `tools/refactor_checks/mixin_coupling.py snapshot|compare`: `VideoPlayer`의 MRO·메서드 본문 해시·`self` 결합을 정적 분석으로 스냅샷해 이동 전후를 견줌
+  (예상된 차이는 `--allow` 목록에 적은 것만 통과)
+- `tools/refactor_checks/runtime_globals.py`: 모든 함수가 쓰는 모듈 전역 이름이 풀리는지 확인 (코드를 옮기며 import를 빠뜨려 드물게 도는 분기에서만 터질 `NameError`를 잡음)
+
+기준 폴더(`.refactor_baseline/`)는 저장소에 넣지 않음 (`.gitignore`). 시험 자체의 시험은 `test_screenshot_check`·`test_refactor_checks`.
+
+### 수동 확인 (자동 시험이 닿지 않는 것)
+
+UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확인합니다:
 1. 비디오 로딩 (작은 파일 및 4K)
 2. A/B 비디오 비교 및 오버레이 컨트롤
 3. OCR 분석 (King, Titmouse, Bento 모드)
@@ -608,6 +707,9 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 - `Info.plist`: 낡은 파일 — spec이 데이터로 복사만 하며 번들의 진짜 Info.plist가 아님. 번들의 `Info.plist`는 spec의 `BUNDLE(info_plist=…)` dict로 만들어짐(`LSMinimumSystemVersion`·버전·`CFBundleDocumentTypes` — BUILD.md 8-1)
 - `installer/yesoncheck.iss`: Windows 설치 파일(Inno Setup) — `[Registry]`가 동영상 연결 프로그램을 HKCU에 등록(`file_associations`와 같은 내용), UTF-8 + BOM 유지 (BUILD.md 8-2)
 - `icon.icns`: 애플리케이션 아이콘
+- `check_frozen_imports.py`: 빌드된 앱에 실행 중 필요한 파이썬 모듈이 모두 들어 있는지 검사 — `yesoncheck/*.py` 소스의 모든 import(함수 안 지연 import 포함)를 모으므로
+  새 모듈을 평면(`yesoncheck/` 바로 아래)에 두고 평소처럼 import하면 spec에 따로 적지 않아도 됨 (하위 패키지에 두면 검사 범위가 말없이 좁아짐 — `tests/test_workers_split.py`가 워커 모듈에 대해 지킴)
+- `.github/workflows/windows-build.yml`·`ci/`·`requirements-test.txt`: CI와 시험 도우미 ('테스트 전략')
 - `pyi_rth_paddle_fixed.py`, `pyi_rth_paddleocr_fixed.py`: PaddleOCR 런타임 훅
 - `tools/write_build_info.py` (96줄): PyInstaller 앞에서 `build/build_info.json`(버전·커밋·빌드 시각·플랫폼)을
   만듦 — 버전은 git 태그 `vX.Y.Z` 기준 (BUILD.md 6절)
@@ -672,19 +774,26 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
            'detections': [],
        }, ...]
    ```
-3. `workers.py`에 `QThread`를 상속하는 새 워커 클래스 추가
-4. `player_base.py`에 새 모드 추가:
-   - 새 모드를 포함하도록 `ocrModeComboBox` 업데이트
-   - `start_ocr_analysis()`에 새 워커를 사용하는 조건부 로직 추가
+3. 워커 모듈(씬 감지는 `scene_workers.py`)에 `QThread`를 상속하는 새 워커 클래스를 추가하고, 옛 경로용으로 `workers.py`에서도 불러와 다시 내보냄
+4. 새 모드 추가:
+   - `player_base.py`의 `initUI`에서 새 모드를 포함하도록 `ocrModeComboBox` 업데이트
+   - `player_ocr.py`의 `on_ocr_mode_changed`와 `run_ocr_analysis()`·`run_ocr_analysis_range()`에 새 워커를 사용하는 조건부 로직 추가
 5. 다양한 비디오 콘텐츠 유형으로 테스트
 
 ## 최근 변경 사항
 
+### 2026-10-22 (큰 파일 나누기 — 동작은 그대로)
+- **`workers.py`**(3,189줄 — 쓰이지 않는 메서드를 지운 뒤 나누기 직전)를 워커별 모듈 5개(`ocr_worker`·`ocr_export_worker`·`scene_workers`·`thumbnail_workers`·`ffmpeg_worker`)로 나누고, `workers.py`는 다시 내보내기만 하는 18줄 모듈로 남김
+- **`player_base.py`**(5,443줄 → 1,740줄): OCR 묶음 → `player_ocr.py`(`PlayerOcrMixin`), 오버레이 묶음 → `player_overlay.py`(`PlayerOverlayMixin`), 스타일시트 문자열 → `main_window_styles.py`,
+  붙잡아 둔 워커 정리 → `worker_lifecycle.py`
+- **`player_sidebar.py`**(3,404줄 → 518줄): 북마크·선택 재생·공유 설정/작품 경로·목록 다시 읽기·썸네일을 믹스인 5개(`sidebar_*.py`)로, 공유 설정 읽기 코드는 `shared_config_load.py`로,
+  항목 상수는 `sidebar_items.py`로 옮김
+- 쓰이지 않는 코드(약 750줄)와 파일 둘(`yesoncheck/styles.py`·`reproduce_issue.py`) 제거. 메서드·클래스는 코드를 바꾸지 않고 옮기기만 했고, 창 화면(픽셀)·MRO·시험 1,273개가 나누기 전과 같음을 확인
+- **자동 시험**: pytest 시험이 이 저장소에 있고 CI(Windows·Mac Apple Silicon·Mac Intel)가 매번 돌림 — 아래 '테스트 전략'
+
 ### 2025-12-11
 - **Spec 파일 업데이트**: `YesonCheck_Autocut.spec`으로 이름 변경 (자동 씬 컷 기능 강조)
-- **Worker 확장**: `SingleExportWorker` 및 `BatchExportWorker` 추가로 내보내기 기능 개선
 - **웹 내보내기**: `web_info.py` 모듈 추가로 OCR 분석 결과를 HTML 보고서로 내보내기
-- **라인 수 업데이트**: 최신 코드베이스 반영 (총 ~21,898줄)
 
 ### 2025-11-21
 - **관심사 분리**: `player_base.py`에서 OCR 리뷰 대화상자를 전용 모듈로 분리:
