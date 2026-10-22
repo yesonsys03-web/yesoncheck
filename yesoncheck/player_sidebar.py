@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 from PyQt5.QtCore import Qt, QSize, QThread, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QIcon, QPixmap
+from PyQt5.QtGui import QIcon, QPixmap
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -35,9 +35,11 @@ from PyQt5.QtWidgets import (
 from yesoncheck.workers import ThumbnailLoaderWorker, ThumbnailWorker
 import traceback
 
-from yesoncheck import bookmarks, build_info, path_map_setup, paths, shared_config, shared_config_load, thumbnails, timing_log, video_list
-from yesoncheck.user_files import UserFileError
+from yesoncheck import build_info, path_map_setup, paths, shared_config, shared_config_load, thumbnails, timing_log, video_list
 from yesoncheck.path_map_setup_dialog import PathMapSetupDialog
+# PlayerSidebarMixin의 부모 믹스인 (북마크, 선택 재생)
+from yesoncheck.sidebar_bookmarks import SidebarBookmarksMixin
+from yesoncheck.sidebar_playlist import SidebarPlaylistMixin
 # 옮긴 이름을 이 모듈에서도 그대로 씀 — 기존 `from yesoncheck.player_sidebar import …`·`player_sidebar.X` 접근도 같은 객체로 유지.
 # 단 gather_shared_config·list_works_not_opening은 다시 내보내기만 함: 시험이 바꿔치기하는 이름이라 이 모듈의 믹스인은
 # shared_config_load.X로 불러 바꿔치기 지점을 그 모듈 한 곳으로 둠 (여기서 이 이름을 바꿔치기해도 닿지 않음)
@@ -103,7 +105,7 @@ class SidebarScan(QThread):
         self.scanned.emit(self)
 
 
-class PlayerSidebarMixin:
+class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin):
 
     def dragEnterEvent(self, event):
         """메인 윈도우에 파일 드래그앤드롭 이벤트"""
@@ -621,165 +623,6 @@ class PlayerSidebarMixin:
         elif not read_failed:
             QMessageBox.warning(self, "경고", "폴더에 지원되는 비디오 파일이 없습니다.")
 
-    def play_selected_files(self):
-        selected_items = self.sidebar.selectedItems()
-        if selected_items:
-            selected_items.sort(key=lambda x: self.sidebar.row(x))
-            self.playlist = [item.toolTip() for item in selected_items]
-            self.current_playlist_index = 0
-            self.is_playlist_playing = True
-            self._playlist_played_any = False
-            print(f"Play Selected: {len(selected_items)} files selected, starting playback")
-            self.play_current_playlist_item()
-        else:
-            print("No files selected")
-            # 사용자에게 선택된 파일이 없다는 것을 알림
-            QMessageBox.information(self, "Play Selected", "Please select one or more files from the sidebar first.")
-
-    def play_current_playlist_item(self):
-        """선택 재생: 지금 차례의 영상을 열어 재생. 열 수 없는 영상은 건너뛰고 다음 영상으로 (되부르지 않고 반복).
-
-        디스크에 없는 영상을 처음 만나면 남은 차례의 영상을 한 번에 확인해 없는 것을 모두 빼고 창 한 번·목록 다시 읽기 한 번
-        (예전에는 없는 영상마다 창과 NAS 다시 읽기). 영상을 확인하지 못하면(NAS 연결 끊김·권한) 창으로 알리고 선택 재생을
-        멈춤 (다음 영상도 그럴 것이므로 영상마다 창이 뜨지 않게). OpenCV가 열지 못한 영상은 open_file이 알리고 다음 영상으로.
-        다음 영상을 정하는 동안(창이 떠 이벤트를 처리함) 보던 영상이 끝나도 선택 재생을 거기서 또 진행하지 않음
-        (_playlist_resolving — 예전에는 같은 영상을 두 번 열고 하나를 건너뜀).
-        """
-        self._playlist_resolving = True
-        try:
-            self._play_playlist_from_current()
-        finally:
-            self._playlist_resolving = False
-
-    def _play_playlist_from_current(self):
-        while 0 <= self.current_playlist_index < len(self.playlist):
-            current_file = self.playlist[self.current_playlist_index]
-            try:
-                os.stat(current_file)
-            except OSError as e:
-                gone, note = video_list.check_gone(current_file, e)
-                if gone:
-                    self._skip_missing_playlist_videos()
-                    continue
-                reason = f"{type(e).__name__}: {e}" + (f"\n{note}" if note else "")
-                print(f"선택 재생할 영상을 확인하지 못함: {current_file} ({reason})")
-                QMessageBox.critical(self, "영상을 열 수 없음",
-                                     "선택 재생할 영상을 확인하지 못해 선택 재생을 멈춥니다 (NAS 연결 끊김·권한 등).\n"
-                                     f"영상: {current_file}\n이유: {reason}")
-                self._end_playlist_mode()
-                return
-            print(f"Playing playlist item {self.current_playlist_index + 1}/{len(self.playlist)}: {os.path.basename(current_file)}")
-            print(f"is_playlist_playing before: {self.is_playlist_playing}")
-            
-            # 플레이리스트 재생 상태 확실히 설정
-            self.is_playlist_playing = True
-            
-            # 사이드바에서 현재 파일 강조
-            for i in range(self.sidebar.count()):
-                item = self.sidebar.item(i)
-                is_current = paths.same_path(item.toolTip(), current_file)
-                font = item.font()
-                font.setBold(is_current)
-                item.setFont(font)
-                if is_current:
-                    item.setForeground(QColor("red"))  # 현재 재생 중인 항목은 빨간색
-                else:
-                    # 현재 테마에 맞는 색상으로 설정
-                    if self.current_theme == 'dark':
-                        item.setForeground(QColor("#fafafa"))  # 블랙 테마에서는 밝은 색상
-                    else:
-                        item.setForeground(QColor("#2c3e50"))  # 라이트 테마에서는 어두운 색상
-            
-            # 파일 열기 및 재생
-            try:
-                if self.open_file('A', current_file):
-                    self._playlist_played_any = True
-                    # 첫 번째 프레임으로 이동
-                    self.seek_to_frame(1)
-                    self.play_video()
-                    self.playSelectedPauseButton.setText('Selected Pause')
-                    self.playSelectedPauseButton.setStyleSheet("background-color: yellow;")
-                    print(f"Successfully started playing: {os.path.basename(current_file)}")
-                    print(f"is_playlist_playing after: {self.is_playlist_playing}")
-                    return
-                # 열지 못함 (open_file이 창으로 알림) — 예전에는 보던 영상을 처음부터 다시 재생했음
-            except Exception as e:
-                print(f"Error playing file {current_file}: {e}")
-                traceback.print_exc()
-                QMessageBox.warning(self, "Play Error", f"Failed to play file: {os.path.basename(current_file)}\nError: {str(e)}")
-            # 오류 발생 시 다음 파일로 이동
-            self.current_playlist_index += 1
-        print(f"Playlist index {self.current_playlist_index} is past the end ({len(self.playlist)} items)")
-        self._finish_playlist()
-
-    def _skip_missing_playlist_videos(self):
-        """선택 재생 중 디스크에 없는 영상을 만남 (지금 차례): 남은 차례의 영상도 한 번에 확인해 없어진 것을 모두 선택 재생에서
-        빼고 창 한 번, 목록 다시 읽기 한 번. 확인하지 못한 영상(공유가 끊김 등)은 남겨 그 차례에 알림."""
-        current = self.playlist[self.current_playlist_index]
-        gone = [current]
-        kept = []
-        for path in self.playlist[self.current_playlist_index + 1:]:
-            try:
-                os.stat(path)
-            except OSError as e:
-                if video_list.is_gone(path, e):
-                    gone.append(path)
-                    continue
-            kept.append(path)
-        self.playlist = self.playlist[:self.current_playlist_index] + kept
-        print(f"선택 재생: 디스크에 없는 영상 {len(gone)}개를 건너뜀:\n" + "\n".join(gone))
-        lines = gone[:10] + ([f"… 외 {len(gone) - 10}개"] if len(gone) > 10 else [])
-        QMessageBox.warning(self, "영상 없음",
-                            f"디스크에 없는 영상 {len(gone)}개를 건너뜁니다:\n" + "\n".join(lines) + "\n목록을 다시 읽습니다.")
-        self.refresh_sidebar()
-
-    def _end_playlist_mode(self):
-        """선택 재생 상태만 끝냄 (보던 영상은 그대로)."""
-        self.is_playlist_playing = False
-        self.reset_sidebar_colors()
-        self.playSelectedPauseButton.setText('Selected Play'); self.playSelectedPauseButton.setStyleSheet("")
-        if not self.timer.isActive():
-            # 창이 떠 있는 동안 보던 영상이 끝나 재생이 이미 멈춤 → 재생 버튼이 'Pause'로 남지 않게
-            self.playPauseButton.setText('Play'); self.playPauseButton.setStyleSheet("")
-            if hasattr(self, 'overlayPlayPause'):
-                self.overlayPlayPause.setText('▶')
-
-    def _finish_playlist(self):
-        """선택 재생 끝. 재생한 영상이 있으면 예전처럼 멈추고 알림. 하나도 재생하지 못했으면(모두 없거나 열 수 없음 — 그때마다
-        창으로 알림) 보던 영상은 멈추지 않고 선택 재생만 끝냄."""
-        if not self._playlist_played_any:
-            print("선택 재생: 재생할 수 있는 영상이 없어 선택 재생을 끝냄 (보던 영상은 그대로)")
-            self._end_playlist_mode()
-            return
-        print("Reached end of playlist, stopping playback")
-        self.is_playlist_playing = False
-        self.stop_video()
-        self.reset_sidebar_colors()
-        QMessageBox.information(self, "Playlist Complete", "All selected files have been played.")
-
-    def reset_sidebar_colors(self):
-        for i in range(self.sidebar.count()):
-            item = self.sidebar.item(i)
-            font = item.font(); font.setBold(False)
-            item.setFont(font)
-            # 현재 테마에 맞는 색상으로 설정
-            if self.current_theme == 'dark':
-                item.setForeground(QColor("#fafafa"))  # 블랙 테마에서는 밝은 색상
-            else:
-                item.setForeground(QColor("#2c3e50"))  # 라이트 테마에서는 어두운 색상
-
-    def play_next_in_playlist(self):
-        if self._playlist_resolving:
-            # 선택 재생이 다음 영상을 정하는 중(창이 떠 있음)에 영상이 끝남: 그 반복이 이어서 엶 — 여기서 또 진행하면 두 번 엶
-            print("선택 재생: 다음 영상을 정하는 중에 영상이 끝남 — 진행은 그 반복이 함")
-            return
-        if self.current_playlist_index < len(self.playlist) - 1:
-            self.current_playlist_index += 1
-            print(f"Moving to next item in playlist: {self.current_playlist_index + 1}/{len(self.playlist)}")
-            self.play_current_playlist_item()
-        else:
-            self._finish_playlist()
-
     def initialize_sidebar_width(self):
         """기본 사이드바 폭을 초기화합니다."""
         # default_sidebar_width가 없으면 초기화
@@ -795,188 +638,6 @@ class PlayerSidebarMixin:
         selected_items = self.sidebar.selectedItems()
         if selected_items:
             self.open_file('A', selected_items[0].toolTip())
-
-    def load_bookmarks(self):
-        """북마크 파일을 읽어 self.bookmarks에. 읽지 못하면 빈 목록 + 기록(스택 트레이스) + 창 (파일은 건드리지 않음).
-
-        시작할 때 불리므로 창은 show_user_file_problems가 창을 보인 뒤에 알림.
-        """
-        try:
-            self.bookmarks = bookmarks.load(self.bookmarks_file)
-        except UserFileError as exc:
-            traceback.print_exc()
-            self.bookmarks = []
-            self._report_user_file_problem("bookmarks-read", "북마크 파일을 읽지 못함", self._bookmarks_problem_text(exc))
-
-    def _bookmarks_problem_text(self, exc):
-        detail = str(exc) if isinstance(exc, UserFileError) else f"{self.bookmarks_file}\n{type(exc).__name__}: {exc}"
-        return f"북마크를 읽거나 바꾸지 못했습니다 (북마크 파일은 그대로 둡니다):\n{detail}\n\n파일을 고치거나 옮긴 뒤 다시 시도해 주세요."
-
-    def _refresh_bookmarks(self):
-        """다른 창이 그동안 더하거나 지웠을 수 있으므로 북마크 파일을 다시 읽어 self.bookmarks에. 읽지 못하면 창 + False."""
-        try:
-            self.bookmarks = bookmarks.load(self.bookmarks_file)
-        except UserFileError as exc:
-            traceback.print_exc()
-            QMessageBox.warning(self, "북마크 파일을 읽지 못함", self._bookmarks_problem_text(exc))
-            return False
-        return True
-
-    def _change_bookmarks(self, change, folders):
-        """folders를 차례로 북마크 파일에 반영하고 (change: bookmarks.add 또는 bookmarks.remove) self.bookmarks를 합친 목록으로.
-
-        읽지 못한 파일(UserFileError)은 덮어 지우지 않고, 잠그지 못하거나(TimeoutError) 쓰지 못한(OSError) 경우와 함께
-        기록 + 창으로 알리고 False.
-        """
-        try:
-            for folder in folders:
-                self.bookmarks = change(self.bookmarks_file, folder)
-        except (UserFileError, TimeoutError, OSError) as exc:
-            traceback.print_exc()
-            QMessageBox.warning(self, "북마크를 바꾸지 못함", self._bookmarks_problem_text(exc))
-            return False
-        return True
-
-    def add_dropped_folders_to_bookmarks(self, folder_paths):
-        """끌어다 놓은 폴더를 북마크에 자동 추가 (파일을 다시 읽고 더함)."""
-        before = list(self.bookmarks)
-        if not self._change_bookmarks(bookmarks.add, folder_paths):
-            return
-        for folder_path in folder_paths:
-            if not paths.contains_path(before, folder_path):
-                print(f"폴더가 북마크에 자동 추가됨: {folder_path}")
-
-        # 사용자에게 알림 (폴더가 여러 개인 경우에만)
-        if len(folder_paths) > 1:
-            QMessageBox.information(self, "북마크 추가", f"{len(folder_paths)}개의 폴더가 북마크에 자동으로 추가되었습니다.")
-
-    def add_bookmark(self):
-        # 현재 폴더를 북마크에 추가
-        if not self._refresh_bookmarks():  # 읽지 못하는 파일이면 폴더를 고르게 하기 전에 알림
-            return
-        folder_path = QFileDialog.getExistingDirectory(self, "북마크할 폴더 선택")
-        folder_path = paths.normalize_native(folder_path)
-        if folder_path:
-            if not self._refresh_bookmarks():  # 고르는 동안 다른 창이 바꿨을 수 있음
-                return
-            if not paths.contains_path(self.bookmarks, folder_path):
-                if not self._change_bookmarks(bookmarks.add, [folder_path]):
-                    return
-                QMessageBox.information(self, "북마크 추가", f"{folder_path}\n폴더가 북마크에 추가되었습니다.")
-            else:
-                QMessageBox.information(self, "이미 북마크됨", f"{folder_path}\n폴더는 이미 북마크에 있습니다.")
-
-    def show_bookmarks(self):
-        if not self._refresh_bookmarks():  # 다른 창이 바꾼 것까지 보이게 열 때마다 다시 읽음
-            return
-        if not self.bookmarks:
-            QMessageBox.information(self, "북마크 없음", "저장된 북마크가 없습니다.")
-            return
-        
-        # 북마크 선택 다이얼로그 생성
-        dialog = QDialog(self)
-        dialog.setWindowTitle("북마크 관리")
-        dialog.setModal(True)
-        dialog.setMinimumSize(500, 300)
-        
-        layout = QVBoxLayout()
-        
-        # 설명 라벨
-        label = QLabel("북마크된 폴더 목록:")
-        layout.addWidget(label)
-        
-        # 북마크 리스트
-        list_widget = QListWidget()
-        for bookmark in self.bookmarks:
-            item = QListWidgetItem(bookmark)
-            list_widget.addItem(item)
-        layout.addWidget(list_widget)
-        
-        # 버튼 레이아웃
-        button_layout = QHBoxLayout()
-        
-        # 폴더 열기 버튼
-        open_button = QPushButton("폴더 열기")
-        open_button.clicked.connect(lambda: self.open_bookmark_folder(list_widget, dialog))
-        button_layout.addWidget(open_button)
-        
-        # 삭제 버튼
-        delete_button = QPushButton("삭제")
-        delete_button.clicked.connect(lambda: self.delete_bookmark(list_widget))
-        button_layout.addWidget(delete_button)
-        
-        # 닫기 버튼
-        close_button = QPushButton("닫기")
-        close_button.clicked.connect(dialog.close)
-        button_layout.addWidget(close_button)
-        
-        layout.addLayout(button_layout)
-        dialog.setLayout(layout)
-        
-        # 더블클릭으로도 폴더 열기 가능
-        list_widget.itemDoubleClicked.connect(lambda item: self.open_bookmark_folder(list_widget, dialog))
-        
-        dialog.exec_()
-
-    def open_bookmark_folder(self, list_widget, dialog):
-        """선택된 북마크 폴더를 엽니다"""
-        current_item = list_widget.currentItem()
-        if current_item:
-            folder_path = current_item.text()
-            
-            # 기존 백그라운드 스레드들을 안전하게 정리
-            self.cleanup_background_threads()
-            
-            # 스레드 정리 후 추가 대기 시간
-            import time
-            time.sleep(0.5)
-            
-            # UI 업데이트 처리
-            QApplication.processEvents()
-            
-            self.load_videos_from_folder(folder_path)
-            # 북마크 폴더는 해당 폴더에 썸네일 생성
-            self.setup_thumbnail_folder_for_bookmark(folder_path)
-            self.schedule_background_thumbnail_loading()
-            dialog.close()
-
-    def setup_thumbnail_folder_for_bookmark(self, folder_path):
-        """북마크 폴더용 썸네일 폴더를 설정합니다."""
-        self._thumbnail_folder_problem = None  # 전에 연 job의 썸네일 폴더 문제는 이제 상관없음
-        try:
-            thumbnail_folder = thumbnails.ensure_folder(folder_path)
-            self.current_thumbnail_folder = thumbnail_folder
-            print(f"북마크 썸네일 폴더 설정: {thumbnail_folder}")
-            return True
-        except Exception as e:
-            print(f"북마크 썸네일 폴더 설정 중 오류: {e}")
-            self.current_thumbnail_folder = None
-            return False
-
-    def delete_bookmark(self, list_widget):
-        """선택된 북마크를 삭제합니다"""
-        current_item = list_widget.currentItem()
-        if current_item:
-            folder_path = current_item.text()
-            reply = QMessageBox.question(
-                self, 
-                "북마크 삭제", 
-                f"다음 폴더를 북마크에서 삭제하시겠습니까?\n\n{folder_path}",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
-            )
-            
-            if reply == QMessageBox.Yes:
-                # 북마크에서 제거 (파일을 다시 읽고 지움 — 다른 창이 더한 것은 남음)
-                if not self._change_bookmarks(bookmarks.remove, [folder_path]):
-                    return
-                
-                # 리스트에서 제거
-                list_widget.takeItem(list_widget.row(current_item))
-                
-                QMessageBox.information(self, "삭제 완료", "북마크가 삭제되었습니다.")
-        else:
-            QMessageBox.warning(self, "선택 필요", "삭제할 북마크를 선택해주세요.")
 
     def setup_shared_config(self):
         """공유 설정 폴더를 정하고 작품 경로(Windows는 변환표도)를 읽어 창에 넣습니다 (동기: 이 스레드에서 바로 읽음).
