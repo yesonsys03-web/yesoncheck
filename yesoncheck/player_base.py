@@ -54,6 +54,36 @@ from PyQt5.QtWidgets import (
 from yesoncheck.video_widget import CustomVideoWidget
 from yesoncheck import bookmarks, build_info, default_app, external_tools, file_associations, image_io, instance_link, \
     instances, paths, timing_log, user_files, video_list
+from yesoncheck.main_window_styles import (
+    BOOKMARK_BUTTON_STYLE,
+    BOOKMARK_LIST_REFRESH_BUTTON_STYLE,
+    DARK_STYLESHEET,
+    FILENAME_LABEL_STYLE,
+    FRAME_COUNT_LABEL_STYLE,
+    LIGHT_STYLESHEET,
+    LIST_MODE_BUTTON_STYLE,
+    OCR_LOG_TEXT_STYLE,
+    OCR_OPTION_LABEL_STYLE,
+    OVERLAY_CURRENT_FRAME_LABEL_STYLE,
+    OVERLAY_FILE_NAME_LABEL_STYLE,
+    OVERLAY_FILE_NAME_LABEL_STYLE_TEMPLATE,
+    OVERLAY_FRAME_NUMBER_LABEL_STYLE,
+    OVERLAY_FRAME_STYLE,
+    OVERLAY_HELP_LABEL_STYLE,
+    OVERLAY_PLAY_PAUSE_STYLE,
+    OVERLAY_SLIDER_STYLE,
+    OVERLAY_VOLUME_STYLE,
+    PLAYBACK_FPS_LABEL_STYLE,
+    PLAY_PAUSE_BUTTON_STYLE,
+    POSITION_SCROLL_INITIAL_STYLE,
+    POSITION_SCROLL_STYLE,
+    STOP_BUTTON_STYLE,
+    THUMBNAIL_MODE_BUTTON_STYLE,
+    TIME_LABEL_STYLE,
+    TOTAL_FRAMES_LABEL_STYLE,
+    VOLUME_SLIDER_STYLE,
+    WORK_PATH_BUTTON_STYLE,
+)
 from yesoncheck.slider_style import jump_to_click
 from yesoncheck.update_banner import UpdateBanner
 from yesoncheck.user_files import UserFileError
@@ -66,318 +96,6 @@ from yesoncheck.worker_lifecycle import EXIT_WAIT_S, _RELEASED_WORKERS, release_
 # from yesoncheck.workers import OCRWorker, OCRExportWorker, SceneDetectWorker
 # from yesoncheck.player_timeline import CollapsibleBox
 # from yesoncheck.player_review import OCRReviewDialog
-
-
-DARK_STYLESHEET = """
-QMainWindow, QWidget {
-    background: #232323;
-    color: #e0e0e0;
-    font-family: 'Segoe UI', 'Malgun Gothic', Arial, sans-serif;
-    font-size: 12px;
-}
-QLabel {
-    color: #e0e0e0;
-}
-QPushButton {
-    background: #2d2d2d;
-    border: 1px solid #444;
-    border-radius: 6px;
-    color: #fafafa;
-    font-weight: 500;
-    padding: 8px 16px;
-}
-QPushButton:hover {
-    background: #353535;
-    border: 1px solid #ff9900;
-    color: #ff9900;
-}
-QPushButton:pressed {
-    background: #1a1a1a;
-    border: 1px solid #ff9900;
-}
-QPushButton:disabled {
-    background: #232323;
-    border: 1px solid #444;
-    color: #555;
-}
-QComboBox {
-    background: #2d2d2d;
-    border: 1px solid #444;
-    border-radius: 6px;
-    padding: 6px 12px;
-    color: #fafafa;
-}
-QComboBox:hover, QComboBox:focus {
-    border: 1px solid #ff9900;
-}
-QComboBox QAbstractItemView {
-    background: #232323;
-    border: 1px solid #444;
-    selection-background-color: #444;
-    color: #fafafa;
-}
-QCheckBox {
-    color: #e0e0e0;
-    spacing: 8px;
-}
-QCheckBox::indicator {
-    width: 16px;
-    height: 16px;
-    border: 2px solid #444;
-    border-radius: 3px;
-    background: #232323;
-}
-QCheckBox::indicator:checked {
-    background: #ff9900;
-    border: 2px solid #ff9900;
-}
-QListWidget, QListView, QMenu {
-    background: #232323;
-    border: 1px solid #444;
-    color: #fafafa;
-    selection-background-color: #444;
-    selection-color: #ff9900;
-}
-QListWidget::item:selected, QListView::item:selected {
-    background: #444;
-    color: #ff9900;
-}
-QSplitter::handle {
-    background: #353535;
-}
-QScrollBar:vertical, QScrollBar:horizontal {
-    background: #232323;
-    border: 1px solid #444;
-    border-radius: 6px;
-}
-QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
-    background: #444;
-    border-radius: 6px;
-    min-height: 20px;
-    min-width: 20px;
-}
-QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
-    background: #ff9900;
-}
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-    height: 0px;
-}
-QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
-    width: 0px;
-}
-QSlider:horizontal {
-    height: 20px;
-    background: #232323;
-}
-QSlider::groove:horizontal {
-    height: 8px;
-    background: #353535;
-    border: 1px solid #444;
-    border-radius: 4px;
-}
-QSlider::handle:horizontal {
-    min-width: 80px;
-    max-width: 80px;
-    height: 20px;
-    background: #ff9900;
-    border: 2px solid #ff9900;
-    border-radius: 10px;
-    margin: -6px 0;
-}
-QSlider::handle:horizontal:hover {
-    background: #ffaa33;
-    border: 2px solid #ffaa33;
-}
-QSlider::handle:horizontal:pressed {
-    background: #ff9900;
-    border: 2px solid #ff9900;
-}
-QSlider::sub-page:horizontal {
-    background: #ff9900;
-    border-radius: 4px;
-}
-QSlider::add-page:horizontal {
-    background: #353535;
-    border-radius: 4px;
-}
-QMessageBox {
-    background: #232323;
-    color: #fafafa;
-}
-"""
-
-LIGHT_STYLESHEET = """
-QMainWindow {
-    background: #fafafa;
-    color: #2c3e50;
-    font-family: 'Segoe UI', 'Malgun Gothic', Arial, sans-serif;
-    font-size: 12px;
-}
-QWidget {
-    background: transparent;
-    color: #2c3e50;
-    font-family: 'Segoe UI', 'Malgun Gothic', Arial, sans-serif;
-}
-QPushButton {
-    background: #ffffff;
-    border: 1px solid #e0e0e0;
-    border-radius: 6px;
-    color: #2c3e50;
-    font-weight: 500;
-    padding: 8px 16px;
-    min-height: 20px;
-}
-QPushButton:hover {
-    background: #f8f9fa;
-    border: 1px solid #d0d0d0;
-    color: #1a252f;
-}
-QPushButton:pressed {
-    background: #e9ecef;
-    border: 1px solid #c0c0c0;
-}
-QPushButton:disabled {
-    background: #f8f9fa;
-    border: 1px solid #e9ecef;
-    color: #adb5bd;
-}
-QComboBox {
-    background: #ffffff;
-    border: 1px solid #e0e0e0;
-    border-radius: 6px;
-    padding: 6px 12px;
-    color: #2c3e50;
-    min-height: 20px;
-}
-QComboBox:hover {
-    border: 1px solid #d0d0d0;
-}
-QComboBox::drop-down {
-    border: none;
-    width: 20px;
-}
-QComboBox::down-arrow {
-    image: none;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 4px solid #6c757d;
-    margin-right: 5px;
-}
-QComboBox QAbstractItemView {
-    background: #ffffff;
-    border: 1px solid #e0e0e0;
-    selection-background-color: #e9ecef;
-    color: #2c3e50;
-}
-QCheckBox {
-    color: #2c3e50;
-    spacing: 8px;
-}
-QCheckBox::indicator {
-    width: 16px;
-    height: 16px;
-    border: 2px solid #e0e0e0;
-    border-radius: 3px;
-    background: #ffffff;
-}
-QCheckBox::indicator:checked {
-    background: #495057;
-    border: 2px solid #495057;
-    image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIiIGhlaWdodD0iOSIgdmlld0JveD0iMCAwIDEyIDkiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxwYXRoIGQ9Ik0xIDQuNUw0LjUgOEwxMSAxIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPgo8L3N2Zz4K);
-}
-QLabel {
-    color: #2c3e50;
-    font-weight: 400;
-}
-QListWidget {
-    background: #ffffff;
-    border: 1px solid #e0e0e0;
-    border-radius: 6px;
-    color: #2c3e50;
-    selection-background-color: #e9ecef;
-    outline: none;
-}
-QListWidget::item {
-    padding: 6px;
-    border-bottom: 1px solid #f8f9fa;
-}
-QListWidget::item:hover {
-    background: #f8f9fa;
-}
-QListWidget::item:selected {
-    background: #e9ecef;
-    color: #2c3e50;
-}
-QSplitter::handle {
-    background: #e0e0e0;
-    border-radius: 1px;
-}
-QSplitter::handle:horizontal {
-    width: 2px;
-}
-QSplitter::handle:vertical {
-    height: 2px;
-}
-QScrollBar:vertical {
-    background: #f8f9fa;
-    width: 12px;
-    border-radius: 6px;
-}
-QScrollBar::handle:vertical {
-    background: #adb5bd;
-    border-radius: 6px;
-    min-height: 20px;
-}
-QScrollBar::handle:vertical:hover {
-    background: #6c757d;
-}
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-    height: 0px;
-}
-QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
-    background: none;
-}
-QSlider:horizontal {
-    height: 20px;
-    background: transparent;
-}
-QSlider::groove:horizontal {
-    height: 6px;
-    background: #e9ecef;
-    border: 1px solid #dee2e6;
-    border-radius: 3px;
-    margin: 7px 0;
-}
-QSlider::handle:horizontal {
-    min-width: 80px;
-    max-width: 80px;
-    height: 16px;
-    background: #495057;
-    border: 1px solid #343a40;
-    border-radius: 8px;
-    margin: -5px 0;
-}
-QSlider::handle:horizontal:hover {
-    background: #6c757d;
-    border: 1px solid #495057;
-}
-QSlider::handle:horizontal:pressed {
-    background: #343a40;
-    border: 1px solid #212529;
-}
-QSlider::sub-page:horizontal {
-    background: #495057;
-    border-radius: 3px;
-}
-QSlider::add-page:horizontal {
-    background: #e9ecef;
-    border-radius: 3px;
-}
-QMessageBox {
-    background: #fafafa;
-    color: #2c3e50;
-}
-"""
 
 
 def _transnetv2_available():
@@ -769,52 +487,14 @@ class VideoPlayerBase(QMainWindow):
         self.playPauseButton.setMinimumHeight(80)
         self.playPauseButton.setMaximumHeight(80)
         self.playPauseButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.playPauseButton.setStyleSheet("""
-QPushButton {
-    background: #ffffff;
-    border: 1px solid #e0e0e0;
-    border-radius: 6px;
-    color: #2c3e50;
-    font-weight: 500;
-    padding: 8px 16px;
-    min-height: 20px;
-}
-QPushButton:hover {
-    background: #f8f9fa;
-    border: 1px solid #d0d0d0;
-    color: #1a252f;
-}
-QPushButton:pressed {
-    background: #e9ecef;
-    border: 1px solid #c0c0c0;
-}
-""")
+        self.playPauseButton.setStyleSheet(PLAY_PAUSE_BUTTON_STYLE)
         stopButton = QPushButton('Stop')
         stopButton.clicked.connect(self.stop_video)
         stopButton.setFixedHeight(80)
         stopButton.setMinimumHeight(80)
         stopButton.setMaximumHeight(80)
         stopButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        stopButton.setStyleSheet("""
-QPushButton {
-    background: #6c757d;
-    border: 1px solid #5a6268;
-    border-radius: 6px;
-    color: white;
-    font-weight: 500;
-    font-size: 14px;
-    padding: 12px 24px;
-    min-height: 20px;
-}
-QPushButton:hover {
-    background: #5a6268;
-    border: 1px solid #495057;
-}
-QPushButton:pressed {
-    background: #495057;
-    border: 1px solid #343a40;
-}
-""")
+        stopButton.setStyleSheet(STOP_BUTTON_STYLE)
         # 정보 줄 라벨 (예전 고정 너비 200·200·150이 창의 최소 너비를 묶었음). 너비는 글꼴로, 최소 너비는 라벨이 실제로
         # 그리는 방법 그대로 잼 (플랫폼·테마마다 글꼴이 다름). 자리가 있으면 예전과 같은 너비(글자가 더 넓은 글꼴이면
         # 글자 너비, 숫자가 바뀌어도 그대로). 모자라면 InfoRowLayout이 이 순서로 줄임 (줄여 그려지면 전체 글자는 툴팁,
@@ -838,46 +518,10 @@ QPushButton:pressed {
         self.labelFrameCount.setFont(font)
         self.labelTotalFrames.setFont(font)
         self.labelPlaybackFPS.setFont(font)  # FPS 위젯에도 폰트 적용
-        self.filenameLabel.setStyleSheet("""
-QLabel {
-    background: #f8f9fa;
-    border: 1px solid #e9ecef;
-    border-radius: 6px;
-    color: #495057;
-    font-weight: 500;
-    padding: 10px;
-}
-""")
-        self.labelFrameCount.setStyleSheet("""
-QLabel {
-    background: #e9ecef;
-    border: 1px solid #dee2e6;
-    border-radius: 6px;
-    color: #495057;
-    font-weight: 500;
-    padding: 10px;
-}
-""")
-        self.labelTotalFrames.setStyleSheet("""
-QLabel {
-    background: #dee2e6;
-    border: 1px solid #ced4da;
-    border-radius: 6px;
-    color: #495057;
-    font-weight: 500;
-    padding: 10px;
-}
-""")
-        self.labelPlaybackFPS.setStyleSheet("""
-QLabel {
-    background: #d1ecf1;
-    border: 1px solid #bee5eb;
-    border-radius: 6px;
-    color: #0c5460;
-    font-weight: 500;
-    padding: 10px;
-}
-""")
+        self.filenameLabel.setStyleSheet(FILENAME_LABEL_STYLE)
+        self.labelFrameCount.setStyleSheet(FRAME_COUNT_LABEL_STYLE)
+        self.labelTotalFrames.setStyleSheet(TOTAL_FRAMES_LABEL_STYLE)
+        self.labelPlaybackFPS.setStyleSheet(PLAYBACK_FPS_LABEL_STYLE)
         # FPS 위젯 초기 텍스트 설정
         self.labelPlaybackFPS.setText('재생: 대기')
         
@@ -886,44 +530,7 @@ QLabel {
         self.positionScroll.setMaximum(100)
         self.positionScroll.setSingleStep(1)
         self.positionScroll.setPageStep(1)
-        self.positionScroll.setStyleSheet("""
-QSlider:horizontal {
-    height: 20px;
-    background: transparent;
-}
-QSlider::groove:horizontal {
-    height: 6px;
-    background: #e9ecef;
-    border: 1px solid #dee2e6;
-    border-radius: 3px;
-    margin: 7px 0;
-}
-QSlider::handle:horizontal {
-    min-width: 80px;
-    max-width: 80px;
-    height: 16px;
-    background: #495057;
-    border: 1px solid #343a40;
-    border-radius: 8px;
-    margin: -5px 0;
-}
-QSlider::handle:horizontal:hover {
-    background: #6c757d;
-    border: 1px solid #495057;
-}
-QSlider::handle:horizontal:pressed {
-    background: #343a40;
-    border: 1px solid #212529;
-}
-QSlider::sub-page:horizontal {
-    background: #495057;
-    border-radius: 3px;
-}
-QSlider::add-page:horizontal {
-    background: #e9ecef;
-    border-radius: 3px;
-}
-""")
+        self.positionScroll.setStyleSheet(POSITION_SCROLL_INITIAL_STYLE)
         self.positionScroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.positionScroll.setMinimumSize(100, 20)
         self.positionScroll.setToolTip('Position')
@@ -961,30 +568,7 @@ QSlider::add-page:horizontal {
         self.volumeSlider.setMaximumWidth(150)
         self.volumeSlider.setToolTip("오디오 볼륨")
         self.volumeSlider.valueChanged.connect(self.setVolume)
-        self.volumeSlider.setStyleSheet("""
-            QSlider::groove:horizontal {
-                border: 1px solid #555;
-                height: 8px;
-                background: #333;
-                border-radius: 4px;
-            }
-            QSlider::handle:horizontal {
-                background: #ffae00;
-                border: 1px solid #ffae00;
-                width: 18px;
-                height: 18px;
-                margin: -5px 0;
-                border-radius: 9px;
-            }
-            QSlider::handle:horizontal:hover {
-                background: #ffc850;
-                border: 1px solid #ffc850;
-            }
-            QSlider::sub-page:horizontal {
-                background: #ffae00;
-                border-radius: 4px;
-            }
-        """)
+        self.volumeSlider.setStyleSheet(VOLUME_SLIDER_STYLE)
 
         volumeLabel = QLabel("🔊 Volume:")
         volumeLabel.setStyleSheet("QLabel { font-weight: bold; }")
@@ -1022,7 +606,7 @@ QSlider::add-page:horizontal {
         
         # OCR 분석 방식을 별도로 추가하여 가독성 향상
         ocr_mode_label_widget = QLabel('OCR 분석 방식:')
-        ocr_mode_label_widget.setStyleSheet("color: #e0e0e0; padding: 2px;")
+        ocr_mode_label_widget.setStyleSheet(OCR_OPTION_LABEL_STYLE)
         analysis_group.add_widget(ocr_mode_label_widget)
         
         # 콤보박스 크기 정책 설정
@@ -1031,7 +615,7 @@ QSlider::add-page:horizontal {
         analysis_group.add_widget(self.ocrModeComboBox)
         
         # All 모드용 패턴 입력 필드 (별도 줄에 배치)
-        self.ocrPatternLabel.setStyleSheet("color: #e0e0e0; padding: 2px;")
+        self.ocrPatternLabel.setStyleSheet(OCR_OPTION_LABEL_STYLE)
         self.ocrPatternLineEdit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.ocrPatternLineEdit.setMinimumWidth(140)
         analysis_group.add_widget(self.ocrPatternLabel)
@@ -1142,67 +726,16 @@ QSlider::add-page:horizontal {
         # 북마크 관련 버튼들 추가
         bookmarkButton = QPushButton('Add Bookmark'); bookmarkButton.clicked.connect(self.add_bookmark)
         bookmarkButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        bookmarkButton.setStyleSheet("""
-QPushButton {
-    background: #28a745;
-    border: 1px solid #28a745;
-    border-radius: 6px;
-    color: white;
-    font-weight: 500;
-    padding: 8px 6px;
-}
-QPushButton:hover {
-    background: #218838;
-    border: 1px solid #1e7e34;
-}
-QPushButton:pressed {
-    background: #1e7e34;
-    border: 1px solid #1c7430;
-}
-""")
+        bookmarkButton.setStyleSheet(BOOKMARK_BUTTON_STYLE)
         
         bookmarkListButton = QPushButton('Bookmarks'); bookmarkListButton.clicked.connect(self.show_bookmarks)
         bookmarkListButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        bookmarkListButton.setStyleSheet("""
-QPushButton {
-    background: #17a2b8;
-    border: 1px solid #17a2b8;
-    border-radius: 6px;
-    color: white;
-    font-weight: 500;
-    padding: 8px 6px;
-}
-QPushButton:hover {
-    background: #138496;
-    border: 1px solid #117a8b;
-}
-QPushButton:pressed {
-    background: #117a8b;
-    border: 1px solid #10707f;
-}
-""")
+        bookmarkListButton.setStyleSheet(BOOKMARK_LIST_REFRESH_BUTTON_STYLE)
         
         # 작품 경로 관리 버튼 추가
         workPathButton = QPushButton('작품 경로 관리'); workPathButton.clicked.connect(self.manage_work_paths)
         workPathButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        workPathButton.setStyleSheet("""
-QPushButton {
-    background: #6f42c1;
-    border: 1px solid #6f42c1;
-    border-radius: 6px;
-    color: white;
-    font-weight: 500;
-    padding: 8px 6px;
-}
-QPushButton:hover {
-    background: #5a32a3;
-    border: 1px solid #5a32a3;
-}
-QPushButton:pressed {
-    background: #4c2a8a;
-    border: 1px solid #4c2a8a;
-}
-""")
+        workPathButton.setStyleSheet(WORK_PATH_BUTTON_STYLE)
         
         # 사이드바 뷰 모드 전환 버튼들 추가 (가로 배치)
         viewModeLayout = QHBoxLayout()
@@ -1212,79 +745,20 @@ QPushButton:pressed {
         self.listModeButton.setChecked(True)
         self.listModeButton.clicked.connect(self.switch_to_list_mode)
         self.listModeButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.listModeButton.setStyleSheet("""
-QPushButton {
-    background: #6f42c1;
-    border: 1px solid #6f42c1;
-    border-radius: 6px;
-    color: white;
-    font-weight: 500;
-    padding: 8px 6px;
-}
-QPushButton:hover {
-    background: #5a32a3;
-    border: 1px solid #4c2b8a;
-}
-QPushButton:pressed {
-    background: #4c2b8a;
-    border: 1px solid #3d2375;
-}
-QPushButton:checked {
-    background: #4c2b8a;
-    border: 1px solid #3d2375;
-}
-""")
+        self.listModeButton.setStyleSheet(LIST_MODE_BUTTON_STYLE)
         
         self.thumbnailModeButton = QPushButton('Thumb')
         self.thumbnailModeButton.setCheckable(True)
         self.thumbnailModeButton.clicked.connect(self.switch_to_thumbnail_mode)
         self.thumbnailModeButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.thumbnailModeButton.setStyleSheet("""
-QPushButton {
-    background: #fd7e14;
-    border: 1px solid #fd7e14;
-    border-radius: 6px;
-    color: white;
-    font-weight: 500;
-    padding: 8px 6px;
-}
-QPushButton:hover {
-    background: #e8690b;
-    border: 1px solid #d55a00;
-}
-QPushButton:pressed {
-    background: #d55a00;
-    border: 1px solid #c05000;
-}
-QPushButton:checked {
-    background: #d55a00;
-    border: 1px solid #c05000;
-}
-""")
+        self.thumbnailModeButton.setStyleSheet(THUMBNAIL_MODE_BUTTON_STYLE)
         
         # 목록 다시 읽기: 다른 PC·Finder에서 NAS의 영상을 지우거나 넣었을 때 (창이 다시 활성될 때도 저절로 읽음)
         self.refreshListButton = QPushButton('새로고침')
         self.refreshListButton.setToolTip('목록 다시 읽기 (F5)')
         self.refreshListButton.clicked.connect(self._refresh_sidebar_by_user)
         self.refreshListButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.refreshListButton.setStyleSheet("""
-QPushButton {
-    background: #17a2b8;
-    border: 1px solid #17a2b8;
-    border-radius: 6px;
-    color: white;
-    font-weight: 500;
-    padding: 8px 6px;
-}
-QPushButton:hover {
-    background: #138496;
-    border: 1px solid #117a8b;
-}
-QPushButton:pressed {
-    background: #117a8b;
-    border: 1px solid #10707f;
-}
-""")
+        self.refreshListButton.setStyleSheet(BOOKMARK_LIST_REFRESH_BUTTON_STYLE)
         refresh_shortcut = QShortcut(QKeySequence(Qt.Key_F5), self)
         refresh_shortcut.activated.connect(self._refresh_sidebar_by_user)
 
@@ -1348,17 +822,7 @@ QPushButton:pressed {
                                      keep_prefix="00:00:00.000 /", hint_text="00:00:00.000 / 00:00:00.000",
                                      shrink_order=3, collapse_order=8)
         self.timeLabel.setText("00:00:00.000 / 00:00:00.000"); self.timeLabel.setFont(QFont("Arial", 16))
-        self.timeLabel.setStyleSheet("""
-QLabel {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 #f39c12, stop:1 #e67e22);
-    border: 1px solid #e67e22;
-    border-radius: 6px;
-    color: white;
-    font-weight: bold;
-    padding: 10px;
-}
-""")
+        self.timeLabel.setStyleSheet(TIME_LABEL_STYLE)
         fileInfoLayout.addWidget(self.timeLabel); fileInfoLayout.setAlignment(self.timeLabel, Qt.AlignRight)
         
         # timeLabel을 control_widgets에 추가
@@ -1374,50 +838,7 @@ QLabel {
         self.control_widgets.append(self.labelPlaybackFPS)
 
         # 스크롤바 핸들(thumb) 크기를 고정 (예: 80px)
-        self.positionScroll.setStyleSheet("""
-QSlider:horizontal {
-    height: 20px;
-    background: transparent;
-}
-QSlider::groove:horizontal {
-    height: 8px;
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 #34495e, stop:1 #2c3e50);
-    border: 1px solid #7f8c8d;
-    border-radius: 4px;
-    margin: 6px 0;
-}
-QSlider::handle:horizontal {
-    min-width: 80px;
-    max-width: 80px;
-    height: 20px;
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 #3498db, stop:1 #2980b9);
-    border: 2px solid #2980b9;
-    border-radius: 10px;
-    margin: -6px 0;
-}
-QSlider::handle:horizontal:hover {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 #5dade2, stop:1 #3498db);
-    border: 2px solid #5dade2;
-}
-QSlider::handle:horizontal:pressed {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 #2980b9, stop:1 #21618c);
-    border: 2px solid #21618c;
-}
-QSlider::sub-page:horizontal {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 #3498db, stop:1 #2980b9);
-    border-radius: 4px;
-}
-QSlider::add-page:horizontal {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 #34495e, stop:1 #2c3e50);
-    border-radius: 4px;
-}
-""")
+        self.positionScroll.setStyleSheet(POSITION_SCROLL_STYLE)
         # Windows(Fusion 포함)에서도 Mac처럼 왼쪽 클릭으로 그 위치로 바로 이동 + 드래그 계속되게
         jump_to_click(self.positionScroll)
 
@@ -2121,17 +1542,7 @@ QSlider::add-page:horizontal {
         # 로그 표시 영역
         self.ocr_log_text = QPlainTextEdit()
         self.ocr_log_text.setReadOnly(True)
-        self.ocr_log_text.setStyleSheet("""
-            QPlainTextEdit {
-                background: #1d1d1d;
-                color: #ffa500;
-                border: 1px solid #444444;
-                border-radius: 4px;
-                padding: 8px;
-                font-family: 'Menlo', 'Monaco', Consolas, monospace;
-                font-size: 11px;
-            }
-        """)
+        self.ocr_log_text.setStyleSheet(OCR_LOG_TEXT_STYLE)
         layout.addWidget(self.ocr_log_text)
         
         # 버튼 레이아웃
@@ -2358,17 +1769,7 @@ QSlider::add-page:horizontal {
         # 로그 표시 영역
         self.ocr_log_text = QPlainTextEdit()
         self.ocr_log_text.setReadOnly(True)
-        self.ocr_log_text.setStyleSheet("""
-            QPlainTextEdit {
-                background: #1d1d1d;
-                color: #ffa500;
-                border: 1px solid #444444;
-                border-radius: 4px;
-                padding: 8px;
-                font-family: 'Menlo', 'Monaco', Consolas, monospace;
-                font-size: 11px;
-            }
-        """)
+        self.ocr_log_text.setStyleSheet(OCR_LOG_TEXT_STYLE)
         layout.addWidget(self.ocr_log_text)
         
         # 버튼 레이아웃
@@ -3452,17 +2853,7 @@ QSlider::add-page:horizontal {
         # 로그 표시 영역
         self.ocr_export_log_text = QPlainTextEdit()
         self.ocr_export_log_text.setReadOnly(True)
-        self.ocr_export_log_text.setStyleSheet("""
-            QPlainTextEdit {
-                background: #1d1d1d;
-                color: #ffa500;
-                border: 1px solid #444444;
-                border-radius: 4px;
-                padding: 8px;
-                font-family: 'Menlo', 'Monaco', Consolas, monospace;
-                font-size: 11px;
-            }
-        """)
+        self.ocr_export_log_text.setStyleSheet(OCR_LOG_TEXT_STYLE)
         layout.addWidget(self.ocr_export_log_text)
         
         # 취소 버튼
@@ -4181,17 +3572,7 @@ QSlider::add-page:horizontal {
     def create_overlay_controls(self):
         """오버레이 컨트롤을 생성합니다."""
         self.overlayFrame = QFrame(self)
-        self.overlayFrame.setStyleSheet('''
-            QFrame {
-                background-color: rgba(0, 0, 0, 200);
-                border: 3px solid white;
-                border-radius: 10px;
-            }
-            QFrame:hover {
-                border: 3px solid rgba(255, 255, 255, 180);
-                background-color: rgba(0, 0, 0, 220);
-            }
-        ''')
+        self.overlayFrame.setStyleSheet(OVERLAY_FRAME_STYLE)
         
         # 리사이즈 영역을 시각적으로 표시하는 오버레이 위젯
         self.resize_overlay = QWidget(self.overlayFrame)
@@ -4206,17 +3587,7 @@ QSlider::add-page:horizontal {
         
         # 도움말 라벨 추가
         self.overlayHelpLabel = QLabel('드래그로 이동, 테두리로 크기조절, Ctrl+휠로 확대/축소, Ctrl+O로 리셋', self.overlayFrame)
-        self.overlayHelpLabel.setStyleSheet('''
-            QLabel {
-                color: rgba(255, 255, 255, 120);
-                font-size: 10px;
-                font-family: 'Arial', sans-serif;
-                background: rgba(0, 0, 0, 100);
-                padding: 2px 6px;
-                border-radius: 3px;
-                border: 1px solid rgba(255, 255, 255, 40);
-            }
-        ''')
+        self.overlayHelpLabel.setStyleSheet(OVERLAY_HELP_LABEL_STYLE)
         self.overlayHelpLabel.setAlignment(Qt.AlignCenter)
         self.overlayHelpLabel.setVisible(False)  # 초기에는 숨김
         
@@ -4270,32 +3641,7 @@ QSlider::add-page:horizontal {
         # 재생/일시정지 버튼
         self.overlayPlayPause = QPushButton('▶', self.overlayFrame)  # 초기 상태는 재생 버튼
         self.overlayPlayPause.setFixedSize(56, 56)
-        self.overlayPlayPause.setStyleSheet('''
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(255, 255, 255, 40),
-                    stop:1 rgba(255, 255, 255, 20));
-                border: 2px solid rgba(255, 255, 255, 120);
-                border-radius: 28px;
-                color: white;
-                font-size: 24px;
-                font-weight: bold;
-                font-family: 'Arial', sans-serif;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(255, 255, 255, 60),
-                    stop:1 rgba(255, 255, 255, 40));
-                border: 2px solid rgba(255, 255, 255, 180);
-                transform: scale(1.05);
-            }
-            QPushButton:pressed {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(255, 255, 255, 80),
-                    stop:1 rgba(255, 255, 255, 60));
-                border: 2px solid rgba(255, 255, 255, 200);
-            }
-        ''')
+        self.overlayPlayPause.setStyleSheet(OVERLAY_PLAY_PAUSE_STYLE)
         self.overlayPlayPause.clicked.connect(self.toggle_play_pause)
         
         # 슬라이더 컨테이너 (프레임 표시를 위한 수직 레이아웃)
@@ -4308,79 +3654,25 @@ QSlider::add-page:horizontal {
         
         # 시작 프레임 라벨
         self.overlayStartFrameLabel = QLabel('0', self.overlayFrame)
-        self.overlayStartFrameLabel.setStyleSheet('''
-            QLabel {
-                color: rgba(255, 255, 255, 200);
-                font-size: 13px;
-                font-weight: 600;
-                font-family: 'Arial', sans-serif;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(0, 0, 0, 120),
-                    stop:1 rgba(0, 0, 0, 80));
-                padding: 4px 10px;
-                border-radius: 6px;
-                border: 1px solid rgba(255, 255, 255, 60);
-            }
-        ''')
+        self.overlayStartFrameLabel.setStyleSheet(OVERLAY_FRAME_NUMBER_LABEL_STYLE)
         self.overlayStartFrameLabel.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         
         # 현재 프레임 라벨 (드래그 중 실시간 업데이트)
         self.overlayCurrentFrameLabel = QLabel('1', self.overlayFrame)
-        self.overlayCurrentFrameLabel.setStyleSheet('''
-            QLabel {
-                color: rgba(255, 255, 255, 255);
-                font-size: 16px;
-                font-weight: bold;
-                font-family: 'Arial', sans-serif;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(0, 150, 255, 180),
-                    stop:1 rgba(0, 120, 200, 160));
-                padding: 6px 12px;
-                border-radius: 8px;
-                border: 2px solid rgba(255, 255, 255, 120);
-                box-shadow: 0 2px 8px rgba(0, 150, 255, 0.4);
-            }
-        ''')
+        self.overlayCurrentFrameLabel.setStyleSheet(OVERLAY_CURRENT_FRAME_LABEL_STYLE)
         self.overlayCurrentFrameLabel.setAlignment(Qt.AlignCenter | Qt.AlignVCenter)
         self.overlayCurrentFrameLabel.setVisible(False)  # 초기에는 숨김
         
         # 파일명 라벨
         self.overlayFileNameLabel = QLabel('No File', self.overlayFrame)
-        self.overlayFileNameLabel.setStyleSheet('''
-            QLabel {
-                color: rgba(255, 255, 255, 180);
-                font-size: 20px;
-                font-weight: 600;
-                font-family: 'Arial', sans-serif;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(0, 0, 0, 100),
-                    stop:1 rgba(0, 0, 0, 60));
-                padding: 4px 10px;
-                border-radius: 4px;
-                border: 1px solid rgba(255, 255, 255, 40);
-                min-width: 80px;
-            }
-        ''')
+        self.overlayFileNameLabel.setStyleSheet(OVERLAY_FILE_NAME_LABEL_STYLE)
         self.overlayFileNameLabel.setAlignment(Qt.AlignCenter | Qt.AlignVCenter)
         self.overlayFileNameLabel.setWordWrap(True)
         self.overlayFileNameLabel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         
         # 끝 프레임 라벨
         self.overlayEndFrameLabel = QLabel('0', self.overlayFrame)
-        self.overlayEndFrameLabel.setStyleSheet('''
-            QLabel {
-                color: rgba(255, 255, 255, 200);
-                font-size: 13px;
-                font-weight: 600;
-                font-family: 'Arial', sans-serif;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(0, 0, 0, 120),
-                    stop:1 rgba(0, 0, 0, 80));
-                padding: 4px 10px;
-                border-radius: 6px;
-                border: 1px solid rgba(255, 255, 255, 60);
-            }
-        ''')
+        self.overlayEndFrameLabel.setStyleSheet(OVERLAY_FRAME_NUMBER_LABEL_STYLE)
         self.overlayEndFrameLabel.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         
         frameLabelsLayout.addWidget(self.overlayStartFrameLabel)
@@ -4397,48 +3689,7 @@ QSlider::add-page:horizontal {
         self.overlaySlider.setMaximum(100)
         self.overlaySlider.setSingleStep(1)
         self.overlaySlider.setFixedHeight(36)
-        self.overlaySlider.setStyleSheet('''
-            QSlider::groove:horizontal {
-                border: none;
-                height: 12px;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(255, 255, 255, 30),
-                    stop:1 rgba(255, 255, 255, 10));
-                border-radius: 6px;
-                margin: 0px;
-            }
-            QSlider::handle:horizontal {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(255, 255, 255, 220),
-                    stop:1 rgba(255, 255, 255, 180));
-                border: 3px solid rgba(255, 255, 255, 150);
-                width: 24px;
-                height: 24px;
-                border-radius: 12px;
-                margin: -6px 0;
-                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-            }
-            QSlider::handle:horizontal:hover {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(255, 255, 255, 255),
-                    stop:1 rgba(255, 255, 255, 220));
-                border: 3px solid rgba(255, 255, 255, 200);
-                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-            }
-            QSlider::handle:horizontal:pressed {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(255, 255, 255, 255),
-                    stop:1 rgba(255, 255, 255, 240));
-                border: 3px solid rgba(255, 255, 255, 250);
-            }
-            QSlider::sub-page:horizontal {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(0, 180, 255, 200),
-                    stop:1 rgba(0, 150, 220, 180));
-                border-radius: 6px;
-                margin: 0px;
-            }
-        ''')
+        self.overlaySlider.setStyleSheet(OVERLAY_SLIDER_STYLE)
         # Windows(Fusion 포함)에서도 Mac처럼 왼쪽 클릭으로 그 위치로 바로 이동 + 드래그 계속되게
         jump_to_click(self.overlaySlider)
         self.overlaySlider.sliderMoved.connect(self.on_overlay_slider_moved)
@@ -4455,39 +3706,7 @@ QSlider::add-page:horizontal {
         self.overlayVolume.setValue(50)
         self.overlayVolume.setFixedWidth(100)  # 너비 반으로 감소 (200 -> 100)
         self.overlayVolume.setFixedHeight(18)  # 높이 반으로 감소 (36 -> 18)
-        self.overlayVolume.setStyleSheet('''
-            QScrollBar:horizontal {
-                border: none;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(255, 255, 255, 30),
-                    stop:1 rgba(255, 255, 255, 10));
-                height: 12px;
-                border-radius: 6px;
-                margin: 0px;
-            }
-            QScrollBar::handle:horizontal {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(0, 220, 120, 200),
-                    stop:1 rgba(0, 180, 100, 180));
-                border: 2px solid rgba(255, 255, 255, 120);
-                min-width: 24px;
-                border-radius: 6px;
-                margin: 0px;
-            }
-            QScrollBar::handle:horizontal:hover {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(0, 240, 140, 220),
-                    stop:1 rgba(0, 200, 120, 200));
-                border: 2px solid rgba(255, 255, 255, 150);
-            }
-            QScrollBar::sub-page:horizontal {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(0, 200, 100, 150),
-                    stop:1 rgba(0, 160, 80, 130));
-                border-radius: 6px;
-                margin: 0px;
-            }
-        ''')
+        self.overlayVolume.setStyleSheet(OVERLAY_VOLUME_STYLE)
         self.overlayVolume.valueChanged.connect(self.setVolume)
         
         # 프레임 라벨들에 볼륨 슬라이더 추가 (같은 Y 좌표에 배치)
@@ -5004,21 +4223,7 @@ QSlider::add-page:horizontal {
                     font_size = 10
                 
                 # 동적으로 스타일시트 업데이트
-                self.overlayFileNameLabel.setStyleSheet(f'''
-                    QLabel {{
-                        color: rgba(255, 255, 255, 180);
-                        font-size: {font_size}px;
-                        font-weight: 600;
-                        font-family: 'Arial', sans-serif;
-                        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                            stop:0 rgba(0, 0, 0, 100),
-                            stop:1 rgba(0, 0, 0, 60));
-                        padding: 4px 10px;
-                        border-radius: 4px;
-                        border: 1px solid rgba(255, 255, 255, 40);
-                        min-width: 80px;
-                    }}
-                ''')
+                self.overlayFileNameLabel.setStyleSheet(OVERLAY_FILE_NAME_LABEL_STYLE_TEMPLATE.format(font_size=font_size))
                 
                 self.overlayFileNameLabel.setText(file_name)
             else:
