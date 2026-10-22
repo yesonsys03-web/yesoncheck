@@ -12,7 +12,7 @@
 PlayerSidebarMixin의 부모 클래스로 붙음 — `class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin, SidebarRefreshMixin, SidebarThumbnailsMixin)`. 그래서 VideoPlayer의 MRO에서 PlayerSidebarMixin 뒤(PlayerPlaybackMixin 앞)에 오고,
 이 메서드들의 이름은 다른 믹스인·VideoPlayerBase와 겹치지 않으므로 어느 것이 불리는지는 예전과 같음. 상태(`self.sidebar`·
 `self._sidebar_sources`·`self._sidebar_generation`·`self._sidebar_scan` 등)는 예전처럼 VideoPlayerBase.__init__이 만들고, 썸네일
-확인·만들기(`_apply_disk_thumbnails`·`generate_thumbnail`·`_make_thumbnails` 등)는 PlayerSidebarMixin의 메서드를 `self.`로 불러 그대로
+확인·만들기(`_apply_disk_thumbnails`·`generate_thumbnail`·`_make_thumbnails` 등)는 SidebarThumbnailsMixin의 메서드를 `self.`로 불러 그대로
 닿음. 이 메서드들을 부르는 쪽(VideoPlayerBase의 신호 연결·메뉴·닫기, player_playback, video_widget의 드롭)도 `self.`·플레이어 객체로
 부르므로 그대로 닿음.
 
