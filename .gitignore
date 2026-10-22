@@ -51,3 +51,6 @@ vendor/ffmpeg/windows/
 # 백업·에이전트 상태
 *.bak
 .omc/
+
+# 리팩토링 검증 기준 스냅샷·그림 (커밋하지 않음)
+.refactor_baseline/
