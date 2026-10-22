@@ -332,6 +332,12 @@ QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
 QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
     background: #ff9900;
 }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0px;
+}
 QSlider:horizontal {
     height: 20px;
     background: #232323;
@@ -1886,6 +1892,12 @@ QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
 }
 QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
     background: #ff9900;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0px;
 }
 QSlider:horizontal {
     height: 20px;
