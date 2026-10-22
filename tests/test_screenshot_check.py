@@ -15,8 +15,7 @@ import sys
 
 import pytest
 from PyQt5 import sip
-from PyQt5.QtCore import QTimer
-from PyQt5.QtGui import QColor, QImage
+from PyQt5.QtGui import QColor, QImage, QPainter
 from PyQt5.QtWidgets import QLabel, QWidget
 
 from tests.conftest import ROOT
@@ -356,20 +355,31 @@ def test_settle_returns_once_two_consecutive_grabs_match(qapp, tool):
     assert info["rounds"] == 1 and info["consecutive_identical"] == 2 and info["fixed_wait_s"] == 0.05
 
 
+class AlwaysChanging(QWidget):
+    """그릴 때마다 다른 색으로 칠하는 위젯 — grab()이 부르는 paintEvent가 매번 다른 그림을 만듦 (타이머·이벤트 처리
+    타이밍에 기대지 않으므로 플랫폼과 상관없이 settle의 연속 두 번 grab은 반드시 다름)."""
+
+    def __init__(self):
+        super().__init__()
+        self.paints = 0
+
+    def paintEvent(self, event):
+        self.paints += 1
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(self.paints % 250, (self.paints * 7) % 250, 100))
+        painter.end()
+
+
 def test_settle_fails_loudly_when_the_picture_keeps_changing(qapp, tool):
-    label = QLabel("0")
-    label.resize(80, 30)
-    label.show()
-    count = iter(range(10**6))
-    timer = QTimer()
-    timer.timeout.connect(lambda: label.setText(str(next(count))))  # 글자가 계속 바뀜
-    timer.start(5)
+    widget = AlwaysChanging()
+    widget.resize(80, 30)
+    widget.show()
     try:
-        with pytest.raises(RuntimeError, match=r"정착하지 않음.*x=\d+\.\.\d+ y=\d+\.\.\d+"):
-            tool.settle(qapp, label)
+        with pytest.raises(RuntimeError, match=r"정착하지 않음.*x=0\.\.79 y=0\.\.29"):  # 바뀐 곳은 위젯 전체
+            tool.settle(qapp, widget)
+        assert widget.paints >= 4  # 시간이 다 되도록 되풀이해 찍었음 (처음 두 번에 포기하지 않음)
     finally:
-        timer.stop()
-        sip.delete(label)
+        sip.delete(widget)
 
 
 def test_tree_dump_does_not_depend_on_creation_order(qapp, tool):
