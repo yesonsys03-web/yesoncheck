@@ -337,7 +337,7 @@ def test_close_for_update_stops_thumbnail_regeneration_loop(qapp, new_player, di
 def test_close_for_update_stops_path_map_search_without_follow_up_dialog(qapp, new_player, dialogs, tmp_path,
                                                                           monkeypatch, search_notices_cancel):
     """변환표 찾기(진행 창, 0.5초 뒤에 보임) 중 닫기 요청: 찾기를 취소하고, 그 뒤의 변환표 문제 창·확인 창을 열지 않음."""
-    from yesoncheck import path_map_setup, player_sidebar
+    from yesoncheck import path_map_setup, sidebar_config_paths
 
     player = new_player(make_config(str(tmp_path), {}))
     player.show()
@@ -355,7 +355,7 @@ def test_close_for_update_stops_path_map_search_without_follow_up_dialog(qapp, n
         return SimpleNamespace(pairs=[], share_problems=[])  # 취소를 보기 전에 끝난 찾기
 
     monkeypatch.setattr(path_map_setup, "propose_mapping", fake_propose)
-    monkeypatch.setattr(player_sidebar, "PathMapSetupDialog",
+    monkeypatch.setattr(sidebar_config_paths, "PathMapSetupDialog",
                         lambda *a, **k: pytest.fail("닫는 중에 변환표 확인 창을 열면 안 됨"))
     assert player.auto_setup_path_map(ask_password=False, startup=True) is False
     assert answers[0] is False  # 첫 진행 보고에서 이미 취소됨
