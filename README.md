@@ -215,8 +215,7 @@ yesoncheck/
 ├─ web_info.py        # 웹UI HTML 생성 및 WebSocket 통신
 ├─ video_widget.py   # 맞춤형 영상 뷰어 및 인터랙션
 ├─ workers.py        # FFmpeg/썸네일 백그라운드 워커
-├─ frame_utils.py    # 프레임/피트 계산 유틸리티
-└─ styles.py         # 스크롤바 등 커스텀 스타일
+└─ frame_utils.py    # 프레임/피트 계산 유틸리티
 ```
 문서화 및 운영 가이드는 `AGENTS.md`에서 확인할 수 있습니다.
 

@@ -1,7 +1,7 @@
 # 저장소 가이드라인
 
 ## 프로젝트 구조 및 모듈 구성
-- `yesoncheck/` 디렉토리에 런타임 코드가 있습니다. `app.py`는 Qt를 부트스트랩하고, `main_window.py`는 `player_base.py`, `player_playback.py`, `player_sidebar.py`로부터 `VideoPlayer`를 조립합니다. `player_review.py`와 `player_timeline.py`는 OCR 검토 UI를 담당하며, `player_review.py`는 WebSocket 서버를 포함합니다. `web_info.py`는 웹UI HTML 생성 및 WebSocket 통신을 담당합니다. `video_widget.py`는 커스텀 뷰포트를 렌더링하고, `workers.py`는 FFmpeg 및 썸네일 스레드를 포함합니다. 헬퍼 함수들은 `frame_utils.py`와 `styles.py`에 있습니다.
+- `yesoncheck/` 디렉토리에 런타임 코드가 있습니다. `app.py`는 Qt를 부트스트랩하고, `main_window.py`는 `player_base.py`, `player_playback.py`, `player_sidebar.py`로부터 `VideoPlayer`를 조립합니다. `player_review.py`와 `player_timeline.py`는 OCR 검토 UI를 담당하며, `player_review.py`는 WebSocket 서버를 포함합니다. `web_info.py`는 웹UI HTML 생성 및 WebSocket 통신을 담당합니다. `video_widget.py`는 커스텀 뷰포트를 렌더링하고, `workers.py`는 FFmpeg 및 썸네일 스레드를 포함합니다. 헬퍼 함수들은 `frame_utils.py`에 있습니다.
 - `YesonCheck_Autocut.spec`이 PyInstaller를 제어합니다 (정적 ffmpeg는 `vendor/ffmpeg/`, TransNetV2 가중치는 `vendor/transnetv2-weights/`). 빌드 방법은 `BUILD.md`.
 - 썸네일은 job 폴더의 `.yesoncheck_thumb/`에 캐시되고 모든 Mac·Windows PC가 함께 씁니다(`yesoncheck/thumbnails.py`, 이름은 `paths.thumbnail_key` — Mac 경로의 md5). 영상이 썸네일보다 새것이면 다시 만듭니다.
 - 문서는 `README.md` (환경 설정), `BUILD.md` (빌드)와 이 가이드에 있습니다. 자동화된 시험은 `tests/` (pytest)에 있습니다.

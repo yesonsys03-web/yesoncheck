@@ -49,7 +49,6 @@ yesoncheck/
 ├── workers.py                # 백그라운드 작업 (OCR, 익스포트, 썸네일)
 ├── auto_trim.py              # 애니매틱 자동 컷 감지 (PySceneDetect)
 ├── web_info.py               # 웹UI HTML 생성 및 WebSocket 통신
-├── styles.py                 # UI 스타일 정의
 └── main_window.py            # 메인 윈도우 통합
 
 빌드 파일:
