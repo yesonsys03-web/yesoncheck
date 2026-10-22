@@ -1,7 +1,7 @@
 """OCR 묶음 믹스인 (PlayerOcrMixin): ROI·분석 방식 UI 상태, 분석 시작(OCR·애니매틱·애니매틱2)과 진행·완료 콜백,
 검토 창 수명, 결과 저장·불러오기, 구간 내보내기.
 
-VideoPlayerBase의 부모 클래스로 붙음 — `class VideoPlayerBase(PlayerOcrMixin, QMainWindow)`. 그래서 VideoPlayer의 MRO에서
+VideoPlayerBase의 부모 클래스로 붙음 — `class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow)`. 그래서 VideoPlayer의 MRO에서
 VideoPlayerBase 바로 뒤(QMainWindow 앞)에 오고, 다른 믹스인과의 가림 관계·`VideoPlayerBase.X`로 찾는 접근은 예전과 같음.
 상태(`self.ocr_*` 등)는 예전처럼 VideoPlayerBase.__init__이 만듦.
 
