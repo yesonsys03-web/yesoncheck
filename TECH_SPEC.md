@@ -39,14 +39,30 @@ YesonCheck는 비디오 파일의 OCR(광학 문자 인식) 분석 및 구간 �
 ```
 yesoncheck/
 ├── app.py                    # 애플리케이션 진입점
-├── player_base.py            # 메인 플레이어 및 공통 UI 로직
+├── main_window_styles.py     # 메인 창 스타일시트(어두운·밝은 테마) 문자열
+├── player_base.py            # 메인 플레이어 및 공통 UI 로직 (테마·메뉴·창 닫기)
+├── player_ocr.py             # OCR·씬 감지 분석 시작, 결과 저장/불러오기, 구간 내보내기 믹스인
+├── player_overlay.py         # 영상 위 오버레이 컨트롤 믹스인
+├── worker_lifecycle.py       # 놓아 준 백그라운드 워커를 끝날 때까지 붙잡아 두기
 ├── player_playback.py       # 재생 제어 및 프레임 이동 로직
-├── player_sidebar.py         # 사이드바 UI
+├── player_sidebar.py         # 사이드바 UI (드롭·파일 넣기·작품/시즌/job) — 아래 sidebar_* 믹스인을 부모로 가짐
+├── sidebar_bookmarks.py      # 북마크 믹스인
+├── sidebar_playlist.py       # 선택 재생 믹스인
+├── sidebar_config_paths.py   # 공유 설정·작품 경로 믹스인
+├── sidebar_refresh.py        # 목록 다시 읽기 믹스인
+├── sidebar_thumbnails.py     # 썸네일 믹스인
+├── sidebar_items.py          # 사이드바 항목 상수·ThumbnailContext
+├── shared_config_load.py     # 공유 설정 읽기(창과 무관한 코드)
 ├── player_timeline.py        # OCR 타임라인 위젯
 ├── player_review.py          # OCR 결과 검토 및 편집 다이얼로그 (WebSocket 서버 포함)
 ├── video_widget.py           # 비디오 렌더링 위젯
 ├── frame_utils.py            # 프레임 계산 유틸리티
-├── workers.py                # 백그라운드 작업 (OCR, 익스포트, 썸네일)
+├── workers.py                # 아래 워커 모듈을 한곳에서 다시 내보내는 호환용 모듈
+├── ocr_worker.py             # OCR 분석 워커 (OCRWorker)
+├── ocr_export_worker.py      # OCR 구간 익스포트 워커
+├── scene_workers.py          # 씬 감지 워커 (애니매틱, 애니매틱2)
+├── thumbnail_workers.py      # 썸네일 생성/로딩 워커
+├── ffmpeg_worker.py          # 영상 병합 워커
 ├── auto_trim.py              # 애니매틱 자동 컷 감지 (PySceneDetect)
 ├── web_info.py               # 웹UI HTML 생성 및 WebSocket 통신
 └── main_window.py            # 메인 윈도우 통합
@@ -450,6 +466,13 @@ pip install pyinstaller==6.14.1
 ---
 
 ## 10. 변경 이력
+
+### 2026.10.22
+- **코드 정리(동작 변경 없음)**: 큰 파일을 역할별 모듈로 나눔
+  - `workers.py` → 워커별 모듈 5개(`ocr_worker`·`ocr_export_worker`·`scene_workers`·`thumbnail_workers`·`ffmpeg_worker`), `workers.py`는 다시 내보내기만 함
+  - `player_base.py` → `player_ocr.py`·`player_overlay.py`·`main_window_styles.py`·`worker_lifecycle.py`
+  - `player_sidebar.py` → `sidebar_bookmarks.py`·`sidebar_playlist.py`·`sidebar_config_paths.py`·`sidebar_refresh.py`·`sidebar_thumbnails.py`·`sidebar_items.py`·`shared_config_load.py`
+  - 쓰이지 않는 코드와 파일 제거. 자동 시험(pytest)과 CI(Windows·Mac Apple Silicon·Mac Intel)가 나누기 전후 동작이 같음을 지킴
 
 ### 2025.11.25 (최신 업데이트)
 - **웹UI 실시간 동기화**: WebSocket을 통한 양방향 실시간 동기화 구현
