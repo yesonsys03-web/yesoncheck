@@ -1261,16 +1261,16 @@ def test_folder_context_not_replaced_by_later_drop(new_player, dialogs, work_are
 
 def record_worker_starts(monkeypatch):
     """사이드바가 띄우는 썸네일 워커의 영상 경로를 차례로 기록하는 목록."""
-    import yesoncheck.player_sidebar as sidebar_module
+    from yesoncheck import sidebar_thumbnails
 
-    real_worker = sidebar_module.ThumbnailWorker
+    real_worker = sidebar_thumbnails.ThumbnailWorker
     started = []
 
     def counting_worker(file_path, *args):
         started.append(file_path)
         return real_worker(file_path, *args)
 
-    monkeypatch.setattr(sidebar_module, "ThumbnailWorker", counting_worker)
+    monkeypatch.setattr(sidebar_thumbnails, "ThumbnailWorker", counting_worker)
     return started
 
 
