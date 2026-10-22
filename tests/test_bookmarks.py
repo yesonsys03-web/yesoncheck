@@ -238,7 +238,7 @@ def test_sidebar_show_bookmarks_reads_what_other_windows_added(new_player, dialo
         shown.append([listing.item(row).text() for row in range(listing.count())])
         return 0
 
-    monkeypatch.setattr("yesoncheck.player_sidebar.QDialog.exec_", fake_exec)
+    monkeypatch.setattr("yesoncheck.sidebar_bookmarks.QDialog.exec_", fake_exec)
     window_a.show_bookmarks()
     assert shown == [["/works/added-later"]]
     assert dialogs.messages == []
