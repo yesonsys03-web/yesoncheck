@@ -493,10 +493,6 @@ class PlayerPlaybackMixin:
         cv2.rectangle(frame, (x - 5, y - th - 5), (x + tw + 5, y + 5), (255,255,255), -1)
         cv2.putText(frame, text, (x, y), font, scale, (0,0,0), thickness)
 
-    def change_position(self, value):
-        """기존 메서드 - 호환성을 위해 유지"""
-        self.on_slider_value_changed(value)
-
     def on_overlay_slider_pressed(self):
         """오버레이 슬라이더를 누를 때 현재 프레임 라벨 표시"""
         if hasattr(self, 'overlayCurrentFrameLabel'):
@@ -1380,15 +1376,6 @@ class PlayerPlaybackMixin:
         m, s = divmod(seconds, 60)
         h, m = divmod(m, 60)
         return f"{int(h):02d}:{int(m):02d}:{s:06.3f}"
-
-    def get_frame_rate(self):
-        try:
-            return float(self.frameRateComboBox.currentText().strip())
-        except (ValueError, TypeError):
-            if self.cap_a:
-                fps = self.cap_a.get(cv2.CAP_PROP_FPS)
-                return fps if fps > 0 else 24.0
-            return 24.0
 
     def get_feet_display(self, total_frames):
         """프레임 수를 피트로 변환하여 표시 형식으로 반환"""
@@ -2486,22 +2473,6 @@ class PlayerPlaybackMixin:
         except Exception as e:
             # GPU 실패 시 CPU로 폴백
             return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-    def detect_video_resolution(self, file_path):
-        """비디오 해상도 감지"""
-        cap = cv2.VideoCapture(file_path)
-        if cap.isOpened():
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            cap.release()
-            
-            if width >= 3840 or height >= 2160:
-                return '4K'
-            elif width >= 1920 or height >= 1080:
-                return 'FullHD'
-            else:
-                return 'HD'
-        return 'Unknown'
 
     def update_playback_fps(self):
         """재생 FPS를 계산하고 표시합니다."""
