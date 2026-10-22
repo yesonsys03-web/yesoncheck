@@ -1,15 +1,15 @@
 """공유 설정·작품 경로 믹스인 (SidebarConfigPathsMixin): 앱이 켜질 때 공유 설정(작품 경로·변환표·마운트 맵)을 읽어 창에 넣는 일과
 문제 알림, (Windows) 변환표 자동 설정, 그리고 작품 경로 관리 대화 상자·작품 → 이 PC 경로 조회·관리 비밀번호.
 
-- 공유 설정(F): 동기·뒤 스레드 읽기 시작(`setup_shared_config`·`start_shared_config_load`), 읽은 결과를 창 상태에 넣기
+- 공유 설정: 동기·뒤 스레드 읽기 시작(`setup_shared_config`·`start_shared_config_load`), 읽은 결과를 창 상태에 넣기
   (`_apply_shared_config`·`_on_shared_config_loaded`), 닫을 때 기다림, 창 제목, 문제 알림·설정 폴더 고르기, 작품이 안 열리는 변환표 제안,
   `auto_setup_path_map`, 작품 콤보 다시 채우기.
-- 작품 경로(G): work_paths.json 쓰기, 비밀번호 파일, `get_work_path`(작품 → 이 PC 경로 — 변환표·마운트 맵, 실패 창),
+- 작품 경로: work_paths.json 쓰기, 비밀번호 파일, `get_work_path`(작품 → 이 PC 경로 — 변환표·마운트 맵, 실패 창),
   관리 대화 상자와 추가·수정·삭제·비밀번호 바꾸기.
-F와 G를 한 파일에 둔 것은 서로 부르기 때문: `manage_work_paths` ↔ `auto_setup_path_map`·`_shared_config_busy`, `auto_setup_path_map` →
+공유 설정과 작품 경로를 한 파일에 둔 것은 서로 부르기 때문: `manage_work_paths` ↔ `auto_setup_path_map`·`_shared_config_busy`, `auto_setup_path_map` →
 `_confirm_work_paths_password`.
 
-PlayerSidebarMixin의 부모 클래스로 붙음 — `class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin)`.
+PlayerSidebarMixin의 부모 클래스로 붙음 — `class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin, SidebarRefreshMixin, SidebarThumbnailsMixin)`.
 그래서 VideoPlayer의 MRO에서 PlayerSidebarMixin 뒤(PlayerPlaybackMixin 앞)에 오고, 이 메서드들의 이름은 다른 믹스인·VideoPlayerBase와
 겹치지 않으므로 어느 것이 불리는지는 예전과 같음. 상태(`self.work_paths`·`self.work_paths_file`·`self.shared_config_problem` 등)는 예전처럼
 VideoPlayerBase.__init__(`setup_shared_config`·`set_shared_config_loading_state` 경유)과 `_apply_shared_config`가 넣고, 작품 콤보

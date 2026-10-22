@@ -1,16 +1,16 @@
 """썸네일 믹스인 (SidebarThumbnailsMixin): 사이드바의 썸네일 — 표시 모드·폭, 썸네일 반복, 영상 단위 확인·만들기,
 썸네일 폴더와 문제 알림, 백그라운드 읽기.
 
-- 표시 모드·폭(H): 목록/썸네일 모드 바꾸기와 사이드바 폭(`switch_to_list_mode`·`switch_to_thumbnail_mode`·`update_sidebar_display`·
+- 표시 모드·폭: 목록/썸네일 모드 바꾸기와 사이드바 폭(`switch_to_list_mode`·`switch_to_thumbnail_mode`·`update_sidebar_display`·
   `initialize_sidebar_width`·`_resize_sidebar_column`).
-- 반복·워커 정리(I): 모든 영상의 썸네일 만들기 흐름(`generate_thumbnails_for_all_items`·`_make_thumbnails`), 반복을 멈출 까닭
+- 반복·워커 정리: 모든 영상의 썸네일 만들기 흐름(`generate_thumbnails_for_all_items`·`_make_thumbnails`), 반복을 멈출 까닭
   (`_thumbnail_pass_state`·`_thumbnail_pass_stopped`), 워커·로더 정리(`cleanup_thumbnail_workers`·`cleanup_background_threads`).
-- 영상 단위 확인·만들기(L): 항목의 썸네일 자리(`_item_thumbnail_context`·`_resolve_pending_thumbnail_context`), 저장된 썸네일 붙이기
+- 영상 단위 확인·만들기: 항목의 썸네일 자리(`_item_thumbnail_context`·`_resolve_pending_thumbnail_context`), 저장된 썸네일 붙이기
   (`_apply_disk_thumbnails`·`_has_disk_thumbnail`), 워커 띄우기(`generate_thumbnail` — ThumbnailWorker), 결과 슬롯(`on_thumbnail_ready`·
   `update_sidebar_item_thumbnail`), 다시 만들기·지우기(`regenerate_selected_thumbnails`·`delete_thumbnail_file`·`clear_thumbnails`).
-- 썸네일 폴더·문제 알림(M): job/폴더의 썸네일 폴더(`get_current_job_path`·`setup_thumbnail_folder`·`_use_dropped_folder_for_thumbnails`),
+- 썸네일 폴더·문제 알림: job/폴더의 썸네일 폴더(`get_current_job_path`·`setup_thumbnail_folder`·`_use_dropped_folder_for_thumbnails`),
   (폴더, 제목)마다 한 번 창으로(`_report_*`·`_on_thumbnail_failed`·`_on_thumbnail_save_failed`).
-- 백그라운드 읽기(N): 목록의 썸네일 파일을 뒤 스레드(ThumbnailLoaderWorker)로 읽어 아이콘으로 (`start_background_thumbnail_loading`·
+- 백그라운드 읽기: 목록의 썸네일 파일을 뒤 스레드(ThumbnailLoaderWorker)로 읽어 아이콘으로 (`start_background_thumbnail_loading`·
   `on_background_thumbnail_loaded`·`on_background_loading_finished`·`schedule_background_thumbnail_loading`).
 
 PlayerSidebarMixin의 부모 클래스로 붙음 — `class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin,

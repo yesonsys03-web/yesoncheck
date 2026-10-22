@@ -1,7 +1,7 @@
 """선택 재생 믹스인 (SidebarPlaylistMixin): 사이드바에서 고른 영상들을 차례로 열어 재생하는 'Selected Play' —
 재생목록 만들기·시작, 차례마다 열기(디스크에 없는 영상 건너뛰기), 현재 항목 강조 색 되돌리기, 영상이 끝나면 다음, 끝 처리.
 
-PlayerSidebarMixin의 부모 클래스로 붙음 — `class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin)`. 그래서
+PlayerSidebarMixin의 부모 클래스로 붙음 — `class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin, SidebarRefreshMixin, SidebarThumbnailsMixin)`. 그래서
 VideoPlayer의 MRO에서 PlayerSidebarMixin 뒤(PlayerPlaybackMixin 앞)에 오고, 이 메서드들의 이름은 다른 믹스인·
 VideoPlayerBase와 겹치지 않으므로 어느 것이 불리는지는 예전과 같음. 상태(`self.playlist`·`self.current_playlist_index`·
 `self.is_playlist_playing` 등)는 예전처럼 VideoPlayerBase.__init__이 만들고, 이 메서드들을 부르는 VideoPlayerBase의 버튼 연결과

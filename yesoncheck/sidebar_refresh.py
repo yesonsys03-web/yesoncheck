@@ -1,16 +1,15 @@
 """목록 다시 읽기 믹스인 (SidebarRefreshMixin)과 디스크 읽기 스레드 (SidebarScan): 사이드바 목록의 항목 모델과, 목록을 디스크와
 맞추는 다시 읽기 흐름 (다른 앱에서 돌아올 때·같은 job을 다시 고를 때·새로고침 버튼(F5)·없는 영상을 열 때).
 
-- 항목 모델(J): 항목 만들기·넣기(`_new_sidebar_item`·`_add_sidebar_videos`), 항목마다 들어온 곳과 썸네일 자리 기억
+- 항목 모델: 항목 만들기·넣기(`_new_sidebar_item`·`_add_sidebar_videos`), 항목마다 들어온 곳과 썸네일 자리 기억
   (`_register_sidebar_source`·`_register_unread_folder`·`_forget_sidebar_sources`), 목록 세대 번호(`_bump_sidebar_generation`),
   쓰는 동안 다시 읽기를 미루는 `_hold_sidebar_refresh`와 미룬 읽기(`_run_deferred_sidebar_refresh`).
-- 다시 읽기(K): 활성·버튼·F5로 시작(`_on_application_state_changed`·`_refresh_sidebar_on_activation`·`_refresh_sidebar_by_user`·
+- 다시 읽기: 활성·버튼·F5로 시작(`_on_application_state_changed`·`_refresh_sidebar_on_activation`·`_refresh_sidebar_by_user`·
   `refresh_sidebar`), 뒤 스레드(`SidebarScan`)의 결과를 GUI 스레드에서 검사해 목록에 넣기(`_on_sidebar_scanned`·`_apply_sidebar_read`·
   `_apply_sidebar_plan`), 새로고침 때의 썸네일 확인(`_check_thumbnails_after_refresh`).
-- 목록 문제 알림(K2): 읽지 못한 폴더·지워진 폴더·확인하지 못한 파일을 창으로 (`_report_list_*`·`_report_unverified_files`).
+- 목록 문제 알림: 읽지 못한 폴더·지워진 폴더·확인하지 못한 파일을 창으로 (`_report_list_*`·`_report_unverified_files`).
 
-PlayerSidebarMixin의 부모 클래스로 붙음 — `class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin,
-SidebarConfigPathsMixin, SidebarRefreshMixin)`. 그래서 VideoPlayer의 MRO에서 PlayerSidebarMixin 뒤(PlayerPlaybackMixin 앞)에 오고,
+PlayerSidebarMixin의 부모 클래스로 붙음 — `class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin, SidebarRefreshMixin, SidebarThumbnailsMixin)`. 그래서 VideoPlayer의 MRO에서 PlayerSidebarMixin 뒤(PlayerPlaybackMixin 앞)에 오고,
 이 메서드들의 이름은 다른 믹스인·VideoPlayerBase와 겹치지 않으므로 어느 것이 불리는지는 예전과 같음. 상태(`self.sidebar`·
 `self._sidebar_sources`·`self._sidebar_generation`·`self._sidebar_scan` 등)는 예전처럼 VideoPlayerBase.__init__이 만들고, 썸네일
 확인·만들기(`_apply_disk_thumbnails`·`generate_thumbnail`·`_make_thumbnails` 등)는 PlayerSidebarMixin의 메서드를 `self.`로 불러 그대로

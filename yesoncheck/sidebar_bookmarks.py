@@ -1,7 +1,7 @@
 """북마크 믹스인 (SidebarBookmarksMixin): 북마크 파일(`~/.yeson_bookmarks.json`) 읽기·더하기·지우기와 북마크 관리 대화 상자,
 북마크 폴더 열기(영상 불러오기 + 그 폴더의 썸네일 폴더 설정).
 
-PlayerSidebarMixin의 부모 클래스로 붙음 — `class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin)`. 그래서
+PlayerSidebarMixin의 부모 클래스로 붙음 — `class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin, SidebarRefreshMixin, SidebarThumbnailsMixin)`. 그래서
 VideoPlayer의 MRO에서 PlayerSidebarMixin 뒤(PlayerPlaybackMixin 앞)에 오고, 이 메서드들의 이름은 다른 믹스인·
 VideoPlayerBase와 겹치지 않으므로 어느 것이 불리는지는 예전과 같음. 상태(`self.bookmarks`·`self.bookmarks_file`·
 `self.current_thumbnail_folder` 등)는 예전처럼 VideoPlayerBase.__init__이 만들고(`load_bookmarks`도 거기서 부름), 폴더 불러오기·썸네일·

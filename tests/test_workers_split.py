@@ -1,6 +1,6 @@
 """workers.py를 워커별 모듈로 나눈 뒤에도 지켜야 할 것: 앱 시작 때의 import 시점, 평면 구조.
 
-- 앱 시작 때 불리는 player_sidebar가 yesoncheck.workers를 부르면, 다시 내보내기만 하는 workers가 scene_workers까지 바로
+- 앱 시작 때 불리는 player_sidebar가 (sidebar_thumbnails를 거쳐) yesoncheck.workers를 부르면, 다시 내보내기만 하는 workers가 scene_workers까지 바로
   불러 scenedetect(auto_trim)·transnetv2_detector가 나누기 전처럼 시작 때 불려야 함 (늦게 불리게 바뀌면 그 import 오류가
   첫 애니매틱 분석 때에야 드러남). TensorFlow는 여전히 시작 때 불리지 않아야 함 (첫 애니매틱2 분석 때만).
 - 새 모듈은 yesoncheck/ 바로 아래(평면)에 있어야 함: check_frozen_imports.py·tests/test_runtime.py의 비재귀 glob은
