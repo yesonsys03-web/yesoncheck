@@ -756,7 +756,7 @@ def test_sync_works_check_shows_wait_cursor(win, dialogs, tmp_path, monkeypatch)
     from PyQt5.QtCore import Qt
     from PyQt5.QtWidgets import QApplication
 
-    from yesoncheck import player_sidebar
+    from yesoncheck import shared_config_load
 
     player = win.player(make_config(str(tmp_path), WORK, {"version": 1, "shares": [{"mac": "/Volumes/yc", "windows": [NAS]}]}))
     cursors = []
@@ -766,14 +766,14 @@ def test_sync_works_check_shows_wait_cursor(win, dialogs, tmp_path, monkeypatch)
         cursors.append(None if cursor is None else cursor.shape())
         return []
 
-    monkeypatch.setattr(player_sidebar, "list_works_not_opening", recording)
+    monkeypatch.setattr(shared_config_load, "list_works_not_opening", recording)
     assert player._works_not_opening() == []
     assert cursors == [Qt.WaitCursor] and QApplication.overrideCursor() is None
 
     def failing(*args, **kwargs):
         raise OSError("확인 실패 (가짜 재현)")
 
-    monkeypatch.setattr(player_sidebar, "list_works_not_opening", failing)
+    monkeypatch.setattr(shared_config_load, "list_works_not_opening", failing)
     with pytest.raises(OSError, match="가짜 재현"):
         player._works_not_opening()
     assert QApplication.overrideCursor() is None

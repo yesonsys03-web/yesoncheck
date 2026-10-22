@@ -35,10 +35,12 @@ from PyQt5.QtWidgets import (
 from yesoncheck.workers import ThumbnailLoaderWorker, ThumbnailWorker
 import traceback
 
-from yesoncheck import bookmarks, build_info, path_map_setup, paths, shared_config, thumbnails, timing_log, video_list
+from yesoncheck import bookmarks, build_info, path_map_setup, paths, shared_config, shared_config_load, thumbnails, timing_log, video_list
 from yesoncheck.user_files import UserFileError
 from yesoncheck.path_map_setup_dialog import PathMapSetupDialog
-# 옮긴 이름을 이 모듈에서도 그대로 씀 — 기존 `from yesoncheck.player_sidebar import …`·`player_sidebar.X` 접근도 같은 객체로 유지
+# 옮긴 이름을 이 모듈에서도 그대로 씀 — 기존 `from yesoncheck.player_sidebar import …`·`player_sidebar.X` 접근도 같은 객체로 유지.
+# 단 gather_shared_config·list_works_not_opening은 다시 내보내기만 함: 시험이 바꿔치기하는 이름이라 이 모듈의 믹스인은
+# shared_config_load.X로 불러 바꿔치기 지점을 그 모듈 한 곳으로 둠 (여기서 이 이름을 바꿔치기해도 닿지 않음)
 from yesoncheck.shared_config_load import (
     SharedConfigLoad,
     SharedConfigState,
@@ -984,7 +986,7 @@ class PlayerSidebarMixin:
         읽기에 실패해도 공유 파일을 기본값으로 덮어쓰지 않습니다. 시작할 때는 start_shared_config_load(백그라운드).
         """
         self._apply_shared_config(SharedConfigState())  # 먼저 빈 상태로 (예상 못 한 예외가 나도 이전 값이 남지 않게)
-        self._apply_shared_config(gather_shared_config())
+        self._apply_shared_config(shared_config_load.gather_shared_config())
 
     def _first_work_item(self):
         """작품 목록의 첫 항목: 불러오는 동안은 "공유 설정 불러오는 중…", 그 뒤는 "작품선택" (골라도 아무 일 없음)."""
@@ -1202,7 +1204,7 @@ class PlayerSidebarMixin:
         GUI 스레드에서 공유 루트마다 최대 SHARE_PROBE_TIMEOUT_S초를 기다릴 수 있어 그동안 대기 커서."""
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            return list_works_not_opening(self.work_paths, paths.to_native)
+            return shared_config_load.list_works_not_opening(self.work_paths, paths.to_native)
         finally:
             QApplication.restoreOverrideCursor()
 

@@ -3,6 +3,10 @@
 창에 넣는 일(`_apply_shared_config`)은 player_sidebar의 믹스인이 함.
 
 기존 경로 `yesoncheck.player_sidebar`에서도 같은 객체로 불러올 수 있음(player_sidebar가 다시 내보냄).
+
+시험이 `gather_shared_config`·`list_works_not_opening`을 바꿔치기할 때는 **이 모듈의 이름**을 바꿈: SharedConfigLoad의 기본 gather와
+gather_shared_config 안의 호출은 이 모듈의 전역으로 찾고, player_sidebar의 믹스인(`setup_shared_config`·`_works_not_opening`)도
+`shared_config_load.X`로 불러 닿음. player_sidebar의 같은 이름은 다시 내보내기라 거기를 바꿔치기해도 아무것도 안 바뀜.
 """
 
 import functools
