@@ -8,13 +8,11 @@ import os
 import shutil
 import stat
 import sys
-import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import cv2
-from PyQt5.QtCore import QDateTime, QDir, Qt, QSize, QThread, QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, QSize, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QPixmap
 from PyQt5.QtWidgets import (
     QAbstractItemView,
@@ -839,17 +837,6 @@ class PlayerSidebarMixin:
 
                 if path and os.path.isdir(path):
                     if selected_work == "MS_Animatic":
-                        job_list = [
-                            file for file in os.listdir(path)
-                            if os.path.isdir(os.path.join(path, file))
-                            and not file.startswith('.')
-                            and 'ANIMATIC' in file.upper()
-                        ]
-                        job_list.sort()
-                        for job in job_list:
-                            self.jobComboBox.addItem(job)
-                        return
-                    elif selected_work == "TJS_Animatic":
                         job_list = [
                             file for file in os.listdir(path)
                             if os.path.isdir(os.path.join(path, file))
@@ -2170,22 +2157,6 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         # 항목 자리의 미뤄 둔 썸네일 폴더 문제도 거기서 창으로 ((폴더, 제목)마다 한 번)
         self.update_sidebar_display()
 
-    def cleanup_all_thumbnail_workers(self):
-        """모든 썸네일 워커를 강제로 정리합니다."""
-        try:
-            print("모든 썸네일 워커 정리 시작")
-            for worker in self.thumbnail_workers:
-                try:
-                    worker.stop()
-                    worker.deleteLater()
-                except Exception as e:
-                    print(f"워커 정리 중 오류: {e}")
-            
-            self.thumbnail_workers.clear()
-            print("모든 썸네일 워커 정리 완료")
-        except Exception as e:
-            print(f"워커 전체 정리 중 오류: {e}")
-
     def update_sidebar_display(self):
         """사이드바 아이템들을 현재 모드에 맞게 업데이트합니다."""
         print(f"사이드바 디스플레이 업데이트: thumbnail_mode={self.is_thumbnail_mode}, item_count={self.sidebar.count()}")
@@ -3352,53 +3323,3 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             print("백그라운드 썸네일 로딩 스케줄링 (0.5초 후)")
         except Exception as e:
             print(f"백그라운드 로딩 스케줄링 중 오류: {e}")
-
-        def cleanup_thumbnail_folder(self):
-            """현재 job의 썸네일 폴더를 정리합니다."""
-            try:
-                if self.current_thumbnail_folder and os.path.exists(self.current_thumbnail_folder):
-                    # 원본 파일이 존재하지 않는 썸네일들 삭제
-                    import hashlib
-                    for filename in os.listdir(self.current_thumbnail_folder):
-                        if filename.endswith('.jpg'):
-                            thumbnail_path = os.path.join(self.current_thumbnail_folder, filename)
-                            try:
-                                pixmap = QPixmap(thumbnail_path)
-                                if pixmap.isNull():
-                                    os.remove(thumbnail_path)
-                                    print(f"손상된 썸네일 삭제: {thumbnail_path}")
-                            except Exception:
-                                try:
-                                    os.remove(thumbnail_path)
-                                    print(f"손상된 썸네일 삭제: {thumbnail_path}")
-                                except Exception:
-                                    pass
-                    print(f"썸네일 폴더 정리 완료: {self.current_thumbnail_folder}")
-            except Exception as e:
-                print(f"썸네일 폴더 정리 중 오류: {e}")
-
-    def get_thumbnail_disk_usage(self):
-        """현재 썸네일 폴더의 디스크 사용량을 반환합니다."""
-        try:
-            if not self.current_thumbnail_folder or not os.path.exists(self.current_thumbnail_folder):
-                return {'total_size': 0, 'file_count': 0, 'folder_path': self.current_thumbnail_folder}
-            
-            total_size = 0
-            file_count = 0
-            
-            for filename in os.listdir(self.current_thumbnail_folder):
-                if filename.endswith('.jpg'):
-                    file_path = os.path.join(self.current_thumbnail_folder, filename)
-                    if os.path.isfile(file_path):
-                        total_size += os.path.getsize(file_path)
-                        file_count += 1
-            
-            return {
-                'total_size': total_size,
-                'file_count': file_count,
-                'folder_path': self.current_thumbnail_folder
-            }
-            
-        except Exception as e:
-            print(f"썸네일 디스크 사용량 계산 중 오류: {e}")
-            return {'total_size': 0, 'file_count': 0, 'folder_path': self.current_thumbnail_folder}
