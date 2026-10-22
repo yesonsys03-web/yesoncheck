@@ -13,24 +13,16 @@ import traceback
 # cv2는 lazy import로 변경 (실제 사용 시점에만 로드)
 # import cv2
 from PyQt5.QtCore import (
-    QDateTime,
-    QDir,
     QEvent,
-    QObject,
-    QPointF,
     QRect,
-    QRectF,
     QSize,
     QTimer,
     Qt,
-    QUrl,
     pyqtSlot,
-    QItemSelectionModel,
 )
 from PyQt5.QtGui import QFont, QKeySequence
 from PyQt5.QtMultimedia import QMediaPlayer
 from PyQt5.QtWidgets import (
-    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -44,30 +36,24 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLineEdit,
     QPlainTextEdit,
-    QListView,
     QListWidget,
-    QListWidgetItem,
     QMainWindow,
-    QMenu,
     QMessageBox,
     QProgressBar,
     QProgressDialog,
     QPushButton,
-    QScrollArea,
     QScrollBar,
     QShortcut,
     QSizePolicy,
     QSlider,
     QSplitter,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from yesoncheck.video_widget import CustomVideoWidget
 from yesoncheck import bookmarks, build_info, default_app, external_tools, file_associations, image_io, instance_link, \
-    instances, paths, shared_config, timing_log, user_files, video_list
+    instances, paths, timing_log, user_files, video_list
 from yesoncheck.slider_style import jump_to_click
 from yesoncheck.update_banner import UpdateBanner
 from yesoncheck.user_files import UserFileError
@@ -618,14 +604,8 @@ class VideoPlayerBase(QMainWindow):
         self.apply_startup_geometry()
         
         # 윈도우 포커스 설정 (빌드된 앱에서 키 이벤트 처리를 위해)
-        self.setFocusPolicy(Qt.StrongFocus)
         self.activateWindow()
         
-        # 드래그 최적화를 위한 변수들
-        self.last_drag_update = 0
-        self.drag_update_interval = 30  # 30ms로 단축 (33fps)
-        self.is_dragging = False
-    
         # 재생 FPS 측정을 위한 변수들 초기화
         self.playback_fps_counter = 0
         self.playback_fps_timer = QTimer()
@@ -1543,11 +1523,6 @@ QSlider::add-page:horizontal {
         self.setFocusPolicy(Qt.StrongFocus)
         self.setFocus()  # 초기 포커스 설정
 
-
-
-
-
-
     def eventFilter(self, source, event):
         # V키가 비활성화되어 있을 때는 오버레이 컨트롤 동작하지 않음 (컨트롤 패널이 표시되어 있을 때)
         if self.controls_visible:
@@ -1875,108 +1850,12 @@ QSlider::add-page:horizontal {
         
         print(f"오버레이 컨트롤러를 하단 중앙으로 재배치: ({x}, {y})")
 
-
-
-
-
-
-
-    #리스트 우클릭 메뉴 설정
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    
-    # 누락되었던 메서드 추가
-
-
-
-
-
-
-
-    
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    
-    
     def on_sidebar_item_clicked(self, item):
         if self.is_playlist_playing: return
         # 캐시 초기화(이전 영상 프레임 방지)는 open_file이 영상을 연 뒤에 함 — 열지 못하면 보던 영상의 캐시는 그대로
         self.open_file('A', item.toolTip())
 
-
-
-
-
-
-    
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     @pyqtSlot(int)
-
-
-    
-
-
-
-
-
-
-
-
-
-
-        
-
-
     def set_dark_theme(self):
         self.setStyleSheet(DARK_STYLESHEET)
         self.current_theme = 'dark'
@@ -4162,56 +4041,7 @@ QSlider::add-page:horizontal {
         """
         
         QMessageBox.about(self, 'Yeson Checker 정보', about_text)
-    
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    
-
-
-    
-    
-    
-        
-       
-
-    
-    
-    
-    
-    
-    
-    
     # 창을 닫을 때 멈추는(그리고 '업데이트' 전에 묻는) 작업: (이름, 워커 속성). 썸네일 만들기·목록 다시 읽기는 넣지 않음
     # — 묻지 않고 멈춤 (설계 5-2)
     RUNNING_JOB_ATTRS = (
@@ -4413,14 +4243,6 @@ QSlider::add-page:horizontal {
             # 부모 클래스의 closeEvent 호출
             super().closeEvent(event)
 
-
-
-
-
-
-
-
-
     def create_overlay_controls(self):
         """오버레이 컨트롤을 생성합니다."""
         self.overlayFrame = QFrame(self)
@@ -4466,11 +4288,6 @@ QSlider::add-page:horizontal {
         # 도움말 표시/숨김 토글
         def toggle_help():
             self.overlayHelpLabel.setVisible(not self.overlayHelpLabel.isVisible())
-        
-        # 우클릭으로 도움말 토글
-        def overlay_context_menu(event):
-            if event.button() == Qt.RightButton:
-                toggle_help()
         
         # 통합된 마우스 프레스 이벤트 핸들러
         def unified_mouse_press_event(event):
