@@ -16,9 +16,20 @@
   하면 같고(함수 본문 해시의 다중집합, MRO에서 이기는 구현, super() 대상 구현, self 이름 사용 횟수), 본문이 바뀌거나 메서드가
   사라지거나 super() 대상이 바뀌면 다르다. "mro"(VideoPlayer·VideoPlayerBase·OCRReviewDialog의 클래스 이름 순서, 맨 끝은 Qt
   기반 클래스)도 들어 있어 믹스인을 더하거나 순서를 바꾸면 차이로 나온다.
+- 플레이어 밖 클래스·모듈 상수: "class_decls"는 패키지의 모든 최상위 클래스를 클래스 이름 키로(파일 무관) 기반 클래스·데코레이터·
+  함수가 아닌 몸체 문장(시그널·클래스 속성)·메서드 이름 목록을 견주고(플레이어 MRO 클래스는 믹스인 사이 이동을 허용하려고 메서드
+  이름 목록은 뺌), "module_constants"는 모듈 최상위 `NAME = ...` 대입을 상수 이름 키로(파일 무관) 견준다. 그래서 워커 클래스 사이
+  메서드 이동·메서드를 모듈 함수로 내림·시그널 서명·기반 클래스·상수 값 변경은 잡히고, 클래스·상수를 다른 파일로 옮기기만 하면 같다.
 - 차이의 한 줄은 `<항목> - <없어진 것>` / `<항목> + <생긴 것>` / `<항목> ~ <이름>: <전> → <후>` 모양.
 - --allow DIFF_FILE: 그 작업에서 일어나리라 미리 적은 차이 목록. 한 줄에 차이 한 줄의 모양(`*`는 아무 글자나)을 쓰고, 빈 줄과
   `#` 줄은 무시. 차이가 모두 목록에 있고 목록의 줄이 모두 실제 차이에 쓰였을 때만 통과(허용만 했고 나타나지 않은 차이도 실패).
+  끝에 맞은 줄 수를 줄마다 보여 줌 — 의도보다 많이 맞으면 모양이 느슨한 것. **이름은 양쪽을 닫아서 쓸 것**: 이름 뒤를 `*`로
+  열어 두면 접두 이름이 같은 다른 항목(generate_thumbnail ↔ generate_thumbnails_for_all_items)까지 허용됨. 닫는 모양:
+    effective_members ~ generate_thumbnail: *          (이름 뒤 `:`)
+    function_bodies - *:PlayerSidebarMixin.generate_thumbnail"*   (`파일:클래스.이름"` — 클래스 앞 `:`, 이름 뒤 `"`)
+    function_bodies + *:PlayerSidebarMixin.generate_thumbnail"*
+    class_decls ~ OCRWorker: *                          (클래스 이름 뒤 `:`)
+    module_constants ~ EXIT_WAIT_S: *                    (상수 이름 뒤 `:`)
 - Qt 이름 목록(qt_names.json, 이 폴더에 있음): Qt에서 물려받은 이름을 가르는 데만 씀. PyQt5가 바뀌면 PyQt5가 있는 환경에서
   다음으로 다시 뽑는다 (도구 자체는 PyQt5를 import하지 않음):
     python -I -c "import json; from PyQt5.QtWidgets import QMainWindow, QDialog; json.dump({'QMainWindow': sorted(dir(QMainWindow)), 'QDialog': sorted(dir(QDialog))}, open('tools/refactor_checks/qt_names.json', 'w'), indent=1, sort_keys=True)"
@@ -33,6 +44,7 @@ import re
 import sys
 
 PKG_NAME = "yesoncheck"
+FORMAT = 2  # 스냅샷에 담는 항목이 바뀌면 올림 — 옛 baseline과는 견주지 않고 다시 뜨게 함
 DEFAULT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_QT_NAMES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qt_names.json")
 SHORT = {  # 보고서용 짧은 이름 (없으면 클래스 이름)
@@ -182,6 +194,34 @@ def class_members(cls):
 
 def body_hash(node):
     return hashlib.sha1(ast.dump(node, include_attributes=False).encode()).hexdigest()[:12]
+
+
+def stmt_summary(stmt):
+    """문장 하나의 읽을 수 있는 앞부분 + 전체 해시 (차이 줄에 무엇이 바뀌었는지 보이게)"""
+    return f"{' '.join(ast.unparse(stmt).split())[:70]} #{body_hash(stmt)}"
+
+
+def class_decl(cls, with_methods):
+    """클래스 선언의 요약: 기반 클래스·데코레이터·함수가 아닌 몸체 문장(시그널·클래스 속성·중첩 클래스, 순서대로) [·메서드 이름]"""
+    funcs = (ast.FunctionDef, ast.AsyncFunctionDef)
+    decl = {"bases": [ast.unparse(b) for b in cls.bases] + [ast.unparse(k) for k in cls.keywords],
+            "decorators": [ast.unparse(d) for d in cls.decorator_list],
+            "attrs": [stmt_summary(n) for n in cls.body if not isinstance(n, funcs)]}
+    if with_methods:
+        decl["methods"] = sorted(n.name for n in cls.body if isinstance(n, funcs))
+    return decl
+
+
+def module_assigns(body):
+    """모듈 최상위(if/try/with 안 포함, 함수·클래스 안은 제외)의 대입문"""
+    for node in body:
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            yield node
+        elif isinstance(node, (ast.If, ast.Try, ast.With, ast.For, ast.While)):
+            for part in ("body", "orelse", "finalbody"):
+                yield from module_assigns(getattr(node, part, []))
+            for handler in getattr(node, "handlers", []):
+                yield from module_assigns(handler.body)
 
 
 def member_node(cls, name):
@@ -397,7 +437,7 @@ def build_snapshot(root, qt_path):
     player = discover_player(pkg)
     keys = [label for label, _, _, _ in player]
     cls_nodes = {label: cls for label, _, _, cls in player}
-    result = {"meta": {"python": "%d.%d" % sys.version_info[:2]}, "mro": keys, "classes": {}}
+    result = {"meta": {"python": "%d.%d" % sys.version_info[:2], "format": FORMAT}, "mro": keys, "classes": {}}
     C = result["classes"]
     for label, fname, cname, cls in player:
         sink, calls_by_method, stores_by_method = analyze_class(cls)
@@ -615,6 +655,25 @@ def build_snapshot(root, qt_path):
                 bodies[h] += 1
                 index[h].append(f"{fname}:{qual}")
     result["function_index"] = dict(index)
+    # 패키지의 모든 최상위 클래스 선언과 모듈 상수 — 키가 클래스 이름·상수 이름이라 다른 파일로 옮겨도 같고, 클래스 사이로 메서드를
+    # 옮기거나 시그널·기반 클래스·상수 값이 바뀌면 다름. (플레이어 MRO 클래스는 믹스인 사이 이동을 허용해야 하므로 메서드 이름은
+    # 제외 — 그쪽은 effective_members·function_bodies가 봄)
+    player_class_names = {C[k]["class"] for k in keys}
+    decls, constants = [], collections.defaultdict(list)
+    for fname in sorted(os.listdir(pkg)):
+        if not fname.endswith(".py"):
+            continue
+        tree = parse(os.path.join(pkg, fname))
+        for top in tree.body:
+            if isinstance(top, ast.ClassDef):
+                decls.append((top.name, fname, class_decl(top, top.name not in player_class_names)))
+        for node in module_assigns(tree.body):
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target]):
+                for name in {x.id for x in ast.walk(target) if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Store)}:
+                    constants[name].append(stmt_summary(node))
+    name_count = collections.Counter(name for name, _, _ in decls)
+    class_decls = {(name if name_count[name] == 1 else f"{name}@{fname}"): decl for name, fname, decl in decls}  # 이름이 겹치면 파일로 구분
+    module_constants = {name: sorted(summaries) for name, summaries in sorted(constants.items())}
     # OCRReviewDialog도 같은 방식: 자신 + (패키지 안) 기반 클래스들의 MRO에서 이기는 구현·super 대상·self 이름 사용
     rv_chain = discover(pkg, os.path.join(pkg, rv_file), "OCRReviewDialog", include_root=True)
     rv_keys = [n for _, _, n, _ in rv_chain]
@@ -649,6 +708,8 @@ def build_snapshot(root, qt_path):
         class_mro[name] = [n for _, _, n, _ in discover(pkg, path, name, include_root=True, externals=True)]
     result["normalized"] = {
         "mro": class_mro,
+        "class_decls": class_decls,
+        "module_constants": module_constants,
         "function_bodies": sorted(bodies.items()),
         "super_targets": sorted(super_targets),
         "self_name_use": {n: dict(sorted(c.items())) for n, c in sorted(use.items())},
@@ -718,11 +779,11 @@ def compare(baseline, current, allow_path=None):
     index = {**baseline.get("function_index", {}), **current.get("function_index", {})}
     groups = diff_entries(baseline["normalized"], current["normalized"], index)
     patterns = read_allow(allow_path) if allow_path else []
-    used = set()
+    matched = collections.Counter()  # 허용 줄 → 맞은 차이 줄 수
 
     def allowed(line):
         hits = [p for p, rx in patterns if rx.fullmatch(line)]
-        used.update(hits)
+        matched.update(hits)
         return bool(hits)
 
     total = denied = 0
@@ -736,7 +797,11 @@ def compare(baseline, current, allow_path=None):
             ok = allowed(line)
             denied += not ok
             print(f"    {'(허용) ' if ok else ''}{line}")
-    unused = [p for p, _ in patterns if p not in used]
+    if patterns:  # 의도보다 많은 줄에 맞는 허용(너무 느슨한 모양)이 보이게
+        print("허용 줄별 맞은 차이 수:")
+        for p, _ in patterns:
+            print(f"    {matched[p]:>3}  {p}")
+    unused = [p for p, _ in patterns if not matched[p]]
     if unused:
         print(f"나타나지 않은 허용 {len(unused)}개 (예상한 차이가 일어나지 않았음):")
         for p in unused:
@@ -780,6 +845,8 @@ def main(argv=None):
 
     with open(args.baseline, encoding="utf-8") as fh:
         baseline = json.load(fh)
+    if baseline.get("meta", {}).get("format") != FORMAT:
+        fail(f"baseline은 옛 스냅샷 형식(format {baseline.get('meta', {}).get('format')})이라 지금 도구(format {FORMAT})와 견줄 수 없음 — 다시 스냅샷")
     made_with = baseline.get("meta", {}).get("python")
     if made_with != snapshot["meta"]["python"]:
         fail(f"baseline은 Python {made_with}로 뜬 것인데 지금은 {snapshot['meta']['python']} — "
