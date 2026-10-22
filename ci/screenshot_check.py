@@ -9,10 +9,13 @@
   VideoPlayer·OCRReviewDialog를 만들고, 정착한 화면을 widget.grab()으로 DIR/<장면>.png 에, 위젯 트리 덤프(클래스·objectName·
   geometry·보임·글자·styleSheet sha256)를 DIR/<장면>.tree.json 에 저장한다. 찍은 환경·정착 정보는 DIR/<장면>.meta.json,
   자식의 출력은 DIR/<장면>.log. --scene을 여러 번 주면 그 장면만(기본: 전부). --root: 이 검사를 돌리는 저장소가 아닌 다른
-  체크아웃(예: 리팩토링 전 커밋의 worktree)의 yesoncheck를 찍을 때.
+  체크아웃(예: 리팩토링 전 커밋의 worktree)의 yesoncheck를 찍을 때. 장면이 끝까지 성공해야만(자식이 창을 닫고 뒤 스레드까지
+  정리하고 종료 코드 0) meta.json에 완료 표시와 PNG·트리의 sha256을 적는다 — 실패한 장면의 PNG·트리·meta는 지우고 로그만 남긴다.
 - compare: 두 폴더의 장면마다 PNG 바이트와 트리 JSON이 모두 같으면 종료 0, 다르면 종료 1 + 어느 장면이 어디서 다른지
-  (다른 픽셀의 바운딩 박스, 트리의 바뀐 위젯과 값, 대화 상자 차이)를 출력한다. 한쪽에만 있는 장면도 차이다. 폴더가 없거나
-  장면 이름이 틀리면 종료 2.
+  (다른 픽셀의 바운딩 박스, 트리의 바뀐 위젯과 값, 대화 상자 차이)를 출력한다. --scene을 안 주면 고정된 장면 전부가 두 폴더
+  모두에 있어야 하고(없으면 차이 — 양쪽에서 같이 빠져도), 디스크에 있는 그 밖의 PNG도 함께 비교한다. 장면의 meta.json에 완료
+  표시가 없거나 PNG·트리가 meta의 sha256과 다르면(찍기가 끝까지 가지 못했거나 찍은 뒤 바뀐 파일) 그 장면은 차이다. 폴더가
+  없거나 장면 이름이 틀리면 종료 2.
 
 같은 기계·같은 플랫폼에서 전/후를 찍어 비교하는 도구다 (글꼴·DPI·스타일이 플랫폼마다 달라 플랫폼 사이 비교는 뜻이 없음).
 전/후를 같은 러너가 찍어야 하고, Qt·글꼴·화면이 다르게 찍힌 폴더끼리 비교하면 [주의]로 알린다.
@@ -65,6 +68,7 @@ INHERITED_ENV_DROPPED = (
     "QT_ENABLE_HIGHDPI_SCALING", "QT_DEVICE_PIXEL_RATIO", "QT_QPA_PLATFORMTHEME", "QT_QPA_FONTDIR",
 )
 
+OUTPUT_SUFFIXES = ("png", "tree.json", "meta.json")
 TREE_FIELDS = ("class", "meta_class", "name", "geometry", "visible", "enabled", "text", "values", "style_sha256")
 ENVIRONMENT_KEYS = ("python", "qt", "pyqt", "platform", "machine", "style", "font", "screen")
 DEFAULT_MAX_DIFF = 40  # 장면마다 보여 줄 트리 차이의 최대 줄 수
@@ -654,13 +658,36 @@ def tail(text, lines=40):
     return "\n".join(rows[-lines:])
 
 
-def capture_scene(name, out, root, work, media_dir, media_hashes, git):
-    """장면 하나를 자식 프로세스로 찍음 → 성공이면 True. 실패는 이유(종료 코드·자식의 마지막 출력)를 크게 출력."""
-    scene = SCENES[name]
-    for suffix in ("png", "tree.json", "meta.json", "log"):  # 이전 결과가 섞이지 않게
+def remove_outputs(out, name, include_log=False):
+    """장면의 산출물(PNG·트리·meta)을 지움. 로그는 include_log일 때만 (실패 원인을 볼 수 있게 남김)."""
+    suffixes = OUTPUT_SUFFIXES + ("meta.json.tmp",) + (("log",) if include_log else ())
+    for suffix in suffixes:
         path = os.path.join(out, f"{name}.{suffix}")
         if os.path.exists(path):
             os.remove(path)
+
+
+def file_sha256(path):
+    with open(path, "rb") as fh:
+        return sha256_hex(fh.read())
+
+
+def capture_scene(name, out, root, work, media_dir, media_hashes, git):
+    """장면 하나를 자식 프로세스로 찍음 → 성공이면 True. 실패는 이유(종료 코드·자식의 마지막 출력)를 크게 출력하고, 실패한
+    (예외로 끝난 것 포함) 장면의 PNG·트리·meta는 남기지 않음 — 자식은 정리(창 닫기·뒤 스레드 기다림)보다 먼저 산출물을 쓰므로
+    정리에서 실패하면 정상처럼 보이는 파일이 남기 때문. 완료 표시는 맨 마지막에 부모가 적음."""
+    remove_outputs(out, name, include_log=True)  # 이전 결과가 섞이지 않게
+    succeeded = False
+    try:
+        succeeded = run_scene_child(name, out, root, work, media_dir, media_hashes, git)
+    finally:
+        if not succeeded:
+            remove_outputs(out, name)
+    return succeeded
+
+
+def run_scene_child(name, out, root, work, media_dir, media_hashes, git):
+    scene = SCENES[name]
     prepare_scene_folder(work, media_dir, scene.media)
     command = [sys.executable, SCRIPT, "_scene", name, "--out", out, "--work", work, "--root", root]
     started = time.monotonic()
@@ -675,7 +702,7 @@ def capture_scene(name, out, root, work, media_dir, media_hashes, git):
     with open(os.path.join(out, f"{name}.log"), "w", encoding="utf-8") as fh:
         fh.write(proc.stdout + "\n--- stderr ---\n" + proc.stderr)
     elapsed = time.monotonic() - started
-    produced = [os.path.join(out, f"{name}.{suffix}") for suffix in ("png", "tree.json", "meta.json")]
+    produced = [os.path.join(out, f"{name}.{suffix}") for suffix in OUTPUT_SUFFIXES]
     if proc.returncode != 0 or not all(os.path.exists(p) for p in produced):
         print(f"[실패] {name}: 종료 코드 {proc.returncode} ({elapsed:.1f}초) — 전체 출력: {os.path.join(out, name + '.log')}",
               file=sys.stderr)
@@ -684,14 +711,17 @@ def capture_scene(name, out, root, work, media_dir, media_hashes, git):
     meta_path = os.path.join(out, f"{name}.meta.json")
     with open(meta_path, encoding="utf-8") as fh:
         meta = json.load(fh)
-    with open(os.path.join(out, f"{name}.png"), "rb") as fh:
-        meta["png_sha256"] = sha256_hex(fh.read())
+    meta["png_sha256"] = file_sha256(os.path.join(out, f"{name}.png"))
+    meta["tree_sha256"] = file_sha256(os.path.join(out, f"{name}.tree.json"))
     meta["media_sha256"] = {n: media_hashes[n] for n in scene.media}
     meta["git"] = git
     meta["elapsed_s"] = round(elapsed, 1)
-    with open(meta_path, "w", encoding="utf-8") as fh:
+    meta["complete"] = True  # 성공 경로의 맨 끝에서만 적는 완료 표시 — compare가 요구함
+    tmp_path = meta_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
         json.dump(meta, fh, ensure_ascii=False, indent=1, sort_keys=True)
         fh.write("\n")
+    os.replace(tmp_path, meta_path)  # 반쯤 쓴 meta가 남지 않게
     settle_info = meta["settle"]
     print(f"{name}: 정착 {settle_info['fixed_wait_s']:g}초 + 연속 두 번 같음 (확인 {settle_info['rounds']}번째, "
           f"정착까지 {settle_info['settle_s']}초), 뒤 스레드 기다림 {settle_info['background_wait_s']}초, "
@@ -861,17 +891,36 @@ def environment_notes(baseline_dir, current_dir, scene):
     return notes
 
 
+def completion_problems(folder, label, scene):
+    """폴더의 장면이 찍기가 끝까지 성공한 것인지 → 문제 줄 목록 (없으면 빈 목록). 끝까지 성공한 장면에만 부모가 meta.json에
+    완료 표시와 PNG·트리의 sha256을 적으므로, 표시가 없거나 파일이 그 해시와 다르면 중간에 실패했거나 찍은 뒤 바뀐 것."""
+    meta_path = os.path.join(folder, f"{scene}.meta.json")
+    if not os.path.exists(meta_path):
+        return [f"{scene}.meta.json이(가) {label} 폴더에 없음 — 찍기가 끝까지 성공하지 않았거나 옛 형식"]
+    meta = load_json(meta_path)
+    if meta.get("complete") is not True:
+        return [f"{label} 폴더의 {scene}.meta.json에 완료 표시가 없음 — 찍기가 끝까지 성공하지 않았거나 옛 형식"]
+    problems = []
+    for key, filename in (("png_sha256", f"{scene}.png"), ("tree_sha256", f"{scene}.tree.json")):
+        path = os.path.join(folder, filename)
+        if os.path.exists(path) and file_sha256(path) != meta.get(key):
+            problems.append(f"{label} 폴더의 {filename}이(가) meta에 적힌 {key}와 다름 — 찍은 뒤 바뀐 파일")
+    return problems
+
+
 def compare_scene(scene, baseline_dir, current_dir, max_diff):
     """장면 하나 비교 → (같은가, 설명 줄 목록)."""
     png_name, tree_name = f"{scene}.png", f"{scene}.tree.json"
+    sides = (("기준", baseline_dir), ("현재", current_dir))
     missing = [f"{filename}이(가) {label} 폴더에 없음"
-               for label, folder in (("기준", baseline_dir), ("현재", current_dir))
-               for filename in (png_name, tree_name) if not os.path.exists(os.path.join(folder, filename))]
+               for label, folder in sides for filename in (png_name, tree_name)
+               if not os.path.exists(os.path.join(folder, filename))]
+    problems = [line for label, folder in sides for line in completion_problems(folder, label, scene)]
     if missing:
-        return False, missing
+        return False, missing + problems
 
-    same = True
-    lines = []
+    same = not problems
+    lines = list(problems)
     baseline_png, current_png = os.path.join(baseline_dir, png_name), os.path.join(current_dir, png_name)
     with open(baseline_png, "rb") as fh:
         before_bytes = fh.read()
@@ -906,11 +955,8 @@ def scenes_in(folder):
 
 
 def cmd_compare(args):
-    # 기본: 두 폴더 중 어느 한쪽에라도 있는 장면 전부 (한쪽에만 있으면 차이)
-    scenes = list(dict.fromkeys(args.scene)) if args.scene else sorted(scenes_in(args.baseline) | scenes_in(args.current))
-    if not scenes:
-        print("비교할 장면이 없음: 두 폴더에 PNG가 하나도 없음", file=sys.stderr)
-        return 1
+    # 기본: 고정된 장면 전부(두 폴더 모두에 있어야 함 — 양쪽에서 같이 빠져도 차이) + 디스크에 있는 그 밖의 PNG
+    scenes = list(dict.fromkeys(args.scene)) if args.scene else sorted(set(SCENES) | scenes_in(args.baseline) | scenes_in(args.current))
     notes = sorted({note for scene in scenes for note in environment_notes(args.baseline, args.current, scene)})
     for note in notes:
         print(note)
