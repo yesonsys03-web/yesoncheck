@@ -5,8 +5,10 @@ VideoPlayerBase의 부모 클래스로 붙음 — `class VideoPlayerBase(PlayerO
 VideoPlayerBase 바로 뒤(QMainWindow 앞)에 오고, 다른 믹스인과의 가림 관계·`VideoPlayerBase.X`로 찾는 접근은 예전과 같음.
 상태(`self.ocr_*` 등)는 예전처럼 VideoPlayerBase.__init__이 만듦.
 
-player_base를 모듈 수준에서 import하지 말 것 — player_base가 상속하려고 이 모듈을 불러오므로 순환이 됨. 워커(`from .workers
-import X`)·검토 창(player_review)·cv2는 예전처럼 메서드 안에서 불러옴(앱 시작 때 불러오지 않음).
+player_base를 모듈 수준에서 import하지 말 것 — player_base가 상속하려고 이 모듈을 불러오므로 순환이 됨. player_base에 남은
+모듈 함수(_transnetv2_available — load_ocr_result)는 메서드 안에서 불러 `player_base.이름`으로 부름(시험이 player_base의 이름을
+바꿔치기하므로 값을 복사해 두지 않음). 워커(`from .workers import X`)·검토 창(player_review)·cv2는 예전처럼 메서드 안에서
+불러옴(앱 시작 때 불러오지 않음).
 """
 
 import copy
@@ -1595,7 +1597,10 @@ class PlayerOcrMixin:
             final_total_frames = actual_total_frames or load_data.get("total_frames") or (self.total_frames_a if hasattr(self, 'total_frames_a') and self.total_frames_a else 1)
             # OCR 모드 로드 (JSON 파일에서 가져오거나 기본값 사용)
             ocr_mode = load_data.get("ocr_mode", 'titmouse')
-            if ocr_mode == 'animatic2' and not _transnetv2_available():
+            # _transnetv2_available은 player_base에 있음(initUI도 씀). 모듈 수준 import는 순환이라 여기서 불러 모듈 속성으로 부름 —
+            # 부를 때마다 player_base에서 찾으므로 시험의 바꿔치기(player_base._transnetv2_available)가 이 메서드에도 닿음
+            from yesoncheck import player_base
+            if ocr_mode == 'animatic2' and not player_base._transnetv2_available():
                 print(
                     "[OCR 로드] 저장된 결과의 모드가 '애니매틱2(TransNetV2)'이지만 "
                     "이 빌드/환경에는 TransNetV2가 포함되어 있지 않아 '애니매틱 (Auto Cut)'으로 대체합니다."
