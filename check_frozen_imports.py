@@ -13,6 +13,7 @@
 - 애니매틱2: TensorFlow + TransNetV2 씬 감지 (합성 3샷 영상, 씬 시작 [0, 30, 60]이어야 함).
   TensorFlow나 가중치(vendor/transnetv2-weights)가 빌드 환경에 없으면 검사 실패
 - 이미지 시퀀스: TGA(RLE)·EXR 프레임 한 장씩 디코딩 (yesoncheck.sequence_source.decode_frame, 메모리에서 만든 작은 프레임).
+  이 환경의 cv2에 OpenEXR 코덱이 꺼져 있으면 EXR은 건너뛰고 TGA만 확인 (빌드는 실패시키지 않고, 건너뛴 사실을 결과 줄에 적음).
   PIL 이미지 플러그인(PIL.TgaImagePlugin 등)은 지연 import라 소스 import만으로는 쓰인 모듈에 안 잡히므로, 실제로 디코딩해서 앱에 있는지 대조함
 
 사용법: python check_frozen_imports.py <앱 번들(.app) 또는 Windows 앱 폴더(dist\\YesonCheck_Autocut)>
@@ -28,6 +29,10 @@ import sys
 import sysconfig
 import tempfile
 import zipfile
+
+# Windows cv2 휠은 OpenEXR 코덱이 기본으로 꺼져 있고 이 값은 cv2를 불러오기 전에 정해 두는 것이 안전하다. exercise_app()은
+# 소스의 import를 이름 순서로 불러서 cv2가 yesoncheck보다 먼저 불려 yesoncheck/__init__.py가 정하기에는 늦으므로, 여기서 맨 먼저 정함
+os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -79,22 +84,27 @@ def source_imports():
     return sorted(names)
 
 
+EXR_SKIPPED = "exr 건너뜀 (이 cv2는 OpenEXR 코덱 비활성)"
+
+
 def exercise_sequence_decode():
     """이미지 시퀀스 프레임을 TGA·EXR 한 장씩 앱의 디코더(sequence_source.decode_frame)로 읽어 봅니다. 읽은 확장자 목록을 돌려줌.
 
     PIL은 이미지 플러그인(TgaImagePlugin 등)을 처음 쓸 때 지연 import하므로, 실제로 디코딩하지 않으면 그 모듈이
     '실행에 쓰인 모듈'에 안 잡혀 빌드된 앱에 빠져도 모른다. 여기서 읽으면 쓰인 모듈에 올라 main()이 앱 안에 있는지 대조한다.
-    EXR은 cv2의 EXR 인코더·디코더가 이 환경의 cv2에 있는지 확인 (cv2는 앱에 같은 휠로 들어감).
+    EXR은 cv2의 EXR 인코더·디코더가 이 환경의 cv2에 있는지 확인 (cv2는 앱에 같은 휠로 들어감). 이 cv2에 OpenEXR 코덱이 꺼져
+    있으면(sequence_source.exr_supported()가 False) EXR은 건너뛰고 TGA만 확인함 — EXR은 이 빌드의 필수가 아니므로 빌드를 실패시키지
+    않지만, 건너뛴 사실을 돌려주는 목록에 적음 ("exr 건너뜀 …"; main()이 그대로 출력).
     디코더가 내는 오류는 잡지 않고 그대로 올림 (스택 트레이스째 검사 실패). 부르기 전에 PROJECT_ROOT가 sys.path에 있어야 함.
     """
     import io
 
+    # sequence_source를 cv2보다 먼저 불러야 함: 환경 변수 OPENCV_IO_ENABLE_OPENEXR을 cv2를 불러오기 전에 정함
+    from yesoncheck import sequence_source
+
     import cv2
     import numpy as np
     from PIL import Image
-
-    # sequence_source를 먼저 불러야 함: OPENCV_IO_ENABLE_OPENEXR을 cv2의 첫 EXR 인코딩·디코딩 전에 정함
-    from yesoncheck import sequence_source
 
     decoded = []
     tga = io.BytesIO()
@@ -104,6 +114,9 @@ def exercise_sequence_decode():
         raise SystemExit(f"TGA 프레임 디코딩 결과가 다릅니다: 모양 {frame.shape}, 첫 픽셀 {tuple(frame[0, 0])} (기대 (4, 8, 3), (30, 200, 10))")
     decoded.append("tga")
 
+    if not sequence_source.exr_supported():
+        decoded.append(EXR_SKIPPED)
+        return decoded
     ok, exr = cv2.imencode(".exr", np.full((4, 8, 3), (0.0, 1.0, 2.0), np.float32))
     if not ok:
         raise SystemExit("이 환경의 cv2가 EXR을 인코딩하지 못합니다 (OpenEXR 지원 확인 필요)")

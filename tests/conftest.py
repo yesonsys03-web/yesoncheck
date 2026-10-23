@@ -4,6 +4,9 @@ import os
 import platform
 import sys
 
+# Windows cv2 휠은 OpenEXR 코덱이 기본으로 꺼져 있음: cv2를 어떤 시험 모듈이 먼저 불러오든 그 전에 정해 둔다
+os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

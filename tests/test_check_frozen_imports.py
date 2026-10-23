@@ -1,6 +1,7 @@
 """check_frozen_imports.py의 별칭 규칙: 같은 파일이 다른 이름으로도 등록된 TensorFlow 모듈
 (tensorflow.compat.v1 ↔ 실제 파일 tensorflow/_api/v2/compat/v1/__init__.py)만, 실제 이름이 앱(PYZ)에 있을 때 통과.
-이미지 시퀀스 프레임 디코딩 실행(exercise_sequence_decode): PIL의 지연 import 플러그인이 '실행에 쓰인 모듈'에 잡히는지."""
+이미지 시퀀스 프레임 디코딩 실행(exercise_sequence_decode): PIL의 지연 import 플러그인이 '실행에 쓰인 모듈'에 잡히는지.
+cv2에 OpenEXR 코덱이 꺼진 환경(Windows 휠의 기본)에서는 EXR을 건너뛰고 TGA만 확인하며 그 사실을 결과에 적음."""
 
 import os
 import subprocess
@@ -10,6 +11,7 @@ import numpy as np
 import pytest
 
 import check_frozen_imports as cfi
+from yesoncheck.sequence_source import exr_supported
 
 SITE = sorted(cfi.SITE_DIRS)[0]
 
@@ -50,11 +52,36 @@ def test_sequence_decode_exercise_pulls_in_the_tga_plugin():
         "import check_frozen_imports as cfi\n"
         "assert 'PIL.TgaImagePlugin' not in sys.modules\n"
         "decoded = cfi.exercise_sequence_decode()\n"
-        "print(sorted(decoded), 'PIL.TgaImagePlugin' in sys.modules)\n"
+        "from yesoncheck import sequence_source\n"
+        "print(sequence_source.exr_supported())\n"
+        "print(sorted(decoded))\n"
+        "print('PIL.TgaImagePlugin' in sys.modules)\n"
     )
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120, check=False)
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == "['exr', 'tga'] True"
+    supported, decoded, plugin_loaded = proc.stdout.strip().splitlines()
+    if sys.platform == "darwin":
+        assert supported == "True", "Mac의 cv2는 EXR을 다룰 수 있어야 함 (조용히 건너뛰지 않게)"
+    # EXR을 다룰 수 있는 환경(Mac 등)은 둘 다, 코덱이 꺼진 환경은 TGA만 하고 건너뛴 사실을 적음
+    assert decoded == str(sorted(["exr", "tga"] if supported == "True" else ["tga", cfi.EXR_SKIPPED]))
+    assert plugin_loaded == "True"
+
+
+def test_sequence_decode_exercise_skips_exr_when_the_codec_is_disabled(monkeypatch):
+    """OpenEXR이 꺼진 cv2에서는 EXR을 건너뜀 (빌드를 실패시키지 않음) — 건너뛴 사실은 결과 목록에 남고 EXR 디코딩은 부르지 않는다."""
+    import yesoncheck.sequence_source as sequence_source
+
+    real, asked = sequence_source.decode_frame, []
+
+    def spy(data, ext):
+        asked.append(ext)
+        return real(data, ext)
+
+    monkeypatch.setattr(sequence_source, "exr_supported", lambda: False)
+    monkeypatch.setattr(sequence_source, "decode_frame", spy)
+    assert cfi.exercise_sequence_decode() == ["tga", cfi.EXR_SKIPPED]
+    assert asked == ["tga"]
+    assert "건너뜀" in cfi.EXR_SKIPPED and "OpenEXR" in cfi.EXR_SKIPPED
 
 
 def test_sequence_decode_exercise_fails_loudly_on_a_wrong_decode(monkeypatch):
@@ -67,6 +94,7 @@ def test_sequence_decode_exercise_fails_loudly_on_a_wrong_decode(monkeypatch):
     assert "TGA" in str(exc.value)
 
 
+@pytest.mark.skipif(not exr_supported(), reason="cv2 OpenEXR 비활성(이 플랫폼 휠)")
 def test_sequence_decode_exercise_checks_the_exr_result_too(monkeypatch):
     """EXR 디코딩이 틀려도 실패 (TGA만 맞고 cv2의 EXR 경로가 깨진 환경)."""
     import yesoncheck.sequence_source as sequence_source

@@ -16,7 +16,9 @@ import threading
 import traceback
 import weakref
 
-# OpenCV는 이 값을 EXR을 처음 디코딩할 때 읽는다 (cv2를 먼저 불러왔어도 그 전에만 정해지면 된다)
+# 예비: 이 값은 cv2를 불러오기 전에 정해 두는 것이 안전하다 (Windows cv2 휠은 불러온 뒤에 정한 값을 못 보는 것으로 보임 —
+# Windows CI 실패 로그 기준, Mac에서는 재현되지 않음). 앱과 시험은 yesoncheck/__init__.py·tests/conftest.py가 더 일찍 정하므로,
+# 여기는 그 둘을 거치지 않고 이 모듈만 쓰는 경우의 몫
 os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
 
 import cv2
@@ -61,7 +63,36 @@ def _decode_pil(data):
     return np.ascontiguousarray(rgb[:, :, ::-1])
 
 
+@functools.lru_cache(maxsize=None)
+def _exr_probe_error():
+    """이 cv2로 EXR을 다룰 수 있는지 한 번만 시험해 (작은 float32 프레임을 EXR로 인코딩) 그 결과를 기억한다.
+
+    할 수 있으면 None. OpenEXR 코덱이 꺼진 cv2 휠(Windows 휠은 기본이 꺼짐)이면 그 cv2.error를 돌려준다.
+    그 오류가 아닌 cv2.error·다른 예외는 삼키지 않고 그대로 올린다 (기억하지도 않음).
+    """
+    try:
+        ok, _buf = cv2.imencode(".exr", np.zeros((1, 1, 3), np.float32))
+    except cv2.error as exc:
+        if "OpenEXR codec is disabled" not in str(exc):
+            raise
+        return exc
+    if not ok:
+        return RuntimeError("cv2.imencode(.exr)가 실패했습니다 (인코더가 False를 돌려줌)")
+    return None
+
+
+def exr_supported():
+    """이 빌드의 cv2가 EXR 프레임을 읽을 수 있는지 (OpenEXR 코덱이 켜져 있는지). 처음 부를 때 한 번 시험하고 기억함."""
+    return _exr_probe_error() is None
+
+
 def _decode_exr(data):
+    error = _exr_probe_error()
+    if error is not None:
+        raise ValueError(
+            "이 빌드의 cv2에 OpenEXR 코덱이 비활성이라 EXR 프레임을 읽을 수 없습니다 "
+            "(환경 변수 OPENCV_IO_ENABLE_OPENEXR=1을 cv2를 불러오기 전에 정해야 하며, 그래도 안 되면 이 cv2는 EXR을 지원하지 않습니다): "
+            f"{error}") from error
     # IMREAD_COLOR는 쓰지 않는다: cv2 4.6.0은 단일 채널 EXR을 그것으로 읽으면 오류 없이 쓰레기 값을 준다
     frame = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
     if frame is None:
