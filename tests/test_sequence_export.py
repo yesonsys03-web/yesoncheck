@@ -493,6 +493,67 @@ def test_output_frame_count_mismatch_is_error_and_output_deleted(qapp, tmp_path,
     assert "프레임 수" in rec.errors[0] and "EX01_tk1" in rec.errors[0]
 
 
+def test_cancel_after_earlier_failure_emits_no_error(qapp, tmp_path, monkeypatch, capsys):
+    """앞 항목이 실패한 뒤 취소해도 error도 finished도 없다 (취소는 사용자의 뜻 — 조용히 끝남). 실패 목록은 워커에 남고 콘솔에 찍힌다."""
+    src, out = tmp_path / "src", tmp_path / "out"
+    make_seq(str(src), "A_tk1", range(1, 11))  # 10장: 3번째 읽기에서 실패
+    make_seq(str(src), "B_tk1", range(1, 41))
+    failing = failing_after(3, str(out), "A broke")
+    monkeypatch.setattr(sequence_export_worker, "ImageSequenceCapture",
+                        lambda identity: failing(identity) if identity.endswith("A_tk1.seq") else ImageSequenceCapture(identity))
+    worker = make_worker(scan(src), out)
+    rec = Recorder(worker)
+    reached, seen = hold_at(worker, str(out), 10 + 3)  # A 몫(10장)을 건너뛴 뒤 B의 3장째
+
+    worker.start()
+    assert reached.wait(WAIT_S)
+    assert seen["files"] == ["B_tk1" + PARTIAL_SUFFIX], "A의 부분 출력은 이미 지워졌고 B는 만드는 중"
+    worker.stop()
+    assert worker.wait(WAIT_S * 1000)
+
+    assert rec.errors == [] and rec.finished == []
+    assert worker.cancelled
+    assert os.listdir(out) == []
+    assert [base for base, _reason in worker.failures] == ["A_tk1"] and "A broke" in worker.failures[0][1]
+    assert "A broke" in capsys.readouterr().out, "알리지 않는 대신 콘솔에는 남아야 합니다"
+
+
+def test_unexpected_exception_in_run_is_reported_as_error(qapp, tmp_path, monkeypatch):
+    """run()이 예상 못 한 예외(여기서는 원본 폴더 검사 중 NAS 오류)를 만나도 스레드가 신호 없이 죽지 않고 error로 알린다."""
+    src, out = tmp_path / "src", tmp_path / "out"
+    make_seq(str(src), "EX01_tk1", range(1, 4))
+
+    def broken_validate(_items, _out_dir):
+        raise PermissionError(13, "NAS 폴더를 읽을 수 없음", str(src))
+
+    monkeypatch.setattr(sequence_export_worker, "validate_out_dir", broken_validate)
+
+    worker = make_worker(scan(src), out)
+    rec = run_to_end(worker)
+
+    assert rec.finished == [] and rec.started == []
+    assert len(rec.errors) == 1
+    assert "PermissionError" in rec.errors[0] and "NAS 폴더를 읽을 수 없음" in rec.errors[0]
+    assert "Traceback" in rec.errors[0], "예상 못 한 오류는 스택 트레이스째 보여야 합니다"
+    assert not out.exists()
+
+
+def test_unexpected_exception_after_cancel_is_logged_not_emitted(qapp, tmp_path, monkeypatch, capsys):
+    src, out = tmp_path / "src", tmp_path / "out"
+    make_seq(str(src), "EX01_tk1", range(1, 4))
+    monkeypatch.setattr(sequence_export_worker, "validate_out_dir",
+                        lambda _items, _out_dir: (_ for _ in ()).throw(OSError("NAS gone")))
+    worker = make_worker(scan(src), out)
+    rec = Recorder(worker)
+
+    worker.stop()
+    worker.start()
+    assert worker.wait(WAIT_S * 1000)
+
+    assert rec.errors == [] and rec.finished == []
+    assert "NAS gone" in capsys.readouterr().out
+
+
 # ---------------------------------------------------------------- 원본 폴더 금지
 
 

@@ -27,6 +27,7 @@ EXPORT_BITRATE = "8000k"  # 고속 모드에서만 쓰이는 값 — 주석 굽�
 PARTIAL_SUFFIX = ".mov.part"  # 만드는 중인 출력의 이름 (<base>.mov.part)
 MAX_RATE_DENOMINATOR = 1001  # fps 분수의 분모 한도 (23.976 -> 24000/1001) — 병합의 pick_frame_rate와 같은 기준
 ERROR_TAIL_CHARS = 4000  # 오류 글에 붙이는 ffmpeg stderr의 끝부분
+LOG_PREFIX = "[시퀀스 MOV]"
 
 
 class SequenceExportError(RuntimeError):
@@ -81,8 +82,10 @@ class SequenceExportWorker(QThread):
     """시퀀스 여러 개를 mov로 — `<out_dir>/<base>.mov`, fps는 짝 mov의 것(없으면 24).
 
     item_started(index, base): 항목을 시작할 때. progress(완료 프레임, 전체 프레임): 프레임마다, 전체는 항목 합산.
-    finished(): 모두 성공. error(글): 실패가 있으면 끝난 뒤 요약 하나 (실패한 항목마다 이유), 또는 시작할 수 없을 때 이유.
-    취소(stop)는 finished도 error도 내지 않는다 (cancelled가 True).
+    finished(): 모두 성공. error(글): 실패가 있으면 끝난 뒤 요약 하나 (실패한 항목마다 이유), 또는 시작할 수 없을 때·예상 못 한
+    예외의 이유 — 끝날 때까지 finished나 error 중 하나는 반드시 나간다.
+    취소(stop)는 finished도 error도 내지 않는다 (cancelled가 True) — 취소 전에 실패한 항목이 있었어도 마찬가지이며, 그 목록은
+    failures([(base, 이유)])에 남고 콘솔에도 찍힌다.
     """
 
     item_started = pyqtSignal(int, str)
@@ -98,6 +101,7 @@ class SequenceExportWorker(QThread):
         self._stopped = threading.Event()
         self._proc = None
         self._proc_lock = threading.Lock()
+        self.failures = []  # 실패한 항목 [(base, 이유)] — run()을 도는 스레드가 채우고, 끝난 뒤 읽음
         # 아래 셋은 run()을 도는 스레드만 만짐
         self._total = sum(_frames_of(seq) for seq in self.items)
         self._done = 0
@@ -124,17 +128,22 @@ class SequenceExportWorker(QThread):
             proc.kill()
 
     def run(self):
+        try:
+            self._run()
+        except Exception as exc:  # 어떤 경우에도 finished나 error 중 하나는 나가야 함 (진행 대화상자가 영영 '실행 중'으로 남지 않게)
+            self._emit_error(f"{exc!r}\n\n{traceback.format_exc()}")
+
+    def _run(self):
         reason = validate_out_dir(self.items, self.out_dir)
         if reason is not None:
-            self.error.emit(reason)
+            self._emit_error(reason)
             return
         try:
             os.makedirs(self.out_dir, exist_ok=True)
         except OSError as exc:
-            self.error.emit(f"출력 폴더를 만들 수 없습니다: {self.out_dir}\n{exc!r}\n\n{traceback.format_exc()}")
+            self._emit_error(f"출력 폴더를 만들 수 없습니다: {self.out_dir}\n{exc!r}\n\n{traceback.format_exc()}")
             return
         self.progress.emit(0, self._total)
-        failures = []  # [(base, 이유)]
         made = set()  # 이 작업에서 이미 만든 출력 이름 (대소문자 무시) — 같은 이름을 말없이 덮어쓰지 않으려고
         for index, seq in enumerate(self.items):
             if self._stopped.is_set():
@@ -145,20 +154,27 @@ class SequenceExportWorker(QThread):
             except _Cancelled:
                 break
             except (SequenceExportError, external_tools.ToolNotFoundError) as exc:
-                failures.append((seq.base, str(exc)))
+                self.failures.append((seq.base, str(exc)))
             except Exception as exc:  # 예상 못 한 실패: 이 항목만 실패로 — 무엇인지 + 스택 트레이스째 알림
-                failures.append((seq.base, f"{exc!r}\n\n{traceback.format_exc()}"))
+                self.failures.append((seq.base, f"{exc!r}\n\n{traceback.format_exc()}"))
             else:
                 continue
             self.progress.emit(self._done, self._total)  # 실패한 항목의 몫을 건너뛰어 전체 진행이 끝까지 가게
-        if failures:
-            self.error.emit(self._summary(failures))
+        if self.failures:
+            self._emit_error(self._summary())
         elif not self._stopped.is_set():
             self.finished.emit()
 
-    def _summary(self, failures):
-        header = f"{len(self.items)}개 중 {len(failures)}개 실패" + (" (취소됨)" if self.cancelled else "")
-        return header + "\n" + "\n\n".join(f"[{base}] {reason}" for base, reason in failures)
+    def _emit_error(self, text):
+        """error 신호로 알림. 취소한 뒤라면 신호는 내지 않고 (취소는 사용자의 뜻 — 조용히 끝남) 콘솔에 남김 (부분 출력을 못 지운 것 같은 일을 묻지 않으려고)."""
+        if self._stopped.is_set():
+            print(f"{LOG_PREFIX} 취소한 뒤의 오류 (알리지 않음):\n{text}", flush=True)
+        else:
+            self.error.emit(text)
+
+    def _summary(self):
+        header = f"{len(self.items)}개 중 {len(self.failures)}개 실패"
+        return header + "\n" + "\n\n".join(f"[{base}] {reason}" for base, reason in self.failures)
 
     def _export_item(self, seq, made):
         """항목 하나를 만든다. 실패·취소면 부분 출력을 지우고 예외를 그대로 올림."""
