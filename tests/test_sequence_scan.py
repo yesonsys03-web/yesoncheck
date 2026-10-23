@@ -18,7 +18,7 @@ def test_group_basic_and_label_fields():
     s = seqs[0]
     assert (s.base, s.ext, s.pad, s.first, s.last, s.count) == ("EX01_tk1", "tga", 4, 1, 3, 3)
     assert s.dir == "/j/frames"
-    assert s.identity == "/j/frames/EX01_tk1.seq" and s.missing == 0
+    assert s.identity == os.path.join("/j/frames", "EX01_tk1.seq") and s.missing == 0  # identity는 OS의 구분자 (실제 경로로 씀)
 
 
 def test_identity_uses_os_path_join():

@@ -226,7 +226,7 @@ def test_scan_counts_single_listdir(tmp_path, monkeypatch):
     real_scandir, scanned, listed = os.scandir, [], []
 
     def scandir(path="."):
-        scanned.append(os.path.relpath(os.fspath(path), str(tmp_path)))
+        scanned.append(os.path.relpath(os.fspath(path), str(tmp_path)).replace(os.sep, "/"))  # Windows의 역슬래시도 "/"로
         return real_scandir(path)
 
     monkeypatch.setattr(video_list.os, "scandir", scandir)

@@ -656,7 +656,9 @@ def test_job_with_only_sequences_uses_the_jobs_thumbnail_folder(new_player, dial
     player.jobComboBox.setCurrentText("job_01")
 
     assert player.sidebar.count() == 0 and player.seq_sidebar.count() == 1
-    job_thumbs = os.path.join(work_area.local, "S1", "job_01", thumbnails.FOLDER_NAME)
+    # 앱이 보는 경로로 견줌: Windows CI에서는 파일을 로컬 경로로 만들지만 앱은 같은 공유를 UNC로 읽음 (같은 폴더인지는 samefile로)
+    job_thumbs = os.path.join(player.current_job_path, thumbnails.FOLDER_NAME)
+    assert os.path.samefile(job_thumbs, os.path.join(work_area.local, "S1", "job_01", thumbnails.FOLDER_NAME))
     assert player.current_thumbnail_folder == job_thumbs != stale
     assert player.seq_sidebar.item(0).data(THUMBNAIL_CONTEXT_ROLE) == ThumbnailContext(folder=job_thumbs)
 
@@ -674,7 +676,9 @@ def test_refresh_gives_new_sequences_the_recorded_context_of_their_source_job(ne
     player.seasonComboBox.setCurrentText("S1")
     player.jobComboBox.setCurrentText("job_01")
     first_thumbs = player.current_thumbnail_folder
-    assert first_thumbs == os.path.join(work_area.local, "S1", "job_01", thumbnails.FOLDER_NAME)
+    # 앱이 보는 경로(Windows CI에서는 UNC)로 견주고, 로컬 경로의 그 폴더와 같은지는 samefile로
+    assert first_thumbs == os.path.join(player.current_job_path, thumbnails.FOLDER_NAME)
+    assert os.path.samefile(first_thumbs, os.path.join(work_area.local, "S1", "job_01", thumbnails.FOLDER_NAME))
     first_jpgs = jpgs(first_thumbs)
     real_stat = os.stat
     down = {"on": True}
@@ -695,10 +699,13 @@ def test_refresh_gives_new_sequences_the_recorded_context_of_their_source_job(ne
     refresh(player)  # 연결이 돌아옴: 시퀀스가 목록에 들어옴
 
     wait_until(lambda: seq_icon_loaded(player) and seq_work_done(player))
-    own = os.path.join(work_area.local, "S1", "job_02", thumbnails.FOLDER_NAME)
-    assert jpgs(own) == [os.path.basename(thumbnails.thumbnail_path(own, seq_in(second).identity))]
+    own = os.path.join(work_area.local, "S1", "job_02", thumbnails.FOLDER_NAME)  # 로컬 경로: 폴더 안을 읽기만 함
+    app_identity = player.seq_sidebar.item(0).data(Qt.UserRole).identity  # 썸네일 이름은 앱이 보는 경로로 지어짐
+    assert jpgs(own) == [os.path.basename(thumbnails.thumbnail_path(own, app_identity))]
     assert jpgs(first_thumbs) == first_jpgs  # 전에 연 job의 썸네일 폴더는 그대로
-    assert player.seq_sidebar.item(0).data(THUMBNAIL_CONTEXT_ROLE) == ThumbnailContext(folder=own)
+    context = player.seq_sidebar.item(0).data(THUMBNAIL_CONTEXT_ROLE)
+    assert context == ThumbnailContext(folder=context.folder)  # 문제·미정 없이 폴더만
+    assert os.path.samefile(context.folder, own) and not os.path.samefile(context.folder, first_thumbs)  # job_02 것 (앱이 보는 경로)
 
 
 def test_refresh_gives_sequences_that_appear_in_an_empty_folder_that_folders_context(player, tmp_path):
