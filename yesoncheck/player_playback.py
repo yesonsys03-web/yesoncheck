@@ -273,7 +273,7 @@ class PlayerPlaybackMixin:
             opening_sequence = is_sequence_path(file_path)
             # 보던 영상을 멈추기 전에 확인하고 열어 봄 (열 수 없는 영상 때문에 빈 화면만 남지 않게)
             if opening_sequence:
-                cap = self._open_sequence_capture(video_type, file_path)
+                cap = self._open_sequence_capture(file_path)
             else:
                 cap = self._open_movie_capture(file_path)
             if cap is None:
@@ -363,20 +363,15 @@ class PlayerPlaybackMixin:
             return None
         return cap
 
-    def _open_sequence_capture(self, video_type, file_path):
-        """시퀀스(.seq 가상 경로)의 캡처 → 못 열면 창으로 알리고 None.
+    def _open_sequence_capture(self, file_path):
+        """시퀀스(.seq 가상 경로)의 캡처 → 못 열면 창으로 알리고 None (보던 영상은 그대로).
 
         가상 경로는 os.stat이 안 되므로 확인은 캡처가 함 (폴더를 읽어 프레임을 찾음 — 폴더를 못 읽으면 OSError, 첫 프레임이
         깨졌으면 ValueError가 생성자에서 올라오고, 프레임이 2장 미만이면 열리지 않은 캡처). 오류는 스택 트레이스째 로그와 창으로.
 
-        바꿔 끼울 쪽의 옛 시퀀스 캡처는 새 캡처를 만들기 전에 놓음: 선읽기 예산은 살아 있는 캡처가 나눠 쓰고, 놓지 않은 캡처는
-        GC까지 몫을 차지함. 그래서 시퀀스를 시퀀스로 바꾸다 열지 못하면 그 쪽은 빈 채로 남음 (옛 mov는 예산을 쓰지 않으므로 여기서
-        놓지 않음 — 열지 못해도 보던 영상은 멈추지 않는 기존 약속 그대로).
+        바꿔 끼울 쪽의 옛 캡처(mov든 시퀀스든)는 여기서 놓지 않음: mov와 같은 순서로 새 캡처가 열린 뒤 open_file이 놓는다 — 열지
+        못해도 보던 영상은 멈추지 않는다. 겹치는 동안에도 선읽기 예산은 넘지 않음 (새 캡처가 열릴 때 살아 있는 캡처들을 줄임).
         """
-        replaced = self.cap_a if video_type == 'A' else self.cap_b
-        released = isinstance(replaced, ImageSequenceCapture)
-        if released:
-            self._release_side(video_type)
         details = None
         try:
             cap = open_any_capture(file_path)
@@ -393,10 +388,6 @@ class PlayerPlaybackMixin:
             print(f"시퀀스를 열지 못함: {file_path} (프레임이 2장 이상인 시퀀스를 폴더에서 찾지 못함)")
             problem = (f"시퀀스를 열지 못했습니다 (폴더에서 '{os.path.splitext(os.path.basename(file_path))[0]}-<번호>' "
                        f"프레임이 2장 이상 든 시퀀스를 찾지 못함): {file_path}")
-        # 열지 못함. 옛 시퀀스를 놓았다면 그 쪽은 빈 채라 화면·재생을 정리한 뒤에 창 (창이 이벤트를 처리하는 동안 빈 A로 타이머가 돌지 않게)
-        if released and video_type == 'A':
-            self._stop_playback_for_open()
-            self.update_frame()
         QMessageBox.critical(self, "영상을 열 수 없음", problem if details is None else f"{problem}\n\n{details}")
         return None
 

@@ -13,6 +13,7 @@ from PyQt5.QtMultimedia import QMediaPlayer
 
 from tests.conftest import write_test_video
 from tests.test_sequence_capture import color_for, make_movie, make_seq
+from tests.test_sequence_prefetch import total_buffered
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 from yesoncheck import paths, player_playback, sequence_source
 from yesoncheck.main_window import VideoPlayer
@@ -233,22 +234,43 @@ def test_same_type_seq_open_keeps_other_side_and_releases_replaced(player, tmp_p
     assert len(sequence_source._LIVE) == 2  # 옛 A는 예산에서 빠짐
 
 
-def test_replaced_sequence_is_released_before_the_new_one_is_created(player, tmp_path, monkeypatch):
-    """선읽기 예산을 나눠 쓰는 옛 캡처는 새 캡처가 만들어지기 전에 놓음 (놓지 않은 캡처는 GC까지 몫을 차지함)."""
+def test_replacing_b_sequence_releases_the_old_b_and_keeps_a(player, tmp_path):
+    a = seq_in(tmp_path, "a", base="tk1", nums=range(1, 5))
+    b = seq_in(tmp_path, "b", base="tk2", nums=range(5, 9))
+    assert player.open_file("A", a) and player.open_file("B", b)
+    turn_wipe_on(player)
+    cap_a, old_b = player.cap_a, player.cap_b
+    b2 = seq_in(tmp_path, "b2", base="tk3", nums=range(9, 13))
+
+    assert player.open_file("B", b2) is True
+
+    assert not old_b.isOpened()
+    assert player.cap_b is not old_b and player.cap_b.isOpened() and player.filename_b == virtual(b2)
+    assert player.cap_a is cap_a and cap_a.isOpened()
+    assert player.wipeCheckBox.isChecked() and player.videoWidget.wipe_enabled_x
+    assert len(sequence_source._LIVE) == 2
+
+
+def test_replaced_sequence_is_released_after_the_new_one_opened(player, tmp_path, monkeypatch):
+    """옛 시퀀스는 새 캡처가 열린 뒤에 놓음 (mov와 같은 순서 — 열지 못해도 보던 것은 그대로). 겹치는 동안에도 선읽기 예산은 지켜짐."""
     assert player.open_file("A", seq_in(tmp_path, "a", base="tk1", nums=range(1, 5)))
     old_a = player.cap_a
     seen = []
     real_open = player_playback.open_any_capture
 
     def recording_open(path):
-        seen.append((old_a.isOpened(), len(sequence_source._LIVE)))
-        return real_open(path)
+        before = old_a.isOpened()
+        new = real_open(path)
+        seen.append((before, old_a.isOpened(), len(sequence_source._LIVE),
+                     total_buffered(old_a, new) <= sequence_source.PREFETCH_BUDGET_FRAMES))
+        return new
 
     monkeypatch.setattr(player_playback, "open_any_capture", recording_open)  # 이름을 읽는 모듈에서 바꿈
 
     assert player.open_file("A", seq_in(tmp_path, "b", base="tk2", nums=range(1, 4)))
 
-    assert seen == [(False, 0)]
+    assert seen == [(True, True, 2, True)]  # 새 캡처를 만드는 동안 옛 캡처는 열려 있고, 둘의 버퍼 합은 예산 안
+    assert not old_a.isOpened()  # 열린 뒤에 놓음
     assert len(sequence_source._LIVE) == 1
 
 
@@ -360,24 +382,63 @@ def test_open_seq_without_enough_frames_reports(player, dialogs, tmp_path):
     assert_side_empty(player, "A")
 
 
-def test_failed_seq_open_releases_the_replaced_seq_but_keeps_the_other_side(player, dialogs, tmp_path):
-    """시퀀스 A를 바꾸다 실패: 바꾸려던 A는 (새 캡처를 만들기 전에 놓았으므로) 비고, B는 그대로."""
+def break_first_frame(tmp_path, folder, base="tk9"):
+    identity = seq_in(tmp_path, folder, base=base, nums=range(1, 5))
+    with open(tmp_path / folder / f"{base}-0001.tga", "wb") as fh:
+        fh.write(b"not an image")
+    return identity
+
+
+@pytest.mark.parametrize("how", ["missing_folder", "corrupt_first_frame", "too_few_frames"])
+def test_failed_seq_over_seq_open_keeps_the_old_sequence_playing(player, dialogs, tmp_path, how):
+    """시퀀스 A를 시퀀스로 바꾸다 실패해도 보던 A·B·와이프·재생은 그대로 (생성자가 예외를 내도, 열리지 않은 캡처여도)."""
     a = seq_in(tmp_path, "a", base="tk1", nums=range(1, 5))
     b = seq_in(tmp_path, "b", base="tk2", nums=range(5, 9))
     assert player.open_file("A", a) and player.open_file("B", b)
     turn_wipe_on(player)
+    player.seek_to_frame(2)
     old_a, cap_b = player.cap_a, player.cap_b
-    player.timer.start(1000)  # 재생 중이었다고 치고: 빈 A를 두고 타이머가 돌면 안 됨
+    player.timer.start(1000)  # 재생 중이었다고 치고
+    broken = {"missing_folder": lambda: str(tmp_path / "gone" / "tk9.seq"),
+              "corrupt_first_frame": lambda: break_first_frame(tmp_path, "bad"),
+              "too_few_frames": lambda: seq_in(tmp_path, "one", base="tk9", nums=[1])}[how]()
 
-    assert player.open_file("A", str(tmp_path / "gone" / "tk9.seq")) is False
+    assert player.open_file("A", broken) is False
+
+    assert broken in reported(dialogs)
+    assert player.cap_a is old_a and old_a.isOpened() and player.filename_a == virtual(a)
+    assert player.cap_b is cap_b and cap_b.isOpened() and player.filename_b == virtual(b)
+    assert player.timer.isActive()  # 보던 재생을 멈추지 않음
+    assert player.wipeCheckBox.isChecked() and player.videoWidget.wipe_enabled_x
+    assert int(old_a.get(cv2.CAP_PROP_POS_FRAMES)) == 2 and frame_color(player.frame_a) == color_for(2)
+    assert shown(player, LEFT) == color_for(2) and shown(player, RIGHT) == color_for(6)  # 화면도 그대로
+    assert len(sequence_source._LIVE) == 2
+    player.seek_to_frame(3)  # 옛 캡처로 계속 탐색됨
+    assert shown(player, LEFT) == color_for(3) and shown(player, RIGHT) == color_for(7)
+    player.timer.stop()
+
+
+def test_failed_seq_b_replace_with_wipe_on_keeps_a_consistent_composite(player, dialogs, tmp_path):
+    """시퀀스 B를 바꾸다 실패(와이프 중): 옛 B가 그대로라 합성 화면도 실제 상태 그대로 (놓은 캡처의 옛 그림이 남지 않음)."""
+    a = seq_in(tmp_path, "a", base="tk1", nums=range(1, 5))
+    b = seq_in(tmp_path, "b", base="tk2", nums=range(5, 9))
+    assert player.open_file("A", a) and player.open_file("B", b)
+    turn_wipe_on(player)
+    player.seek_to_frame(2)
+    old_b = player.cap_b
+    assert shown(player, LEFT) == color_for(2) and shown(player, RIGHT) == color_for(6)
+
+    assert player.open_file("B", break_first_frame(tmp_path, "bad")) is False
 
     reported(dialogs)
-    assert not old_a.isOpened()
-    assert_side_empty(player, "A")
-    assert not player.timer.isActive()
-    assert player.cap_b is cap_b and cap_b.isOpened() and player.filename_b == virtual(b)
-    assert len(sequence_source._LIVE) == 1  # 놓은 A의 예산 몫이 B에게 돌아감
-    assert player.videoWidget.video_item.pixmap().isNull()  # 놓은 A의 마지막 그림이 화면에 남지 않음
+    assert player.cap_b is old_b and old_b.isOpened() and player.filename_b == virtual(b)
+    assert frame_color(player.frame_b) == color_for(6)
+    assert shown(player, LEFT) == color_for(2) and shown(player, RIGHT) == color_for(6)
+    player.update_frame()  # 다시 그려도 같은 합성
+    assert shown(player, LEFT) == color_for(2) and shown(player, RIGHT) == color_for(6)
+    player.seek_to_frame(3)
+    assert shown(player, LEFT) == color_for(3) and shown(player, RIGHT) == color_for(7)
+    assert len(sequence_source._LIVE) == 2
 
 
 def test_failed_cross_type_open_keeps_everything_playing(player, dialogs, tmp_path):
