@@ -71,6 +71,27 @@ def test_decode_exr_clips_to_uint8_without_tonemapping():
     assert tuple(arr[0, 0]) == (0, 255, 255)
 
 
+def test_decode_exr_grayscale_expands_to_bgr():
+    # 단일 채널 EXR을 IMREAD_COLOR로 읽으면 cv2 4.6.0은 오류 없이 쓰레기 값(검정)을 준다
+    ok, buf = cv2.imencode(".exr", np.full((4, 8), 0.5, np.float32))
+    assert ok
+    arr = decode_frame(buf.tobytes(), "exr")
+    assert arr.shape == (4, 8, 3) and arr.dtype == np.uint8
+    assert arr.flags["C_CONTIGUOUS"]
+    assert tuple(arr[0, 0]) == (127, 127, 127)
+
+
+def test_decode_exr_alpha_dropped():
+    src = np.empty((4, 8, 4), np.float32)
+    src[:, :] = (0.25, 0.5, 0.75, 1.0)  # BGRA
+    ok, buf = cv2.imencode(".exr", src)
+    assert ok
+    arr = decode_frame(buf.tobytes(), "exr")
+    assert arr.shape == (4, 8, 3) and arr.dtype == np.uint8
+    assert arr.flags["C_CONTIGUOUS"]
+    assert tuple(arr[0, 0]) == (63, 127, 191)
+
+
 def test_decode_unsupported_ext_raises():
     with pytest.raises(ValueError):
         decode_frame(_encode("PNG"), "dpx")
