@@ -88,9 +88,12 @@ class SidebarSequencesMixin:
         item.setToolTip(seq_tooltip(seq))
         return item
 
-    def _set_seq_items(self, seqs):
+    def _set_seq_items(self, seqs, source_contexts=None):
         """Seq 목록을 seqs(SeqInfo 목록)로 바꿈. 같으면 목록을 건드리지 않음 (깜빡임 없음). 바뀌면 선택·현재 항목은 같은 시퀀스
-        (폴더·이름)에 그대로 (스크롤 위치는 항목을 한 번에 다시 넣으므로 Qt가 그대로 둠 — 시험이 지킴)."""
+        (폴더·이름)에 그대로 (스크롤 위치는 항목을 한 번에 다시 넣으므로 Qt가 그대로 둠 — 시험이 지킴).
+
+        새 시퀀스의 썸네일 자리: 이미 있던 시퀀스는 그 항목의 자리 그대로, source_contexts({_seq_key: ThumbnailContext} — 다시 읽기에서
+        새 시퀀스가 들어온 곳이 처음 불러올 때 기억한 자리, Mov 항목이 쓰는 것과 같음)에 있으면 그것, 아니면 지금 상태의 자리."""
         seqs = list(seqs)
         if seqs == self._current_seq_items():
             return
@@ -98,9 +101,10 @@ class SidebarSequencesMixin:
         selected = {item.data(Qt.UserRole).identity for item in widget.selectedItems()}
         current = widget.currentItem()
         current_identity = current.data(Qt.UserRole).identity if current is not None else None
-        # 이미 있던 시퀀스는 그 항목의 썸네일 자리 그대로, 새 시퀀스는 지금의 자리 (Mov 항목과 같은 규칙 — 재검토 L1)
-        contexts = {_seq_key(widget.item(i).data(Qt.UserRole)): widget.item(i).data(THUMBNAIL_CONTEXT_ROLE)
-                    for i in range(widget.count())}
+        # 이미 있던 시퀀스는 그 항목의 썸네일 자리 그대로, 새 시퀀스는 들어온 곳이 기억한 자리 또는 지금의 자리 (Mov 항목과 같은 규칙 — 재검토 L1)
+        contexts = dict(source_contexts or {})
+        contexts.update({_seq_key(widget.item(i).data(Qt.UserRole)): widget.item(i).data(THUMBNAIL_CONTEXT_ROLE)
+                         for i in range(widget.count())})
         widget.setUpdatesEnabled(False)
         try:
             widget.clear()
@@ -148,14 +152,19 @@ class SidebarSequencesMixin:
         current = self._current_seq_items()
         fresh = []
         kept = []
+        source_contexts = {}  # 새로 읽은 시퀀스 -> 그것이 들어온 곳이 기억한 썸네일 자리 (Mov 항목이 새 영상에 쓰는 self._sidebar_sources와 같음)
         for source, result in read.results.items():
             if isinstance(result, video_list.ScanResult):
                 fresh.extend(result.sequences)
+                recorded = self._sidebar_sources.get(source)  # 기억하지 않은 곳(합성한 읽기)은 지금 상태의 자리
+                if recorded is not None:
+                    for seq in result.sequences:
+                        source_contexts.setdefault(_seq_key(seq), recorded)
                 kept.extend(seq for seq in current
                             if any(video_list.is_under(seq.dir, folder) for folder, _error in result.unreadable))
             elif result is None:
                 kept.extend(seq for seq in current if video_list.is_under(seq.dir, source.folder))
-        self._set_seq_items(_merged(fresh, kept))
+        self._set_seq_items(_merged(fresh, kept), source_contexts)
 
     # ---------------------------------------------------------------- 누르기·탭
 

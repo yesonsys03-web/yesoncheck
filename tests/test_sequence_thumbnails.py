@@ -6,6 +6,7 @@
 - 시퀀스 프레임은 tests.test_sequence_capture.make_seq가 만든 작은 TGA. 예시 이름만 씀 (공개 저장소).
 """
 
+import errno
 import os
 import time
 
@@ -17,6 +18,7 @@ from PyQt5.QtWidgets import QApplication
 
 from tests.conftest import write_test_video
 from tests.test_sequence_capture import color_for, make_seq
+from tests.test_sidebar_refresh import choose, refresh, wait_refreshed
 from tests.test_thumbnails import red_pixmap, wait_until
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 from yesoncheck import sequence_source, sidebar_sequences, thumbnail_workers, thumbnails
@@ -657,6 +659,87 @@ def test_job_with_only_sequences_uses_the_jobs_thumbnail_folder(new_player, dial
     job_thumbs = os.path.join(work_area.local, "S1", "job_01", thumbnails.FOLDER_NAME)
     assert player.current_thumbnail_folder == job_thumbs != stale
     assert player.seq_sidebar.item(0).data(THUMBNAIL_CONTEXT_ROLE) == ThumbnailContext(folder=job_thumbs)
+
+
+def test_refresh_gives_new_sequences_the_recorded_context_of_their_source_job(new_player, dialogs, work_area, monkeypatch):
+    """job을 고를 때 job 폴더를 확인하지 못해(NAS 끊김) 그 job만 기억해 둔 채 일찍 끝나면, 전에 연 job의 썸네일 폴더가 그대로 남음.
+    연결이 돌아와 새로고침이 시퀀스를 찾으면 Mov 항목처럼 그 job이 기억한 자리를 쓰므로 첫 프레임 썸네일은 그 job의 .yesoncheck_thumb에
+    저장됨 (전에 연 job의 것이 아니라)."""
+    first = os.path.join(work_area.local, "S1", "job_01", "scene-001", "frames")
+    write_test_video(os.path.join(first, "FL_001.mov"))
+    second = os.path.join(work_area.local, "S1", "job_02", "scene-001", "frames")
+    make_seq(second, "FL_002_tk1", range(1, 7))
+    player = new_player(make_config(work_area.local, {"SMOKE": work_area.stored}, work_area.path_map))
+    player.workComboBox.setCurrentText("SMOKE")
+    player.seasonComboBox.setCurrentText("S1")
+    player.jobComboBox.setCurrentText("job_01")
+    first_thumbs = player.current_thumbnail_folder
+    assert first_thumbs == os.path.join(work_area.local, "S1", "job_01", thumbnails.FOLDER_NAME)
+    first_jpgs = jpgs(first_thumbs)
+    real_stat = os.stat
+    down = {"on": True}
+
+    def stat(path, *args, **kwargs):
+        if down["on"] and os.path.basename(os.path.normpath(os.fspath(path))) == "job_02":
+            raise TimeoutError(errno.ETIMEDOUT, "Operation timed out", os.fspath(path))
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", stat)
+    choose(player, "job_02")
+    wait_refreshed(player)
+    assert player.seq_sidebar.count() == 0
+    assert player.current_thumbnail_folder == first_thumbs  # 일찍 끝나 전에 연 job의 썸네일 폴더가 남아 있음
+
+    down["on"] = False
+    player.thumbnailModeButton.click()
+    refresh(player)  # 연결이 돌아옴: 시퀀스가 목록에 들어옴
+
+    wait_until(lambda: seq_icon_loaded(player) and seq_work_done(player))
+    own = os.path.join(work_area.local, "S1", "job_02", thumbnails.FOLDER_NAME)
+    assert jpgs(own) == [os.path.basename(thumbnails.thumbnail_path(own, seq_in(second).identity))]
+    assert jpgs(first_thumbs) == first_jpgs  # 전에 연 job의 썸네일 폴더는 그대로
+    assert player.seq_sidebar.item(0).data(THUMBNAIL_CONTEXT_ROLE) == ThumbnailContext(folder=own)
+
+
+def test_refresh_gives_sequences_that_appear_in_an_empty_folder_that_folders_context(player, tmp_path):
+    """영상도 시퀀스도 없던 폴더를 연 뒤(썸네일 폴더 초기화 없음) 그 폴더에 시퀀스가 생겨 새로고침이 찾으면, 전에 연 폴더가 아니라 그 폴더의
+    .yesoncheck_thumb에 저장됨."""
+    shot_in_player(player, tmp_path)
+    previous = player.current_thumbnail_folder
+    player.thumbnailModeButton.click()
+    wait_until(lambda: not player.thumbnail_workers and seq_work_done(player))
+    before = jpgs(previous)
+    empty = str(tmp_path / "empty")
+    os.makedirs(empty)
+    player.load_videos_from_folder(empty)  # 영상도 시퀀스도 없음 (경고 창은 가로채임)
+    assert player.current_thumbnail_folder == previous  # 초기화하지 않음
+    make_seq(empty, "tk1", range(1, 7))
+
+    refresh(player)
+
+    wait_until(lambda: seq_icon_loaded(player) and seq_work_done(player))
+    own = os.path.join(empty, thumbnails.FOLDER_NAME)
+    assert jpgs(own) == [os.path.basename(thumbnails.thumbnail_path(own, seq_in(empty).identity))]
+    assert jpgs(previous) == before
+    assert player.seq_sidebar.item(0).data(THUMBNAIL_CONTEXT_ROLE) == ThumbnailContext(folder=own)
+
+
+def test_refresh_keeps_the_context_of_sequences_already_in_the_list(player, tmp_path):
+    """이미 목록에 있는 시퀀스는 다시 읽어도 그 항목의 자리 그대로 (출처가 기억한 자리는 새 시퀀스에만 — Mov 항목의 규칙)."""
+    folder = shot_in_player(player, tmp_path)
+    own = player.current_thumbnail_folder
+    kept = ThumbnailContext(folder=str(tmp_path / "kept" / thumbnails.FOLDER_NAME))
+    player.seq_sidebar.item(0).setData(THUMBNAIL_CONTEXT_ROLE, kept)  # 이 항목은 다른 자리를 기억함
+    player.current_thumbnail_folder = str(tmp_path / "elsewhere" / thumbnails.FOLDER_NAME)
+    make_seq(folder, "tk9", range(1, 4))  # 새 시퀀스가 생김 -> 목록이 바뀌어 다시 만들어짐
+
+    refresh(player)
+
+    contexts = {player.seq_sidebar.item(i).data(Qt.UserRole).base: player.seq_sidebar.item(i).data(THUMBNAIL_CONTEXT_ROLE)
+                for i in range(player.seq_sidebar.count())}
+    assert set(contexts) == {"tk1", "tk9"}
+    assert contexts["tk1"] == kept  # 이미 있던 것: 그 항목의 자리
+    assert contexts["tk9"] == ThumbnailContext(folder=own)  # 새것: 이 폴더를 불러올 때 기억한 출처의 자리 (지금 상태의 자리가 아님)
 
 
 def test_fallback_generation_waits_for_thumbnail_mode(player, tmp_path):
