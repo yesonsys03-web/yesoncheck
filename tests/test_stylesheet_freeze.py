@@ -12,10 +12,10 @@ import pytest
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 
 
-DARK_SHA256 = "0c23330727e63a3855941c1782eb38b54375020eaf261f63daf9150b91253fac"  # 어두운 시트, 2,902자
-LIGHT_SHA256 = "6b4ba3085b5635a0f735ad15d0f9493d2aee286ae2e15014f0d4eb9058e2b647"  # 밝은 시트, 3,792자
-DARK_LENGTH = 2902
-LIGHT_LENGTH = 3792
+DARK_SHA256 = "f75108a96dda17f0c0b5bf8726613aec7a3f4ecb039bb93336309531ce5d8e80"  # 어두운 시트, 3,280자 (사이드바 Mov·Seq 탭 규칙 +378자)
+LIGHT_SHA256 = "0d7c248a7145f8f3d248847a2b72fa45089ca61b04e199b93ce5162d83102bbf"  # 밝은 시트, 4,201자 (사이드바 Mov·Seq 탭 규칙 +409자)
+DARK_LENGTH = 3280
+LIGHT_LENGTH = 4201
 
 
 def sha256_of(sheet):

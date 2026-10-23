@@ -81,6 +81,26 @@ QListWidget::item:selected, QListView::item:selected {
     background: #444;
     color: #ff9900;
 }
+QTabWidget::pane {
+    border: none;
+}
+QTabBar::tab {
+    background: #2d2d2d;
+    border: 1px solid #444;
+    border-radius: 6px;
+    color: #e0e0e0;
+    padding: 4px 14px;
+    margin: 0px 2px 4px 0px;
+}
+QTabBar::tab:hover {
+    border: 1px solid #ff9900;
+    color: #ff9900;
+}
+QTabBar::tab:selected {
+    background: #444;
+    border: 1px solid #ff9900;
+    color: #ff9900;
+}
 QSplitter::handle {
     background: #353535;
 }
@@ -247,6 +267,27 @@ QListWidget::item:hover {
 QListWidget::item:selected {
     background: #e9ecef;
     color: #2c3e50;
+}
+QTabWidget::pane {
+    border: none;
+}
+QTabBar::tab {
+    background: #ffffff;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    color: #2c3e50;
+    padding: 4px 14px;
+    margin: 0px 2px 4px 0px;
+}
+QTabBar::tab:hover {
+    background: #f8f9fa;
+    border: 1px solid #d0d0d0;
+    color: #1a252f;
+}
+QTabBar::tab:selected {
+    background: #e9ecef;
+    border: 1px solid #adb5bd;
+    color: #1a252f;
 }
 QSplitter::handle {
     background: #e0e0e0;

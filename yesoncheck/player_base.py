@@ -37,6 +37,7 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
     QSlider,
     QSplitter,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -169,6 +170,11 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         self.setStyleSheet(DARK_STYLESHEET)
         
         self.controls_visible = True  # initUI() 호출 전에 먼저 정의
+        # 사이드바 Mov·Seq 탭 (initUI가 위젯을 만듦; SidebarSequencesMixin이 씀): 탭 위젯, Seq 목록(이미지 시퀀스), 폴더를 읽어 찾은 시퀀스
+        # (path_key → [SeqInfo] — 영상 경로만 돌려주는 get_video_files_from_folder와 목록을 채우는 쪽 사이)
+        self.sidebar_tabs = None
+        self.seq_sidebar = None
+        self._folder_sequences = {}
 
         timing_log.startup("창: 화면 구성 중…")
         started = time.perf_counter()
@@ -694,6 +700,20 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         self.sidebar.setAcceptDrops(True)
         # 사이드바가 키보드 포커스를 받을 수 있도록 설정 (상하 화살표 키 작동을 위해)
         self.sidebar.setFocusPolicy(Qt.StrongFocus)
+        # Mov·Seq 탭: Mov 페이지는 위의 self.sidebar 그대로 (스캔·다시 읽기·썸네일·메뉴가 모두 이 목록에 묶여 있음), Seq 페이지는 이미지
+        # 시퀀스 목록. Mov 목록을 비우면 Seq 목록도 비움 (job을 바꿈·폴더를 불러옴 — 지난 시퀀스가 남지 않게). 탭 막대는 포커스를
+        # 받지 않음 (←→ 프레임 이동 단축키가 탭 막대에 먹혀 탭이 바뀌지 않게 — 다른 단추들처럼; QTabWidget의 포커스 정책은 탭 막대에도 감)
+        self.seq_sidebar = QListWidget(); self.seq_sidebar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.seq_sidebar.setSelectionMode(QListWidget.ExtendedSelection)
+        self.seq_sidebar.itemClicked.connect(self.on_seq_item_clicked)
+        self.seq_sidebar.installEventFilter(self)  # Mov 목록처럼 목록이 포커스를 가져도 전역 단축키(프레임 이동 등)가 먹게
+        self.seq_sidebar.setFocusPolicy(Qt.StrongFocus)
+        self.sidebar.model().modelAboutToBeReset.connect(self._clear_seq_items)
+        self.sidebar_tabs = QTabWidget()
+        self.sidebar_tabs.addTab(self.sidebar, 'Mov')
+        self.sidebar_tabs.addTab(self.seq_sidebar, 'Seq')
+        self.sidebar_tabs.setFocusPolicy(Qt.NoFocus)
+        self.sidebar_tabs.currentChanged.connect(self._on_sidebar_tab_changed)
         selectFolderButton = QPushButton('Select Folder'); selectFolderButton.clicked.connect(self.select_folder)
         selectFolderButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         
@@ -755,7 +775,7 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         sidebarLayout.addWidget(workPathButton)  # 작품 경로 관리 버튼 추가
         sidebarLayout.addLayout(viewModeLayout)  # 가로 배치된 뷰 모드 버튼들 추가
         sidebarLayout.addWidget(self.thumbnailProgressBar)  # 진행바를 버튼 아래에 추가
-        sidebarLayout.addWidget(self.sidebar)
+        sidebarLayout.addWidget(self.sidebar_tabs)  # Mov(self.sidebar)·Seq 탭
         sidebarContainer = QWidget()
         sidebarContainer.setLayout(sidebarLayout); sidebarContainer.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
@@ -786,10 +806,12 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         layout.insertWidget(0, self.update_banner)
         widget = QWidget(); widget.setLayout(layout); self.setCentralWidget(widget)
         self.setAcceptDrops(True)
+        # self.sidebar는 넣지 않음: 이제 Mov 탭의 페이지라, V 키·전체화면 복원이 손으로 setVisible(True)하면 Seq 탭이 보이는 동안에도
+        # Mov 목록이 보이게 됨 (사이드바 컨테이너가 이미 목록 전체를 숨기고 보임 — 보이고 숨는 모습은 예전과 같음)
         self.control_widgets = [
             sidebarContainer, self.middleScrollArea, workLabel, stopButton, self.frameRateLabel, volumeLabel, self.workComboBox, self.seasonComboBox, self.jobComboBox,
             self.loopCheckBox, self.playPauseButton, self.playSelectedButton,
-            self.volumeSlider, self.frameRateComboBox, self.wipeCheckBox, self.sidebar, self.wipeXButton, self.wipeYButton, openButtonA, openButtonB, self.volumeSlider, selectFolderButton, bookmarkButton, bookmarkListButton, workPathButton, self.listModeButton, self.thumbnailModeButton, self.refreshListButton, self.thumbnailProgressBar
+            self.volumeSlider, self.frameRateComboBox, self.wipeCheckBox, self.wipeXButton, self.wipeYButton, openButtonA, openButtonB, self.volumeSlider, selectFolderButton, bookmarkButton, bookmarkListButton, workPathButton, self.listModeButton, self.thumbnailModeButton, self.refreshListButton, self.thumbnailProgressBar
         ]
         # 시간: 줄이면 뒤쪽(전체 시간)부터 …로 ('00:00:00.000 / …'까지). 너비는 예전처럼 이 모양의 글자 너비로 고정
         self.timeLabel = ElidedLabel(Qt.ElideRight, keep_text="00:00:00.000 / 00:00:00.000",

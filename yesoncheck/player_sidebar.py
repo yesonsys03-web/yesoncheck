@@ -13,11 +13,12 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck import paths, video_list
-# PlayerSidebarMixin의 부모 믹스인 (북마크, 선택 재생, 공유 설정·작품 경로, 목록 다시 읽기, 썸네일)
+# PlayerSidebarMixin의 부모 믹스인 (북마크, 선택 재생, 공유 설정·작품 경로, 목록 다시 읽기, Seq 탭, 썸네일)
 from yesoncheck.sidebar_bookmarks import SidebarBookmarksMixin
 from yesoncheck.sidebar_playlist import SidebarPlaylistMixin
 from yesoncheck.sidebar_config_paths import SidebarConfigPathsMixin
 from yesoncheck.sidebar_refresh import SidebarRefreshMixin
+from yesoncheck.sidebar_sequences import SidebarSequencesMixin
 from yesoncheck.sidebar_thumbnails import SidebarThumbnailsMixin
 # 다시 내보내기만 함 (이 모듈은 안 씀): 기존 `from yesoncheck.player_sidebar import …`·`player_sidebar.X` 접근이 같은 객체로 돌게.
 # 시험이 바꿔치기하는 gather_shared_config·list_works_not_opening은 믹스인이 shared_config_load.X로 불러 바꿔치기 지점을 그 모듈
@@ -39,7 +40,7 @@ from yesoncheck.sidebar_items import (
 )
 
 
-class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin, SidebarRefreshMixin, SidebarThumbnailsMixin):
+class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin, SidebarRefreshMixin, SidebarSequencesMixin, SidebarThumbnailsMixin):
 
     def dragEnterEvent(self, event):
         """메인 윈도우에 파일 드래그앤드롭 이벤트"""
@@ -145,6 +146,8 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         items = self._add_sidebar_videos(
             [(os.path.basename(file_path), file_path, source_of(file_path))
              for file_path in file_paths if os.path.exists(file_path)])
+        # 끌어다 놓은 폴더에서 함께 찾은 이미지 시퀀스는 Seq 목록에 덧붙임 (get_video_files_from_folder가 읽을 때 기억해 둠)
+        self._add_seq_items(self._take_folder_sequences(folders))
         # 썸네일 모드인 경우 썸네일 생성. 영상·자리를 미리 꺼내 둠: 만드는 동안 이벤트를 처리하므로 목록이 바뀌면
         # (job·폴더를 바꿈) 항목이 지워짐 → 그때는 멈춤. 그동안 목록 다시 읽기는 끝난 뒤로 미룸
         if self.is_thumbnail_mode:
@@ -176,10 +179,12 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         try:
             result = video_list.scan_folder(folder_path)
         except OSError as e:
+            self._note_folder_sequences(folder_path, [])
             self._report_list_source_problem(folder_path, e)
             return None
         self._sidebar_scan_seconds = time.perf_counter() - started
         self._report_list_read(folder_path, result)
+        self._note_folder_sequences(folder_path, result.sequences)  # 같은 읽기에서 찾은 시퀀스 (Seq 목록용 — 돌려주는 값은 영상 경로만)
         return [file_path for _name, file_path in result.videos]
 
     def show_sidebar_context_menu(self, pos):
@@ -452,6 +457,7 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         video_files = self.get_video_files_from_folder(folder_path)
         read_failed = video_files is None  # 폴더를 읽지 못함 (창으로 알림) — 연결이 돌아오면 다시 읽기(F5)로 목록이 생김
         video_files = video_files or []
+        sequences = self._take_folder_sequences([folder_path])  # 같은 읽기에서 함께 찾은 이미지 시퀀스
         
         if video_files:
             # 폴더 드래그앤드롭 시에는 기존 썸네일 폴더를 초기화하고 새로 설정 — 항목을 넣기 전에 (항목마다 이 자리를 기억)
@@ -465,6 +471,7 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         # 사이드바에 파일들 추가
         self.playlist.extend(video_files)
         self._add_sidebar_videos([(os.path.basename(file_path), file_path, source) for file_path in video_files])
+        self._set_seq_items(sequences)
         self._sidebar_read_done(None)  # 방금 읽음 (앱이 다시 활성돼도 곧바로 또 읽지 않게)
         
         if self.playlist:
@@ -473,7 +480,7 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
             self.sidebar.selectAll()
             self.schedule_background_thumbnail_loading()
             QMessageBox.information(self, "폴더 로드 완료", f"{len(video_files)}개의 비디오 파일이 사이드바에 추가되었습니다.\n첫 번째 파일이 Video A에 로드되었습니다.")
-        elif not read_failed:
+        elif not read_failed and not sequences:  # 시퀀스만 든 폴더는 Seq 탭에 들어왔으므로 '영상이 없습니다'를 띄우지 않음
             QMessageBox.warning(self, "경고", "폴더에 지원되는 비디오 파일이 없습니다.")
 
     def load_selected_item_to_video_a(self):

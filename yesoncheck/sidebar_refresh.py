@@ -336,6 +336,7 @@ class SidebarRefreshMixin:
                   f"(읽은 곳 {len(read.results)}곳, {elapsed:.2f}초)")
         else:
             print(f"목록 다시 읽기: 바뀐 것 없음 ({len(rows)}개, 읽은 곳 {len(read.results)}곳, {elapsed:.2f}초)")
+        self._apply_seq_read(read)  # Seq 목록도 같은 읽기로 (폴더를 더 읽지 않음)
         for source, result in read.results.items():
             if isinstance(result, video_list.ScanResult):
                 self._report_list_read(source.folder, result)

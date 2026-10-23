@@ -225,6 +225,7 @@ class PlayerPlaybackMixin:
             # 파일 이름만 표시, 경로는 UserRole·툴팁. 항목마다 이 job의 썸네일 자리(폴더·폴더 문제)를 기억
             self._add_sidebar_videos([(name, full_path, source) for name, full_path in all_mov_files])
             self.sidebar.setUpdatesEnabled(True)  # UI 업데이트 재개
+            self._set_seq_items(result.sequences)  # 같은 읽기에서 함께 찾은 이미지 시퀀스 (Seq 탭)
             # 읽지 못한 하위 폴더는 목록을 다 넣은 뒤에 알림 (창이 떠 있는 동안 목록이 반쯤 만들어진 채이지 않게)
             self._report_list_read(base_path, result)
 
@@ -2045,8 +2046,8 @@ class PlayerPlaybackMixin:
 
     def wheelEvent(self, event):
         """전역 휠 이벤트 처리 - 사이드바를 제외한 모든 영역에서 프레임 이동"""
-        # 사이드바 영역에서는 휠 이벤트를 무시
-        if self.sidebar.underMouse():
+        # 사이드바 영역(Mov·Seq 목록)에서는 휠 이벤트를 무시
+        if self.sidebar.underMouse() or self.seq_sidebar.underMouse():
             event.ignore()
             return
             
