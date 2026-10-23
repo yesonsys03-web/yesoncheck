@@ -175,6 +175,14 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         self.sidebar_tabs = None
         self.seq_sidebar = None
         self._folder_sequences = {}
+        # Seq 썸네일의 뒤 스레드 일 (SidebarSequencesMixin이 씀): 도는 워커들(읽기·만들기), 만들 대기열, 지금 만드는 ThumbnailWorker
+        self._seq_thumbnail_workers = []
+        self._seq_generation_queue = []
+        self._seq_generating = None
+        # Mov 탭이 썸네일을 만드는 동안 시작한 Seq 썸네일 읽기를 만들기가 끝난 뒤 한 번 더 하게 하는 타이머 (SidebarSequencesMixin이 씀)
+        self._seq_thumbnail_timer = QTimer(self)
+        self._seq_thumbnail_timer.setSingleShot(True)
+        self._seq_thumbnail_timer.timeout.connect(self._load_seq_thumbnails_after_mov)
 
         timing_log.startup("창: 화면 구성 중…")
         started = time.perf_counter()
@@ -746,7 +754,10 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         self.thumbnailModeButton.clicked.connect(self.switch_to_thumbnail_mode)
         self.thumbnailModeButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.thumbnailModeButton.setStyleSheet(THUMBNAIL_MODE_BUTTON_STYLE)
-        
+        # Seq 목록도 같은 표시 모드를 따름: 위의 Mov 쪽 슬롯이 모드를 바꾼 다음에 불리도록 그 뒤에 이음 (Mov 쪽 메서드는 그대로)
+        self.listModeButton.clicked.connect(self._apply_seq_display_mode)
+        self.thumbnailModeButton.clicked.connect(self._apply_seq_display_mode)
+
         # 목록 다시 읽기: 다른 PC·Finder에서 NAS의 영상을 지우거나 넣었을 때 (창이 다시 활성될 때도 저절로 읽음)
         self.refreshListButton = QPushButton('새로고침')
         self.refreshListButton.setToolTip('목록 다시 읽기 (F5)')
@@ -1719,7 +1730,10 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
             
             # 워커 리스트 클리어
             self.thumbnail_workers.clear()
-            
+
+            # Seq 썸네일의 뒤 스레드 일: 결과를 버리고 도는 워커는 끝날 때까지 붙잡아 둠 (앱이 끝나기 전에 wait_for_released_workers가 기다림)
+            self._stop_seq_thumbnail_work()
+
             # 비디오 캡처 객체 정리
             if hasattr(self, 'cap_a') and self.cap_a:
                 self.cap_a.release()

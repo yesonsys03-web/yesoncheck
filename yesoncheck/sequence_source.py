@@ -127,6 +127,41 @@ def _paired_fps(folder, paired):
     return DEFAULT_FPS
 
 
+def paired_movies(folder, bases):
+    """{base: 짝 영상 경로 또는 None} — folder를 한 번 읽어 bases(집합) 각각의 짝을 찾음.
+
+    짝은 fps를 읽는 짝 영상(`_paired_fps`)과 같은 규칙: 이름이 `<base>.mov`(확장자 대소문자 무시)인 파일, 없으면 `<base>.mp4`.
+    썸네일이 이 영상의 것을 그대로 쓰므로 둘이 같은 영상을 골라야 한다. 폴더를 읽지 못하면 OSError가 그대로 올라간다.
+    """
+    names = {}  # (이름, 확장자) -> 파일 이름. 정렬해서 읽어 .mov·.MOV처럼 겹쳐도 늘 같은 것을 고름
+    with os.scandir(folder) as entries:
+        for entry in sorted(entries, key=lambda e: e.name):
+            stem, dot_ext = os.path.splitext(entry.name)
+            ext = dot_ext[1:].lower()
+            if stem in bases and ext in PAIRED_MOVIE_EXTS and entry.is_file():
+                names.setdefault((stem, ext), entry.name)
+    return {base: next((os.path.join(folder, names[base, ext]) for ext in PAIRED_MOVIE_EXTS if (base, ext) in names), None)
+            for base in bases}
+
+
+def first_frame_path(seq):
+    """SeqInfo의 가장 작은 번호 프레임 파일 경로 (스캔 때 본 first 번호 — 시작 번호가 0001이 아니어도 됨).
+
+    먼저 `seq.frame_name(first)`로 확인 (폴더를 읽지 않음). 확장자 대소문자만 다른 파일(`.TGA`)은 대소문자를 가리는 파일 시스템
+    (NFS 마운트)에서 그 이름으로 열리지 않으므로 그때만 폴더에서 실제 이름을 찾는다. 파일이 없어졌으면 FileNotFoundError.
+    """
+    path = os.path.join(seq.dir, seq.frame_name(seq.first))
+    try:
+        os.stat(path)
+    except FileNotFoundError:
+        frame_names, _paired = _list_folder(seq.dir, seq.base)
+        name = _frames_by_number(seq, frame_names).get(seq.first)
+        if name is None:
+            raise
+        return os.path.join(seq.dir, name)
+    return path
+
+
 def _read_frame_file(path):
     with open(path, "rb") as f:
         return f.read()
