@@ -459,10 +459,13 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         video_files = video_files or []
         sequences = self._take_folder_sequences([folder_path])  # 같은 읽기에서 함께 찾은 이미지 시퀀스
         
-        if video_files:
-            # 폴더 드래그앤드롭 시에는 기존 썸네일 폴더를 초기화하고 새로 설정 — 항목을 넣기 전에 (항목마다 이 자리를 기억)
+        if video_files or sequences:
+            # 폴더 드래그앤드롭 시에는 기존 썸네일 폴더를 초기화하고 새로 설정 — 항목을 넣기 전에 (항목마다 이 자리를 기억).
+            # 시퀀스만 든 폴더도 초기화: Seq 항목이 전에 연 job·폴더의 썸네일 폴더를 이어받아 첫 프레임 썸네일을 엉뚱한 곳에 쓰지 않게
+            # (이 폴더의 썸네일 폴더는 처음 쓸 때 만듦 — 영상이 없으면 폴더를 열기만 해서는 만들지 않음)
             self.current_thumbnail_folder = None  # 기존 썸네일 폴더 초기화
             self._thumbnail_folder_problem = None  # 전에 연 job의 썸네일 폴더 문제는 이제 상관없음
+        if video_files:
             self.setup_thumbnail_folder()
             source = self._register_sidebar_source(video_list.ListSource("folder", folder_path))
         else:

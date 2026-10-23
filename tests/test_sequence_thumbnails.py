@@ -607,6 +607,58 @@ def test_sequence_only_folder_makes_first_frame_thumbnails_in_thumbnail_mode(pla
     assert player.seq_sidebar.item(0).icon().availableSizes()[0].width() == player.thumbnail_size
 
 
+def test_sequence_only_folder_writes_into_its_own_thumbnail_folder_not_the_previous_jobs(player, tmp_path):
+    """영상이 있는 폴더(job처럼)를 연 다음 시퀀스만 든 폴더를 고르면, 첫 프레임 썸네일은 전에 연 폴더의 .yesoncheck_thumb가 아니라
+    고른 폴더의 .yesoncheck_thumb에 저장됨 (전에 연 폴더의 썸네일 폴더가 남아 엉뚱한 곳에 쓰던 문제)."""
+    shot_in_player(player, tmp_path)
+    previous = player.current_thumbnail_folder
+    player.thumbnailModeButton.click()
+    wait_until(lambda: not player.thumbnail_workers and seq_work_done(player))
+    before = jpgs(previous)
+    only = str(tmp_path / "only")
+    make_seq(only, "tk1", range(1, 7))
+
+    player.load_videos_from_folder(only)
+
+    wait_until(lambda: seq_icon_loaded(player) and seq_work_done(player))
+    own = os.path.join(only, thumbnails.FOLDER_NAME)
+    assert jpgs(own) == [os.path.basename(thumbnails.thumbnail_path(own, seq_in(only).identity))]
+    assert jpgs(previous) == before  # 전에 연 폴더의 썸네일 폴더는 그대로
+    assert player.seq_sidebar.item(0).data(THUMBNAIL_CONTEXT_ROLE) == ThumbnailContext(folder=own)
+
+
+def test_sequence_only_folder_forgets_the_previous_jobs_thumbnail_folder_problem(player, tmp_path):
+    """전에 연 폴더의 썸네일 폴더 문제(그 폴더는 화면에만 저장)가 시퀀스만 든 새 폴더의 항목에 남지 않음."""
+    only = str(tmp_path / "only")
+    make_seq(only, "tk1", range(1, 7))
+    player.current_thumbnail_folder = None
+    player._thumbnail_folder_problem = (str(tmp_path / "gone" / thumbnails.FOLDER_NAME), "썸네일 폴더 문제", "만들지 못함")
+
+    player.load_videos_from_folder(only)
+
+    assert player.seq_sidebar.item(0).data(THUMBNAIL_CONTEXT_ROLE) == ThumbnailContext(pending_base=only)
+    assert player._thumbnail_folder_problem is None
+
+
+def test_job_with_only_sequences_uses_the_jobs_thumbnail_folder(new_player, dialogs, work_area):
+    """job 목록 경로는 영상이 없어도 job을 열 때마다 썸네일 폴더를 job 것으로 새로 정함 — 전에 연 곳의 것이 남지 않음 (남지 않는 까닭을 시험으로)."""
+    frames = os.path.join(work_area.local, "S1", "job_01", "scene-001", "frames")
+    make_seq(frames, "FL_001_tk1", range(1, 7))
+    player = new_player(make_config(work_area.local, {"SMOKE": work_area.stored}, work_area.path_map))
+    stale = os.path.join(work_area.local, "elsewhere", thumbnails.FOLDER_NAME)
+    player.current_thumbnail_folder = stale
+    player._thumbnail_folder_problem = None
+    player.workComboBox.setCurrentText("SMOKE")
+    player.seasonComboBox.setCurrentText("S1")
+
+    player.jobComboBox.setCurrentText("job_01")
+
+    assert player.sidebar.count() == 0 and player.seq_sidebar.count() == 1
+    job_thumbs = os.path.join(work_area.local, "S1", "job_01", thumbnails.FOLDER_NAME)
+    assert player.current_thumbnail_folder == job_thumbs != stale
+    assert player.seq_sidebar.item(0).data(THUMBNAIL_CONTEXT_ROLE) == ThumbnailContext(folder=job_thumbs)
+
+
 def test_fallback_generation_waits_for_thumbnail_mode(player, tmp_path):
     """목록 모드에서는 읽지도 만들지도 않음 (폴더에 .yesoncheck_thumb도 만들지 않음)."""
     folder = str(tmp_path / "only")
