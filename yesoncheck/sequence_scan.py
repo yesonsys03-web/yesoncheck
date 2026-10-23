@@ -11,6 +11,9 @@ import os
 import re
 from dataclasses import dataclass
 
+# natural_key는 video_list가 아닌 중립 모듈(file_names)에 있음: video_list가 이 모듈을 쓰므로(스캔 때 시퀀스를 함께 찾음) 거기서 가져오면 순환 import
+from yesoncheck.file_names import natural_key
+
 # 시퀀스로 묶는 이미지 확장자 (점 없는 소문자; 비교는 소문자로)
 SEQ_EXTENSIONS = {"tga", "png", "jpg", "jpeg", "tif", "tiff", "exr"}
 # 시퀀스에서 뽑은 임시 프레임을 두는 폴더 이름: 부르는 쪽이 이 이름의 폴더는 그룹핑에서 뺀다
@@ -59,9 +62,6 @@ def group_sequences(dir_path, names):
     (base, 확장자, 번호 자릿수)가 같은 파일이 한 시퀀스다: 테이크가 다르거나(tk1·tk2) 자릿수가 다르면(-001·-0001)
     별개. 확장자는 SEQ_EXTENSIONS만(대소문자 무시, SeqInfo.ext는 소문자), '.'으로 시작하는 숨김·._ 파일은 제외.
     """
-    # natural_key는 video_list에 있는데 video_list도 이 모듈을 쓰므로(스캔 때 시퀀스를 함께 찾음) 부를 때 가져옴
-    from yesoncheck.video_list import natural_key
-
     groups = {}  # (base, ext, pad) -> 본 프레임 번호 집합 (같은 이름이 또 와도 한 장)
     for name in names:
         if name.startswith("."):
