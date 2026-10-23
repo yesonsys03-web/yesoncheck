@@ -139,6 +139,7 @@ class SidebarPlaylistMixin:
         self.is_playlist_playing = False
         self.reset_sidebar_colors()
         self.playSelectedPauseButton.setText('Selected Play'); self.playSelectedPauseButton.setStyleSheet("")
+        self._sync_selected_play_buttons()  # Seq 탭이면 선택 재생이 끝난 이 단추는 꺼짐
         if not self.timer.isActive():
             # 창이 떠 있는 동안 보던 영상이 끝나 재생이 이미 멈춤 → 재생 버튼이 'Pause'로 남지 않게
             self.playPauseButton.setText('Play'); self.playPauseButton.setStyleSheet("")

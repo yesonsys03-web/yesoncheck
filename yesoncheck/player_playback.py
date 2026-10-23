@@ -2171,6 +2171,7 @@ class PlayerPlaybackMixin:
         if self.is_playlist_playing:
             self.is_playlist_playing = False; self.reset_sidebar_colors()
         self.playSelectedPauseButton.setText('Selected Play'); self.playSelectedPauseButton.setStyleSheet("")
+        self._sync_selected_play_buttons()  # Seq 탭이면 선택 재생이 끝난 이 단추는 꺼짐
 
     def seek_to_frame(self, frame_number, update_audio=True):
         if not self.cap_a:

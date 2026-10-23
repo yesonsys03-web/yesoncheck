@@ -2,13 +2,14 @@
 
 - 목록 채우기: 영상 목록을 만드는 읽기(video_list.ScanResult)가 같은 폴더 목록에서 함께 찾은 시퀀스(`ScanResult.sequences`)를
   그 읽기가 끝날 때마다 받아 넣음 — 폴더를 더 읽지 않음. 첫 불러오기(`_load_job_list`·`load_videos_from_folder`)는 `_set_seq_items`,
-  끌어다 놓은 폴더는 `_add_seq_items`(목록에 덧붙임), 목록 다시 읽기(`_apply_sidebar_read`)는 `_apply_seq_read`.
+  끌어다 놓은 폴더는 `_add_seq_items`(목록에 덧붙임; 영상 없이 시퀀스만 든 폴더는 `_show_dropped_sequence_folders` — Seq 탭을 보여 줌), 목록 다시 읽기(`_apply_sidebar_read`)는 `_apply_seq_read`.
   Mov 목록을 비우면(`self.sidebar.clear()` — job을 바꿈·폴더를 불러옴·읽지 못함) Seq 목록도 함께 비움(`_clear_seq_items`).
 - 항목: 라벨 "베이스 (처음–끝, N프레임)"(+ 빠진 프레임이 있으면 ", 빠짐 N"), `Qt.UserRole`에 `SeqInfo`(프레임 파일 이름은 들지 않음),
   툴팁은 사람이 읽는 정보. Mov 목록 코드는 `item.toolTip()`을 경로로 읽지만 이 목록은 별도 위젯이라 그 관례가 닿지 않음.
 - 누르기: `on_seq_item_clicked` → 시퀀스를 A로 엶 (`open_file('A', seq.identity)`, Mov 목록 누르기와 같은 규칙).
 - 탭 전환(`_on_sidebar_tab_changed`)은 페이지 교체뿐 — GUI 스레드는 디스크를 읽지 않음 (썸네일 모드면 Seq 썸네일을 뒤 스레드로 다시
-  읽을 뿐). Seq 탭에서는 'Play Selected' 단추를 끔 (선택 재생은 Mov 경로 전제).
+  읽을 뿐). Seq 탭에서는 선택 재생 단추 둘('Play Selected'·'Play/Pause Selected')을 끔 (선택 재생은 Mov 경로 전제 — 이미 도는 선택 재생의
+  일시정지 단추는 예외, `_sync_selected_play_buttons`).
 - 썸네일: Seq 목록은 전역 표시 모드(List/Thumb 단추 — `_apply_seq_display_mode`)를 따르고, 썸네일 모드에서 읽기 전용 경량 경로
   (`_load_seq_thumbnails` — SeqThumbnailLoaderWorker가 뒤 스레드에서 디스크의 썸네일을 읽어 아이콘만 붙임)로 보여 줌. 시퀀스의 썸네일은
   짝 영상(<base>.mov, 없으면 <base>.mp4)의 기존 썸네일 파일 그대로 (같은 키 — 디코드 0회)라 만들기 반복·진행바가 없고, 생성은 Mov 탭의 일.
@@ -299,6 +300,24 @@ class SidebarSequencesMixin:
             found.extend(self._folder_sequences.pop(paths.path_key(folder), ()))
         return found
 
+    def _dropped_folders_have_sequences(self, folders):
+        """끌어다 놓은 폴더들의 읽기(get_video_files_from_folder)에서 시퀀스를 찾았는지 — 꺼내지 않고 봄 (넣는 쪽이 꺼냄).
+        영상이 하나도 없는 드롭이 '영상이 없습니다'를 띄울지, 시퀀스만 든 폴더로 받아들일지 가르는 데 씀."""
+        return any(self._folder_sequences.get(paths.path_key(folder)) for folder in folders)
+
+    def _show_dropped_sequence_folders(self, folders):
+        """영상 없이 시퀀스만 든 폴더를 끌어다 놓음 (`load_videos_from_folder`의 `elif sequences:`와 같은 결과): '영상이 없습니다'를 띄우지
+        않고 시퀀스를 Seq 목록에 넣은 뒤 Seq 탭을 보여 줌 (탭 페이지 교체뿐 — 디스크를 읽지 않음).
+
+        영상이 있는 폴더를 놓을 때와 같은 일을 영상 없이: 첫 폴더를 썸네일을 둘 자리로 삼고(폴더는 처음 쓸 때 만듦 — 영상이 없으면 열기만
+        해서는 만들지 않음, 전에 연 job·폴더의 썸네일 폴더를 이어받지 않게 비움), add_files_to_sidebar가 폴더를 목록 다시 읽기의 출처로
+        기억하고(다시 읽어도 Seq 항목이 사라지지 않게) 읽어 둔 시퀀스를 Seq 목록에 덧붙임. 목록을 비울지(영상 영역·창)는 부르는 쪽이 정함."""
+        self.selected_folder_path = folders[0]
+        self.current_thumbnail_folder = None
+        self._thumbnail_folder_problem = None
+        self.add_files_to_sidebar([], folders)
+        self.sidebar_tabs.setCurrentIndex(1)
+
     def _apply_seq_read(self, read):
         """목록 다시 읽기의 결과(video_list.SourcesRead)로 Seq 목록을 맞춤 — Mov 목록과 같은 읽기, 폴더를 더 읽지 않음.
 
@@ -331,12 +350,21 @@ class SidebarSequencesMixin:
         self.open_file('A', item.data(Qt.UserRole).identity)
 
     def _on_sidebar_tab_changed(self, index):
-        """Mov·Seq 탭 전환 — 페이지가 바뀔 뿐 GUI 스레드는 디스크를 읽지 않음. Seq 탭에서는 'Play Selected'를 끔 (선택 재생은 영상
-        경로 전제). 썸네일 모드에서 Seq 탭을 보면 그 사이 Mov 탭이 만든 썸네일도 보이게 Seq 썸네일을 뒤 스레드로 다시 읽음."""
-        on_seq_page = self.sidebar_tabs.widget(index) is self.seq_sidebar
-        self.playSelectedButton.setEnabled(not on_seq_page)
-        if on_seq_page:
+        """Mov·Seq 탭 전환 — 페이지가 바뀔 뿐 GUI 스레드는 디스크를 읽지 않음. Seq 탭에서는 선택 재생 단추를 끔
+        (`_sync_selected_play_buttons` — 선택 재생은 영상 경로 전제). 썸네일 모드에서 Seq 탭을 보면 그 사이 Mov 탭이 만든 썸네일도
+        보이게 Seq 썸네일을 뒤 스레드로 다시 읽음."""
+        self._sync_selected_play_buttons()
+        if self.sidebar_tabs.widget(index) is self.seq_sidebar:
             self._load_seq_thumbnails()
+
+    def _sync_selected_play_buttons(self):
+        """선택 재생 단추를 보이는 탭에 맞춤. Seq 탭에서는 'Play Selected'뿐 아니라 짝 단추 'Play/Pause Selected'(멈춰 있을 때 라벨
+        'Selected Play')도 끔 — 누르면 보이지 않는 Mov 목록의 선택(폴더를 불러올 때 selectAll)으로 선택 재생이 시작되어 열어 둔 시퀀스를
+        닫기 때문. 다만 선택 재생이 이미 돌고 있으면 짝 단추는 그 재생의 일시정지 단추('Selected Pause')라 켜 둠 (Mov 탭에서 시작한 선택
+        재생을 보다가 Seq 탭으로 옮겨도 멈출 수 있게). 탭 전환과, 선택 재생이 끝나는 길(stop_video·_end_playlist_mode)이 부름."""
+        on_seq_page = self.sidebar_tabs.currentWidget() is self.seq_sidebar
+        self.playSelectedButton.setEnabled(not on_seq_page)
+        self.playSelectedPauseButton.setEnabled(not on_seq_page or self.is_playlist_playing)
 
     # ---------------------------------------------------------------- 썸네일 (짝 영상의 썸네일 재사용 — 읽기 전용 경량 경로)
 

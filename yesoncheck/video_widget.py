@@ -339,6 +339,10 @@ class CustomVideoWidget(QGraphicsView):
                     # 백그라운드 로딩 스케줄링
                     parent.schedule_background_thumbnail_loading()
                     QMessageBox.information(parent, "폴더 로드 완료", f"{len(video_files)}개의 비디오 파일이 사이드바에 추가되었습니다.\n첫 번째 파일이 Video A에 로드되었습니다.")
+                elif parent._dropped_folders_have_sequences(folder_paths):
+                    # 시퀀스만 든 폴더: 영상 폴더를 놓을 때처럼 목록을 새로 채우되 Seq 탭을 보여 줌 ('영상이 없습니다' 경고 없음)
+                    parent.sidebar.clear()
+                    parent._show_dropped_sequence_folders(folder_paths)
                 elif not read_failed:
                     QMessageBox.warning(parent, "경고", "폴더에 지원되는 비디오 파일이 없습니다.")
             else:

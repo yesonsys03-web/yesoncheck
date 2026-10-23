@@ -1106,6 +1106,9 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
                     # 백그라운드 로딩 스케줄링
                     if folder_paths:
                         self.schedule_background_thumbnail_loading()
+                elif self._dropped_folders_have_sequences(folder_paths):
+                    # 시퀀스만 든 폴더: 영상 폴더를 놓을 때처럼 목록에 덧붙이되 Seq 탭을 보여 줌 (조용히 아무것도 안 하지 않음)
+                    self._show_dropped_sequence_folders(folder_paths)
                 return True
         
         return False  # 기본 이벤트 처리 허용

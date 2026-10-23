@@ -7,10 +7,11 @@ dialogs가 가로챔 (실제 QMessageBox를 띄우지 않음).
 
 import os
 import time
+from types import SimpleNamespace
 
 import pytest
-from PyQt5.QtCore import QPoint, QPointF, Qt
-from PyQt5.QtGui import QWheelEvent
+from PyQt5.QtCore import QMimeData, QPoint, QPointF, Qt, QUrl
+from PyQt5.QtGui import QDropEvent, QWheelEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QTabWidget
 
@@ -20,6 +21,7 @@ from tests.test_sidebar_refresh import refresh
 from tests.test_thumbnails import drop_folder
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 from yesoncheck import paths, video_list
+from yesoncheck.player_sidebar import PlayerSidebarMixin
 from yesoncheck.sequence_scan import SeqInfo
 
 
@@ -228,6 +230,99 @@ def test_dropping_the_same_folder_twice_does_not_duplicate(player, dialogs, tmp_
     assert seq_identities(player) == ["tk1.seq", "tk2.seq"]
 
 
+def drop_on_window(player, folder):
+    """메인 창 핸들러(PlayerSidebarMixin.dropEvent)에 폴더를 끌어다 놓음. 최상위 창은 parent()가 없어 그 핸들러 본문이 돌지 않으므로
+    (예전부터 그랬음) parent()가 창을 돌려주는 대역으로 핸들러 코드를 그대로 돌림."""
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(str(folder))])
+    event = QDropEvent(QPointF(5, 5), Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier)
+    PlayerSidebarMixin.dropEvent(SimpleNamespace(parent=lambda: player), event)
+
+
+def drop_any(player, target, folder):
+    if target == "window":
+        drop_on_window(player, folder)
+    else:
+        drop_folder(player, target, folder)
+
+
+def seq_only_folder(tmp_path, name="renders"):
+    folder = tmp_path / name
+    make_seq(str(folder), "tk7", range(1, 5))
+    return folder
+
+
+@pytest.mark.parametrize("target", ["video", "sidebar", "window"])
+def test_dropped_sequence_only_folder_shows_seq_tab_without_false_warning(player, dialogs, tmp_path, target):
+    """시퀀스만 든 폴더를 끌어다 놓아도 Select Folder처럼: Seq 항목이 채워지고 Seq 탭이 보이며 '영상이 없습니다' 경고가 없음."""
+    folder = seq_only_folder(tmp_path)
+
+    drop_any(player, target, folder)
+
+    assert player.sidebar.count() == 0
+    assert seq_labels(player) == ["tk7 (0001–0004, 4프레임)"]
+    assert player.sidebar_tabs.currentIndex() == 1
+    assert dialogs.warnings == []
+    assert not player.playSelectedButton.isEnabled()  # 탭 전환의 부수 효과도 그대로
+    assert player._folder_sequences.get(paths.path_key(str(folder)), []) == []  # 읽어 둔 시퀀스를 썼음 (남지 않음)
+
+
+@pytest.mark.parametrize("target", ["video", "sidebar", "window"])
+def test_dropped_sequence_only_folder_survives_a_list_refresh(player, dialogs, tmp_path, target):
+    """끌어다 놓은 폴더는 목록 다시 읽기(F5)가 다시 읽는 곳으로 기억됨 — 다시 읽어도 Seq 항목이 사라지지 않음."""
+    drop_any(player, target, seq_only_folder(tmp_path))
+
+    refresh(player)
+
+    assert seq_labels(player) == ["tk7 (0001–0004, 4프레임)"]
+
+
+def test_dropped_sequence_only_folder_on_video_area_replaces_both_lists(player, dialogs, tmp_path):
+    """영상 영역에 놓기는 영상 폴더를 놓을 때처럼 목록을 비우고 새로 채움 (Mov 목록의 옛 영상·옛 시퀀스가 남지 않음)."""
+    player.load_videos_from_folder(str(shot(tmp_path, "first")))
+    assert player.sidebar.count() == 1 and player.seq_sidebar.count() == 2
+
+    drop_folder(player, "video", seq_only_folder(tmp_path))
+
+    assert player.sidebar.count() == 0
+    assert seq_identities(player) == ["tk7.seq"]
+    assert player.sidebar_tabs.currentIndex() == 1
+
+
+def test_dropped_sequence_only_folder_on_mov_list_appends(player, dialogs, tmp_path):
+    """Mov 목록에 놓기는 영상 폴더를 놓을 때처럼 덧붙임 (지금 목록 그대로 두고 시퀀스만 더함)."""
+    player.load_videos_from_folder(str(shot(tmp_path, "first")))
+
+    drop_folder(player, "sidebar", seq_only_folder(tmp_path))
+
+    assert mov_names(player) == ["tk1.mov"]
+    assert seq_identities(player) == ["tk1.seq", "tk2.seq", "tk7.seq"]
+    assert player.sidebar_tabs.currentIndex() == 1
+
+
+@pytest.mark.parametrize("target", ["video", "sidebar", "window"])
+def test_dropped_empty_folder_still_warns_or_stays_quiet(player, dialogs, tmp_path, target):
+    """영상도 시퀀스도 없는 폴더: 예전 그대로 (영상 영역·창은 '영상이 없습니다' 경고, Mov 목록은 조용히 아무것도 안 함)."""
+    folder = tmp_path / "empty"
+    folder.mkdir()
+
+    drop_any(player, target, folder)
+
+    assert dialogs.warnings == ([] if target == "sidebar" else ["폴더에 지원되는 비디오 파일이 없습니다."])
+    assert player.seq_sidebar.count() == 0 and player.sidebar_tabs.currentIndex() == 0
+
+
+@pytest.mark.parametrize("target", ["video", "sidebar", "window"])
+def test_dropped_folder_with_videos_keeps_the_current_tab(player, dialogs, tmp_path, target):
+    """영상이 든 폴더(시퀀스가 함께 있어도)는 예전 그대로: 시퀀스는 Seq 목록에 들어가고 보던 Mov 탭은 그대로, 경고 없음."""
+    drop_any(player, target, shot(tmp_path))
+
+    assert mov_names(player) == ["tk1.mov"]
+    assert seq_identities(player) == ["tk1.seq", "tk2.seq"]
+    assert player.sidebar_tabs.currentIndex() == 0
+    assert dialogs.warnings == []
+
+
 # ---------------------------------------------------------------- 탭 전환·단추
 
 
@@ -260,6 +355,53 @@ def test_selected_play_disabled_on_seq_tab(player):
 
     player.sidebar_tabs.setCurrentIndex(0)
     assert player.playSelectedButton.isEnabled()
+
+
+def test_both_selected_play_buttons_disabled_on_seq_tab(player):
+    """'Play Selected'뿐 아니라 짝 단추 'Selected Play'(Play/Pause Selected)도: 눌리면 안 보이는 Mov 목록의 선택으로 재생을 시작하므로."""
+    assert player.playSelectedButton.isEnabled() and player.playSelectedPauseButton.isEnabled()
+
+    player.sidebar_tabs.setCurrentIndex(1)
+    assert not player.playSelectedButton.isEnabled()
+    assert not player.playSelectedPauseButton.isEnabled()
+
+    player.sidebar_tabs.setCurrentIndex(0)  # Mov 탭은 예전 그대로
+    assert player.playSelectedButton.isEnabled() and player.playSelectedPauseButton.isEnabled()
+
+
+def test_selected_pause_button_stays_disabled_after_stop_video_on_seq_tab(player, tmp_path):
+    """open_file이 부르는 stop_video가 'Selected Play'로 되돌려도 Seq 탭이면 꺼진 채 (시퀀스를 열어도 단추가 살아나지 않음)."""
+    player.load_videos_from_folder(str(shot(tmp_path)))
+    player.sidebar_tabs.setCurrentIndex(1)
+
+    player.on_seq_item_clicked(seq_item(player, "tk2"))  # 시퀀스를 엶 (open_file -> stop_video)
+
+    assert player.is_sequence_active()
+    assert player.playSelectedPauseButton.text() == "Selected Play"
+    assert not player.playSelectedPauseButton.isEnabled()
+
+
+def test_selected_pause_button_stays_usable_while_playlist_plays_on_seq_tab(player):
+    """선택 재생이 이미 돌고 있으면 그 단추는 재생목록의 일시정지 단추 — Seq 탭으로 옮겨도 눌러서 멈출 수 있어야 함.
+    선택 재생이 끝나면(stop_video·_end_playlist_mode) 그때부터 꺼짐."""
+    player.is_playlist_playing = True  # Mov 탭에서 시작한 선택 재생
+    player.sidebar_tabs.setCurrentIndex(1)
+
+    assert player.playSelectedPauseButton.isEnabled()
+    assert not player.playSelectedButton.isEnabled()  # 새 선택 재생을 시작하는 단추는 여전히 꺼짐
+
+    player.stop_video()  # 선택 재생 끝
+    assert not player.is_playlist_playing and not player.playSelectedPauseButton.isEnabled()
+
+    player.is_playlist_playing = True
+    player.sidebar_tabs.setCurrentIndex(0)
+    player.sidebar_tabs.setCurrentIndex(1)
+    assert player.playSelectedPauseButton.isEnabled()
+    player._end_playlist_mode()  # 재생할 수 있는 영상이 없어 끝나는 길
+    assert not player.is_playlist_playing and not player.playSelectedPauseButton.isEnabled()
+
+    player.sidebar_tabs.setCurrentIndex(0)
+    assert player.playSelectedPauseButton.isEnabled()
 
 
 # ---------------------------------------------------------------- 누르기
