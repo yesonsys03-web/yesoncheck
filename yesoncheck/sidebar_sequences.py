@@ -24,22 +24,52 @@
 `self._seq_generating`·`self._seq_thumbnail_timer`)는 예전처럼 VideoPlayerBase가 만들고(위젯은 initUI), 이 믹스인은 `self.`로 씀. PlayerSidebarMixin의 부모
 클래스로 붙음. 이 모듈은 player_sidebar·player_base를 모듈 수준에서 import하지 않음 (순환).
 
-`ThumbnailWorker`는 이 모듈의 전역 이름으로 찾음 — 시험이 바꿔치기하려면 이 모듈의 이름(`sidebar_sequences.ThumbnailWorker`)을 바꿔야 닿음.
+- 오른쪽 클릭 메뉴(`show_seq_context_menu`): 열기(A/B)·선택한 시퀀스로 MOV 만들기·썸네일 다시 만들기·정보 보기 — 다섯 개뿐 (mov 전용 합치기·
+  OCR류 없음). 메뉴를 연 항목이 선택 밖이면 그 항목만 선택 (메뉴의 일은 눌린 항목에 대한 것), 선택 안이면 선택 전체가 일의 대상.
+- 일괄 내보내기(`export_selected_sequences`): 선택 항목(목록 순서) -> 출력 폴더 고르기(원본 폴더면 경고하고 다시 고르게 함 —
+  validate_out_dir) -> 실행마다 새 SequenceExportWorker(`self.seq_export_worker` — RUNNING_JOB_ATTRS가 창 닫기·업데이트 가드로 잡음)와
+  비모달 진행 창(SequenceExportDialog — `self.seq_export_dialog`, 닫아도 작업은 계속). 취소는 stop() 뒤 한도 안에서만 wait() (GUI를 오래 막지 않음, 한도를
+  넘으면 '취소하는 중'으로 두고 끝나는 걸 조금씩 봄). 워커는 취소하면 finished·error를 내지 않으므로 취소 뒤에 늦게 온 신호(아주 작은 틈의
+  레이스)와 지난 실행의 신호는 무시 — 슬롯은 워커를 함께 받아 지금 실행의 것인지 봄.
+
+`ThumbnailWorker`·`SequenceExportWorker`·`ImageSequenceCapture`는 이 모듈의 전역 이름으로 찾음 — 시험이 바꿔치기하려면 이 모듈의
+이름(`sidebar_sequences.ThumbnailWorker` 등)을 바꿔야 닿음.
 """
 
 import functools
 import os
+import traceback
 
-from PyQt5.QtCore import QItemSelectionModel, QSize, Qt
+import cv2
+from PyQt5.QtCore import QItemSelectionModel, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QIcon, QPixmap
-from PyQt5.QtWidgets import QListWidgetItem
+from PyQt5.QtWidgets import (
+    QDialog,
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QListWidgetItem,
+    QMenu,
+    QMessageBox,
+    QPlainTextEdit,
+    QProgressBar,
+    QPushButton,
+    QVBoxLayout,
+)
 
 from yesoncheck import paths, sequence_source, thumbnails, video_list
+from yesoncheck.sequence_export_worker import SequenceExportWorker, validate_out_dir
+from yesoncheck.sequence_source import ImageSequenceCapture
 from yesoncheck.sidebar_items import THUMBNAIL_CONTEXT_ROLE, THUMBNAIL_MAKE_FAILED, THUMBNAIL_VIDEO_PROBLEM
 from yesoncheck.thumbnail_workers import SeqThumbnailLoaderWorker, ThumbnailWorker
 from yesoncheck.worker_lifecycle import release_worker
 
 SEQ_FOLLOWUP_MS = 300  # Mov 탭이 썸네일을 만드는 중에 시작한 Seq 썸네일 읽기를, 만들기가 끝났는지 이 간격으로 보며 기다림
+SEQ_EXPORT_TITLE = "시퀀스 MOV 만들기"
+SEQ_EXPORT_PROGRESS_MS = 50  # 프레임마다 오는 진행 신호를 막대에는 이 간격으로 모아 반영 (마지막 값은 반드시 반영)
+SEQ_EXPORT_CANCEL_WAIT_MS = 5000  # 취소 단추: stop() 뒤 GUI 스레드가 워커가 끝나길 기다리는 최대 시간 (ffmpeg를 끝내고 부분 출력을 지우는 시간)
+SEQ_EXPORT_CANCEL_POLL_MS = 200  # 그 안에 끝나지 않으면 이 간격으로 끝났는지만 봄 (기다리며 막지 않음)
+SEQ_EXPORT_LOG_PREFIX = "[시퀀스 MOV]"
 
 
 def seq_label(seq):
@@ -70,6 +100,128 @@ def _merged(*groups):
         for seq in group:
             unique.setdefault(_seq_key(seq), seq)
     return video_list.sort_sequences(unique.values())
+
+
+class SequenceExportDialog(QDialog):
+    """시퀀스 -> mov 일괄 내보내기의 비모달 진행 창 (보기만 — 워커와 잇는 일은 SidebarSequencesMixin이 함).
+
+    위에서부터: 저장 위치, `n/m 항목`, 지금 항목 이름, 프레임 진행 막대(항목 합산 — 워커의 progress 그대로), 상태, 로그, 취소·닫기 단추.
+    state: running(만드는 중) -> finished(완료) / failed(실패 — 요약이 로그에 남음) / cancelling(취소하는 중) -> cancelled(취소됨).
+    취소 단추는 cancel_requested 신호만 내고 바로 꺼짐 (연결은 부르는 쪽). 창을 닫아도(X·Esc·닫기) 작업은 계속됨 — 닫기는 창을 숨길 뿐이고
+    (취소가 아님 — 앱 종료의 모든 창 닫기를 막지도 않음), 다시 보려면 'MOV 만들기'를 한 번 더 고르면 되며(이미 만드는 중이라고 알리며 이 창을
+    앞으로 가져옴) 끝나거나 실패하면 창이 저절로 다시 나타남. 진행 막대는 프레임마다 오는 신호를
+    SEQ_EXPORT_PROGRESS_MS 간격으로 모아 반영하고 flush_progress()가 마지막 값을 바로 반영 (끝·취소·실패는 늘 flush한 뒤 상태를 바꿈).
+    """
+
+    cancel_requested = pyqtSignal()
+
+    def __init__(self, parent, item_count, out_dir):
+        super().__init__(parent)
+        self.setWindowTitle(SEQ_EXPORT_TITLE)
+        self.setWindowModality(Qt.NonModal)
+        self.resize(560, 380)
+        self.item_count = item_count
+        self.state = "running"
+        self._pending_frames = None
+        self._flush_timer = QTimer(self)
+        self._flush_timer.setSingleShot(True)
+        self._flush_timer.setInterval(SEQ_EXPORT_PROGRESS_MS)
+        self._flush_timer.timeout.connect(self.flush_progress)
+
+        layout = QVBoxLayout(self)
+        self.out_label = QLabel(f"저장 위치: {out_dir}")
+        self.out_label.setWordWrap(True)
+        layout.addWidget(self.out_label)
+        self.items_label = QLabel(f"0/{item_count} 항목")
+        layout.addWidget(self.items_label)
+        self.current_label = QLabel("")
+        layout.addWidget(self.current_label)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 1)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(False)  # 첫 진행 신호가 오기 전에는 '0 / 1'이 보이지 않게
+        layout.addWidget(self.progress_bar)
+        self.state_label = QLabel("")
+        layout.addWidget(self.state_label)
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
+        layout.addWidget(self.log)
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        self.cancel_button = QPushButton("취소")
+        self.cancel_button.clicked.connect(self._on_cancel_clicked)
+        buttons.addWidget(self.cancel_button)
+        self.close_button = QPushButton("닫기")  # 창만 닫음 (작업은 그대로)
+        self.close_button.clicked.connect(self.close)
+        buttons.addWidget(self.close_button)
+        layout.addLayout(buttons)
+
+        self._show_state("만드는 중…")
+        self.add_log(f"{item_count}개 시퀀스를 mov로 만듭니다: {out_dir}")
+        self.add_log("창을 닫아도 작업은 계속됩니다 (멈추려면 취소).")
+
+    def _show_state(self, text, bold_red=False):
+        self.state_label.setText(text)
+        self.state_label.setStyleSheet("font-weight: bold; color: #d9534f;" if bold_red else "font-weight: bold;")
+        self.cancel_button.setEnabled(self.state == "running")
+
+    def _on_cancel_clicked(self):
+        self.cancel_button.setEnabled(False)  # 두 번 눌러도 한 번만
+        self.cancel_requested.emit()
+
+    def add_log(self, text):
+        self.log.appendPlainText(text)
+
+    def set_item(self, index, base):
+        """index번째(0부터) 항목을 시작함."""
+        self.items_label.setText(f"{index + 1}/{self.item_count} 항목")
+        self.current_label.setText(f"지금: {base}")
+        self.add_log(f"[{index + 1}/{self.item_count}] {base}")
+
+    def set_frames(self, done, total):
+        """항목 합산 프레임 진행: 막대에는 SEQ_EXPORT_PROGRESS_MS마다 모아서 반영."""
+        self._pending_frames = (done, total)
+        if not self._flush_timer.isActive():
+            self._flush_timer.start()
+
+    def flush_progress(self):
+        self._flush_timer.stop()
+        if self._pending_frames is None:
+            return
+        done, total = self._pending_frames
+        self._pending_frames = None
+        self.progress_bar.setRange(0, max(total, 1))
+        self.progress_bar.setValue(done)
+        self.progress_bar.setFormat("%v / %m 프레임")
+        self.progress_bar.setTextVisible(True)
+
+    def _end(self, state, text, log_text, bold_red=False):
+        self.flush_progress()
+        self.state = state
+        self._show_state(text, bold_red=bold_red)
+        self.add_log(log_text)
+
+    def set_finished(self, message):
+        self.items_label.setText(f"{self.item_count}/{self.item_count} 항목")
+        self.current_label.setText("")
+        self._end("finished", "완료", message)
+
+    def set_failed(self, summary):
+        """실패 요약(워커의 error 글)을 로그에 그대로 — 창은 닫지 않음."""
+        self._end("failed", "실패 — 아래 내용을 확인하세요", f"오류:\n{summary}", bold_red=True)
+
+    def set_cancelling(self):
+        self.state = "cancelling"
+        self._show_state("취소하는 중…")
+        self.add_log("취소하는 중… (ffmpeg를 끝내고 만들던 파일을 지웁니다)")
+
+    def set_cancelled(self, failures):
+        """취소됨: 취소 전에 이미 실패한 항목이 있었으면 그 이유도 보임 (워커는 취소하면 오류 신호를 내지 않음)."""
+        lines = ["취소됨 — 만들던 파일은 지웠습니다. 이미 만든 mov는 그대로 있습니다."]
+        if failures:
+            lines.append(f"취소 전에 실패한 항목 {len(failures)}개:")
+            lines += [f"[{base}] {reason}" for base, reason in failures]
+        self._end("cancelled", "취소됨", "\n".join(lines))
 
 
 class SidebarSequencesMixin:
@@ -386,3 +538,200 @@ class SidebarSequencesMixin:
             if worker is not generating:
                 worker.stop()
             release_worker(worker, "Seq 썸네일 만들기" if worker is generating else "Seq 썸네일 읽기")
+
+    # ---------------------------------------------------------------- 오른쪽 클릭 메뉴·정보
+
+    def _selected_seq_items(self):
+        """고른 Seq 항목들 (목록 순서 — 누른 순서가 아님). 고른 것이 없으면 현재 항목 하나, 그것도 없으면 빈 목록."""
+        widget = self.seq_sidebar
+        items = [widget.item(i) for i in range(widget.count()) if widget.item(i).isSelected()]
+        if not items and widget.currentItem() is not None:
+            items = [widget.currentItem()]
+        return items
+
+    def show_seq_context_menu(self, pos):
+        """Seq 목록의 오른쪽 클릭 메뉴 (항목 위에서만): 열기(A/B) / 선택한 시퀀스로 MOV 만들기 / 썸네일 다시 만들기 / 정보 보기.
+        mov 전용 동작(합치기·OCR류·파일 복사)은 넣지 않음. 선택 밖의 항목에서 열었으면 그 항목만 선택."""
+        item = self.seq_sidebar.itemAt(pos)
+        if item is None:
+            return
+        if not item.isSelected():
+            self.seq_sidebar.clearSelection()
+            item.setSelected(True)
+        identity = item.data(Qt.UserRole).identity
+        menu = QMenu(self.seq_sidebar)
+        menu.addAction("비디오 A로 열기").triggered.connect(lambda: self.open_file('A', identity))
+        menu.addAction("비디오 B로 열기").triggered.connect(lambda: self.open_file('B', identity))
+        menu.addSeparator()
+        menu.addAction("선택한 시퀀스로 MOV 만들기…").triggered.connect(lambda: self.export_selected_sequences())
+        menu.addSeparator()
+        menu.addAction("썸네일 다시 만들기").triggered.connect(lambda: self.regenerate_seq_thumbnails(self._selected_seq_items()))
+        menu.addSeparator()
+        menu.addAction("정보 보기").triggered.connect(lambda: self.show_seq_info(item))
+        # 메뉴가 떠 있는 동안·고른 일을 하는 동안 목록 다시 읽기는 미룸 (Mov 목록 메뉴와 같음 — 항목이 바뀌지 않게)
+        with self._hold_sidebar_refresh():
+            menu.exec_(self.seq_sidebar.viewport().mapToGlobal(pos))
+
+    def show_seq_info(self, item):
+        """'정보 보기': 범위·개수·빠짐은 목록의 값, 프레임 속도·해상도는 시퀀스를 잠깐 열어 읽음 (바로 놓음 — 첫 프레임을 디코드하므로
+        GUI 스레드에서 한 번 디스크를 읽음). 읽지 못하면 이유를 스택 트레이스째 창과 로그에 (아는 값은 그대로 보임)."""
+        seq = item.data(Qt.UserRole)
+        width = height = 0
+        fps = 0.0
+        movie = None
+        details = ""
+        problem = None
+        try:
+            cap = ImageSequenceCapture(seq.identity)
+            try:
+                if cap.isOpened():
+                    fps = cap.get(cv2.CAP_PROP_FPS)
+                    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                else:
+                    problem = "폴더에서 이 시퀀스를 찾지 못했습니다 (프레임이 없어졌거나 2장 미만)"
+            finally:
+                cap.release()
+            movie = sequence_source.paired_movies(seq.dir, {seq.base})[seq.base]
+        except (OSError, ValueError, cv2.error) as exc:
+            problem = f"{type(exc).__name__}: {exc}"
+            details = traceback.format_exc()
+            traceback.print_exc()
+        missing = f"{seq.missing}프레임" if seq.missing > 0 else "없음"
+        lines = [
+            f"이름: {seq.base}",
+            f"폴더: {seq.dir}",
+            f"범위: {seq.first:0{seq.pad}d}–{seq.last:0{seq.pad}d}",
+            f"개수: {seq.count}프레임",
+            f"빠짐: {missing}",
+            f"형식: {seq.ext.upper()} ({seq.pad}자리 번호)",
+        ]
+        if problem is None:
+            source = f"짝 영상 {os.path.basename(movie)}" if movie else "짝 영상 없음 — 기본값"
+            lines += [f"프레임 속도: {fps:.2f} fps ({source})", f"해상도: {width} x {height}"]
+        else:
+            lines.append(f"프레임 속도·해상도: 읽지 못했습니다 — {problem}")
+        box = QMessageBox(self)
+        box.setWindowTitle("시퀀스 정보")
+        box.setIcon(QMessageBox.Information if problem is None else QMessageBox.Warning)
+        box.setTextFormat(Qt.PlainText)
+        box.setText("\n".join(lines))
+        if details:
+            box.setDetailedText(details)
+        box.exec_()
+
+    # ---------------------------------------------------------------- 시퀀스 -> mov 일괄 내보내기
+
+    def export_selected_sequences(self):
+        """고른 시퀀스들을 mov로: 출력 폴더 고르기(원본 폴더면 거부) -> 새 워커 + 비모달 진행 창. 이미 만드는 중이면 그 창을 앞으로."""
+        worker = self.seq_export_worker
+        if worker is not None and worker.isRunning():
+            QMessageBox.information(self, SEQ_EXPORT_TITLE, "이미 시퀀스 MOV를 만드는 중입니다. 끝나거나 취소한 뒤에 다시 하세요.")
+            dialog = self.seq_export_dialog
+            if dialog is not None:
+                dialog.show()
+                dialog.raise_()
+                dialog.activateWindow()
+            return
+        seqs = [item.data(Qt.UserRole) for item in self._selected_seq_items()]
+        if not seqs:
+            QMessageBox.information(self, SEQ_EXPORT_TITLE, "MOV로 만들 시퀀스를 Seq 목록에서 고르세요.")
+            return
+        ffmpeg = self.require_ffmpeg()  # 없으면 안내 창이 이미 뜸
+        if ffmpeg is None:
+            return
+        out_dir = self._ask_seq_export_dir(seqs)
+        if out_dir is None:
+            return
+        self._start_seq_export(seqs, out_dir, ffmpeg)
+
+    def _ask_seq_export_dir(self, seqs):
+        """출력 폴더를 고르게 함 → 경로, 고르지 않고 닫으면 None. 원본 폴더(validate_out_dir가 거부)면 경고하고 다시 고르게 함."""
+        start = ""
+        while True:
+            chosen = QFileDialog.getExistingDirectory(self, "MOV를 저장할 폴더 선택", start)
+            if not chosen:
+                return None
+            out_dir = paths.normalize_native(chosen)
+            reason = validate_out_dir(seqs, out_dir)
+            if reason is None:
+                return out_dir
+            QMessageBox.warning(self, "원본 폴더는 고를 수 없습니다", reason)
+            start = os.path.dirname(os.path.normpath(out_dir))
+
+    def _start_seq_export(self, seqs, out_dir, ffmpeg):
+        """실행마다 새 워커·새 창 (멈춘 워커는 다시 쓸 수 없음). 슬롯은 워커를 함께 받아 지금 실행의 신호인지 봄."""
+        old = self.seq_export_dialog
+        if old is not None:  # 지난 실행의 창 (끝난 뒤에도 보이게 둔 것)
+            old.hide()
+            old.deleteLater()
+        old_worker = self.seq_export_worker
+        if old_worker is not None:  # 끝난 지난 실행의 워커 (export_selected_sequences가 도는 워커는 막음): 시그널 연결과 함께 놓음
+            old_worker.deleteLater()
+        worker = SequenceExportWorker(seqs, out_dir, ffmpeg)
+        dialog = SequenceExportDialog(self, len(seqs), out_dir)
+        dialog.cancel_requested.connect(functools.partial(self.cancel_seq_export, worker))
+        worker.item_started.connect(functools.partial(self._on_seq_export_item_started, worker))
+        worker.progress.connect(functools.partial(self._on_seq_export_progress, worker))
+        worker.finished.connect(functools.partial(self._on_seq_export_finished, worker))
+        worker.error.connect(functools.partial(self._on_seq_export_error, worker))
+        self.seq_export_worker = worker
+        self.seq_export_dialog = dialog
+        dialog.show()
+        worker.start()
+
+    def _seq_export_is_live(self, worker):
+        """worker가 지금 실행의 것이고 취소하지 않았는지 — 지난 실행의 신호와 취소 뒤 늦게 온 신호는 무시."""
+        return worker is self.seq_export_worker and not worker.cancelled
+
+    def _on_seq_export_item_started(self, worker, index, base):
+        if self._seq_export_is_live(worker):
+            self.seq_export_dialog.set_item(index, base)
+
+    def _on_seq_export_progress(self, worker, done, total):
+        if self._seq_export_is_live(worker):
+            self.seq_export_dialog.set_frames(done, total)
+
+    def _on_seq_export_finished(self, worker):
+        if self._seq_export_is_live(worker):
+            dialog = self.seq_export_dialog
+            dialog.set_finished(f"완료: {len(worker.items)}개 시퀀스를 만들었습니다 — {worker.out_dir}")
+            dialog.show()  # 닫아 둔 창이면 다시 나타나 끝났음을 알림
+
+    def _on_seq_export_error(self, worker, text):
+        """실패 요약: 진행 창에 그대로 남기고(닫지 않음) 오류 창도 띄움 — 스택 트레이스가 든 요약이므로 콘솔에도."""
+        if not self._seq_export_is_live(worker):
+            return
+        print(f"{SEQ_EXPORT_LOG_PREFIX} 실패:\n{text}", flush=True)
+        self.seq_export_dialog.set_failed(text)
+        self.seq_export_dialog.show()  # 닫아 둔 창이면 다시 나타남 (오류 창을 닫은 뒤에도 요약이 읽히게)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Critical)
+        box.setWindowTitle("시퀀스 MOV 만들기 실패")
+        box.setText(f"시퀀스 MOV 만들기가 실패했습니다: {text.partition(chr(10))[0]}")  # 첫 줄: 무엇이 틀렸는지
+        box.setDetailedText(text)  # 항목별 이유 전체
+        box.exec_()
+
+    def cancel_seq_export(self, worker):
+        """진행 창의 취소 단추: stop()으로 ffmpeg를 끝내고 만들던 파일을 지우게 한 뒤, 끝나길 SEQ_EXPORT_CANCEL_WAIT_MS까지만 기다림.
+        그 안에 끝나지 않으면(느린 NAS의 파일 지우기·ffprobe) GUI를 막지 않고 '취소하는 중'으로 두며 끝났는지만 조금씩 봄."""
+        dialog = self.seq_export_dialog
+        if worker is not self.seq_export_worker or dialog.state != "running":
+            return
+        dialog.set_cancelling()
+        worker.stop()
+        if worker.wait(SEQ_EXPORT_CANCEL_WAIT_MS):
+            dialog.set_cancelled(list(worker.failures))
+            return
+        print(f"{SEQ_EXPORT_LOG_PREFIX} 취소가 {SEQ_EXPORT_CANCEL_WAIT_MS / 1000:g}초 안에 끝나지 않음 — 끝날 때까지 기다림", flush=True)
+        timer = QTimer(dialog)  # 창이 사라지면 함께 사라짐 (닫힌 창을 뒤늦게 건드리지 않게)
+        timer.setInterval(SEQ_EXPORT_CANCEL_POLL_MS)
+        timer.timeout.connect(functools.partial(self._poll_seq_export_cancel, worker, dialog, timer))
+        timer.start()
+
+    def _poll_seq_export_cancel(self, worker, dialog, timer):
+        if worker.isRunning():
+            return
+        timer.stop()
+        timer.deleteLater()
+        dialog.set_cancelled(list(worker.failures))

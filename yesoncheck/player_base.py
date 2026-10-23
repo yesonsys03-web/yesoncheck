@@ -183,6 +183,9 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         self._seq_thumbnail_timer = QTimer(self)
         self._seq_thumbnail_timer.setSingleShot(True)
         self._seq_thumbnail_timer.timeout.connect(self._load_seq_thumbnails_after_mov)
+        # 시퀀스 -> mov 일괄 내보내기 (SidebarSequencesMixin이 씀): 지금(또는 마지막) 실행의 워커(RUNNING_JOB_ATTRS가 창 닫기·업데이트 가드로 잡음)와 진행 창
+        self.seq_export_worker = None
+        self.seq_export_dialog = None
 
         timing_log.startup("창: 화면 구성 중…")
         started = time.perf_counter()
@@ -714,6 +717,8 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         self.seq_sidebar = QListWidget(); self.seq_sidebar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.seq_sidebar.setSelectionMode(QListWidget.ExtendedSelection)
         self.seq_sidebar.itemClicked.connect(self.on_seq_item_clicked)
+        self.seq_sidebar.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.seq_sidebar.customContextMenuRequested.connect(self.show_seq_context_menu)
         self.seq_sidebar.installEventFilter(self)  # Mov 목록처럼 목록이 포커스를 가져도 전역 단축키(프레임 이동 등)가 먹게
         self.seq_sidebar.setFocusPolicy(Qt.StrongFocus)
         self.sidebar.model().modelAboutToBeReset.connect(self._clear_seq_items)
