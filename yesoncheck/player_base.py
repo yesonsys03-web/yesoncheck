@@ -1563,6 +1563,7 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         ("OCR 구간 내보내기", "ocr_export_worker"),
         ("주석 영상 내보내기", "annotation_export_worker"),
         ("영상 병합", "merge_worker"),
+        ("시퀀스 MOV 만들기", "seq_export_worker"),
     )
 
     def running_jobs(self):
@@ -1575,11 +1576,11 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         return jobs
 
     def running_job_labels(self) -> list[str]:
-        """실행 중인 OCR·컷 감지/OCR 구간 내보내기/주석 영상 내보내기/영상 병합의 이름."""
+        """실행 중인 OCR·컷 감지/OCR 구간 내보내기/주석 영상 내보내기/영상 병합/시퀀스 MOV 만들기의 이름."""
         return [label for label, _worker in self.running_jobs()]
 
     def stop_running_jobs(self, timeout_ms=None):
-        """창을 닫을 때: 실행 중인 OCR 분석·컷 감지, OCR 구간 내보내기·주석 내보내기·병합을 멈추고 끝날 때까지 기다립니다
+        """창을 닫을 때: 실행 중인 OCR 분석·컷 감지, OCR 구간 내보내기·주석 내보내기·병합·시퀀스 MOV 만들기를 멈추고 끝날 때까지 기다립니다
         (최대 timeout_ms, 기본 JOB_CLOSE_WAIT_MS).
 
         멈추지 않으면 ffmpeg가 (Windows에서는 보이지 않은 채) 남아 NAS의 출력 파일을 잡고 있고,
