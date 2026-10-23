@@ -43,14 +43,35 @@ def stored_and_native_path(stored_path, native_path):
     return f"저장된 경로: {stored_path}\n이 PC 경로: {native_path}"
 
 
+# 이미지 시퀀스가 열려 있을 때 OCR·컷 감지를 쓰려 하면 알리는 글 (OCR은 영상 파일을 다시 열어 분석하는데 시퀀스는 그럴 파일이 없음)
+OCR_SEQUENCE_UNAVAILABLE = "이미지 시퀀스에서는 OCR·컷 감지를 쓸 수 없습니다.\n영상(mov)을 열어서 사용해 주세요."
+OCR_SEQUENCE_TOOLTIP = "이미지 시퀀스에서는 OCR·컷 감지를 쓸 수 없습니다."
+
+
 class PlayerOcrMixin:
     """VideoPlayer의 OCR·컷 감지 분석과 그 결과(검토·저장·불러오기·내보내기)."""
+
+    def _ocr_blocked_by_sequence(self):
+        """OCR·컷 감지를 쓸 수 없는 소스(이미지 시퀀스)가 열려 있음 — 버튼 활성 조건과 직접 불린 쪽의 가드 모두 이 한 판정을 씀."""
+        return self.is_sequence_active()
+
+    def _refuse_ocr_for_sequence(self):
+        """시퀀스가 열려 있으면 이유를 창으로 알리고 True (부른 쪽은 아무것도 하지 않고 바로 돌아옴). 소리 없이 무시하지 않음."""
+        if not self._ocr_blocked_by_sequence():
+            return False
+        QMessageBox.information(self, "OCR 사용 불가", OCR_SEQUENCE_UNAVAILABLE)
+        return True
 
     def toggle_ocr_roi_selection(self, checked):
         """Enable or disable ROI selection mode based on button state."""
         frame_a = getattr(self, "frame_a", None)
         cap_a = getattr(self, "cap_a", None)
         if checked:
+            if self._refuse_ocr_for_sequence():
+                self.ocrSelectRoiButton.blockSignals(True)
+                self.ocrSelectRoiButton.setChecked(False)
+                self.ocrSelectRoiButton.blockSignals(False)
+                return
             if hasattr(self, "annotationModeButton") and self.annotationModeButton.isChecked():
                 self.annotationModeButton.setChecked(False)
             if not cap_a or frame_a is None:
@@ -99,6 +120,16 @@ class PlayerOcrMixin:
         except RuntimeError:
             # 객체가 이미 삭제된 경우 무시
             pass
+
+        # 이미지 시퀀스가 열려 있으면 어느 모드든 분석 관련 버튼을 모두 끔 (ROI가 있어도, 애니매틱 모드여도)
+        if self._ocr_blocked_by_sequence():
+            if hasattr(self, 'ocrSelectRoiButton'):
+                self.ocrSelectRoiButton.setEnabled(False)
+                self.ocrSelectRoiButton.setToolTip(OCR_SEQUENCE_TOOLTIP)
+            for name in ('ocrTrackingCheckBox', 'ocrAnalyzeButton', 'ocrAnalyzeRangeButton'):
+                if hasattr(self, name):
+                    getattr(self, name).setEnabled(False)
+            return
 
         # 애니매틱/애니매틱2 모드일 때는 ROI 선택 버튼 비활성화
         if ocr_mode in ['animatic', 'animatic2']:
@@ -230,6 +261,8 @@ class PlayerOcrMixin:
 
     def run_ocr_analysis(self):
         """Kick off OCR worker to detect text changes and export segments."""
+        if self._refuse_ocr_for_sequence():
+            return
         if self.ocr_worker and self.ocr_worker.isRunning():
             QMessageBox.information(self, "OCR 진행 중", "이미 OCR 분석이 실행 중입니다.")
             return
@@ -413,6 +446,8 @@ class PlayerOcrMixin:
 
     def run_ocr_analysis_range(self):
         """지정한 프레임 범위만 OCR 분석합니다."""
+        if self._refuse_ocr_for_sequence():
+            return
         print("[선택구간 분석] 시작됨")
         
         if self.ocr_worker and self.ocr_worker.isRunning():
@@ -1077,6 +1112,8 @@ class PlayerOcrMixin:
     
     def reopen_ocr_result(self):
         """이전에 분석한 OCR 결과를 다시 엽니다"""
+        if self._refuse_ocr_for_sequence():
+            return
         # 원본 분석 결과가 없으면 오류 메시지 표시
         if not hasattr(self, 'last_ocr_segments') or not self.last_ocr_segments:
             QMessageBox.information(self, "결과 없음", "다시 열 OCR 결과가 없습니다. 먼저 OCR 분석을 실행하세요.")
@@ -1405,6 +1442,8 @@ class PlayerOcrMixin:
     
     def load_ocr_result(self):
         """저장된 OCR 분석 결과를 로드"""
+        if self._refuse_ocr_for_sequence():
+            return
         # 현재 비디오 경로 사용 (사이드바 또는 Video A)
         current_video_path = self.get_current_video_path() or self.filename_a
         default_dir = os.path.dirname(current_video_path) if current_video_path else os.path.expanduser("~")

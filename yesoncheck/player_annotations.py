@@ -953,6 +953,11 @@ class PlayerAnnotationsMixin:
 
         audio_check = QCheckBox("오디오 포함")
         audio_check.setChecked(True)
+        if self.is_sequence_active():
+            # 이미지 시퀀스에는 소리가 없음 (내보내기도 소리 입력 없이 영상만 만듦)
+            audio_check.setChecked(False)
+            audio_check.setEnabled(False)
+            audio_check.setToolTip("이미지 시퀀스에는 소리가 없습니다.")
         layout.addWidget(audio_check)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)

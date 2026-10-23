@@ -16,6 +16,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from yesoncheck import paths, user_files
+from yesoncheck.sequence_scan import is_sequence_path
 
 
 ANNOTATION_TYPES = ("text", "rect", "ellipse", "line", "arrow")
@@ -62,20 +63,33 @@ def normalize_item_frame_range(item: Dict[str, Any], anchor_frame: int) -> Dict[
 
 
 def annotation_file_path(video_path: str) -> str:
-    """Sidecar JSON path next to the video file."""
+    """Sidecar JSON path next to the video file.
+
+    이미지 시퀀스는 가상 경로(`<폴더>/<base>.seq`)가 영상 경로 자리에 오고 `<base>_seq_annotations.json`에 저장된다 — 이름이
+    시작 번호·실제 확장자와 무관해 재렌더(0001→0101, tga→png)에도 같은 파일을 읽고, 같은 이름의 mov 주석 파일과도 겹치지 않는다.
+    """
     base = os.path.splitext(os.path.basename(video_path))[0]
     folder = os.path.join(os.path.dirname(video_path), ".yesoncheck")
-    return os.path.join(folder, f"{base}_annotations.json")
+    suffix = "_seq_annotations.json" if is_sequence_path(video_path) else "_annotations.json"
+    return os.path.join(folder, f"{base}{suffix}")
+
+
+# 시퀀스를 굽기 내보내기하면 나오는 영상 (시퀀스에는 영상 확장자가 없어 정함)
+SEQUENCE_EXPORT_EXT = ".mov"
 
 
 def annotation_export_suggested_name(video_path: str) -> str:
     base, ext = os.path.splitext(os.path.basename(video_path))
+    if is_sequence_path(video_path):
+        ext = SEQUENCE_EXPORT_EXT  # 가상 경로의 '.seq'가 아니라 영상 파일로
     return f"{base}_annotated{ext or '.mp4'}"
 
 
 def annotation_export_default_path(video_path: str) -> str:
     """Default burned-in export path beside the source video."""
     base, ext = os.path.splitext(video_path)
+    if is_sequence_path(video_path):
+        ext = SEQUENCE_EXPORT_EXT
     return f"{base}_annotated{ext or '.mp4'}"
 
 
