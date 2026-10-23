@@ -972,14 +972,18 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
                         self.sidebar.setFocus()
                         QTimer.singleShot(10, self.load_selected_item_to_video_a)
                         return False
-                elif key == Qt.Key_Space: 
-                    self.toggle_play_pause()
-                    return True
                 elif key in (Qt.Key_Return, Qt.Key_Enter): 
                     self.play_selected_files()
                     return True
                 elif key == Qt.Key_Backslash: 
                     self.toggle_play_pause_selected()
+                    return True
+            
+            # 사이드바 목록(Mov·Seq 어느 쪽이든 목록이 포커스를 가진 채)에서 먹는 단축키: 재생/정지와 확대·축소·화면 맞춤.
+            # 선택 재생(Enter·\)·위아래 화살표로 열기는 재생목록 기계장치가 Mov 목록 전제라 위의 Mov 목록 전용
+            if source in (self.sidebar, self.seq_sidebar):
+                if key == Qt.Key_Space: 
+                    self.toggle_play_pause()
                     return True
                 elif key in [Qt.Key_Plus, Qt.Key_Equal, Qt.Key_2]: 
                     print("EventFilter - Zoom in triggered")

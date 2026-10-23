@@ -480,7 +480,11 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
             self.sidebar.selectAll()
             self.schedule_background_thumbnail_loading()
             QMessageBox.information(self, "폴더 로드 완료", f"{len(video_files)}개의 비디오 파일이 사이드바에 추가되었습니다.\n첫 번째 파일이 Video A에 로드되었습니다.")
-        elif not read_failed and not sequences:  # 시퀀스만 든 폴더는 Seq 탭에 들어왔으므로 '영상이 없습니다'를 띄우지 않음
+        elif sequences:
+            # 시퀀스만 든 폴더: '영상이 없습니다'를 띄우지 않고 Seq 탭을 보여 줌 (탭 페이지 교체뿐 — 디스크를 읽지 않음).
+            # 영상이 있는 폴더는 지금 보던 탭 그대로
+            self.sidebar_tabs.setCurrentIndex(1)
+        elif not read_failed:
             QMessageBox.warning(self, "경고", "폴더에 지원되는 비디오 파일이 없습니다.")
 
     def load_selected_item_to_video_a(self):

@@ -6,6 +6,7 @@ dialogs가 가로챔 (실제 QMessageBox를 띄우지 않음).
 """
 
 import os
+import time
 
 import pytest
 from PyQt5.QtCore import QPoint, QPointF, Qt
@@ -170,6 +171,16 @@ def test_sequence_only_folder_fills_seq_list_without_no_video_warning(player, di
     assert player.sidebar.count() == 0
     assert seq_labels(player) == ["tk1 (0001–0004, 4프레임)"]
     assert dialogs.warnings == []  # 시퀀스가 있는 폴더에 '영상이 없습니다'를 띄우지 않음
+    assert player.sidebar_tabs.currentIndex() == 1  # 볼 것이 Seq 탭에만 있으므로 그 탭을 보여 줌
+    assert not player.playSelectedButton.isEnabled()  # 탭 전환의 부수 효과도 그대로 (Seq 탭에서는 선택 재생 끔)
+
+
+def test_folder_with_videos_keeps_the_current_tab(player, tmp_path):
+    """영상이 있는 폴더는 (시퀀스가 함께 있어도) 지금 보던 탭 그대로 — Mov 탭이 보이는 상태에서 시작하면 Mov 탭."""
+    player.load_videos_from_folder(str(shot(tmp_path)))
+
+    assert player.sidebar_tabs.currentIndex() == 0
+    assert player.playSelectedButton.isEnabled()
 
 
 def test_empty_folder_still_warns_no_videos(player, dialogs, tmp_path):
@@ -436,23 +447,90 @@ def test_wheel_over_a_sidebar_list_does_not_step_frames(player, tmp_path, monkey
     assert player.positionScroll.value() == position
 
 
+# (키, 부르는 대상, 불리는 메서드): 목록이 포커스를 가진 채 먹어야 하는 단축키
+LIST_SHORTCUTS = [
+    # 프레임 이동·전체화면·썸네일: 창 전역 (목록이 . , F R 같은 글자 키를 '입력해서 찾기'로 먹으므로 목록에도 이벤트 필터가 있어야 함)
+    (Qt.Key_Right, "player", "next_frame"), (Qt.Key_Left, "player", "prev_frame"),
+    (Qt.Key_Period, "player", "next_frame"), (Qt.Key_Comma, "player", "prev_frame"),
+    (Qt.Key_F, "player", "toggle_fullscreen"), (Qt.Key_R, "player", "regenerate_selected_thumbnails"),
+    # 재생/정지·확대·축소·화면 맞춤: 이벤트 필터의 사이드바 목록 분기 (Mov·Seq 어느 목록이든)
+    (Qt.Key_Space, "player", "toggle_play_pause"),
+    (Qt.Key_Plus, "video", "zoom_in"), (Qt.Key_Equal, "video", "zoom_in"), (Qt.Key_2, "video", "zoom_in"),
+    (Qt.Key_Minus, "video", "zoom_out"), (Qt.Key_1, "video", "zoom_out"),
+    (Qt.Key_3, "video", "reset_view"), (Qt.Key_4, "video", "show_original_size"),
+]
+
+
+def pump(ms=60):
+    deadline = time.monotonic() + ms / 1000
+    while time.monotonic() < deadline:
+        QApplication.processEvents()
+        time.sleep(0.005)
+
+
+def focus_list(player, which):
+    """which 목록의 탭을 보이고 그 목록에 키보드 포커스를 줌 (창을 보여야 포커스가 감).
+
+    창이 활성되면 100ms 뒤 force_focus가 포커스를 창으로 되돌리므로(앱 동작) 그 타이머가 지난 뒤에 주고, 늦게 온 것에 뺏기면 다시 줌."""
+    if not player.isVisible():
+        player.show()
+        pump(250)
+    player.sidebar_tabs.setCurrentIndex(0 if which == "sidebar" else 1)
+    widget = getattr(player, which)
+    for _ in range(5):
+        widget.setFocus()
+        pump(30)
+        if QApplication.focusWidget() is widget:
+            break
+    assert QApplication.focusWidget() is widget
+    return widget
+
+
+@pytest.mark.parametrize("which", ["sidebar", "seq_sidebar"])
+@pytest.mark.parametrize("key, owner, action", LIST_SHORTCUTS)
+def test_global_shortcuts_work_while_a_sidebar_list_has_focus(player, tmp_path, monkeypatch, which, key, owner, action):
+    """Seq 항목을 눌러 목록이 포커스를 가진 채로도 프레임 이동·전체화면·재생/정지·확대·축소 같은 단축키가 먹음.
+    Mov 목록 쪽도 같은 표로 확인해 Mov 동작이 그대로임을 못 박음."""
+    player.load_videos_from_folder(str(shot(tmp_path)))
+    target = player if owner == "player" else player.videoWidget
+    called = []
+    monkeypatch.setattr(target, action, lambda *args: called.append(action))
+    widget = focus_list(player, which)
+
+    QTest.keyClick(widget, key)
+
+    assert called == [action]
+
+
 @pytest.mark.parametrize("key, action", [
-    (Qt.Key_Right, "next_frame"), (Qt.Key_Left, "prev_frame"),
-    (Qt.Key_Period, "next_frame"), (Qt.Key_Comma, "prev_frame"),  # 목록이 글자 키를 '입력해서 찾기'로 먹는 키들
-    (Qt.Key_F, "toggle_fullscreen"), (Qt.Key_R, "regenerate_selected_thumbnails"),
+    (Qt.Key_Return, "play_selected_files"), (Qt.Key_Enter, "play_selected_files"),
+    (Qt.Key_Backslash, "toggle_play_pause_selected"),
 ])
-def test_global_shortcuts_work_while_the_seq_list_has_focus(player, tmp_path, monkeypatch, key, action):
-    """Seq 항목을 눌러 목록이 포커스를 가진 채로도 프레임 이동·전체화면 같은 전역 단축키가 먹음 — Mov 목록처럼.
-    (목록은 . , F R 같은 글자 키를 '입력해서 찾기'로 먹으므로 창의 이벤트 필터를 목록에도 걸어야 함)"""
+def test_playlist_shortcuts_stay_mov_list_only(player, tmp_path, monkeypatch, key, action):
+    """선택 재생(Enter·\\)은 재생목록 기계장치가 Mov 목록 전제라 Seq 목록에서는 먹지 않음 (Mov 목록은 그대로 먹음)."""
     player.load_videos_from_folder(str(shot(tmp_path)))
     called = []
     monkeypatch.setattr(player, action, lambda *args: called.append(action))
-    player.show()
-    player.sidebar_tabs.setCurrentIndex(1)
-    player.seq_sidebar.setFocus()
-    QApplication.processEvents()
-    assert QApplication.focusWidget() is player.seq_sidebar
 
-    QTest.keyClick(player.seq_sidebar, key)
-
+    QTest.keyClick(focus_list(player, "sidebar"), key)
     assert called == [action]
+
+    called.clear()
+    QTest.keyClick(focus_list(player, "seq_sidebar"), key)
+    assert called == []
+
+
+def test_up_down_open_the_selected_item_only_on_the_mov_list(player, tmp_path, monkeypatch):
+    """위아래 화살표로 선택을 옮기면 Mov 목록은 그 영상을 A로 엶 (Seq 목록은 누를 때만 엶 — 이 일은 Mov 목록 전용)."""
+    player.load_videos_from_folder(str(shot(tmp_path)))
+    opened = []
+    monkeypatch.setattr(player, "load_selected_item_to_video_a", lambda: opened.append("mov"))
+
+    QTest.keyClick(focus_list(player, "sidebar"), Qt.Key_Down)
+    pump()
+    assert opened == ["mov"]
+
+    opened.clear()
+    QTest.keyClick(focus_list(player, "seq_sidebar"), Qt.Key_Down)
+    pump()
+    assert opened == []
