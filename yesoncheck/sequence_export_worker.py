@@ -8,6 +8,10 @@ ffmpeg의 stderr는 리더 스레드로 계속 비운다 (안 읽으면 파이�
 그 항목의 부분 출력을 지우고 기록만 한 뒤 다음 항목으로 넘어가며, 모두 끝난 뒤 실패가 하나라도 있으면 error(요약) 하나로 알린다.
 취소(stop)와 오류는 모두 만들던 항목의 부분 출력을 지운다. 출력은 `<base>.mov.part`로 만들다가 검증이 끝나면 `<base>.mov`로 바꾼다
 (os.replace) — 만드는 중인 파일이 `.mov`로 보이지 않고, 실패·취소가 이미 있던 `<base>.mov`를 건드리지 않는다.
+
+읽지 못한 프레임(깨진 파일·NAS 순단)은 재생과 같이 직전 프레임으로 메워 길이를 지키지만, 납품용 mov에 같은 프레임이 말없이 들어가면 안 되므로
+항목마다 그 수를 세어(ImageSequenceCapture.read_failure_count) 알린다: 항목이 끝날 때 item_done 신호와 콘솔 한 줄, 모두 끝난 뒤 요약
+(substitution_summary — finished 때는 진행 창의 마지막 글에, 실패가 있으면 error 요약 뒤에). 오류가 아니다 (길이는 그대로, finished도 나감).
 """
 
 import os
@@ -28,6 +32,21 @@ PARTIAL_SUFFIX = ".mov.part"  # 만드는 중인 출력의 이름 (<base>.mov.pa
 MAX_RATE_DENOMINATOR = 1001  # fps 분수의 분모 한도 (23.976 -> 24000/1001) — 병합의 pick_frame_rate와 같은 기준
 ERROR_TAIL_CHARS = 4000  # 오류 글에 붙이는 ffmpeg stderr의 끝부분
 LOG_PREFIX = "[시퀀스 MOV]"
+
+
+def substitution_note(count):
+    """항목 하나의 대체 프레임 안내 (진행 창 로그·콘솔 공통)."""
+    return f"대체 프레임 {count}개 (읽지 못한 프레임을 직전 프레임으로 채움 — 길이는 그대로)"
+
+
+def substitution_summary(substitutions):
+    """[(base, 대체 프레임 수)] -> 끝난 뒤의 요약 글 (없으면 빈 글자). 오류가 아니라 알림."""
+    if not substitutions:
+        return ""
+    lines = [f"대체 프레임이 있는 항목 {len(substitutions)}개 — 읽지 못한 프레임을 직전 프레임으로 채웠습니다 "
+             "(mov 길이는 그대로, 원본 프레임 파일을 확인하세요):"]
+    lines += [f"[{base}] 대체 프레임 {count}개" for base, count in substitutions]
+    return "\n".join(lines)
 
 
 class SequenceExportError(RuntimeError):
@@ -82,14 +101,16 @@ class SequenceExportWorker(QThread):
     """시퀀스 여러 개를 mov로 — `<out_dir>/<base>.mov`, fps는 짝 mov의 것(없으면 24).
 
     item_started(index, base): 항목을 시작할 때. progress(완료 프레임, 전체 프레임): 프레임마다, 전체는 항목 합산.
+    item_done(index, base, 대체 프레임 수): 항목을 성공으로 마쳤을 때 (읽지 못해 직전 프레임으로 채운 프레임 수 — 0이면 없음; 오류가 아님).
     finished(): 모두 성공. error(글): 실패가 있으면 끝난 뒤 요약 하나 (실패한 항목마다 이유), 또는 시작할 수 없을 때·예상 못 한
     예외의 이유 — 끝날 때까지 finished나 error 중 하나는 반드시 나간다.
     취소(stop)는 finished도 error도 내지 않는다 (cancelled가 True) — 취소 전에 실패한 항목이 있었어도 마찬가지이며, 그 목록은
-    failures([(base, 이유)])에 남고 콘솔에도 찍힌다.
+    failures([(base, 이유)])에 남고 콘솔에도 찍힌다. 대체 프레임이 있었던 성공 항목은 substitutions([(base, 수)])에 남고 콘솔에도 찍힌다.
     """
 
     item_started = pyqtSignal(int, str)
     progress = pyqtSignal(int, int)
+    item_done = pyqtSignal(int, str, int)
     finished = pyqtSignal()  # QThread.finished를 가림 — FFmpegWorker와 같은 모양 (스레드가 끝난 것은 wait()로)
     error = pyqtSignal(str)
 
@@ -102,6 +123,7 @@ class SequenceExportWorker(QThread):
         self._proc = None
         self._proc_lock = threading.Lock()
         self.failures = []  # 실패한 항목 [(base, 이유)] — run()을 도는 스레드가 채우고, 끝난 뒤 읽음
+        self.substitutions = []  # 읽지 못한 프레임을 직전 프레임으로 채운 성공 항목 [(base, 대체 프레임 수)] — failures와 같이 끝난 뒤 읽음
         # 아래 셋은 run()을 도는 스레드만 만짐
         self._total = sum(_frames_of(seq) for seq in self.items)
         self._done = 0
@@ -150,7 +172,7 @@ class SequenceExportWorker(QThread):
                 break
             self.item_started.emit(index, seq.base)
             try:
-                self._export_item(seq, made)
+                substituted = self._export_item(seq, made)
             except _Cancelled:
                 break
             except (SequenceExportError, external_tools.ToolNotFoundError) as exc:
@@ -158,12 +180,23 @@ class SequenceExportWorker(QThread):
             except Exception as exc:  # 예상 못 한 실패: 이 항목만 실패로 — 무엇인지 + 스택 트레이스째 알림
                 self.failures.append((seq.base, f"{exc!r}\n\n{traceback.format_exc()}"))
             else:
+                self._report_item_done(index, seq.base, substituted)
                 continue
             self.progress.emit(self._done, self._total)  # 실패한 항목의 몫을 건너뛰어 전체 진행이 끝까지 가게
         if self.failures:
             self._emit_error(self._summary())
         elif not self._stopped.is_set():
+            summary = substitution_summary(self.substitutions)
+            if summary:
+                print(f"{LOG_PREFIX} 완료 — {summary}", flush=True)
             self.finished.emit()
+
+    def _report_item_done(self, index, base, substituted):
+        """성공한 항목의 알림: 대체 프레임이 있었으면 기록하고 콘솔에 한 줄 (오류가 아님 — 길이는 그대로라 항목은 성공)."""
+        if substituted:
+            self.substitutions.append((base, substituted))
+            print(f"{LOG_PREFIX} [{base}] {substitution_note(substituted)}", flush=True)
+        self.item_done.emit(index, base, substituted)
 
     def _emit_error(self, text):
         """error 신호로 알림. 취소한 뒤라면 신호는 내지 않고 (취소는 사용자의 뜻 — 조용히 끝남) 콘솔에 남김 (부분 출력을 못 지운 것 같은 일을 묻지 않으려고)."""
@@ -174,10 +207,12 @@ class SequenceExportWorker(QThread):
 
     def _summary(self):
         header = f"{len(self.items)}개 중 {len(self.failures)}개 실패"
-        return header + "\n" + "\n\n".join(f"[{base}] {reason}" for base, reason in self.failures)
+        text = header + "\n" + "\n\n".join(f"[{base}] {reason}" for base, reason in self.failures)
+        summary = substitution_summary(self.substitutions)  # 성공한 다른 항목의 대체 프레임도 놓치지 않게
+        return text + "\n\n" + summary if summary else text
 
     def _export_item(self, seq, made):
-        """항목 하나를 만든다. 실패·취소면 부분 출력을 지우고 예외를 그대로 올림."""
+        """항목 하나를 만든다 -> 읽지 못해 직전 프레임으로 채운 프레임 수. 실패·취소면 부분 출력을 지우고 예외를 그대로 올림."""
         planned = _frames_of(seq)
         self._item_frames = planned
         base_done = self._done
@@ -187,13 +222,14 @@ class SequenceExportWorker(QThread):
             if seq.base.casefold() in made:
                 raise SequenceExportError(f"같은 이름({seq.base}.mov)의 출력이 이 작업에서 이미 만들어졌습니다 — "
                                           f"덮어쓰지 않고 건너뜁니다: {seq.identity}")
-            self._encode(seq, base_done, planned, partial)
+            substituted = self._encode(seq, base_done, planned, partial)
             try:
                 os.replace(partial, final)
             except PermissionError as exc:  # Windows: 덮어쓸 mov를 다른 프로그램이 열고 있음
                 raise SequenceExportError(f"이미 있는 파일을 덮어쓸 수 없습니다 — 다른 프로그램이 열고 있는지 확인하세요: "
                                           f"{final}\n{exc!r}") from exc
             made.add(seq.base.casefold())
+            return substituted
         except BaseException:
             self._remove_partial(partial)
             raise
@@ -220,7 +256,8 @@ class SequenceExportWorker(QThread):
         return cmd
 
     def _encode(self, seq, base_done, planned, partial):
-        """시퀀스를 읽어 ffmpeg에 흘리고, 끝나면 partial의 프레임 수를 확인한다 (틀리면 SequenceExportError)."""
+        """시퀀스를 읽어 ffmpeg에 흘리고, 끝나면 partial의 프레임 수를 확인한다 (틀리면 SequenceExportError).
+        성공하면 읽지 못해 직전 프레임으로 채운 프레임 수를 돌려줌."""
         cap = ImageSequenceCapture(seq.identity)  # 폴더를 읽지 못하면 OSError가 그대로 올라옴
         proc = reader = None
         stderr_chunks = []
@@ -275,6 +312,7 @@ class SequenceExportWorker(QThread):
             packets = _count_packets(partial)
             if packets != written:
                 raise SequenceExportError(f"만든 mov의 프레임 수({packets})가 시퀀스의 프레임 수({written})와 다릅니다: {seq.identity}")
+            return cap.read_failure_count
         finally:
             cap.release()
             self._reap(proc, reader)

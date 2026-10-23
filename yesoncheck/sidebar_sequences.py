@@ -32,7 +32,8 @@
   비모달 진행 창(SequenceExportDialog — `self.seq_export_dialog`, 닫아도 작업은 계속). 취소는 stop() 뒤 GUI 스레드에서 wait()하지 않음 (ffmpeg를 끝내고
   부분 출력을 지우는 일이 느린 NAS에서 걸려도 창이 얼지 않게): 바로 '취소하는 중…'을 보이고 타이머로 isRunning()만 조금씩 보다가, 스레드가 끝나야
   '취소됨'(= 부분 출력을 지운 뒤). 워커는 취소하면 finished·error를 내지 않으므로 취소 뒤에 늦게 온 신호(아주 작은 틈의
-  레이스)와 지난 실행의 신호는 무시 — 슬롯은 워커를 함께 받아 지금 실행의 것인지 봄.
+  레이스)와 지난 실행의 신호는 무시 — 슬롯은 워커를 함께 받아 지금 실행의 것인지 봄. 읽지 못해 직전 프레임으로 채운 프레임이 있으면(오류가
+  아님 — 길이는 그대로) 항목이 끝날 때마다 로그에 그 수를 알리고(`item_done`), 완료 때 마지막 글에 항목별 요약을 붙임.
 
 `ThumbnailWorker`·`SequenceExportWorker`·`ImageSequenceCapture`는 이 모듈의 전역 이름으로 찾음 — 시험이 바꿔치기하려면 이 모듈의
 이름(`sidebar_sequences.ThumbnailWorker` 등)을 바꿔야 닿음.
@@ -60,7 +61,7 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck import paths, sequence_source, thumbnails, video_list
-from yesoncheck.sequence_export_worker import SequenceExportWorker, validate_out_dir
+from yesoncheck.sequence_export_worker import SequenceExportWorker, substitution_note, substitution_summary, validate_out_dir
 from yesoncheck.sequence_source import ImageSequenceCapture
 from yesoncheck.sidebar_items import THUMBNAIL_CONTEXT_ROLE, THUMBNAIL_MAKE_FAILED, THUMBNAIL_VIDEO_PROBLEM
 from yesoncheck.thumbnail_workers import SeqThumbnailLoaderWorker, ThumbnailWorker
@@ -182,6 +183,11 @@ class SequenceExportDialog(QDialog):
         self.items_label.setText(f"{index + 1}/{self.item_count} 항목")
         self.current_label.setText(f"지금: {base}")
         self.add_log(f"[{index + 1}/{self.item_count}] {base}")
+
+    def set_item_done(self, index, base, substituted):
+        """index번째(0부터) 항목을 마침. 읽지 못해 직전 프레임으로 채운 프레임이 있으면 그 수를 같은 줄에 알림 (오류가 아님 — 항목은 성공)."""
+        note = f" — {substitution_note(substituted)}" if substituted else ""
+        self.add_log(f"    완료{note}")
 
     def set_frames(self, done, total):
         """항목 합산 프레임 진행: 막대에는 SEQ_EXPORT_PROGRESS_MS마다 모아서 반영."""
@@ -705,6 +711,7 @@ class SidebarSequencesMixin:
         dialog.cancel_requested.connect(functools.partial(self.cancel_seq_export, worker))
         worker.item_started.connect(functools.partial(self._on_seq_export_item_started, worker))
         worker.progress.connect(functools.partial(self._on_seq_export_progress, worker))
+        worker.item_done.connect(functools.partial(self._on_seq_export_item_done, worker))
         worker.finished.connect(functools.partial(self._on_seq_export_finished, worker))
         worker.error.connect(functools.partial(self._on_seq_export_error, worker))
         self.seq_export_worker = worker
@@ -724,10 +731,16 @@ class SidebarSequencesMixin:
         if self._seq_export_is_live(worker):
             self.seq_export_dialog.set_frames(done, total)
 
+    def _on_seq_export_item_done(self, worker, index, base, substituted):
+        if self._seq_export_is_live(worker):
+            self.seq_export_dialog.set_item_done(index, base, substituted)
+
     def _on_seq_export_finished(self, worker):
         if self._seq_export_is_live(worker):
             dialog = self.seq_export_dialog
-            dialog.set_finished(f"완료: {len(worker.items)}개 시퀀스를 만들었습니다 — {worker.out_dir}")
+            message = f"완료: {len(worker.items)}개 시퀀스를 만들었습니다 — {worker.out_dir}"
+            summary = substitution_summary(worker.substitutions)  # 읽지 못해 대신한 프레임이 있었으면 로그의 마지막에 (오류가 아님)
+            dialog.set_finished(f"{message}\n{summary}" if summary else message)
             dialog.show()  # 닫아 둔 창이면 다시 나타나 끝났음을 알림
 
     def _on_seq_export_error(self, worker, text):

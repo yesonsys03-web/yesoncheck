@@ -19,6 +19,7 @@ import pytest
 from PyQt5.QtCore import Qt
 
 from tests.test_sequence_capture import PALETTE, identify, make_frame, make_movie, make_seq
+from tests.test_sequence_prefetch import failing_reads
 from yesoncheck import external_tools, sequence_export_worker
 from yesoncheck.player_base import VideoPlayerBase
 from yesoncheck.sequence_export_worker import PARTIAL_SUFFIX, SequenceExportWorker, validate_out_dir
@@ -63,8 +64,10 @@ class Recorder:
     """워커의 신호를 신호를 낸 스레드에서 바로 모은다."""
 
     def __init__(self, worker):
-        self.started, self.progress, self.errors, self.finished = [], [], [], []
+        self.started, self.progress, self.errors, self.finished, self.item_done = [], [], [], [], []
         worker.item_started.connect(lambda index, base: self.started.append((index, base)), Qt.DirectConnection)
+        worker.item_done.connect(lambda index, base, substituted: self.item_done.append((index, base, substituted)),
+                                 Qt.DirectConnection)
         worker.progress.connect(lambda done, total: self.progress.append((done, total)), Qt.DirectConnection)
         worker.error.connect(self.errors.append, Qt.DirectConnection)
         worker.finished.connect(lambda: self.finished.append(True), Qt.DirectConnection)
@@ -228,6 +231,67 @@ def test_batch_two_items_serial_progress(qapp, tmp_path):
     assert sorted(os.listdir(out)) == ["A_tk1.mov", "B_tk1.mov"]
     assert int(probe(out / "A_tk1.mov")["nb_read_packets"]) == 4
     assert int(probe(out / "B_tk1.mov")["nb_read_packets"]) == 7
+
+
+# ---------------------------------------------------------------- 읽지 못한 프레임을 직전 프레임으로 채운 수 알림 (Ruling 10)
+
+
+def test_export_reports_substituted_frames_for_unreadable_frames(qapp, tmp_path, monkeypatch, capsys):
+    """항목을 내보내다 프레임 파일 둘을 읽지 못하면: 길이는 보존(오류 아님, finished 나감)되지만 대체 프레임 수를 항목 알림·
+    워커 기록·콘솔로 알림 — 납품용 mov에 직전 프레임이 말없이 들어가지 않게."""
+    src, out = tmp_path / "src", tmp_path / "out"
+    make_seq(str(src), "EX01_tk1", range(1, 9))
+    failing_reads(monkeypatch, "EX01_tk1-0004", lambda: OSError("simulated NAS blip"))
+    failing_reads(monkeypatch, "EX01_tk1-0006", lambda: ValueError("simulated corrupt frame"))
+    worker = make_worker(scan(src), out)
+
+    rec = run_to_end(worker)
+
+    assert rec.errors == [] and rec.finished == [True]
+    assert sorted(os.listdir(out)) == ["EX01_tk1.mov"]
+    assert int(probe(out / "EX01_tk1.mov")["nb_read_packets"]) == 8, "길이는 보존"
+    assert frame_ids(out / "EX01_tk1.mov") == expected_ids([1, 2, 3, 3, 5, 5, 7, 8]), "읽지 못한 프레임은 직전 프레임으로"
+    assert rec.item_done == [(0, "EX01_tk1", 2)]
+    assert worker.substitutions == [("EX01_tk1", 2)]
+    printed = capsys.readouterr().out
+    assert "[EX01_tk1] 대체 프레임 2개" in printed
+    assert "대체 프레임이 있는 항목 1개" in printed, "끝난 뒤 요약도 콘솔에"
+
+
+def test_export_without_read_failures_reports_no_substitution(qapp, tmp_path, capsys):
+    """읽기 실패가 없으면 (빠진 번호를 메운 것은 설계된 동작이라 세지 않음) 대체 프레임 알림이 없다."""
+    src, out = tmp_path / "src", tmp_path / "out"
+    make_seq(str(src), "A_tk1", range(1, 5))
+    make_seq(str(src), "GAP_tk1", [1, 3])
+    worker = make_worker(scan(src), out)
+
+    rec = run_to_end(worker)
+
+    assert rec.errors == [] and rec.finished == [True]
+    assert rec.item_done == [(0, "A_tk1", 0), (1, "GAP_tk1", 0)]
+    assert worker.substitutions == []
+    assert "대체 프레임" not in capsys.readouterr().out
+
+
+def test_substitutions_are_per_item_and_listed_in_the_failure_summary(qapp, tmp_path, monkeypatch):
+    """한 항목은 대체 프레임을 쓰며 성공하고 다른 항목이 실패하면: 성공한 항목의 대체 프레임도 error 요약에 남음 (놓치지 않게)."""
+    src, out = tmp_path / "src", tmp_path / "out"
+    make_seq(str(src), "A_tk1", range(1, 7))
+    make_seq(str(src), "B_tk1", range(1, 11))
+    make_seq(str(src), "C_tk1", range(1, 5))
+    failing_reads(monkeypatch, "A_tk1-0004", lambda: OSError("simulated NAS blip"))
+    failing = failing_after(3, str(out), "B broke")
+    monkeypatch.setattr(sequence_export_worker, "ImageSequenceCapture",
+                        lambda identity: failing(identity) if identity.endswith("B_tk1.seq") else ImageSequenceCapture(identity))
+
+    rec = run_to_end(make_worker(scan(src), out))
+
+    assert rec.item_done == [(0, "A_tk1", 1), (2, "C_tk1", 0)]  # 실패한 B는 item_done이 없음
+    assert rec.finished == [] and len(rec.errors) == 1
+    summary = rec.errors[0]
+    assert summary.splitlines()[0].startswith("3개 중 1개 실패") and "B broke" in summary
+    assert "대체 프레임이 있는 항목 1개" in summary and "[A_tk1] 대체 프레임 1개" in summary
+    assert "C_tk1" not in summary
 
 
 # ---------------------------------------------------------------- 취소·오류: 부분 출력 삭제

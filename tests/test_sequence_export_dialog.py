@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import QApplication, QMenu
 
 from tests.test_sequence_capture import make_movie, make_seq
 from tests.test_sequence_export import hold_at
+from tests.test_sequence_prefetch import failing_reads
 from tests.test_thumbnails import wait_until
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 from yesoncheck import sidebar_sequences
@@ -33,6 +34,7 @@ class FakeWorker(QThread):
 
     item_started = pyqtSignal(int, str)
     progress = pyqtSignal(int, int)
+    item_done = pyqtSignal(int, str, int)
     finished = pyqtSignal()
     error = pyqtSignal(str)
 
@@ -46,6 +48,7 @@ class FakeWorker(QThread):
         self.waits = []
         self.cancelled = False
         self.failures = []
+        self.substitutions = []
 
     def start(self):
         self.running = True
@@ -556,6 +559,7 @@ def test_late_finished_after_cancel_is_ignored(player, tmp_path, dialogs, worker
     worker.error.emit("1개 중 1개 실패\n[EX01_tk1] 가짜 오류")
     worker.progress.emit(3, 8)
     worker.item_started.emit(1, "EX01_tk2")
+    worker.item_done.emit(1, "EX01_tk2", 2)
     dialog.flush_progress()
 
     assert dialog.state == "cancelled" and "취소됨" in dialog.state_label.text()
@@ -578,6 +582,54 @@ def test_finished_shows_success_state(player, tmp_path, dialogs, workers):
     assert str(out) in dialog.log.toPlainText()
     assert not dialog.cancel_button.isEnabled()
     assert dialogs.messages == []
+    settle(player)
+
+
+def test_item_log_line_reports_substituted_frames_without_being_an_error(player, tmp_path, dialogs, workers):
+    """항목이 끝날 때 읽지 못해 직전 프레임으로 채운 프레임이 있으면 그 수가 로그에 보임 (오류가 아님: 창·상태는 그대로 진행). 없으면 알림 없음."""
+    fill_list(player, folder_with(tmp_path))
+    worker, dialog, _out = start_export(player, tmp_path, dialogs)
+
+    worker.item_started.emit(0, "EX01_tk1")
+    worker.item_done.emit(0, "EX01_tk1", 3)
+    worker.item_started.emit(1, "EX01_tk2")
+    worker.item_done.emit(1, "EX01_tk2", 0)
+
+    lines = dialog.log.toPlainText().splitlines()
+    done_lines = [line.strip() for line in lines if line.strip().startswith("완료")]
+    assert len(done_lines) == 2
+    assert done_lines[0].startswith("완료 — 대체 프레임 3개")
+    assert done_lines[1] == "완료"
+    assert "".join(lines).count("대체 프레임") == 1
+    assert dialog.state == "running" and dialogs.messages == []
+    settle(player)
+
+
+def test_finished_summary_lists_items_with_substituted_frames(player, tmp_path, dialogs, workers):
+    """끝났을 때 대체 프레임이 있던 항목은 로그의 마지막 글에 항목별로 — 상태는 그냥 '완료' (오류 아님, 오류 창 없음)."""
+    fill_list(player, folder_with(tmp_path))
+    worker, dialog, out = start_export(player, tmp_path, dialogs)
+    worker.substitutions = [("EX01_tk1", 3), ("EX01_tk2", 1)]
+
+    worker.finished.emit()
+
+    log = dialog.log.toPlainText()
+    assert dialog.state == "finished" and "완료" in dialog.state_label.text()
+    assert str(out) in log
+    assert "대체 프레임이 있는 항목 2개" in log
+    assert "[EX01_tk1] 대체 프레임 3개" in log and "[EX01_tk2] 대체 프레임 1개" in log
+    assert log.rstrip().splitlines()[-1] == "[EX01_tk2] 대체 프레임 1개"
+    assert dialogs.messages == []
+    settle(player)
+
+
+def test_finished_without_substitutions_has_no_note(player, tmp_path, dialogs, workers):
+    fill_list(player, folder_with(tmp_path))
+    worker, dialog, _out = start_export(player, tmp_path, dialogs)
+
+    worker.finished.emit()
+
+    assert dialog.state == "finished" and "대체 프레임" not in dialog.log.toPlainText()
     settle(player)
 
 
@@ -771,6 +823,32 @@ def test_real_export_end_to_end(player, tmp_path, dialogs):
     assert dialog.state == "finished", dialog.log.toPlainText()
     assert sorted(os.listdir(out)) == ["EX01_tk1.mov", "EX01_tk2.mov"]
     assert dialog.items_label.text() == "2/2 항목" and dialog.progress_bar.value() == dialog.progress_bar.maximum() == 8
+    assert dialogs.messages == []
+    player.seq_export_worker.wait(5000)
+    settle(player)
+
+
+def test_real_export_shows_substituted_frames_in_the_dialog(player, tmp_path, dialogs, monkeypatch):
+    """진짜 워커로: 프레임 하나를 읽지 못해도 끝까지 만들고 '완료'에 닿으며, 로그에 항목의 대체 프레임 수와 요약이 보임."""
+    src = folder_with(tmp_path, "real3", bases=("EX01_tk1", "EX01_tk2"))
+    fill_list(player, src)
+    player.require_ffmpeg = VideoPlayerBase.require_ffmpeg.__get__(player)
+    failing_reads(monkeypatch, "EX01_tk1-0003", lambda: OSError("simulated NAS blip"))
+    out = tmp_path / "movs3"
+    out.mkdir()
+    select_rows(player, 0, 1)
+    dialogs.folders.append(str(out))
+
+    player.export_selected_sequences()
+    dialog = player.seq_export_dialog
+    wait_until(lambda: dialog.state != "running", timeout=60)
+
+    log = dialog.log.toPlainText()
+    assert dialog.state == "finished", log
+    assert sorted(os.listdir(out)) == ["EX01_tk1.mov", "EX01_tk2.mov"]
+    assert "완료 — 대체 프레임 1개" in log
+    assert "대체 프레임이 있는 항목 1개" in log and "[EX01_tk1] 대체 프레임 1개" in log
+    assert "EX01_tk2] 대체" not in log
     assert dialogs.messages == []
     player.seq_export_worker.wait(5000)
     settle(player)

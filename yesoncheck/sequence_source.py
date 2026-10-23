@@ -254,6 +254,7 @@ class ImageSequenceCapture:
 
     열 때의 실패(첫 프레임을 못 읽음 등)는 예외로 올라오지만, read() 도중 프레임 하나를 못 읽으면(OSError·ValueError·cv2.error)
     예외 없이 직전에 돌려준 프레임을 유지하고 위치는 전진하며, 스택 트레이스째 로그에 남긴다 (프레임 번호당 한 번).
+    그렇게 직전 프레임으로 대신한 프레임의 수는 `read_failure_count` (재생은 읽는 동작이 그대로고, 내보내기가 이 수를 사용자에게 알림).
 
     선읽기: 앞쪽 프레임을 공유 데몬 스레드 풀이 미리 디코드해 `_buffer`(파일 순번 -> 프레임)에 둔다. 버퍼에는 현재 위치 뒤
     KEEP_BEHIND장과 앞쪽이 들어가고, 살아 있는 캡처 전체의 합이 PREFETCH_BUDGET_FRAMES를 넘지 않는다. read()는 버퍼에 있으면
@@ -268,6 +269,7 @@ class ImageSequenceCapture:
         self._dir, filename = os.path.split(identity_path)
         self._base = filename[:-len(SEQ_SUFFIX)]
         self._gen = 0  # 세대 카운터: _reset이 되돌리지 않는다 (release 전 세대의 작업이 다시 유효해지면 안 됨)
+        self._substituted = set()  # read()가 읽지 못해 직전 프레임으로 대신한 프레임 번호 (캡처마다 새로 시작; _reset이 비우지 않아 release 뒤에도 셈)
         self._cond = threading.Condition(_LOCK)  # 선읽기 작업 수가 바뀔 때 알림 (시험용 대기)
         self._reset()
         self._open()
@@ -325,6 +327,14 @@ class ImageSequenceCapture:
     def isOpened(self):
         return self._opened
 
+    @property
+    def read_failure_count(self):
+        """read()가 프레임을 읽지 못해 직전 프레임으로 대신해 돌려준 프레임의 수 (프레임 번호당 한 번 — 같은 프레임을 다시 읽어도 늘지 않음).
+        빠진 번호를 메운 프레임(설계된 동작)이나 해상도가 달라 대신한 프레임은 세지 않음. 선읽기가 실패했다가 read()가 다시 읽어 낸 프레임도
+        세지 않음 (대신한 적이 없으므로). release()해도 값은 남음."""
+        with _LOCK:
+            return len(self._substituted)
+
     def read(self):
         with _LOCK:
             if not self._opened or self._pos >= self._count:
@@ -354,6 +364,7 @@ class ImageSequenceCapture:
                 shown = self._last
                 announce_failure = file_number not in self._failure_logged
                 self._failure_logged.add(file_number)
+                self._substituted.add(number)
             else:
                 if slot not in self._buffer:
                     self._store_locked(gen, slot, frame)

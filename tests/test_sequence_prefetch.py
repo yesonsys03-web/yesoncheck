@@ -407,6 +407,63 @@ def test_transient_prefetch_failure_is_retried_when_playback_arrives(tmp_path, m
     assert len(log_entries(out)) == 1 and "Traceback" in out and "simulated NAS blip" in out
 
 
+@pytest.mark.parametrize("prefetch", [True, False], ids=["prefetch", "sync-only"])
+def test_read_failure_count_counts_substituted_frames_once_per_frame(tmp_path, monkeypatch, opened, prefetch):
+    """read()가 읽지 못해 직전 프레임으로 대신한 프레임의 수 (내보내기가 납품용 mov의 대체 프레임을 알리는 데 씀):
+    프레임 번호당 한 번 — 다시 훑어도 늘지 않고, release한 뒤에도 값이 남는다. 읽는 동작(돌려주는 프레임)은 그대로."""
+    if not prefetch:
+        monkeypatch.setattr(sequence_source, "PREFETCH_BUDGET_FRAMES", 0)
+    identity = make_seq(str(tmp_path), "EX01_tk1", range(1, 7))
+    failing_reads(monkeypatch, "EX01_tk1-0003", lambda: OSError("simulated NAS blip"))
+    failing_reads(monkeypatch, "EX01_tk1-0005", lambda: ValueError("simulated corrupt frame"))
+    cap = opened(identity)
+    if prefetch:
+        assert cap._wait_prefetch_idle(WAIT)
+    assert cap.read_failure_count == 0  # 읽기 전에는 없음 (선읽기가 실패해도 대신한 것이 아님)
+
+    frames = [identify(cap.read()[1]) for _ in range(6)]
+    assert frames == [1, 2, 2, 4, 4, 6]  # 읽는 동작은 예전 그대로: 직전 프레임 유지
+    assert cap.read_failure_count == 2
+
+    for _ in range(2):  # 다시 훑어도 같은 프레임 번호는 한 번만
+        cap.set(POS, 0)
+        for _ in range(6):
+            cap.read()
+    assert cap.read_failure_count == 2
+
+    cap.release()
+    assert cap.read_failure_count == 2
+
+
+def test_read_failure_count_ignores_recovered_prefetch_failure_and_gap_fill(tmp_path, monkeypatch, opened):
+    """선읽기에서 한 번 실패했지만 read()가 다시 읽어 낸 프레임, 그리고 빠진 번호를 메운 프레임(설계된 동작)은 대신한 프레임이 아님."""
+    identity = make_seq(str(tmp_path), "EX01_tk1", [1, 2, 3, 5, 6])  # 4번이 빠짐
+    raised = failing_reads(monkeypatch, "EX01_tk1-0003", lambda: OSError("simulated NAS blip"), times=1)
+    cap = opened(identity)
+    assert cap._wait_prefetch_idle(WAIT)
+    assert len(raised) == 1 and 2 not in cap._buffer  # 선읽기는 실패
+
+    frames = [identify(cap.read()[1]) for _ in range(6)]
+    assert frames == [1, 2, 3, 3, 5, 6]  # 3번은 다시 읽어 정상, 4번은 빠진 번호라 직전(3) 유지
+    assert cap.read_failure_count == 0
+
+
+def test_read_failure_count_starts_at_zero_per_capture(tmp_path, monkeypatch, opened):
+    """캡처마다 새로 시작 (항목마다 새 캡처를 여는 내보내기가 항목별로 셈)."""
+    identity = make_seq(str(tmp_path), "EX01_tk1", range(1, 5))
+    failing_reads(monkeypatch, "EX01_tk1-0002", lambda: OSError("simulated NAS blip"))
+    first = opened(identity)
+    for _ in range(4):
+        first.read()
+    assert first.read_failure_count == 1
+    assert sequence_source._POOL.wait_idle(WAIT)
+    monkeypatch.undo()  # 읽기 실패가 사라진 뒤 새 캡처를 엶
+    second = opened(identity)
+    for _ in range(4):
+        second.read()
+    assert second.read_failure_count == 0 and first.read_failure_count == 1
+
+
 def test_first_frame_decode_failure_at_open_still_raises(tmp_path, monkeypatch):
     """생성자의 실패는 그대로 올라온다 (읽는 도중 실패만 직전 프레임 유지)."""
     identity = make_seq(str(tmp_path), "EX01_tk1", range(1, 4))
