@@ -28,8 +28,9 @@
   OCR류 없음). 메뉴를 연 항목이 선택 밖이면 그 항목만 선택 (메뉴의 일은 눌린 항목에 대한 것), 선택 안이면 선택 전체가 일의 대상.
 - 일괄 내보내기(`export_selected_sequences`): 선택 항목(목록 순서) -> 출력 폴더 고르기(원본 폴더면 경고하고 다시 고르게 함 —
   validate_out_dir) -> 실행마다 새 SequenceExportWorker(`self.seq_export_worker` — RUNNING_JOB_ATTRS가 창 닫기·업데이트 가드로 잡음)와
-  비모달 진행 창(SequenceExportDialog — `self.seq_export_dialog`, 닫아도 작업은 계속). 취소는 stop() 뒤 한도 안에서만 wait() (GUI를 오래 막지 않음, 한도를
-  넘으면 '취소하는 중'으로 두고 끝나는 걸 조금씩 봄). 워커는 취소하면 finished·error를 내지 않으므로 취소 뒤에 늦게 온 신호(아주 작은 틈의
+  비모달 진행 창(SequenceExportDialog — `self.seq_export_dialog`, 닫아도 작업은 계속). 취소는 stop() 뒤 GUI 스레드에서 wait()하지 않음 (ffmpeg를 끝내고
+  부분 출력을 지우는 일이 느린 NAS에서 걸려도 창이 얼지 않게): 바로 '취소하는 중…'을 보이고 타이머로 isRunning()만 조금씩 보다가, 스레드가 끝나야
+  '취소됨'(= 부분 출력을 지운 뒤). 워커는 취소하면 finished·error를 내지 않으므로 취소 뒤에 늦게 온 신호(아주 작은 틈의
   레이스)와 지난 실행의 신호는 무시 — 슬롯은 워커를 함께 받아 지금 실행의 것인지 봄.
 
 `ThumbnailWorker`·`SequenceExportWorker`·`ImageSequenceCapture`는 이 모듈의 전역 이름으로 찾음 — 시험이 바꿔치기하려면 이 모듈의
@@ -67,8 +68,7 @@ from yesoncheck.worker_lifecycle import release_worker
 SEQ_FOLLOWUP_MS = 300  # Mov 탭이 썸네일을 만드는 중에 시작한 Seq 썸네일 읽기를, 만들기가 끝났는지 이 간격으로 보며 기다림
 SEQ_EXPORT_TITLE = "시퀀스 MOV 만들기"
 SEQ_EXPORT_PROGRESS_MS = 50  # 프레임마다 오는 진행 신호를 막대에는 이 간격으로 모아 반영 (마지막 값은 반드시 반영)
-SEQ_EXPORT_CANCEL_WAIT_MS = 5000  # 취소 단추: stop() 뒤 GUI 스레드가 워커가 끝나길 기다리는 최대 시간 (ffmpeg를 끝내고 부분 출력을 지우는 시간)
-SEQ_EXPORT_CANCEL_POLL_MS = 200  # 그 안에 끝나지 않으면 이 간격으로 끝났는지만 봄 (기다리며 막지 않음)
+SEQ_EXPORT_CANCEL_POLL_MS = 100  # 취소 단추: stop() 뒤 워커 스레드가 끝났는지 이 간격으로 봄 (GUI 스레드는 기다리며 막히지 않음)
 SEQ_EXPORT_LOG_PREFIX = "[시퀀스 MOV]"
 
 
@@ -149,9 +149,13 @@ class SequenceExportDialog(QDialog):
         buttons = QHBoxLayout()
         buttons.addStretch(1)
         self.cancel_button = QPushButton("취소")
+        self.cancel_button.setAutoDefault(False)  # Enter·Return이 (로그에 포커스가 있어도) 취소를 누르지 않게: 이 창에는 기본 단추가 없음
+        self.cancel_button.setDefault(False)
         self.cancel_button.clicked.connect(self._on_cancel_clicked)
         buttons.addWidget(self.cancel_button)
         self.close_button = QPushButton("닫기")  # 창만 닫음 (작업은 그대로)
+        self.close_button.setAutoDefault(False)
+        self.close_button.setDefault(False)
         self.close_button.clicked.connect(self.close)
         buttons.addWidget(self.close_button)
         layout.addLayout(buttons)
@@ -713,17 +717,13 @@ class SidebarSequencesMixin:
         box.exec_()
 
     def cancel_seq_export(self, worker):
-        """진행 창의 취소 단추: stop()으로 ffmpeg를 끝내고 만들던 파일을 지우게 한 뒤, 끝나길 SEQ_EXPORT_CANCEL_WAIT_MS까지만 기다림.
-        그 안에 끝나지 않으면(느린 NAS의 파일 지우기·ffprobe) GUI를 막지 않고 '취소하는 중'으로 두며 끝났는지만 조금씩 봄."""
+        """진행 창의 취소 단추: stop()으로 ffmpeg를 끝내고 만들던 파일을 지우게 함. GUI 스레드는 워커를 기다리지 않음 — 바로 '취소하는 중…'을
+        보이고(이벤트 루프로 돌아가야 그려짐), SEQ_EXPORT_CANCEL_POLL_MS마다 isRunning()만 봄. 스레드가 끝나야(= 부분 출력을 지운 뒤) '취소됨'."""
         dialog = self.seq_export_dialog
         if worker is not self.seq_export_worker or dialog.state != "running":
             return
         dialog.set_cancelling()
         worker.stop()
-        if worker.wait(SEQ_EXPORT_CANCEL_WAIT_MS):
-            dialog.set_cancelled(list(worker.failures))
-            return
-        print(f"{SEQ_EXPORT_LOG_PREFIX} 취소가 {SEQ_EXPORT_CANCEL_WAIT_MS / 1000:g}초 안에 끝나지 않음 — 끝날 때까지 기다림", flush=True)
         timer = QTimer(dialog)  # 창이 사라지면 함께 사라짐 (닫힌 창을 뒤늦게 건드리지 않게)
         timer.setInterval(SEQ_EXPORT_CANCEL_POLL_MS)
         timer.timeout.connect(functools.partial(self._poll_seq_export_cancel, worker, dialog, timer))
@@ -734,4 +734,4 @@ class SidebarSequencesMixin:
             return
         timer.stop()
         timer.deleteLater()
-        dialog.set_cancelled(list(worker.failures))
+        dialog.set_cancelled(list(worker.failures))  # 스레드가 끝난 뒤에만 읽음

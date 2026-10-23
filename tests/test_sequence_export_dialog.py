@@ -7,9 +7,11 @@
 
 import os
 import shutil
+import time
 
 import pytest
 from PyQt5.QtCore import QThread, Qt, pyqtSignal
+from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QMenu
 
 from tests.test_sequence_capture import make_movie, make_seq
@@ -42,7 +44,6 @@ class FakeWorker(QThread):
         self.running = False
         self.stops = 0
         self.waits = []
-        self.wait_ends_thread = True  # False면 wait()가 시간 안에 끝나지 않음
         self.cancelled = False
         self.failures = []
 
@@ -57,10 +58,14 @@ class FakeWorker(QThread):
         self.cancelled = True
 
     def wait(self, timeout=None):
+        """GUI 스레드가 부르면 막힘 — 창 닫기(stop_running_jobs)만 부름. 부른 기록을 남기고 스레드가 끝난 것으로 함."""
         self.waits.append(timeout)
-        if self.wait_ends_thread:
-            self.running = False
-        return self.wait_ends_thread
+        self.running = False
+        return True
+
+    def end_thread(self):
+        """stop() 뒤 정리(ffmpeg 끝내기·부분 출력 지우기)를 마치고 스레드가 끝남."""
+        self.running = False
 
 
 @pytest.fixture
@@ -467,18 +472,60 @@ def test_progress_updates_are_throttled(player, tmp_path, dialogs, workers, monk
 
 
 def test_progress_dialog_cancel_calls_worker_stop(player, tmp_path, dialogs, workers):
-    """취소 단추는 워커 stop()에 연결되어 있고, 끝나길 기다린 뒤 '취소됨'을 보임."""
+    """취소 단추는 워커 stop()에 연결되어 있고, 워커 스레드가 끝난 뒤에야 '취소됨'을 보임."""
     fill_list(player, folder_with(tmp_path))
     worker, dialog, _out = start_export(player, tmp_path, dialogs)
     worker.item_started.emit(0, "EX01_tk1")
 
     dialog.cancel_button.click()
 
-    assert worker.stops == 1 and len(worker.waits) == 1 and worker.waits[0] is not None  # 기다림은 시간 한도가 있음
-    assert dialog.state == "cancelled" and "취소됨" in dialog.state_label.text()
+    assert worker.stops == 1 and dialog.state == "cancelling" and "취소하는 중" in dialog.state_label.text()
     assert not dialog.cancel_button.isEnabled()
-    assert "취소" in dialog.log.toPlainText()
+    worker.end_thread()  # ffmpeg를 끝내고 부분 출력을 지운 뒤 스레드가 끝남
+    wait_until(lambda: dialog.state == "cancelled")
+    assert worker.stops == 1 and "취소됨" in dialog.state_label.text() and "취소" in dialog.log.toPlainText()
     assert dialogs.messages == []  # 취소는 사용자의 뜻 — 오류 창 없음
+    settle(player)
+
+
+def test_cancel_does_not_block_the_gui_and_shows_cancelling_until_the_thread_ends(player, tmp_path, dialogs, workers):
+    """취소는 GUI 스레드에서 워커를 기다리지 않음 (느린 정리에도 창이 얼지 않음): 바로 돌아와 '취소하는 중…'을 보이고,
+    워커가 도는 동안은 이벤트를 몇 번 처리해도 '취소됨'이 되지 않으며, 끝나야 '취소됨'."""
+    fill_list(player, folder_with(tmp_path))
+    worker, dialog, _out = start_export(player, tmp_path, dialogs)
+
+    started = time.monotonic()
+    dialog.cancel_button.click()
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.5 and worker.waits == []  # 기다리지 않음 (wait() 호출 자체가 없음)
+    assert dialog.state == "cancelling" and "취소하는 중" in dialog.state_label.text()
+    deadline = time.monotonic() + 0.5  # 확인 타이머가 여러 번 돌 시간
+    while time.monotonic() < deadline:
+        QApplication.processEvents()
+        time.sleep(0.01)
+    assert dialog.state == "cancelling" and worker.stops == 1  # 스레드가 도는 동안은 취소됨이 아님
+    worker.end_thread()
+    wait_until(lambda: dialog.state == "cancelled")
+    assert worker.waits == []
+    settle(player)
+
+
+def test_enter_key_does_not_cancel_the_export(player, tmp_path, dialogs, workers):
+    """Enter/Return은 '취소'를 누른 것이 아님 (닫으려는 흔한 몸짓이 긴 작업을 죽이지 않게): 창에서도 로그에 포커스가 있어도."""
+    fill_list(player, folder_with(tmp_path))
+    worker, dialog, _out = start_export(player, tmp_path, dialogs)
+    requested = []
+    dialog.cancel_requested.connect(lambda: requested.append(True))
+    dialog.log.setFocus()
+
+    for target in (dialog, dialog.log, dialog.cancel_button, dialog.close_button):
+        for key in (Qt.Key_Return, Qt.Key_Enter):
+            QTest.keyClick(target, key)
+    QApplication.processEvents()
+
+    assert requested == [] and worker.stops == 0 and dialog.state == "running" and dialog.cancel_button.isEnabled()
+    assert dialog.isVisible()  # 닫기 단추도 Enter의 기본 단추가 아님
     settle(player)
 
 
@@ -488,25 +535,11 @@ def test_cancel_shows_failures_that_happened_before(player, tmp_path, dialogs, w
     worker.failures.append(("EX01_tk1", "FFmpeg 오류 (종료 코드 1)"))
 
     dialog.cancel_button.click()
+    worker.end_thread()
+    wait_until(lambda: dialog.state == "cancelled")
 
     log = dialog.log.toPlainText()
     assert dialog.state == "cancelled" and "EX01_tk1" in log and "FFmpeg 오류 (종료 코드 1)" in log
-    settle(player)
-
-
-def test_cancel_that_takes_long_waits_in_the_background(player, tmp_path, dialogs, workers):
-    """워커가 한도 안에 끝나지 않으면 GUI를 막지 않고 '취소하는 중'으로 두었다가, 끝나면 '취소됨'."""
-    fill_list(player, folder_with(tmp_path))
-    worker, dialog, _out = start_export(player, tmp_path, dialogs)
-    worker.wait_ends_thread = False
-
-    dialog.cancel_button.click()
-
-    assert worker.stops == 1 and dialog.state == "cancelling" and "취소하는 중" in dialog.state_label.text()
-    assert not dialog.cancel_button.isEnabled()
-    worker.running = False  # 부분 출력 정리가 끝남
-    wait_until(lambda: dialog.state == "cancelled")
-    assert worker.stops == 1
     settle(player)
 
 
@@ -515,7 +548,8 @@ def test_late_finished_after_cancel_is_ignored(player, tmp_path, dialogs, worker
     fill_list(player, folder_with(tmp_path))
     worker, dialog, _out = start_export(player, tmp_path, dialogs)
     dialog.cancel_button.click()
-    assert dialog.state == "cancelled"
+    worker.end_thread()
+    wait_until(lambda: dialog.state == "cancelled")
     log_before = dialog.log.toPlainText()
 
     worker.finished.emit()
@@ -608,6 +642,7 @@ def test_fresh_worker_and_dialog_per_run(player, tmp_path, dialogs, workers):
     fill_list(player, folder_with(tmp_path))
     first, first_dialog, _out = start_export(player, tmp_path, dialogs)
     first_dialog.cancel_button.click()
+    first.end_thread()
     assert first.stops == 1
 
     second, second_dialog, _out = start_export(player, tmp_path, dialogs, out_name="out2")
@@ -707,8 +742,9 @@ def test_real_worker_cancel_button_removes_partial_and_ends_quietly(player, tmp_
     dialog = player.seq_export_dialog
 
     dialog.cancel_button.click()
+    wait_until(lambda: dialog.state == "cancelled")  # 워커 스레드가 끝나야 '취소됨'
 
-    assert dialog.state == "cancelled" and not worker.isRunning() and os.listdir(out) == []
+    assert not worker.isRunning() and os.listdir(out) == []
     assert dialogs.messages == []
     QApplication.processEvents()  # 늦게 온 신호가 있어도 상태가 그대로
     assert dialog.state == "cancelled"
