@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from yesoncheck import external_tools
+from yesoncheck import external_tools, sequence_source
 from yesoncheck.sequence_source import ImageSequenceCapture, open_any_capture
 
 POS = cv2.CAP_PROP_POS_FRAMES
@@ -336,17 +336,34 @@ def test_non_sequence_path_rejected(tmp_path):
         ImageSequenceCapture(str(tmp_path / "EX01_tk1.mov"))
 
 
-def test_corrupt_existing_frame_raises_and_does_not_advance(tmp_path):
-    """파일이 있는데 디코드가 안 되면 숨기지 않고 ValueError (빠진 프레임의 직전 프레임 유지는 파일이 없을 때만)."""
+def test_corrupt_existing_frame_holds_previous_and_logs_traceback_once(tmp_path, capsys):
+    """읽는 도중 파일이 디코드되지 않으면(Ruling 6) 예외 없이 직전 프레임을 유지하고 위치는 전진, 스택 트레이스째 프레임당 한 번 로그.
+
+    생성자의 실패는 그대로 올라온다 (첫 프레임이 깨지면 ValueError)."""
     identity = make_seq(str(tmp_path), "EX01_tk1", range(1, 4))
     with open(str(tmp_path / "EX01_tk1-0002.tga"), "wb") as f:
         f.write(b"garbage")
+    capsys.readouterr()
     cap = ImageSequenceCapture(identity)
-    assert cap.read()[0] is True
-    with pytest.raises(ValueError, match="EX01_tk1-0002.tga"):
-        cap.read()
-    assert cap.get(POS) == 1.0
+    ok, first = cap.read()
+    assert ok and identify(first) == 1
+    ok, held = cap.read()  # 깨진 0002
+    assert ok and np.array_equal(held, first) and held is not first
+    assert cap.get(POS) == 2.0  # 깨진 프레임도 지나가야 재생이 멈추지 않는다
+    ok, third = cap.read()
+    assert ok and identify(third) == 3
+    cap.set(POS, 1)
+    assert cap.read()[0] is True  # 다시 만나도 예외 없음
+    assert sequence_source._POOL.wait_idle(10)  # 선읽기 쪽에서 낸 실패 로그가 찍히는 것까지 기다림
+    printed = capsys.readouterr().out
+    assert printed.count("[시퀀스]") == 1  # 프레임당 한 번 (예외 사슬이 여러 Traceback 구간이어도 로그는 한 건)
+    assert "Traceback" in printed and "EX01_tk1-0002.tga" in printed and "ValueError" in printed
     cap.release()
+
+    with open(str(tmp_path / "EX01_tk1-0001.tga"), "wb") as f:
+        f.write(b"garbage")
+    with pytest.raises(ValueError, match="EX01_tk1-0001.tga"):
+        ImageSequenceCapture(identity)
 
 
 def test_release_clears_state_and_is_repeatable(tmp_path):
