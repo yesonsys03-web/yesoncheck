@@ -18,9 +18,9 @@ from tests.conftest import write_test_video
 from tests.test_sequence_capture import color_for, make_seq
 from tests.test_sidebar_refresh import refresh
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
-from yesoncheck import paths, player_playback, sequence_source
+from yesoncheck import paths, player_playback, sequence_scan, sequence_source
 from yesoncheck.player_sidebar import PlayerSidebarMixin
-from yesoncheck.sequence_scan import SEQ_EXTENSIONS, group_sequences, parse_frame_name, sequence_of_frame
+from yesoncheck.sequence_scan import SEQ_EXTENSIONS, FolderFrames, group_sequences, parse_frame_name, sequence_of_frame
 from yesoncheck.sequence_source import ImageSequenceCapture, find_frame_sequence, resolve_frame_path
 
 
@@ -348,14 +348,15 @@ def test_picking_a_frame_in_the_dialog_opens_the_whole_sequence(player, tmp_path
 
 
 def drop_files(player, target, files):
-    """파일(들)을 실제 QDropEvent로 끌어다 놓음. target: "video"(영상 영역), "sidebar"(Mov 목록), "window"(메인 창)."""
+    """파일(들)을 실제 QDropEvent로 끌어다 놓음. target: "video"(영상 영역), "sidebar"(Mov 목록), "window"(PlayerSidebarMixin.dropEvent —
+    실제 창에서는 닿지 않는 핸들러, 아래 test_window_drop_handler_logic_is_unreachable_on_the_real_window 하나만 씀)."""
     mime = QMimeData()
     mime.setUrls([QUrl.fromLocalFile(str(path)) for path in files])
     event = QDropEvent(QPointF(5, 5), Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier)
     if target == "video":
         player.videoWidget.dropEvent(event)
     elif target == "window":
-        PlayerSidebarMixin.dropEvent(SimpleNamespace(parent=lambda: player), event)  # 최상위 창은 parent()가 없어 대역으로
+        PlayerSidebarMixin.dropEvent(SimpleNamespace(parent=lambda: player), event)  # 대역: 실제 최상위 창은 parent()가 None이라 이 핸들러는 아무것도 안 함
     else:
         assert player.eventFilter(player.sidebar, event) is True
 
@@ -377,12 +378,11 @@ def shot_folder(tmp_path, name="shot"):
     return folder
 
 
-@pytest.mark.parametrize("target", ["video", "window"])
-def test_dropped_frame_opens_its_sequence_as_a(player, dialogs, tmp_path, target):
-    """영상 영역·메인 창에 프레임 한 장을 놓으면 mov를 놓을 때처럼 열림 (A) — 시퀀스 전체가, Seq 목록에 들어가고 Seq 탭에 선택된 채로."""
+def test_dropped_frame_opens_its_sequence_as_a(player, dialogs, tmp_path):
+    """영상 영역에 프레임 한 장을 놓으면 mov를 놓을 때처럼 열림 (A) — 시퀀스 전체가, Seq 목록에 들어가고 Seq 탭에 선택된 채로."""
     folder = shot_folder(tmp_path)
 
-    drop_files(player, target, [frame(folder, "tk1", 3)])
+    drop_files(player, "video", [frame(folder, "tk1", 3)])
 
     assert isinstance(player.cap_a, ImageSequenceCapture)
     assert player.filename_a == virtual(os.path.join(str(folder), "tk1.seq"))
@@ -439,13 +439,12 @@ def test_dropped_frame_folder_is_read_once_for_many_frames(player, dialogs, tmp_
     assert len(reads) == 1
 
 
-@pytest.mark.parametrize("target", ["video", "window"])
-def test_dropped_mixed_movie_and_frame_keeps_the_movie_behavior(player, dialogs, tmp_path, target):
+def test_dropped_mixed_movie_and_frame_keeps_the_movie_behavior(player, dialogs, tmp_path):
     """영상 파일이 함께 있으면 영상은 예전 그대로(A로 열림) — 시퀀스는 열지 않고 Seq 목록에만 넣고, 보던 Mov 탭은 그대로."""
     folder = shot_folder(tmp_path)
     mov = write_test_video(str(tmp_path / "movs" / "a.mov"))
 
-    drop_files(player, target, [frame(folder, "tk1", 2), mov])
+    drop_files(player, "video", [frame(folder, "tk1", 2), mov])
 
     assert not isinstance(player.cap_a, ImageSequenceCapture)
     assert player.filename_a == virtual(mov)
@@ -547,7 +546,7 @@ def test_dropped_orphan_frame_on_the_mov_list_stays_quiet(player, dialogs, tmp_p
     assert player.seq_sidebar.count() == 0 and player.sidebar_tabs.currentIndex() == 0 and dialogs.messages == []
 
 
-@pytest.mark.parametrize("target", ["video", "sidebar", "window"])
+@pytest.mark.parametrize("target", ["video", "sidebar"])
 def test_dropped_folder_together_with_a_frame_keeps_the_folder_behavior(player, dialogs, tmp_path, target):
     """폴더와 프레임을 함께 놓으면 폴더는 예전 그대로이고 프레임의 시퀀스는 Seq 목록에 더해짐."""
     other = tmp_path / "other"
@@ -560,11 +559,79 @@ def test_dropped_folder_together_with_a_frame_keeps_the_folder_behavior(player, 
     event = QDropEvent(QPointF(5, 5), Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier)
     if target == "video":
         player.videoWidget.dropEvent(event)
-    elif target == "window":
-        PlayerSidebarMixin.dropEvent(SimpleNamespace(parent=lambda: player), event)
     else:
         assert player.eventFilter(player.sidebar, event) is True
 
     assert mov_names(player) == ["z.mov"]
     assert seq_identities(player) == ["tk9.seq"]
     assert player.sidebar_tabs.currentIndex() == 0
+
+
+def test_window_drop_handler_logic_is_unreachable_on_the_real_window(player, dialogs, tmp_path):
+    """PlayerSidebarMixin.dropEvent(메인 창 핸들러)는 self.parent()로 VideoPlayer를 찾는데 최상위 창은 parent()가 None이라 실제 창에서는
+    본문이 한 번도 돌지 않음 (영상 파일을 놓아도 마찬가지 — 예전부터 있던 일이고 이번 변경에서 살리지 않음). 이 시험은 parent()가 창을 돌려주는
+    대역으로 그 핸들러 안의 프레임 처리 논리만 지킴: 영상 영역과 같은 결과여야 코드가 어긋나지 않음. 실제 동작을 보장하는 시험이 아님."""
+    folder = shot_folder(tmp_path)
+    assert player.parent() is None  # 실제 창의 상태: 이 핸들러는 도달할 수 없음
+
+    drop_files(player, "window", [frame(folder, "tk1", 3)])
+
+    assert player.filename_a == virtual(os.path.join(str(folder), "tk1.seq"))
+    assert seq_identities(player) == ["tk1.seq", "tk2.seq"]
+    assert player.sidebar_tabs.currentIndex() == 1
+    assert dialogs.messages == []
+
+
+# ---------------------------------------------------------------- 많은 프레임을 한꺼번에 놓기 (폴더 목록당 묶기 한 번)
+
+
+def test_folder_frames_resolves_exactly_like_sequence_of_frame():
+    names = ["a-0001.png", "a-0002.png", "a-0001.tga", "a-0002.tga", "b-0001.tga", "b-0002.tga", "b-0004.tga",
+             "lone-0001.tga", "t-001.tga", "t-0001.tga", "a.mov", ".h-0001.tga", ".h-0002.tga"]
+    index = FolderFrames("/j", names)
+    probes = names + ["b-0003.tga", "zzz-0001.tga", "a-0003.png", "readme.txt", "a-0001.TGA"]
+
+    for name in probes:
+        assert index.sequence_of(name) == sequence_of_frame("/j", names, name), name
+    assert index.sequences == group_sequences("/j", names)
+
+
+def spy_group_sequences(monkeypatch):
+    calls = []
+    real = sequence_scan.group_sequences
+    monkeypatch.setattr(sequence_scan, "group_sequences", lambda *args: (calls.append(args[0]), real(*args))[1])
+    return calls
+
+
+@pytest.mark.parametrize("target", ["video", "sidebar"])
+def test_dropping_hundreds_of_frames_groups_the_folder_once(player, dialogs, tmp_path, monkeypatch, target):
+    """렌더 한 벌을 통째로 놓는 것이 자연스러운 동작: 프레임 수만큼 폴더 목록을 묶으면 GUI가 얼음 (프레임 5,000장 -> 30초 이상) —
+    폴더를 한 번 읽고 한 번 묶은 뒤 프레임마다는 찾아보기만 함. 시간이 아니라 호출 횟수로 지킴."""
+    folder = tmp_path / "render"
+    make_seq(str(folder), "big_tk1", range(1, 401))
+    make_seq(str(folder), "big_tk2", range(1, 4))
+    reads = []
+    real_list = sequence_source.list_frame_names
+    monkeypatch.setattr(sequence_source, "list_frame_names", lambda f: (reads.append(f), real_list(f))[1])
+    groupings = spy_group_sequences(monkeypatch)
+    dropped = [frame(folder, "big_tk1", n, ) for n in range(1, 401)] + [frame(folder, "big_tk2", 2)]
+
+    drop_files(player, target, dropped)
+
+    assert len(reads) == 1  # 폴더를 한 번 읽음
+    assert len(groupings) == 1  # 그리고 한 번 묶음 (프레임 401장이어도)
+    assert seq_identities(player) == ["big_tk1.seq", "big_tk2.seq"]  # 같은 시퀀스는 한 항목, 놓은 차례대로 찾음
+    assert [item.data(Qt.UserRole).count for item in map(player.seq_sidebar.item, range(2))] == [400, 3]
+    assert dialogs.messages == []
+
+
+def test_dropping_frames_from_two_folders_groups_each_folder_once(player, dialogs, tmp_path, monkeypatch):
+    first, second = tmp_path / "one", tmp_path / "two"
+    make_seq(str(first), "tk1", range(1, 31))
+    make_seq(str(second), "tk2", range(1, 31))
+    groupings = spy_group_sequences(monkeypatch)
+
+    drop_files(player, "sidebar", [frame(first, "tk1", n) for n in range(1, 31)] + [frame(second, "tk2", n) for n in range(1, 31)])
+
+    assert sorted(groupings) == sorted([str(first), str(second)])
+    assert seq_identities(player) == ["tk1.seq", "tk2.seq"]

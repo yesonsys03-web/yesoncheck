@@ -97,20 +97,41 @@ def group_sequences(dir_path, names):
     return sequences
 
 
+class FolderFrames:
+    """폴더 하나의 파일 이름들을 한 번만 풀어 둔 색인 — 프레임 파일 여러 장이 속한 시퀀스를 장마다 찾아보기만 하면 되게 함 (디스크를 읽지 않음).
+
+    `group_sequences`는 폴더 목록 전체를 훑으므로 프레임마다 부르면 장수의 제곱으로 느려짐 (렌더 한 벌 5,000장을 통째로 놓으면 30초 이상):
+    묶기와 이름 풀기는 만들 때 한 번, `sequence_of`는 사전 조회. 규칙은 `sequence_of_frame`과 같음. `sequences`는 폴더의 모든 시퀀스(`group_sequences`의 결과).
+    """
+
+    def __init__(self, dir_path, names):
+        self.sequences = group_sequences(dir_path, names)
+        self._present = {parsed for parsed in map(parse_frame_name, names) if parsed is not None}  # 목록에 실제로 있는 프레임 (base, 번호, 확장자, 자릿수)
+        self._first_by_base = {}  # base -> 같은 base 중 첫 묶음 (group_sequences의 순서)
+        for seq in self.sequences:
+            self._first_by_base.setdefault(seq.base, seq)
+
+    def sequence_of(self, frame_name):
+        """프레임 파일 frame_name이 속한 시퀀스(SeqInfo) — 없으면 None (None인 경우는 `sequence_of_frame`의 설명대로)."""
+        parsed = parse_frame_name(frame_name)
+        if parsed is None or parsed not in self._present:
+            return None
+        base, _number, ext, pad = parsed
+        seq = self._first_by_base.get(base)
+        if seq is None or (seq.ext, seq.pad) != (ext, pad):
+            return None
+        return seq
+
+
 def sequence_of_frame(dir_path, names, frame_name):
     """dir_path 폴더의 파일 이름들(names)에서 프레임 파일 frame_name이 속한 시퀀스(SeqInfo) — 없으면 None (디스크를 읽지 않음).
 
     None인 경우: 프레임 이름이 아님 / 그 프레임이 names에 없음 (번호가 first~last 사이여도) / 같은 (base, 확장자, 자릿수)가 2장 미만 /
     같은 base의 시퀀스가 여럿인데 이 프레임의 묶음이 첫 묶음이 아님 — 시퀀스를 여는 캡처는 같은 base 중 첫 묶음만 열고(identity가 base까지만
     가리킴) 다른 묶음의 프레임을 눌러 다른 프레임들이 열리면 안 되므로 이때는 프레임 한 장 그대로 둔다.
+
+    한 장만 찾을 때 쓰는 모양 (호출마다 폴더 목록을 묶음) — 여러 장은 `FolderFrames`를 한 번 만들어 `sequence_of`로.
     """
-    parsed = parse_frame_name(frame_name)
-    if parsed is None:
+    if parse_frame_name(frame_name) is None:
         return None
-    base, _number, ext, pad = parsed
-    if not any(parse_frame_name(name) == parsed for name in names):
-        return None
-    same_base = [seq for seq in group_sequences(dir_path, names) if seq.base == base]
-    if not same_base or (same_base[0].ext, same_base[0].pad) != (ext, pad):
-        return None
-    return same_base[0]
+    return FolderFrames(dir_path, names).sequence_of(frame_name)

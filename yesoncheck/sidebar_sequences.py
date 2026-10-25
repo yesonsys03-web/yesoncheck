@@ -7,10 +7,12 @@
 - 항목: 라벨 "베이스 (처음–끝, N프레임)"(+ 빠진 프레임이 있으면 ", 빠짐 N"), `Qt.UserRole`에 `SeqInfo`(프레임 파일 이름은 들지 않음),
   툴팁은 사람이 읽는 정보. Mov 목록 코드는 `item.toolTip()`을 경로로 읽지만 이 목록은 별도 위젯이라 그 관례가 닿지 않음.
 - 누르기: `on_seq_item_clicked` → 시퀀스를 A로 엶 (`open_file('A', seq.identity)`, Mov 목록 누르기와 같은 규칙).
-- 끌어다 놓은 프레임 파일(`<base>-NNNN.<확장자>`): 세 드롭 핸들러(영상 영역·메인 창·Mov 목록)가 영상이 아닌 파일을 `_dropped_frames`로 풀어
-  (프레임 이름이 아닌 파일은 디스크를 읽지 않음, 폴더마다 한 번만 읽음) 그 프레임이 속한 시퀀스를 찾고, `_add_dropped_frames`가 그 폴더의 시퀀스들을
-  Seq 목록에 넣음 (폴더를 목록 다시 읽기의 출처로 기억 — 시퀀스만 든 폴더를 놓을 때와 같은 자리). 영상 영역·메인 창은 영상 파일을 놓을 때처럼 그
-  시퀀스를 A로 엶(둘이면 A·B). 한 장뿐인 프레임은 예전처럼 무시. 영상 파일이 함께 있으면 영상은 예전 그대로이고 시퀀스는 목록에만 더함.
+- 끌어다 놓은 프레임 파일(`<base>-NNNN.<확장자>`): 드롭 핸들러(영상 영역 `CustomVideoWidget.dropEvent`·Mov 목록 `eventFilter`)가 영상이 아닌 파일을 `_dropped_frames`로 풀어
+  (프레임 이름이 아닌 파일은 디스크를 읽지 않음, 폴더마다 한 번 읽고 한 번 묶음 — `FolderFrames`, 프레임마다 묶으면 장수의 제곱) 그 프레임이 속한 시퀀스를 찾고,
+  `_add_dropped_frames`가 그 폴더의 시퀀스들을 Seq 목록에 넣음 (폴더를 목록 다시 읽기의 출처로 기억 — 시퀀스만 든 폴더를 놓을 때와 같은 자리).
+  영상 영역은 영상 파일을 놓을 때처럼 그 시퀀스를 A로 엶(둘이면 A·B), Mov 목록은 열지 않음. 한 장뿐인 프레임은 예전처럼 무시. 영상 파일이 함께 있으면
+  영상은 예전 그대로이고 시퀀스는 목록에만 더함. 메인 창 핸들러(`PlayerSidebarMixin.dropEvent`)에도 같은 처리가 있으나 최상위 창은 `parent()`가 None이라
+  실제 창에서는 도달하지 않음 (영상 파일도 마찬가지 — 예전부터, 이번에 살리지 않음).
 - 탭 전환(`_on_sidebar_tab_changed`)은 페이지 교체뿐 — GUI 스레드는 디스크를 읽지 않음 (썸네일 모드면 Seq 썸네일을 뒤 스레드로 다시
   읽을 뿐). Seq 탭에서는 선택 재생 단추 둘('Play Selected'·'Play/Pause Selected')을 끔 (선택 재생은 Mov 경로 전제 — 이미 도는 선택 재생의
   일시정지 단추는 예외, `_sync_selected_play_buttons`).
@@ -348,7 +350,7 @@ class SidebarSequencesMixin:
         폴더마다 한 번) 그 프레임이 속한 시퀀스를 찾음: 한 장뿐인 프레임은 시퀀스가 아니라 빠짐 (예전처럼 무시). 폴더를 읽지 못하면(권한·NAS 끊김)
         스택 트레이스째 로그와 창으로 알리고 그 폴더의 프레임은 뺌.
         """
-        listings = {}  # path_key(폴더) -> 폴더의 프레임 후보 이름들 (읽지 못했으면 None)
+        indexes = {}  # path_key(폴더) -> 그 폴더 목록을 한 번 묶어 둔 FolderFrames (읽지 못했으면 None) — 프레임마다 다시 묶지 않음 (장수의 제곱으로 느려짐)
         found = {}  # path_key(폴더) -> 폴더 (시퀀스를 찾은 폴더만, 놓은 차례)
         sequences = {}  # _seq_key -> SeqInfo (놓은 차례)
         for file_path in file_paths:
@@ -356,16 +358,16 @@ class SidebarSequencesMixin:
             if sequence_scan.parse_frame_name(name) is None:
                 continue
             key = paths.path_key(folder)
-            if key not in listings:
-                listings[key] = self._read_dropped_frame_folder(folder)
-            if listings[key] is None:
+            if key not in indexes:
+                names = self._read_dropped_frame_folder(folder)
+                indexes[key] = None if names is None else sequence_scan.FolderFrames(folder, names)
+            if indexes[key] is None:
                 continue
-            seq = sequence_scan.sequence_of_frame(folder, listings[key], name)
+            seq = indexes[key].sequence_of(name)
             if seq is not None:
                 sequences.setdefault(_seq_key(seq), seq)
                 found.setdefault(key, folder)
-        folders = {folder: video_list.sort_sequences(sequence_scan.group_sequences(folder, listings[key]))
-                   for key, folder in found.items()}
+        folders = {folder: video_list.sort_sequences(indexes[key].sequences) for key, folder in found.items()}
         return DroppedFrames(list(sequences.values()), folders)
 
     def _read_dropped_frame_folder(self, folder):

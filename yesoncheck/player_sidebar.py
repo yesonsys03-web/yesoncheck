@@ -61,7 +61,7 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
             has_folder = False
             read_failed = False  # 읽지 못한 폴더가 있음 (창으로 알림 — '지원되는 비디오 파일이 없습니다'는 띄우지 않음)
             folder_paths = []  # 폴더 경로들을 저장할 리스트
-            frame_files = []  # 영상이 아닌 파일 — 이미지 시퀀스 프레임이면 그 시퀀스를 엶 (parent._dropped_frames가 이름을 봄)
+            frame_files = []  # 영상이 아닌 파일 — 이미지 시퀀스 프레임이면 그 시퀀스를 엶 (parent._dropped_frames가 이름을 봄). 이 핸들러는 실제 최상위 창에서 도달하지 않음 (위 parent 탐색: 창의 parent()는 None) — video_widget과 같은 코드를 유지
             
             # URL들을 파일/폴더로 분류
             for url in urls:
