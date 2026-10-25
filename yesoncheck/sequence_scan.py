@@ -56,6 +56,24 @@ def is_sequence_path(path):
     return path.endswith(SEQ_SUFFIX)
 
 
+def parse_frame_name(name):
+    """파일 이름 `<base>-<번호>.<확장자>` -> (base, 번호(int), 소문자 확장자, 번호 자릿수), 시퀀스 프레임 이름이 아니면 None (디스크를 읽지 않음).
+
+    group_sequences가 묶는 이름과 같은 규칙: 번호는 2자리 이상 ASCII 숫자, 확장자는 SEQ_EXTENSIONS(대소문자 무시 — `.seq`·mov는 아님),
+    '.'으로 시작하는 숨김·._ 파일은 제외. base는 마지막 '-' 앞까지라 base 안에 '-'가 있어도 된다.
+    """
+    if name.startswith("."):
+        return None
+    match = _FRAME_NAME.fullmatch(name)
+    if match is None:
+        return None
+    base, digits, ext = match.groups()
+    ext = ext.lower()
+    if ext not in SEQ_EXTENSIONS:
+        return None
+    return base, int(digits), ext, len(digits)
+
+
 def group_sequences(dir_path, names):
     """dir_path 폴더의 파일 이름들(names, 폴더 항목은 부르는 쪽이 뺌)에서 2장 이상인 시퀀스를 찾아 base 번호 순서로.
 
@@ -64,16 +82,11 @@ def group_sequences(dir_path, names):
     """
     groups = {}  # (base, ext, pad) -> 본 프레임 번호 집합 (같은 이름이 또 와도 한 장)
     for name in names:
-        if name.startswith("."):
+        parsed = parse_frame_name(name)
+        if parsed is None:
             continue
-        match = _FRAME_NAME.fullmatch(name)
-        if match is None:
-            continue
-        base, digits, ext = match.groups()
-        ext = ext.lower()
-        if ext not in SEQ_EXTENSIONS:
-            continue
-        groups.setdefault((base, ext, len(digits)), set()).add(int(digits))
+        base, number, ext, pad = parsed
+        groups.setdefault((base, ext, pad), set()).add(number)
 
     sequences = [
         SeqInfo(dir_path, base, ext, pad, min(numbers), max(numbers), len(numbers))
@@ -82,3 +95,22 @@ def group_sequences(dir_path, names):
     ]
     sequences.sort(key=lambda s: (natural_key(s.base), s.base, s.ext, s.pad))
     return sequences
+
+
+def sequence_of_frame(dir_path, names, frame_name):
+    """dir_path 폴더의 파일 이름들(names)에서 프레임 파일 frame_name이 속한 시퀀스(SeqInfo) — 없으면 None (디스크를 읽지 않음).
+
+    None인 경우: 프레임 이름이 아님 / 그 프레임이 names에 없음 (번호가 first~last 사이여도) / 같은 (base, 확장자, 자릿수)가 2장 미만 /
+    같은 base의 시퀀스가 여럿인데 이 프레임의 묶음이 첫 묶음이 아님 — 시퀀스를 여는 캡처는 같은 base 중 첫 묶음만 열고(identity가 base까지만
+    가리킴) 다른 묶음의 프레임을 눌러 다른 프레임들이 열리면 안 되므로 이때는 프레임 한 장 그대로 둔다.
+    """
+    parsed = parse_frame_name(frame_name)
+    if parsed is None:
+        return None
+    base, _number, ext, pad = parsed
+    if not any(parse_frame_name(name) == parsed for name in names):
+        return None
+    same_base = [seq for seq in group_sequences(dir_path, names) if seq.base == base]
+    if not same_base or (same_base[0].ext, same_base[0].pad) != (ext, pad):
+        return None
+    return same_base[0]

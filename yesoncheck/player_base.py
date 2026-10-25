@@ -1074,12 +1074,15 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
                 urls = event.mimeData().urls()
                 video_files = []
                 folder_paths = []  # 폴더 경로들을 저장할 리스트
+                frame_files = []  # 영상이 아닌 파일 — 이미지 시퀀스 프레임이면 Seq 목록에 넣음 (_dropped_frames가 이름을 봄)
                 
                 for url in urls:
                     file_path = paths.normalize_native(url.toLocalFile())
                     if os.path.isfile(file_path):
                         if self.is_video_file(file_path):
                             video_files.append(file_path)
+                        else:
+                            frame_files.append(file_path)
                     elif os.path.isdir(file_path):
                         # 폴더인 경우 - 재귀적으로 비디오 파일 찾기
                         folder_paths.append(file_path)  # 폴더 경로 저장
@@ -1109,6 +1112,11 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
                 elif self._dropped_folders_have_sequences(folder_paths):
                     # 시퀀스만 든 폴더: 영상 폴더를 놓을 때처럼 목록에 덧붙이되 Seq 탭을 보여 줌 (조용히 아무것도 안 하지 않음)
                     self._show_dropped_sequence_folders(folder_paths)
+                
+                # 이미지 시퀀스 프레임 파일: 그 시퀀스를 Seq 목록에 덧붙임 (열지는 않음 — Mov 목록에 놓은 영상처럼). 영상이 함께 있으면 보던 탭 그대로
+                frames = self._dropped_frames(frame_files)
+                if frames:
+                    self._add_dropped_frames(frames, show_tab=not video_files)
                 return True
         
         return False  # 기본 이벤트 처리 허용

@@ -25,7 +25,14 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from yesoncheck.sequence_scan import SEQ_EXTENSIONS, SEQ_SUFFIX, group_sequences, is_sequence_path
+from yesoncheck.sequence_scan import (
+    SEQ_EXTENSIONS,
+    SEQ_SUFFIX,
+    group_sequences,
+    is_sequence_path,
+    parse_frame_name,
+    sequence_of_frame,
+)
 
 PIL_EXTENSIONS = frozenset({"tga", "png", "jpg", "jpeg", "tif", "tiff"})
 PAIRED_MOVIE_EXTS = ("mov", "mp4")  # fps를 읽는 짝 영상 (<base>.mov가 있으면 그것, 없으면 <base>.mp4)
@@ -546,6 +553,39 @@ class ImageSequenceCapture:
         if announce:
             _log(f"{self._base}: {name} 선읽기 실패 — 재생이 이 프레임에 닿으면 다시 읽어 보고, 안 되면 직전 프레임을 유지합니다 "
                  f"(프레임 {file_number}): {self._dir}\n{_format_error(error)}")
+
+
+def list_frame_names(folder):
+    """folder 바로 안의 이미지 프레임 후보 파일 이름들 (확장자가 SEQ_EXTENSIONS인 파일, 정렬) — 폴더를 한 번만 읽음.
+
+    폴더가 없으면 FileNotFoundError·NotADirectoryError, 읽지 못하면 OSError가 그대로 올라간다 (삼키지 않음 — 부르는 쪽이 정함).
+    """
+    with os.scandir(folder) as entries:
+        return sorted(entry.name for entry in entries
+                      if os.path.splitext(entry.name)[1][1:].lower() in SEQ_EXTENSIONS and entry.is_file())
+
+
+def find_frame_sequence(path):
+    """프레임 파일 경로(`<폴더>/<base>-NNNN.<확장자>`) -> 그 프레임이 속한 시퀀스(SeqInfo), 아니면 None.
+
+    프레임 이름이 아닌 경로(mov·`.seq`·그 밖의 파일)는 폴더를 읽지 않고 None. 프레임 이름이면 폴더를 한 번 읽어
+    (`sequence_scan.sequence_of_frame`의 규칙으로) 같은 시퀀스를 찾음 — 폴더가 없으면 None (원래 경로가 예전처럼 '영상 없음'으로
+    처리됨), 그 밖의 읽기 오류(권한·NAS 끊김)는 OSError 그대로.
+    """
+    folder, name = os.path.split(path)
+    if parse_frame_name(name) is None:
+        return None
+    try:
+        names = list_frame_names(folder)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    return sequence_of_frame(folder, names, name)
+
+
+def resolve_frame_path(path):
+    """프레임 파일 경로 -> 그 프레임의 시퀀스를 가리키는 가상 경로(`<폴더>/<base>.seq`), 시퀀스가 아니면(한 장뿐·폴더 없음 등) None."""
+    seq = find_frame_sequence(path)
+    return None if seq is None else seq.identity
 
 
 def open_any_capture(path):

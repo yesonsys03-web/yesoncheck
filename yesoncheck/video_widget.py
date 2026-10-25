@@ -301,6 +301,7 @@ class CustomVideoWidget(QGraphicsView):
             has_folder = False
             read_failed = False  # 읽지 못한 폴더가 있음 (창으로 알림 — '지원되는 비디오 파일이 없습니다'는 띄우지 않음)
             folder_paths = []  # 폴더 경로들을 저장할 리스트
+            frame_files = []  # 영상이 아닌 파일 — 이미지 시퀀스 프레임이면 그 시퀀스를 엶 (parent._dropped_frames가 이름을 봄)
             
             # URL들을 파일/폴더로 분류
             for url in urls:
@@ -309,6 +310,8 @@ class CustomVideoWidget(QGraphicsView):
                     # 파일인 경우
                     if parent.is_video_file(local_path):
                         video_files.append(local_path)
+                    else:
+                        frame_files.append(local_path)
                 elif os.path.isdir(local_path):
                     # 폴더인 경우 - 재귀적으로 비디오 파일 찾기
                     has_folder = True
@@ -324,6 +327,9 @@ class CustomVideoWidget(QGraphicsView):
             # 폴더가 포함된 경우 북마크에 자동 추가
             if folder_paths:
                 parent.add_dropped_folders_to_bookmarks(folder_paths)
+            
+            # 이미지 시퀀스 프레임 파일 (한 장뿐인 프레임·프레임이 아닌 파일은 빠짐 — 예전처럼 무시)
+            frames = parent._dropped_frames(frame_files)
             
             # 비디오 파일 처리
             if has_folder:
@@ -347,6 +353,10 @@ class CustomVideoWidget(QGraphicsView):
                     QMessageBox.warning(parent, "경고", "폴더에 지원되는 비디오 파일이 없습니다.")
             else:
                 # 개별 파일들만 있는 경우
+                if frames:
+                    # 프레임: 영상 파일이 함께 없으면 영상 파일을 놓을 때처럼 그 시퀀스를 열고 Seq 탭을 보여 줌. 영상이 함께 있으면 영상은 아래에서 예전대로,
+                    # 시퀀스는 Seq 목록에만 더함
+                    parent._add_dropped_frames(frames, show_tab=not video_files, open_them=not video_files)
                 if len(video_files) == 1:
                     parent.open_file('A', video_files[0])
                 elif len(video_files) == 2:
@@ -360,6 +370,10 @@ class CustomVideoWidget(QGraphicsView):
                     parent.add_files_to_sidebar(remaining_files)
                     if remaining_files:
                         QMessageBox.information(parent, "파일 로드 완료", f"첫 번째 파일이 Video A에 로드되고, {len(remaining_files)}개의 파일이 사이드바에 추가되었습니다.")
+            
+            # 폴더와 함께 놓은 프레임의 시퀀스는 Seq 목록에만 더함 (폴더 처리는 위에서 예전대로)
+            if has_folder and frames:
+                parent._add_dropped_frames(frames)
         
         event.acceptProposedAction()
 

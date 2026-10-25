@@ -27,7 +27,7 @@ from PyQt5.QtWidgets import (
 
 from yesoncheck.frame_utils import FrameCalculator
 from yesoncheck.sequence_scan import is_sequence_path
-from yesoncheck.sequence_source import ImageSequenceCapture, open_any_capture
+from yesoncheck.sequence_source import ImageSequenceCapture, open_any_capture, resolve_frame_path
 from yesoncheck.workers import FFmpegWorker
 from yesoncheck import external_tools, file_names, paths, thumbnails, video_list
 from yesoncheck.player_sidebar import ThumbnailContext
@@ -264,12 +264,18 @@ class PlayerPlaybackMixin:
         이미지 시퀀스(.seq 가상 경로)도 같은 흐름으로 엶 — 캡처만 ImageSequenceCapture (cv2.VideoCapture와 같은 의미)라 탐색·
         스텝·와이프 코드는 그대로이고, 소리는 없음 (self.mediaPlayer 속성은 만드는 속성이라 시퀀스 경로에서 쓰지 않음).
         A/B는 같은 종류(mov/시퀀스)끼리만: 종류가 다른 쪽은 새로 연 뒤에 놓고 와이프를 끔.
+
+        시퀀스 프레임 한 장(`<base>-NNNN.<확장자>`)의 경로를 받으면 그 프레임이 속한 시퀀스를 엶 (`_frame_to_sequence_path` — Open Video A/B
+        대화상자·끌어다 놓기·Finder 열기가 모두 여기를 거침). 시퀀스가 아닌 한 장뿐인 프레임은 예전처럼 영상 경로로.
         """
         if file_path is None:
             file_path, _ = QFileDialog.getOpenFileName(self, f"Open Video {video_type}")
 
         if file_path:
             file_path = paths.normalize_native(file_path)
+            file_path = self._frame_to_sequence_path(file_path)
+            if file_path is None:
+                return False
             print(f"Attempting to open video file: {file_path}")
             opening_sequence = is_sequence_path(file_path)
             # 보던 영상을 멈추기 전에 확인하고 열어 봄 (열 수 없는 영상 때문에 빈 화면만 남지 않게)
@@ -330,6 +336,30 @@ class PlayerPlaybackMixin:
                     self.on_video_annotations_reset(file_path)
             return True
         return False
+
+    def _frame_to_sequence_path(self, file_path):
+        """시퀀스 프레임 한 장의 경로면 그 프레임의 시퀀스(`<폴더>/<base>.seq` 가상 경로)로 바꿔 돌려줌 — 아니면 받은 경로 그대로.
+
+        영상·`.seq`·프레임이 아닌 파일은 폴더를 읽지 않음. 프레임이면 폴더를 한 번 읽어 같은 (base, 확장자, 자릿수)의 프레임이 2장 이상 있고 이
+        프레임이 그 안에 있을 때만 바꿈: 한 장뿐인 프레임·없는 폴더·없는 파일은 그대로라 예전 흐름(영상 열기·'영상 없음' 창)이 처리함.
+        폴더를 읽지 못하면(권한·NAS 연결 끊김) 스택 트레이스째 로그와 창으로 알리고 None (열지 않음 — 보던 영상은 그대로).
+        """
+        if is_sequence_path(file_path):
+            return file_path
+        try:
+            identity = resolve_frame_path(file_path)
+        except OSError as e:
+            reason = f"{type(e).__name__}: {e}"
+            print(f"프레임이 든 폴더를 읽지 못함: {file_path} ({reason})")
+            traceback.print_exc()
+            QMessageBox.critical(self, "영상을 열 수 없음",
+                                 f"이미지 프레임이 든 폴더를 읽지 못했습니다 (NAS 연결 끊김·권한 등): {file_path}\n"
+                                 f"이유: {reason}\n\n{traceback.format_exc()}")
+            return None
+        if identity is None:
+            return file_path
+        print(f"[시퀀스] 프레임 한 장 {file_path} -> 그 시퀀스 {identity}")
+        return identity
 
     def is_sequence_active(self):
         """A가 이미지 시퀀스로 열려 있음 (A/B는 같은 종류끼리라 A가 기준 — 시퀀스 전용 기능이 쓰는 값)."""

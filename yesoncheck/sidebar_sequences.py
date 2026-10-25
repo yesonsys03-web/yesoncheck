@@ -7,6 +7,10 @@
 - 항목: 라벨 "베이스 (처음–끝, N프레임)"(+ 빠진 프레임이 있으면 ", 빠짐 N"), `Qt.UserRole`에 `SeqInfo`(프레임 파일 이름은 들지 않음),
   툴팁은 사람이 읽는 정보. Mov 목록 코드는 `item.toolTip()`을 경로로 읽지만 이 목록은 별도 위젯이라 그 관례가 닿지 않음.
 - 누르기: `on_seq_item_clicked` → 시퀀스를 A로 엶 (`open_file('A', seq.identity)`, Mov 목록 누르기와 같은 규칙).
+- 끌어다 놓은 프레임 파일(`<base>-NNNN.<확장자>`): 세 드롭 핸들러(영상 영역·메인 창·Mov 목록)가 영상이 아닌 파일을 `_dropped_frames`로 풀어
+  (프레임 이름이 아닌 파일은 디스크를 읽지 않음, 폴더마다 한 번만 읽음) 그 프레임이 속한 시퀀스를 찾고, `_add_dropped_frames`가 그 폴더의 시퀀스들을
+  Seq 목록에 넣음 (폴더를 목록 다시 읽기의 출처로 기억 — 시퀀스만 든 폴더를 놓을 때와 같은 자리). 영상 영역·메인 창은 영상 파일을 놓을 때처럼 그
+  시퀀스를 A로 엶(둘이면 A·B). 한 장뿐인 프레임은 예전처럼 무시. 영상 파일이 함께 있으면 영상은 예전 그대로이고 시퀀스는 목록에만 더함.
 - 탭 전환(`_on_sidebar_tab_changed`)은 페이지 교체뿐 — GUI 스레드는 디스크를 읽지 않음 (썸네일 모드면 Seq 썸네일을 뒤 스레드로 다시
   읽을 뿐). Seq 탭에서는 선택 재생 단추 둘('Play Selected'·'Play/Pause Selected')을 끔 (선택 재생은 Mov 경로 전제 — 이미 도는 선택 재생의
   일시정지 단추는 예외, `_sync_selected_play_buttons`).
@@ -42,6 +46,7 @@
 import functools
 import os
 import traceback
+from dataclasses import dataclass, field
 
 import cv2
 from PyQt5.QtCore import QItemSelectionModel, QSize, Qt, QTimer, pyqtSignal
@@ -60,7 +65,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
-from yesoncheck import paths, sequence_source, thumbnails, video_list
+from yesoncheck import paths, sequence_scan, sequence_source, thumbnails, video_list
 from yesoncheck.sequence_export_worker import SequenceExportWorker, substitution_note, substitution_summary, validate_out_dir
 from yesoncheck.sequence_source import ImageSequenceCapture
 from yesoncheck.sidebar_items import THUMBNAIL_CONTEXT_ROLE, THUMBNAIL_MAKE_FAILED, THUMBNAIL_VIDEO_PROBLEM
@@ -102,6 +107,18 @@ def _merged(*groups):
         for seq in group:
             unique.setdefault(_seq_key(seq), seq)
     return video_list.sort_sequences(unique.values())
+
+
+@dataclass
+class DroppedFrames:
+    """끌어다 놓은 프레임 파일에서 찾은 시퀀스: sequences = 프레임이 속한 시퀀스들 (놓은 차례, 같은 시퀀스는 한 번),
+    folders = {시퀀스가 든 폴더: 그 폴더의 모든 시퀀스} (Seq 목록에 넣을 것)."""
+
+    sequences: list = field(default_factory=list)
+    folders: dict = field(default_factory=dict)
+
+    def __bool__(self):
+        return bool(self.sequences)
 
 
 class SequenceExportDialog(QDialog):
@@ -323,6 +340,70 @@ class SidebarSequencesMixin:
         self._thumbnail_folder_problem = None
         self.add_files_to_sidebar([], folders)
         self.sidebar_tabs.setCurrentIndex(1)
+
+    def _dropped_frames(self, file_paths):
+        """끌어다 놓은 (영상이 아닌) 파일들 중 이미지 시퀀스 프레임 -> DroppedFrames.
+
+        이름이 프레임 규칙(`sequence_scan.parse_frame_name`)이 아닌 파일은 디스크를 읽지 않음. 프레임이면 그 폴더를 한 번만 읽어(여러 장을 놓아도
+        폴더마다 한 번) 그 프레임이 속한 시퀀스를 찾음: 한 장뿐인 프레임은 시퀀스가 아니라 빠짐 (예전처럼 무시). 폴더를 읽지 못하면(권한·NAS 끊김)
+        스택 트레이스째 로그와 창으로 알리고 그 폴더의 프레임은 뺌.
+        """
+        listings = {}  # path_key(폴더) -> 폴더의 프레임 후보 이름들 (읽지 못했으면 None)
+        found = {}  # path_key(폴더) -> 폴더 (시퀀스를 찾은 폴더만, 놓은 차례)
+        sequences = {}  # _seq_key -> SeqInfo (놓은 차례)
+        for file_path in file_paths:
+            folder, name = os.path.split(file_path)
+            if sequence_scan.parse_frame_name(name) is None:
+                continue
+            key = paths.path_key(folder)
+            if key not in listings:
+                listings[key] = self._read_dropped_frame_folder(folder)
+            if listings[key] is None:
+                continue
+            seq = sequence_scan.sequence_of_frame(folder, listings[key], name)
+            if seq is not None:
+                sequences.setdefault(_seq_key(seq), seq)
+                found.setdefault(key, folder)
+        folders = {folder: video_list.sort_sequences(sequence_scan.group_sequences(folder, listings[key]))
+                   for key, folder in found.items()}
+        return DroppedFrames(list(sequences.values()), folders)
+
+    def _read_dropped_frame_folder(self, folder):
+        """끌어다 놓은 프레임이 든 폴더의 프레임 후보 이름들. 폴더가 (그새) 없어졌으면 None, 읽지 못하면 창으로 알리고 None."""
+        try:
+            return sequence_source.list_frame_names(folder)
+        except (FileNotFoundError, NotADirectoryError):
+            return None
+        except OSError as e:
+            reason = f"{type(e).__name__}: {e}"
+            print(f"끌어다 놓은 프레임이 든 폴더를 읽지 못함: {folder} ({reason})")
+            traceback.print_exc()
+            QMessageBox.critical(self, "시퀀스 폴더를 읽을 수 없음",
+                                 f"끌어다 놓은 이미지 프레임이 든 폴더를 읽지 못했습니다 (NAS 연결 끊김·권한 등): {folder}\n"
+                                 f"이유: {reason}\n\n{traceback.format_exc()}")
+            return None
+
+    def _add_dropped_frames(self, frames, show_tab=False, open_them=False):
+        """끌어다 놓은 프레임의 시퀀스들(`_dropped_frames`의 결과)을 Seq 목록에 덧붙임. 목록을 비우지 않음 (파일 하나를 놓는다고 목록을 갈아엎지 않음).
+
+        시퀀스만 든 폴더를 놓을 때처럼 그 폴더를 목록 다시 읽기의 출처로 기억하고(다시 읽어도 항목이 사라지지 않게) 폴더의 시퀀스들을 넣음.
+        show_tab: Seq 탭을 보여 줌(`_show_dropped_sequence_folders`). open_them: 영상 파일을 놓을 때처럼 시퀀스를 엶 — 하나면 A, 둘이면 A·B,
+        더 많으면 첫 번째만 A (나머지는 목록에만). 연 A의 항목을 목록에서 고른 채로.
+        """
+        for folder, sequences in frames.folders.items():
+            self._note_folder_sequences(folder, sequences)  # add_files_to_sidebar가 꺼내 Seq 목록에 덧붙임
+        folders = list(frames.folders)
+        if show_tab:
+            self._show_dropped_sequence_folders(folders)
+        else:
+            self.add_files_to_sidebar([], folders)
+        if open_them:
+            self.open_file('A', frames.sequences[0].identity)
+            if len(frames.sequences) == 2:
+                self.open_file('B', frames.sequences[1].identity)
+            items = self._seq_items_with_identity(frames.sequences[0].identity)
+            if items:
+                self.seq_sidebar.setCurrentItem(items[0])  # 선택도 함께 (연 항목 하나만)
 
     def _apply_seq_read(self, read):
         """목록 다시 읽기의 결과(video_list.SourcesRead)로 Seq 목록을 맞춤 — Mov 목록과 같은 읽기, 폴더를 더 읽지 않음.

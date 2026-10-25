@@ -136,7 +136,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   - `yesoncheck/sidebar_config_paths.py` (883줄): `SidebarConfigPathsMixin` — 공유 설정 읽기 시작·창에 넣기·문제 알림, (Windows) 변환표 자동 설정,
     작품 경로 관리 창·`get_work_path`·관리 비밀번호
   - `yesoncheck/sidebar_refresh.py` (496줄): `SidebarRefreshMixin`·`SidebarScan` — 목록 항목 모델(출처·세대·다시 읽기 보류)과 목록 다시 읽기·목록 문제 알림
-  - `yesoncheck/sidebar_sequences.py` (778줄): `SidebarSequencesMixin`·`SequenceExportDialog` — Mov·Seq 탭과 Seq 목록, Seq 우클릭 메뉴(A/B로 열기·MOV 만들기·썸네일·정보),
+  - `yesoncheck/sidebar_sequences.py` (859줄): `SidebarSequencesMixin`·`SequenceExportDialog` — Mov·Seq 탭과 Seq 목록, 끌어다 놓은 프레임 파일 처리, Seq 우클릭 메뉴(A/B로 열기·MOV 만들기·썸네일·정보),
     일괄 내보내기 진행 창. 시퀀스 썸네일은 짝 `.mov`의 것을 재사용
   - `yesoncheck/sidebar_thumbnails.py` (933줄): `SidebarThumbnailsMixin` — 목록/썸네일 모드·사이드바 폭, 썸네일 반복·워커 정리, 영상 단위 확인·만들기,
     썸네일 폴더·문제 알림, 백그라운드 썸네일 읽기
@@ -150,10 +150,15 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   판정 (여러 창일 때의 순서는 아래 '여러 창과 업데이트')
 - `yesoncheck/video_widget.py` (869줄): 줌, 팬, ROI 선택 기능이 있는 커스텀 비디오 뷰포트
 - 이미지 시퀀스 (`<베이스>-NNNN.<확장자>` 프레임들을 영상처럼 열어 재생·비교, Seq 탭, 시퀀스 → MOV 일괄 만들기 — 사용자 설명은 README '이미지 시퀀스 재생'):
-  - `yesoncheck/sequence_scan.py` (84줄): 파일 이름에서 시퀀스를 묶는 규칙 `group_sequences`·`SeqInfo` — Qt·디스크 없음. **시퀀스의 정체성은 가상 경로
+  - `yesoncheck/sequence_scan.py` (116줄): 파일 이름에서 시퀀스를 묶는 규칙 `group_sequences`·`SeqInfo`·프레임 이름 해석 `parse_frame_name`·한 프레임의 시퀀스 찾기 `sequence_of_frame` — Qt·디스크 없음. **시퀀스의 정체성은 가상 경로
     `<폴더>/<베이스>.seq`(`SeqInfo.identity`, `is_sequence_path`로 판별)**: 진짜 파일이 아니며 목록·`filename_a`·주석 파일 이름(`<베이스>_seq_annotations.json`)·
     창 제목이 모두 이 문자열을 씀. 시퀀스 경로를 `os.path.exists`·`cv2.VideoCapture`에 그대로 넘기지 말 것 (`open_any_capture`가 가름, OCR 류는 `is_sequence_active`로 막음)
-  - `yesoncheck/sequence_source.py` (555줄): `decode_frame`(TGA·PNG·JPG·TIF는 PIL, EXR은 cv2)·`ImageSequenceCapture`(`cv2.VideoCapture` 자리에 꽂는 캡처, 선읽기 버퍼)·`open_any_capture`
+  - `yesoncheck/sequence_source.py` (595줄): `decode_frame`(TGA·PNG·JPG·TIF는 PIL, EXR은 cv2)·`ImageSequenceCapture`(`cv2.VideoCapture` 자리에 꽂는 캡처, 선읽기 버퍼)·`open_any_capture`
+    **프레임 한 장 = 그 시퀀스**: `resolve_frame_path`/`find_frame_sequence`(폴더를 한 번 읽음, 프레임 이름이 아닌 경로·`.seq`는 읽지 않음, 없는 폴더는 None, 그 밖의 읽기 오류는 그대로 올림)가
+    프레임 경로를 시퀀스 가상 경로로 바꿈. `open_file`(`_frame_to_sequence_path`)이 **모든 열기 길**(Open Video A/B 대화상자 — 필터가 없어 프레임도 고를 수 있음 —·끌어다 놓기·Finder 열기·다음으로 열기)에서
+    mov·`.seq` 분기 앞에서 부르므로 `filename_a/_b`에는 늘 `.seq`가 들어감. 한 장뿐인 프레임(시퀀스 아님)은 예전처럼 영상 경로. 같은 base의 시퀀스가 여럿(다른 확장자·자릿수)이면 캡처가 여는 첫 묶음의
+    프레임만 바꿈. 끌어다 놓기는 `SidebarSequencesMixin._dropped_frames`·`_add_dropped_frames`(세 드롭 핸들러가 부름 — 영상 영역·메인 창은 영상 파일처럼 A(둘이면 A·B)로 열고 Seq 탭을 보여 줌,
+    Mov 목록은 Seq 목록에만 덧붙임, 영상 파일이 함께 있으면 영상은 예전대로)
     EXR: Windows cv2 휠은 OpenEXR 코덱이 기본으로 꺼져 있고 `OPENCV_IO_ENABLE_OPENEXR=1`은 **cv2를 불러오기 전에** 정해 두는 것이 안전함 — `yesoncheck/__init__.py`·`tests/conftest.py`·`check_frozen_imports.py`가
     맨 위에서 정함 (cv2를 부르는 새 진입점이 생기면 그보다 앞에). 그래도 꺼진 cv2면 `exr_supported()`가 False, `decode_frame(…, "exr")`는 원인을 이은 ValueError로 크게 실패 (EXR 시험은 이때만 건너뜀)
   - `yesoncheck/sequence_export_worker.py` (335줄): `SequenceExportWorker`(`QThread`) — 시퀀스 여러 개를 `<출력 폴더>/<베이스>.mov`로, `validate_out_dir`가 원본 폴더를 거부.
@@ -612,8 +617,8 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 
 **시험은 반드시 `~/coding/p310_tf/bin/python -m pytest`로 돌릴 것** — TensorFlow가 없는 `~/coding/p310`으로 돌리면 11개가 실패함.
 
-`tests/`에 시험 파일 69개 (수집 1,704개). `python -m pytest tests -q`로 돌리며(약 8분), 이 Mac의 소스 실행에서 1,659개가 통과하고 45개는 건너뜀 —
-다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-10-23 기준). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
+`tests/`에 시험 파일 70개 (수집 1,778개). `python -m pytest tests -q`로 돌리며(약 8분), 이 Mac의 소스 실행에서 1,733개가 통과하고 45개는 건너뜀 —
+다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-10-26 기준). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
 정적 빌드(`vendor/ffmpeg/`)를 씀 (`tests/conftest.py`). 시험을 건너뛰거나 지워서 통과시키지 말 것.
 
 시험 구성 (파일 이름 기준):
