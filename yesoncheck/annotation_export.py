@@ -9,6 +9,8 @@ from PyQt5.QtCore import QThread, pyqtSignal
 
 from yesoncheck import external_tools
 from yesoncheck.annotation_burn import burn_annotations_on_frame
+from yesoncheck.sequence_scan import is_sequence_path
+from yesoncheck.sequence_source import open_any_capture
 
 
 class AnnotationExportWorker(QThread):
@@ -56,19 +58,21 @@ class AnnotationExportWorker(QThread):
             f"{fps:.6f}",
             "-i",
             "pipe:0",
-            "-i",
-            self.video_path,
-            "-map",
-            "0:v:0",
         ]
-        if self.include_audio:
+        # 이미지 시퀀스의 가상 경로(.seq)는 진짜 파일이 아니라 ffmpeg가 열 수 없고, 시퀀스에는 소리도 없음 → 소리 입력 없이 영상만
+        sequence = is_sequence_path(self.video_path)
+        with_audio = self.include_audio and not sequence
+        if not sequence:
+            cmd.extend(["-i", self.video_path])
+        cmd.extend(["-map", "0:v:0"])
+        if with_audio:
             cmd.extend(["-map", "1:a:0?"])
         else:
             cmd.append("-an")
 
         cmd.extend(external_tools.video_encoder_args(self.export_mode, self.bitrate))
 
-        if self.include_audio:
+        if with_audio:
             cmd.extend(["-c:a", "aac", "-b:a", "192k"])
         cmd.append(self.output_path)
         return cmd
@@ -79,7 +83,8 @@ class AnnotationExportWorker(QThread):
         stderr_chunks = []
         stderr_reader = None
         try:
-            cap = cv2.VideoCapture(self.video_path)
+            # 시퀀스(.seq)는 ImageSequenceCapture — 못 열면 cv2와 달리 생성자가 예외를 올리는데, 아래 except가 error 신호로 알림
+            cap = open_any_capture(self.video_path)
             if not cap.isOpened():
                 self.error.emit(f"비디오를 열 수 없습니다: {self.video_path}")
                 return

@@ -26,6 +26,8 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck.frame_utils import FrameCalculator
+from yesoncheck.sequence_scan import is_sequence_path
+from yesoncheck.sequence_source import ImageSequenceCapture, open_any_capture, resolve_frame_path
 from yesoncheck.workers import FFmpegWorker
 from yesoncheck import external_tools, file_names, paths, thumbnails, video_list
 from yesoncheck.player_sidebar import ThumbnailContext
@@ -223,6 +225,7 @@ class PlayerPlaybackMixin:
             # 파일 이름만 표시, 경로는 UserRole·툴팁. 항목마다 이 job의 썸네일 자리(폴더·폴더 문제)를 기억
             self._add_sidebar_videos([(name, full_path, source) for name, full_path in all_mov_files])
             self.sidebar.setUpdatesEnabled(True)  # UI 업데이트 재개
+            self._set_seq_items(result.sequences)  # 같은 읽기에서 함께 찾은 이미지 시퀀스 (Seq 탭)
             # 읽지 못한 하위 폴더는 목록을 다 넣은 뒤에 알림 (창이 떠 있는 동안 목록이 반쯤 만들어진 채이지 않게)
             self._report_list_read(base_path, result)
 
@@ -257,57 +260,55 @@ class PlayerPlaybackMixin:
 
         디스크에 없는 영상(목록에 남아 있던 것)이면 알리고 사이드바 목록을 다시 읽음. 영상이 있지만 확인하지 못하거나
         (권한·NAS 연결 끊김) OpenCV가 열지 못하면 오류 창 (예전에는 보던 영상을 멈춘 뒤 로그에만 남김).
+
+        이미지 시퀀스(.seq 가상 경로)도 같은 흐름으로 엶 — 캡처만 ImageSequenceCapture (cv2.VideoCapture와 같은 의미)라 탐색·
+        스텝·와이프 코드는 그대로이고, 소리는 없음 (self.mediaPlayer 속성은 만드는 속성이라 시퀀스 경로에서 쓰지 않음).
+        A/B는 같은 종류(mov/시퀀스)끼리만: 종류가 다른 쪽은 새로 연 뒤에 놓고 와이프를 끔.
+
+        시퀀스 프레임 한 장(`<base>-NNNN.<확장자>`)의 경로를 받으면 그 프레임이 속한 시퀀스를 엶 (`_frame_to_sequence_path` — Open Video A/B
+        대화상자·끌어다 놓기·Finder 열기가 모두 여기를 거침). 시퀀스가 아닌 한 장뿐인 프레임은 예전처럼 영상 경로로.
         """
         if file_path is None:
             file_path, _ = QFileDialog.getOpenFileName(self, f"Open Video {video_type}")
 
         if file_path:
             file_path = paths.normalize_native(file_path)
-            print(f"Attempting to open video file: {file_path}")
-            # 보던 영상을 멈추기 전에 확인하고 열어 봄 (열 수 없는 영상 때문에 빈 화면만 남지 않게)
-            try:
-                os.stat(file_path)
-            except OSError as e:
-                reason = f"{type(e).__name__}: {e}"
-                # 없어짐인지는 위로 올라가며 확인 (끊긴 공유는 Windows에서도 FileNotFoundError — 그때는 '없음'이라 하지 않음)
-                gone, note = video_list.check_gone(file_path, e)
-                if note:
-                    reason += f"\n{note}"
-                if gone:
-                    print(f"디스크에 없는 영상: {file_path} ({reason})")
-                    QMessageBox.warning(self, "영상 없음",
-                                        f"디스크에 없는 영상입니다: {file_path}\n({reason})\n목록을 다시 읽습니다.")
-                    self.refresh_sidebar()
-                    return False
-                print(f"영상을 확인하지 못함: {file_path} ({reason})")
-                QMessageBox.critical(self, "영상을 열 수 없음",
-                                     f"영상을 확인하지 못했습니다 (NAS 연결 끊김·권한 등): {file_path}\n이유: {reason}")
+            file_path = self._frame_to_sequence_path(file_path)
+            if file_path is None:
                 return False
-            cap = cv2.VideoCapture(file_path)
-            if not cap.isOpened():
-                print(f"Failed to open video file: {file_path}")
-                QMessageBox.critical(self, "영상을 열 수 없음",
-                                     f"영상을 열지 못했습니다 (OpenCV가 읽지 못함 — 파일이 손상되었거나 지원하지 않는 "
-                                     f"형식일 수 있음): {file_path}")
+            print(f"Attempting to open video file: {file_path}")
+            opening_sequence = is_sequence_path(file_path)
+            # 보던 영상을 멈추기 전에 확인하고 열어 봄 (열 수 없는 영상 때문에 빈 화면만 남지 않게)
+            if opening_sequence:
+                cap = self._open_sequence_capture(file_path)
+            else:
+                cap = self._open_movie_capture(file_path)
+            if cap is None:
                 return False
 
-            # 플레이리스트 재생 중이 아닐 때만 stop_video 호출
-            if not self.is_playlist_playing:
-                self.stop_video()
-            else:
-                # 플레이리스트 재생 중에는 타이머만 정지
-                self.timer.stop()
-                self.stop_media_player()
+            self._stop_playback_for_open()
 
             # 새로운 영상을 열 때 프레임 캐시 초기화 (이전 영상 프레임 방지)
             self.clear_cache()
+
+            # 혼합 차단: 반대쪽이 다른 종류(mov/시퀀스)면 놓고 와이프를 끔 (열기에 성공한 뒤에만 — 실패하면 보던 것은 그대로)
+            other_cap = self.cap_b if video_type == 'A' else self.cap_a
+            if other_cap is not None and isinstance(other_cap, ImageSequenceCapture) != opening_sequence:
+                self.wipeCheckBox.setChecked(False)  # 와이프 끄기: 기존 토글 (버튼·위젯 상태·화면까지)
+                self._release_side('B' if video_type == 'A' else 'A')
+                if video_type == 'B':
+                    self.update_frame()  # 놓은 A의 마지막 그림이 화면에 남지 않게
 
             if video_type == 'A':
                 if self.cap_a: self.cap_a.release()
                 self.filename_a = file_path
                 self.cap_a = cap
-                # 소리 재생기를 처음 만드는 곳 (mediaPlayer 속성: 처음 쓸 때 만듦)
-                self.mediaPlayer.setMedia(QMediaContent(QUrl.fromLocalFile(file_path)))
+                if opening_sequence:
+                    # 시퀀스는 소리가 없음: 이전 영상의 소리만 놓음 (재생기를 만들지 않음)
+                    self._drop_audio_media()
+                else:
+                    # 소리 재생기를 처음 만드는 곳 (mediaPlayer 속성: 처음 쓸 때 만듦)
+                    self.mediaPlayer.setMedia(QMediaContent(QUrl.fromLocalFile(file_path)))
                 
                 total_frames = int(self.cap_a.get(cv2.CAP_PROP_FRAME_COUNT))
                 self.positionScroll.setMaximum(max(1, total_frames - 1))
@@ -335,6 +336,124 @@ class PlayerPlaybackMixin:
                     self.on_video_annotations_reset(file_path)
             return True
         return False
+
+    def _frame_to_sequence_path(self, file_path):
+        """시퀀스 프레임 한 장의 경로면 그 프레임의 시퀀스(`<폴더>/<base>.seq` 가상 경로)로 바꿔 돌려줌 — 아니면 받은 경로 그대로.
+
+        영상·`.seq`·프레임이 아닌 파일은 폴더를 읽지 않음. 프레임이면 폴더를 한 번 읽어 같은 (base, 확장자, 자릿수)의 프레임이 2장 이상 있고 이
+        프레임이 그 안에 있을 때만 바꿈: 한 장뿐인 프레임·없는 폴더·없는 파일은 그대로라 예전 흐름(영상 열기·'영상 없음' 창)이 처리함.
+        폴더를 읽지 못하면(권한·NAS 연결 끊김) 스택 트레이스째 로그와 창으로 알리고 None (열지 않음 — 보던 영상은 그대로).
+        """
+        if is_sequence_path(file_path):
+            return file_path
+        try:
+            identity = resolve_frame_path(file_path)
+        except OSError as e:
+            reason = f"{type(e).__name__}: {e}"
+            print(f"프레임이 든 폴더를 읽지 못함: {file_path} ({reason})")
+            traceback.print_exc()
+            QMessageBox.critical(self, "영상을 열 수 없음",
+                                 f"이미지 프레임이 든 폴더를 읽지 못했습니다 (NAS 연결 끊김·권한 등): {file_path}\n"
+                                 f"이유: {reason}\n\n{traceback.format_exc()}")
+            return None
+        if identity is None:
+            return file_path
+        print(f"[시퀀스] 프레임 한 장 {file_path} -> 그 시퀀스 {identity}")
+        return identity
+
+    def is_sequence_active(self):
+        """A가 이미지 시퀀스로 열려 있음 (A/B는 같은 종류끼리라 A가 기준 — 시퀀스 전용 기능이 쓰는 값)."""
+        return isinstance(self.cap_a, ImageSequenceCapture)
+
+    def _open_movie_capture(self, file_path):
+        """mov 등 영상 파일의 cv2 캡처 → 못 열면 창으로 알리고 None (보던 영상은 그대로)."""
+        try:
+            os.stat(file_path)
+        except OSError as e:
+            reason = f"{type(e).__name__}: {e}"
+            # 없어짐인지는 위로 올라가며 확인 (끊긴 공유는 Windows에서도 FileNotFoundError — 그때는 '없음'이라 하지 않음)
+            gone, note = video_list.check_gone(file_path, e)
+            if note:
+                reason += f"\n{note}"
+            if gone:
+                print(f"디스크에 없는 영상: {file_path} ({reason})")
+                QMessageBox.warning(self, "영상 없음",
+                                    f"디스크에 없는 영상입니다: {file_path}\n({reason})\n목록을 다시 읽습니다.")
+                self.refresh_sidebar()
+                return None
+            print(f"영상을 확인하지 못함: {file_path} ({reason})")
+            QMessageBox.critical(self, "영상을 열 수 없음",
+                                 f"영상을 확인하지 못했습니다 (NAS 연결 끊김·권한 등): {file_path}\n이유: {reason}")
+            return None
+        cap = cv2.VideoCapture(file_path)
+        if not cap.isOpened():
+            print(f"Failed to open video file: {file_path}")
+            QMessageBox.critical(self, "영상을 열 수 없음",
+                                 f"영상을 열지 못했습니다 (OpenCV가 읽지 못함 — 파일이 손상되었거나 지원하지 않는 "
+                                 f"형식일 수 있음): {file_path}")
+            return None
+        return cap
+
+    def _open_sequence_capture(self, file_path):
+        """시퀀스(.seq 가상 경로)의 캡처 → 못 열면 창으로 알리고 None (보던 영상은 그대로).
+
+        가상 경로는 os.stat이 안 되므로 확인은 캡처가 함 (폴더를 읽어 프레임을 찾음 — 폴더를 못 읽으면 OSError, 첫 프레임이
+        깨졌으면 ValueError가 생성자에서 올라오고, 프레임이 2장 미만이면 열리지 않은 캡처). 오류는 스택 트레이스째 로그와 창으로.
+
+        바꿔 끼울 쪽의 옛 캡처(mov든 시퀀스든)는 여기서 놓지 않음: mov와 같은 순서로 새 캡처가 열린 뒤 open_file이 놓는다 — 열지
+        못해도 보던 영상은 멈추지 않는다. 겹치는 동안에도 선읽기 예산은 넘지 않음 (새 캡처가 열릴 때 살아 있는 캡처들을 줄임).
+        """
+        details = None
+        try:
+            cap = open_any_capture(file_path)
+        except (OSError, ValueError, cv2.error) as e:
+            reason = f"{type(e).__name__}: {e}"
+            details = traceback.format_exc()
+            print(f"시퀀스를 열지 못함: {file_path} ({reason})")
+            traceback.print_exc()
+            problem = f"시퀀스를 열지 못했습니다 (폴더를 읽지 못했거나 프레임이 깨졌음): {file_path}\n이유: {reason}"
+        else:
+            if cap.isOpened():
+                return cap
+            cap.release()
+            print(f"시퀀스를 열지 못함: {file_path} (프레임이 2장 이상인 시퀀스를 폴더에서 찾지 못함)")
+            problem = (f"시퀀스를 열지 못했습니다 (폴더에서 '{os.path.splitext(os.path.basename(file_path))[0]}-<번호>' "
+                       f"프레임이 2장 이상 든 시퀀스를 찾지 못함): {file_path}")
+        QMessageBox.critical(self, "영상을 열 수 없음", problem if details is None else f"{problem}\n\n{details}")
+        return None
+
+    def _stop_playback_for_open(self):
+        """새 영상을 열기 전에 재생을 멈춤 (소리는 재생기가 있을 때만)."""
+        # 플레이리스트 재생 중이 아닐 때만 stop_video 호출
+        if not self.is_playlist_playing:
+            self.stop_video()
+        else:
+            # 플레이리스트 재생 중에는 타이머만 정지
+            self.timer.stop()
+            self.stop_media_player()
+
+    def _release_side(self, side):
+        """A 또는 B 한쪽을 비움: 캡처를 놓고 파일 이름·프레임을 지움 (이름 줄은 남은 쪽만). A는 그 영상의 소리도 놓음."""
+        if side == 'A':
+            cap, self.cap_a = self.cap_a, None
+            self.filename_a = ""
+            self.frame_a = None
+            self._drop_audio_media()
+        else:
+            cap, self.cap_b = self.cap_b, None
+            self.filename_b = ""
+            self.frame_b = None
+        if cap is not None:
+            cap.release()
+        self.filenameLabel.setText(f"A: {os.path.basename(self.filename_a)}" if self.filename_a else "")
+
+    def _drop_audio_media(self):
+        """소리 재생기가 연 영상을 멈추고 놓음 (멈추기만 하면 재생 버튼이 옛 영상의 소리를 다시 냄).
+        재생기가 없으면 할 일이 없음 — self.mediaPlayer 속성은 접근만으로 재생기를 만들므로 쓰지 않음."""
+        media_player = self._media_player
+        if media_player is not None:
+            media_player.stop()
+            media_player.setMedia(QMediaContent())
 
     def change_gpu_backend(self, index):
         backend = self.gpuComboBox.currentText()
@@ -1957,8 +2076,8 @@ class PlayerPlaybackMixin:
 
     def wheelEvent(self, event):
         """전역 휠 이벤트 처리 - 사이드바를 제외한 모든 영역에서 프레임 이동"""
-        # 사이드바 영역에서는 휠 이벤트를 무시
-        if self.sidebar.underMouse():
+        # 사이드바 영역(Mov·Seq 목록)에서는 휠 이벤트를 무시
+        if self.sidebar.underMouse() or self.seq_sidebar.underMouse():
             event.ignore()
             return
             
@@ -2082,6 +2201,7 @@ class PlayerPlaybackMixin:
         if self.is_playlist_playing:
             self.is_playlist_playing = False; self.reset_sidebar_colors()
         self.playSelectedPauseButton.setText('Selected Play'); self.playSelectedPauseButton.setStyleSheet("")
+        self._sync_selected_play_buttons()  # Seq 탭이면 선택 재생이 끝난 이 단추는 꺼짐
 
     def seek_to_frame(self, frame_number, update_audio=True):
         if not self.cap_a:

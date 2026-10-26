@@ -13,11 +13,12 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck import paths, video_list
-# PlayerSidebarMixin의 부모 믹스인 (북마크, 선택 재생, 공유 설정·작품 경로, 목록 다시 읽기, 썸네일)
+# PlayerSidebarMixin의 부모 믹스인 (북마크, 선택 재생, 공유 설정·작품 경로, 목록 다시 읽기, Seq 탭, 썸네일)
 from yesoncheck.sidebar_bookmarks import SidebarBookmarksMixin
 from yesoncheck.sidebar_playlist import SidebarPlaylistMixin
 from yesoncheck.sidebar_config_paths import SidebarConfigPathsMixin
 from yesoncheck.sidebar_refresh import SidebarRefreshMixin
+from yesoncheck.sidebar_sequences import SidebarSequencesMixin
 from yesoncheck.sidebar_thumbnails import SidebarThumbnailsMixin
 # 다시 내보내기만 함 (이 모듈은 안 씀): 기존 `from yesoncheck.player_sidebar import …`·`player_sidebar.X` 접근이 같은 객체로 돌게.
 # 시험이 바꿔치기하는 gather_shared_config·list_works_not_opening은 믹스인이 shared_config_load.X로 불러 바꿔치기 지점을 그 모듈
@@ -39,7 +40,7 @@ from yesoncheck.sidebar_items import (
 )
 
 
-class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin, SidebarRefreshMixin, SidebarThumbnailsMixin):
+class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin, SidebarRefreshMixin, SidebarSequencesMixin, SidebarThumbnailsMixin):
 
     def dragEnterEvent(self, event):
         """메인 윈도우에 파일 드래그앤드롭 이벤트"""
@@ -50,8 +51,9 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
 
     def dropEvent(self, event):
         urls = event.mimeData().urls()
-        # 부모 위젯을 찾아서 VideoPlayer 인스턴스를 찾기
-        parent = self.parent()
+        # 대상 VideoPlayer 찾기. 이 믹스인은 VideoPlayer 자신의 일부라 self가 open_file을 가진 최상위 창이면 self가 대상 (최상위 창은 parent()가
+        # None이라 아래 부모 탐색만으로는 대상을 찾지 못해 창 본문에 놓은 파일이 말없이 아무 일도 없었음). 다른 위젯에 붙은 경우만 부모를 따라 올라감
+        parent = self if hasattr(self, 'open_file') else self.parent()
         while parent and not hasattr(parent, 'open_file'):
             parent = parent.parent()
         
@@ -60,6 +62,7 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
             has_folder = False
             read_failed = False  # 읽지 못한 폴더가 있음 (창으로 알림 — '지원되는 비디오 파일이 없습니다'는 띄우지 않음)
             folder_paths = []  # 폴더 경로들을 저장할 리스트
+            frame_files = []  # 영상이 아닌 파일 — 이미지 시퀀스 프레임이면 그 시퀀스를 엶 (parent._dropped_frames가 이름을 봄). video_widget의 핸들러와 같은 코드를 유지
             
             # URL들을 파일/폴더로 분류
             for url in urls:
@@ -68,6 +71,8 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
                     # 파일인 경우
                     if parent.is_video_file(local_path):
                         video_files.append(local_path)
+                    else:
+                        frame_files.append(local_path)
                 elif os.path.isdir(local_path):
                     # 폴더인 경우 - 재귀적으로 비디오 파일 찾기
                     has_folder = True
@@ -84,6 +89,9 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
             if folder_paths:
                 parent.add_dropped_folders_to_bookmarks(folder_paths)
             
+            # 이미지 시퀀스 프레임 파일 (한 장뿐인 프레임·프레임이 아닌 파일은 빠짐 — 예전처럼 무시)
+            frames = parent._dropped_frames(frame_files)
+            
             # 비디오 파일 처리
             if has_folder:
                 # 폴더가 포함된 경우: 기존 사이드바 초기화 후 모든 파일을 사이드바에 추가하고 첫 번째 파일을 Video A에 로드
@@ -99,10 +107,18 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
                     # 백그라운드 로딩 스케줄링
                     parent.schedule_background_thumbnail_loading()
                     QMessageBox.information(parent, "폴더 로드 완료", f"{len(video_files)}개의 비디오 파일이 사이드바에 추가되었습니다.\n첫 번째 파일이 Video A에 로드되었습니다.")
+                elif parent._dropped_folders_have_sequences(folder_paths):
+                    # 시퀀스만 든 폴더: 영상 폴더를 놓을 때처럼 목록을 새로 채우되 Seq 탭을 보여 줌 ('영상이 없습니다' 경고 없음)
+                    parent.sidebar.clear()
+                    parent._show_dropped_sequence_folders(folder_paths)
                 elif not read_failed:
                     QMessageBox.warning(parent, "경고", "폴더에 지원되는 비디오 파일이 없습니다.")
             else:
                 # 개별 파일들만 있는 경우
+                if frames:
+                    # 프레임: 영상 파일이 함께 없으면 영상 파일을 놓을 때처럼 그 시퀀스를 열고 Seq 탭을 보여 줌. 영상이 함께 있으면 영상은 아래에서 예전대로,
+                    # 시퀀스는 Seq 목록에만 더함
+                    parent._add_dropped_frames(frames, show_tab=not video_files, open_them=not video_files)
                 if len(video_files) == 1:
                     parent.open_file('A', video_files[0])
                 elif len(video_files) == 2:
@@ -116,6 +132,10 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
                     parent.add_files_to_sidebar(remaining_files)
                     if remaining_files:
                         QMessageBox.information(parent, "파일 로드 완료", f"첫 번째 파일이 Video A에 로드되고, {len(remaining_files)}개의 파일이 사이드바에 추가되었습니다.")
+            
+            # 폴더와 함께 놓은 프레임의 시퀀스는 Seq 목록에만 더함 (폴더 처리는 위에서 예전대로)
+            if has_folder and frames:
+                parent._add_dropped_frames(frames)
         
         event.acceptProposedAction()
 
@@ -145,6 +165,8 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         items = self._add_sidebar_videos(
             [(os.path.basename(file_path), file_path, source_of(file_path))
              for file_path in file_paths if os.path.exists(file_path)])
+        # 끌어다 놓은 폴더에서 함께 찾은 이미지 시퀀스는 Seq 목록에 덧붙임 (get_video_files_from_folder가 읽을 때 기억해 둠)
+        self._add_seq_items(self._take_folder_sequences(folders))
         # 썸네일 모드인 경우 썸네일 생성. 영상·자리를 미리 꺼내 둠: 만드는 동안 이벤트를 처리하므로 목록이 바뀌면
         # (job·폴더를 바꿈) 항목이 지워짐 → 그때는 멈춤. 그동안 목록 다시 읽기는 끝난 뒤로 미룸
         if self.is_thumbnail_mode:
@@ -176,10 +198,12 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         try:
             result = video_list.scan_folder(folder_path)
         except OSError as e:
+            self._note_folder_sequences(folder_path, [])
             self._report_list_source_problem(folder_path, e)
             return None
         self._sidebar_scan_seconds = time.perf_counter() - started
         self._report_list_read(folder_path, result)
+        self._note_folder_sequences(folder_path, result.sequences)  # 같은 읽기에서 찾은 시퀀스 (Seq 목록용 — 돌려주는 값은 영상 경로만)
         return [file_path for _name, file_path in result.videos]
 
     def show_sidebar_context_menu(self, pos):
@@ -452,11 +476,15 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         video_files = self.get_video_files_from_folder(folder_path)
         read_failed = video_files is None  # 폴더를 읽지 못함 (창으로 알림) — 연결이 돌아오면 다시 읽기(F5)로 목록이 생김
         video_files = video_files or []
+        sequences = self._take_folder_sequences([folder_path])  # 같은 읽기에서 함께 찾은 이미지 시퀀스
         
-        if video_files:
-            # 폴더 드래그앤드롭 시에는 기존 썸네일 폴더를 초기화하고 새로 설정 — 항목을 넣기 전에 (항목마다 이 자리를 기억)
+        if video_files or sequences:
+            # 폴더 드래그앤드롭 시에는 기존 썸네일 폴더를 초기화하고 새로 설정 — 항목을 넣기 전에 (항목마다 이 자리를 기억).
+            # 시퀀스만 든 폴더도 초기화: Seq 항목이 전에 연 job·폴더의 썸네일 폴더를 이어받아 첫 프레임 썸네일을 엉뚱한 곳에 쓰지 않게
+            # (이 폴더의 썸네일 폴더는 처음 쓸 때 만듦 — 영상이 없으면 폴더를 열기만 해서는 만들지 않음)
             self.current_thumbnail_folder = None  # 기존 썸네일 폴더 초기화
             self._thumbnail_folder_problem = None  # 전에 연 job의 썸네일 폴더 문제는 이제 상관없음
+        if video_files:
             self.setup_thumbnail_folder()
             source = self._register_sidebar_source(video_list.ListSource("folder", folder_path))
         else:
@@ -465,6 +493,7 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         # 사이드바에 파일들 추가
         self.playlist.extend(video_files)
         self._add_sidebar_videos([(os.path.basename(file_path), file_path, source) for file_path in video_files])
+        self._set_seq_items(sequences)
         self._sidebar_read_done(None)  # 방금 읽음 (앱이 다시 활성돼도 곧바로 또 읽지 않게)
         
         if self.playlist:
@@ -473,6 +502,10 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
             self.sidebar.selectAll()
             self.schedule_background_thumbnail_loading()
             QMessageBox.information(self, "폴더 로드 완료", f"{len(video_files)}개의 비디오 파일이 사이드바에 추가되었습니다.\n첫 번째 파일이 Video A에 로드되었습니다.")
+        elif sequences:
+            # 시퀀스만 든 폴더: '영상이 없습니다'를 띄우지 않고 Seq 탭을 보여 줌 (탭 페이지 교체뿐 — 디스크를 읽지 않음).
+            # 영상이 있는 폴더는 지금 보던 탭 그대로
+            self.sidebar_tabs.setCurrentIndex(1)
         elif not read_failed:
             QMessageBox.warning(self, "경고", "폴더에 지원되는 비디오 파일이 없습니다.")
 

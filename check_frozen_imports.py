@@ -12,6 +12,9 @@
 - PySceneDetect 씬 감지 (임시 합성 영상)
 - 애니매틱2: TensorFlow + TransNetV2 씬 감지 (합성 3샷 영상, 씬 시작 [0, 30, 60]이어야 함).
   TensorFlow나 가중치(vendor/transnetv2-weights)가 빌드 환경에 없으면 검사 실패
+- 이미지 시퀀스: TGA(RLE)·EXR 프레임 한 장씩 디코딩 (yesoncheck.sequence_source.decode_frame, 메모리에서 만든 작은 프레임).
+  이 환경의 cv2에 OpenEXR 코덱이 꺼져 있으면 EXR은 건너뛰고 TGA만 확인 (빌드는 실패시키지 않고, 건너뛴 사실을 결과 줄에 적음).
+  PIL 이미지 플러그인(PIL.TgaImagePlugin 등)은 지연 import라 소스 import만으로는 쓰인 모듈에 안 잡히므로, 실제로 디코딩해서 앱에 있는지 대조함
 
 사용법: python check_frozen_imports.py <앱 번들(.app) 또는 Windows 앱 폴더(dist\\YesonCheck_Autocut)>
 누락이 하나라도 있으면 목록을 출력하고 종료 코드 1로 끝납니다.
@@ -26,6 +29,10 @@ import sys
 import sysconfig
 import tempfile
 import zipfile
+
+# Windows cv2 휠은 OpenEXR 코덱이 기본으로 꺼져 있고 이 값은 cv2를 불러오기 전에 정해 두는 것이 안전하다. exercise_app()은
+# 소스의 import를 이름 순서로 불러서 cv2가 yesoncheck보다 먼저 불려 yesoncheck/__init__.py가 정하기에는 늦으므로, 여기서 맨 먼저 정함
+os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -77,6 +84,49 @@ def source_imports():
     return sorted(names)
 
 
+EXR_SKIPPED = "exr 건너뜀 (이 cv2는 OpenEXR 코덱 비활성)"
+
+
+def exercise_sequence_decode():
+    """이미지 시퀀스 프레임을 TGA·EXR 한 장씩 앱의 디코더(sequence_source.decode_frame)로 읽어 봅니다. 읽은 확장자 목록을 돌려줌.
+
+    PIL은 이미지 플러그인(TgaImagePlugin 등)을 처음 쓸 때 지연 import하므로, 실제로 디코딩하지 않으면 그 모듈이
+    '실행에 쓰인 모듈'에 안 잡혀 빌드된 앱에 빠져도 모른다. 여기서 읽으면 쓰인 모듈에 올라 main()이 앱 안에 있는지 대조한다.
+    EXR은 cv2의 EXR 인코더·디코더가 이 환경의 cv2에 있는지 확인 (cv2는 앱에 같은 휠로 들어감). 이 cv2에 OpenEXR 코덱이 꺼져
+    있으면(sequence_source.exr_supported()가 False) EXR은 건너뛰고 TGA만 확인함 — EXR은 이 빌드의 필수가 아니므로 빌드를 실패시키지
+    않지만, 건너뛴 사실을 돌려주는 목록에 적음 ("exr 건너뜀 …"; main()이 그대로 출력).
+    디코더가 내는 오류는 잡지 않고 그대로 올림 (스택 트레이스째 검사 실패). 부르기 전에 PROJECT_ROOT가 sys.path에 있어야 함.
+    """
+    import io
+
+    # sequence_source를 cv2보다 먼저 불러야 함: 환경 변수 OPENCV_IO_ENABLE_OPENEXR을 cv2를 불러오기 전에 정함
+    from yesoncheck import sequence_source
+
+    import cv2
+    import numpy as np
+    from PIL import Image
+
+    decoded = []
+    tga = io.BytesIO()
+    Image.new("RGB", (8, 4), (10, 200, 30)).save(tga, format="TGA", compression="tga_rle")  # 앱의 시퀀스 TGA처럼 RLE
+    frame = sequence_source.decode_frame(tga.getvalue(), "tga")
+    if frame.shape != (4, 8, 3) or tuple(frame[0, 0]) != (30, 200, 10):  # BGR
+        raise SystemExit(f"TGA 프레임 디코딩 결과가 다릅니다: 모양 {frame.shape}, 첫 픽셀 {tuple(frame[0, 0])} (기대 (4, 8, 3), (30, 200, 10))")
+    decoded.append("tga")
+
+    if not sequence_source.exr_supported():
+        decoded.append(EXR_SKIPPED)
+        return decoded
+    ok, exr = cv2.imencode(".exr", np.full((4, 8, 3), (0.0, 1.0, 2.0), np.float32))
+    if not ok:
+        raise SystemExit("이 환경의 cv2가 EXR을 인코딩하지 못합니다 (OpenEXR 지원 확인 필요)")
+    frame = sequence_source.decode_frame(exr.tobytes(), "exr")
+    if frame.shape != (4, 8, 3) or tuple(frame[0, 0]) != (0, 255, 255):  # 0~1 밖의 값은 잘라내기만 함
+        raise SystemExit(f"EXR 프레임 디코딩 결과가 다릅니다: 모양 {frame.shape}, 첫 픽셀 {tuple(frame[0, 0])} (기대 (4, 8, 3), (0, 255, 255))")
+    decoded.append("exr")
+    return decoded
+
+
 def exercise_app():
     """앱이 실행 중에 거치는 경로를 소스 환경에서 실행합니다."""
     sys.path.insert(0, PROJECT_ROOT)
@@ -89,6 +139,8 @@ def exercise_app():
             # 앱이 부르지 않는 함수 안의 선택 import(transnetv2_model.predict_video의 ffmpeg 등)는 건너뜀 (목록은 출력함).
             # TensorFlow는 여기서 건너뛰어도 아래 애니매틱2 실행에서 다시 불러 실패가 드러남
             skipped.append(f"{name} ({exc})")
+
+    frame_formats = exercise_sequence_decode()  # 가볍고 PIL 플러그인 누락을 바로 잡으므로 느린 OCR 앞에서
 
     import cv2
     import numpy as np
@@ -146,7 +198,7 @@ def exercise_app():
     cuts = [segment["start_frame"] for segment in segments]
     if cuts != THREE_SHOT_STARTS:
         raise SystemExit(f"TransNetV2 씬 감지 결과가 다릅니다: 씬 시작 {cuts} (기대 {THREE_SHOT_STARTS})")
-    return texts, cuts, skipped
+    return texts, cuts, skipped, frame_formats
 
 
 def frozen_contents(bundle):
@@ -281,7 +333,7 @@ def main():
     bundle = sys.argv[1]
 
     baseline = set(sys.modules)  # 인터프리터 시작 시 모듈(.pth 포함)은 앱과 무관
-    texts, cuts, skipped = exercise_app()
+    texts, cuts, skipped, frame_formats = exercise_app()
     used = {name: mod for name, mod in sys.modules.items() if name not in baseline and mod is not None}
 
     modules, files = frozen_contents(bundle)
@@ -327,7 +379,7 @@ def main():
         elif rel not in files:
             missing.append(f"{name} (앱에 {rel} 없음)")
 
-    print(f"앱 경로 실행: OCR 결과 {texts}, 애니매틱2(TransNetV2) 씬 시작 {cuts}, 사용 모듈 {len(used)}개")
+    print(f"앱 경로 실행: OCR 결과 {texts}, 애니매틱2(TransNetV2) 씬 시작 {cuts}, 시퀀스 프레임 디코딩 {frame_formats}, 사용 모듈 {len(used)}개")
     if aliases:
         print(f"TensorFlow 별칭 모듈 {len(aliases)}개 (같은 파일이 앱에는 실제 이름으로 들어 있어 통과):")
         for name, real_name in aliases:

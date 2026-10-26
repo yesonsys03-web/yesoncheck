@@ -92,11 +92,11 @@ class VideoPlayer(PlayerUpdateMixin, PlayerAnnotationsMixin, PlayerSidebarMixin,
 
 큰 파일은 믹스인을 부모로 붙여 나눔 (코드는 옮기기만 했고 동작은 그대로):
 - `PlayerSidebarMixin`(`player_sidebar.py`)은 `SidebarBookmarksMixin`·`SidebarPlaylistMixin`·`SidebarConfigPathsMixin`·
-  `SidebarRefreshMixin`·`SidebarThumbnailsMixin` 5개를 상속
+  `SidebarRefreshMixin`·`SidebarSequencesMixin`·`SidebarThumbnailsMixin` 6개를 상속
 - `VideoPlayerBase`(`player_base.py`)는 `PlayerOcrMixin`·`PlayerOverlayMixin` 2개와 `QMainWindow`를 상속
 
 그래서 `VideoPlayer.__mro__`는 `VideoPlayer > PlayerUpdateMixin > PlayerAnnotationsMixin > PlayerSidebarMixin > SidebarBookmarksMixin >
-SidebarPlaylistMixin > SidebarConfigPathsMixin > SidebarRefreshMixin > SidebarThumbnailsMixin > PlayerPlaybackMixin > VideoPlayerBase >
+SidebarPlaylistMixin > SidebarConfigPathsMixin > SidebarRefreshMixin > SidebarSequencesMixin > SidebarThumbnailsMixin > PlayerPlaybackMixin > VideoPlayerBase >
 PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 것:
 - 같은 이름의 메서드를 두 믹스인에 두지 않음 (MRO에서 먼저 나오는 쪽이 가림 — `PlayerSidebarMixin`의 `dragEnterEvent`·`dropEvent`는 `QMainWindow`의 가상 함수를 가림).
   부모 믹스인 모듈(`sidebar_*`·`player_ocr`·`player_overlay`)은 상속받는 쪽(`player_sidebar`·`player_base`)을 모듈 수준에서 import하지 않음 (순환).
@@ -132,10 +132,12 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
 - `yesoncheck/player_sidebar.py` (518줄): `PlayerSidebarMixin` — 드롭·파일 넣기·폴더 불러오기, 우클릭 메뉴·파일 복사, 작품 → 시즌 → job 콤보,
   선택한 영상을 A에 열기. 나머지는 아래 부모 믹스인 모듈에 있고 이 모듈은 옛 import 경로를 위해 일부 이름을 다시 내보냄
   - `yesoncheck/sidebar_bookmarks.py` (216줄): `SidebarBookmarksMixin` — 북마크 읽기·더하기·지우기, 북마크 관리 창, 북마크 폴더 열기
-  - `yesoncheck/sidebar_playlist.py` (182줄): `SidebarPlaylistMixin` — 선택 재생(Play Selected) 재생목록 시작·차례대로 열기·없는 영상 건너뛰기
+  - `yesoncheck/sidebar_playlist.py` (183줄): `SidebarPlaylistMixin` — 선택 재생(Play Selected) 재생목록 시작·차례대로 열기·없는 영상 건너뛰기
   - `yesoncheck/sidebar_config_paths.py` (883줄): `SidebarConfigPathsMixin` — 공유 설정 읽기 시작·창에 넣기·문제 알림, (Windows) 변환표 자동 설정,
     작품 경로 관리 창·`get_work_path`·관리 비밀번호
   - `yesoncheck/sidebar_refresh.py` (496줄): `SidebarRefreshMixin`·`SidebarScan` — 목록 항목 모델(출처·세대·다시 읽기 보류)과 목록 다시 읽기·목록 문제 알림
+  - `yesoncheck/sidebar_sequences.py` (861줄): `SidebarSequencesMixin`·`SequenceExportDialog` — Mov·Seq 탭과 Seq 목록, 끌어다 놓은 프레임 파일 처리, Seq 우클릭 메뉴(A/B로 열기·MOV 만들기·썸네일·정보),
+    일괄 내보내기 진행 창. 시퀀스 썸네일은 짝 `.mov`의 것을 재사용
   - `yesoncheck/sidebar_thumbnails.py` (933줄): `SidebarThumbnailsMixin` — 목록/썸네일 모드·사이드바 폭, 썸네일 반복·워커 정리, 영상 단위 확인·만들기,
     썸네일 폴더·문제 알림, 백그라운드 썸네일 읽기
   - `yesoncheck/sidebar_items.py` (37줄): 사이드바 항목 상수(창 제목·안내 문구·항목 데이터 역할)와 `ThumbnailContext` — 잎 모듈
@@ -147,6 +149,25 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   + Help → 업데이트 확인…), 알림 띠 처리, '업데이트'를 누른 뒤 받기·다른 창 닫기·도우미에 넘기기, 다시 켜진 앱의 성공/실패
   판정 (여러 창일 때의 순서는 아래 '여러 창과 업데이트')
 - `yesoncheck/video_widget.py` (869줄): 줌, 팬, ROI 선택 기능이 있는 커스텀 비디오 뷰포트
+- 이미지 시퀀스 (`<베이스>-NNNN.<확장자>` 프레임들을 영상처럼 열어 재생·비교, Seq 탭, 시퀀스 → MOV 일괄 만들기 — 사용자 설명은 README '이미지 시퀀스 재생'):
+  - `yesoncheck/sequence_scan.py` (137줄): 파일 이름에서 시퀀스를 묶는 규칙 `group_sequences`·`SeqInfo`·프레임 이름 해석 `parse_frame_name`·한 프레임의 시퀀스 찾기 `sequence_of_frame`·여러 프레임용 색인 `FolderFrames` — Qt·디스크 없음. **시퀀스의 정체성은 가상 경로
+    `<폴더>/<베이스>.seq`(`SeqInfo.identity`, `is_sequence_path`로 판별)**: 진짜 파일이 아니며 목록·`filename_a`·주석 파일 이름(`<베이스>_seq_annotations.json`)·
+    창 제목이 모두 이 문자열을 씀. 시퀀스 경로를 `os.path.exists`·`cv2.VideoCapture`에 그대로 넘기지 말 것 (`open_any_capture`가 가름, OCR 류는 `is_sequence_active`로 막음)
+  - `yesoncheck/sequence_source.py` (595줄): `decode_frame`(TGA·PNG·JPG·TIF는 PIL, EXR은 cv2)·`ImageSequenceCapture`(`cv2.VideoCapture` 자리에 꽂는 캡처, 선읽기 버퍼)·`open_any_capture`
+    **프레임 한 장 = 그 시퀀스**: `resolve_frame_path`/`find_frame_sequence`(폴더를 한 번 읽음, 프레임 이름이 아닌 경로·`.seq`는 읽지 않음, 없는 폴더는 None, 그 밖의 읽기 오류는 그대로 올림)가
+    프레임 경로를 시퀀스 가상 경로로 바꿈. `open_file`(`_frame_to_sequence_path`)이 **모든 열기 길**(Open Video A/B 대화상자 — 필터가 없어 프레임도 고를 수 있음 —·끌어다 놓기·Finder 열기·다음으로 열기)에서
+    mov·`.seq` 분기 앞에서 부르므로 `filename_a/_b`에는 늘 `.seq`가 들어감. 한 장뿐인 프레임(시퀀스 아님)은 예전처럼 영상 경로. 같은 base의 시퀀스가 여럿(다른 확장자·자릿수)이면 캡처가 여는 첫 묶음의
+    프레임만 바꿈. 끌어다 놓기는 `SidebarSequencesMixin._dropped_frames`·`_add_dropped_frames`(영상 영역 `CustomVideoWidget.dropEvent`와 Mov 목록 `eventFilter`와 메인 창 `PlayerSidebarMixin.dropEvent`가 부름 — 영상 영역·창은 영상 파일처럼 A(둘이면 A·B)로 열고 Seq 탭을 보여 줌,
+    Mov 목록은 Seq 목록에만 덧붙임, 영상 파일이 함께 있으면 영상은 예전대로). 폴더 목록은 `FolderFrames`로 한 번만 묶음(프레임마다 `group_sequences`를 부르면 장수의 제곱으로 느려져 5,000장 드롭이 30초 넘게 GUI를 얼림).
+    **드롭 대상 (창 본문 핸들러)**: Qt는 드롭을 놓은 자리에서 위로 올라가며 `acceptDrops()`인 첫 위젯에 건넴 — 영상 영역(`CustomVideoWidget`)과 Mov 목록(`self.sidebar`, `eventFilter`가 DragEnter·Drop을 받음)은 자기가 받고,
+    드롭을 받지 않는 위젯(Seq 목록·창 가장자리·컨트롤 영역)은 최상위 창 `VideoPlayer`(`setAcceptDrops(True)`, `dragEnterEvent`가 URL이면 수락)에 가서 `PlayerSidebarMixin.dropEvent`가 돎. 드롭은 한 위젯에만 건네지므로 두 번 처리되지 않음.
+    `dropEvent`는 `self`가 `open_file`을 가진 창이면 self를 대상으로 씀 (예전에는 `self.parent()`로만 찾아서 최상위 창에서는 대상이 없어 본문이 한 번도 돌지 않았음 — 영상 파일·폴더·프레임 모두 말없이 무시). 본문은 `CustomVideoWidget.dropEvent`와 같은 코드이므로 한쪽을 고치면 다른 쪽도 고칠 것.
+    시험은 실제 `QDropEvent`를 `player.dropEvent`에 건네고(`tests/test_sequence_frame_open.py`의 `drop_files(…, "window", …)`), 위젯 위 전달(Seq 목록·영상 영역·Mov 목록)은 `QApplication.sendEvent`로 DragEnter → DragMove → Drop을 보내(`deliver_drag`) Qt의 대상 고르기까지 지킴
+    EXR: Windows cv2 휠은 OpenEXR 코덱이 기본으로 꺼져 있고 `OPENCV_IO_ENABLE_OPENEXR=1`은 **cv2를 불러오기 전에** 정해 두는 것이 안전함 — `yesoncheck/__init__.py`·`tests/conftest.py`·`check_frozen_imports.py`가
+    맨 위에서 정함 (cv2를 부르는 새 진입점이 생기면 그보다 앞에). 그래도 꺼진 cv2면 `exr_supported()`가 False, `decode_frame(…, "exr")`는 원인을 이은 ValueError로 크게 실패 (EXR 시험은 이때만 건너뜀)
+  - `yesoncheck/sequence_export_worker.py` (335줄): `SequenceExportWorker`(`QThread`) — 시퀀스 여러 개를 `<출력 폴더>/<베이스>.mov`로, `validate_out_dir`가 원본 폴더를 거부.
+    읽지 못한 프레임을 직전 프레임으로 채운 수는 `ImageSequenceCapture.read_failure_count`로 세어 항목마다(`item_done`)·끝날 때(`substitutions`) 진행 창 로그와 콘솔에 알림 — 오류 아님(길이 보존, `finished` 나감)
+  - `check_frozen_imports.py`가 TGA·EXR 한 장씩 `decode_frame`을 실행함 — PIL 플러그인은 지연 import라 동결 앱에서 빠져도 시험이 못 잡음 (cv2에 EXR이 꺼져 있으면 EXR만 건너뛰고 결과 줄에 적음)
 - `yesoncheck/video_list.py` (427줄): 사이드바 영상 목록 규칙 (job·폴더 읽기, 정렬, 다시 읽기 계획, 없어진 영상 판정 `check_gone`) — Qt 없음
 - `yesoncheck/mac_mounts.py`: (Mac) 이 Mac에서 공유가 붙은 곳 — 자동 연결(autofs) 설정(`/etc/auto_master`와 간접 맵)과
   `/etc/fstab`을 읽어, 공유 설정의 앞부분(`/USA_DB`, path_map.json의 "mac", 제자리가 아닌 공유의 `/<이름>`)이 이 Mac에
@@ -389,7 +410,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
 - 재생 속도 및 오디오 제어
 - 프레임 탐색 (다음/이전 프레임, 프레임으로 이동)
 
-**PlayerSidebarMixin** (`player_sidebar.py`, 부모 `SidebarBookmarksMixin`·`SidebarPlaylistMixin`·`SidebarConfigPathsMixin`·`SidebarRefreshMixin`·`SidebarThumbnailsMixin`):
+**PlayerSidebarMixin** (`player_sidebar.py`, 부모 `SidebarBookmarksMixin`·`SidebarPlaylistMixin`·`SidebarConfigPathsMixin`·`SidebarRefreshMixin`·`SidebarSequencesMixin`·`SidebarThumbnailsMixin`):
 - 파일 브라우저가 있는 사이드바 UI — 파일 드래그 앤 드롭 처리, 폴더·파일을 목록에 넣기
 - 컨텍스트 메뉴 작업 (파일 복사 등)
 - 작품 → 시즌 → job 순서 (시즌이 없는 The_Johnsons·TJS_Animatic은 작품 → job): 시즌을 고르기 전에는 job 목록이 'job선택'만,
@@ -598,8 +619,10 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 
 ### 자동 시험 (pytest)
 
-`tests/`에 시험 파일 57개 (수집 1,318개). `python -m pytest tests -q`로 돌리며(약 7분), 이 Mac의 소스 실행에서 1,273개가 통과하고 45개는 건너뜀 —
-다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-10-22 기준). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
+**시험은 반드시 `~/coding/p310_tf/bin/python -m pytest`로 돌릴 것** — TensorFlow가 없는 `~/coding/p310`으로 돌리면 11개가 실패함.
+
+`tests/`에 시험 파일 70개 (수집 1,802개). `python -m pytest tests -q`로 돌리며(약 8분), 이 Mac의 소스 실행에서 1,757개가 통과하고 45개는 건너뜀 —
+다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-10-26 기준). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
 정적 빌드(`vendor/ffmpeg/`)를 씀 (`tests/conftest.py`). 시험을 건너뛰거나 지워서 통과시키지 말 것.
 
 시험 구성 (파일 이름 기준):
@@ -709,6 +732,7 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 - `icon.icns`: 애플리케이션 아이콘
 - `check_frozen_imports.py`: 빌드된 앱에 실행 중 필요한 파이썬 모듈이 모두 들어 있는지 검사 — `yesoncheck/*.py` 소스의 모든 import(함수 안 지연 import 포함)를 모으므로
   새 모듈을 평면(`yesoncheck/` 바로 아래)에 두고 평소처럼 import하면 spec에 따로 적지 않아도 됨 (하위 패키지에 두면 검사 범위가 말없이 좁아짐 — `tests/test_workers_split.py`가 워커 모듈에 대해 지킴)
+  PIL처럼 지연 import하는 모듈은 import만으로는 안 잡히므로 실제로 실행해야 함 — 시퀀스 TGA·EXR 한 장 디코딩(`exercise_sequence_decode`)이 그 예 (`tests/test_check_frozen_imports.py`)
 - `.github/workflows/windows-build.yml`·`ci/`·`requirements-test.txt`: CI와 시험 도우미 ('테스트 전략')
 - `pyi_rth_paddle_fixed.py`, `pyi_rth_paddleocr_fixed.py`: PaddleOCR 런타임 훅
 - `tools/write_build_info.py` (96줄): PyInstaller 앞에서 `build/build_info.json`(버전·커밋·빌드 시각·플랫폼)을

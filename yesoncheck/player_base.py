@@ -37,6 +37,7 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
     QSlider,
     QSplitter,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -169,6 +170,22 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         self.setStyleSheet(DARK_STYLESHEET)
         
         self.controls_visible = True  # initUI() 호출 전에 먼저 정의
+        # 사이드바 Mov·Seq 탭 (initUI가 위젯을 만듦; SidebarSequencesMixin이 씀): 탭 위젯, Seq 목록(이미지 시퀀스), 폴더를 읽어 찾은 시퀀스
+        # (path_key → [SeqInfo] — 영상 경로만 돌려주는 get_video_files_from_folder와 목록을 채우는 쪽 사이)
+        self.sidebar_tabs = None
+        self.seq_sidebar = None
+        self._folder_sequences = {}
+        # Seq 썸네일의 뒤 스레드 일 (SidebarSequencesMixin이 씀): 도는 워커들(읽기·만들기), 만들 대기열, 지금 만드는 ThumbnailWorker
+        self._seq_thumbnail_workers = []
+        self._seq_generation_queue = []
+        self._seq_generating = None
+        # Mov 탭이 썸네일을 만드는 동안 시작한 Seq 썸네일 읽기를 만들기가 끝난 뒤 한 번 더 하게 하는 타이머 (SidebarSequencesMixin이 씀)
+        self._seq_thumbnail_timer = QTimer(self)
+        self._seq_thumbnail_timer.setSingleShot(True)
+        self._seq_thumbnail_timer.timeout.connect(self._load_seq_thumbnails_after_mov)
+        # 시퀀스 -> mov 일괄 내보내기 (SidebarSequencesMixin이 씀): 지금(또는 마지막) 실행의 워커(RUNNING_JOB_ATTRS가 창 닫기·업데이트 가드로 잡음)와 진행 창
+        self.seq_export_worker = None
+        self.seq_export_dialog = None
 
         timing_log.startup("창: 화면 구성 중…")
         started = time.perf_counter()
@@ -694,6 +711,22 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         self.sidebar.setAcceptDrops(True)
         # 사이드바가 키보드 포커스를 받을 수 있도록 설정 (상하 화살표 키 작동을 위해)
         self.sidebar.setFocusPolicy(Qt.StrongFocus)
+        # Mov·Seq 탭: Mov 페이지는 위의 self.sidebar 그대로 (스캔·다시 읽기·썸네일·메뉴가 모두 이 목록에 묶여 있음), Seq 페이지는 이미지
+        # 시퀀스 목록. Mov 목록을 비우면 Seq 목록도 비움 (job을 바꿈·폴더를 불러옴 — 지난 시퀀스가 남지 않게). 탭 막대는 포커스를
+        # 받지 않음 (←→ 프레임 이동 단축키가 탭 막대에 먹혀 탭이 바뀌지 않게 — 다른 단추들처럼; QTabWidget의 포커스 정책은 탭 막대에도 감)
+        self.seq_sidebar = QListWidget(); self.seq_sidebar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.seq_sidebar.setSelectionMode(QListWidget.ExtendedSelection)
+        self.seq_sidebar.itemClicked.connect(self.on_seq_item_clicked)
+        self.seq_sidebar.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.seq_sidebar.customContextMenuRequested.connect(self.show_seq_context_menu)
+        self.seq_sidebar.installEventFilter(self)  # Mov 목록처럼 목록이 포커스를 가져도 전역 단축키(프레임 이동 등)가 먹게
+        self.seq_sidebar.setFocusPolicy(Qt.StrongFocus)
+        self.sidebar.model().modelAboutToBeReset.connect(self._clear_seq_items)
+        self.sidebar_tabs = QTabWidget()
+        self.sidebar_tabs.addTab(self.sidebar, 'Mov')
+        self.sidebar_tabs.addTab(self.seq_sidebar, 'Seq')
+        self.sidebar_tabs.setFocusPolicy(Qt.NoFocus)
+        self.sidebar_tabs.currentChanged.connect(self._on_sidebar_tab_changed)
         selectFolderButton = QPushButton('Select Folder'); selectFolderButton.clicked.connect(self.select_folder)
         selectFolderButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         
@@ -726,7 +759,10 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         self.thumbnailModeButton.clicked.connect(self.switch_to_thumbnail_mode)
         self.thumbnailModeButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.thumbnailModeButton.setStyleSheet(THUMBNAIL_MODE_BUTTON_STYLE)
-        
+        # Seq 목록도 같은 표시 모드를 따름: 위의 Mov 쪽 슬롯이 모드를 바꾼 다음에 불리도록 그 뒤에 이음 (Mov 쪽 메서드는 그대로)
+        self.listModeButton.clicked.connect(self._apply_seq_display_mode)
+        self.thumbnailModeButton.clicked.connect(self._apply_seq_display_mode)
+
         # 목록 다시 읽기: 다른 PC·Finder에서 NAS의 영상을 지우거나 넣었을 때 (창이 다시 활성될 때도 저절로 읽음)
         self.refreshListButton = QPushButton('새로고침')
         self.refreshListButton.setToolTip('목록 다시 읽기 (F5)')
@@ -755,7 +791,7 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         sidebarLayout.addWidget(workPathButton)  # 작품 경로 관리 버튼 추가
         sidebarLayout.addLayout(viewModeLayout)  # 가로 배치된 뷰 모드 버튼들 추가
         sidebarLayout.addWidget(self.thumbnailProgressBar)  # 진행바를 버튼 아래에 추가
-        sidebarLayout.addWidget(self.sidebar)
+        sidebarLayout.addWidget(self.sidebar_tabs)  # Mov(self.sidebar)·Seq 탭
         sidebarContainer = QWidget()
         sidebarContainer.setLayout(sidebarLayout); sidebarContainer.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
@@ -786,10 +822,12 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         layout.insertWidget(0, self.update_banner)
         widget = QWidget(); widget.setLayout(layout); self.setCentralWidget(widget)
         self.setAcceptDrops(True)
+        # self.sidebar는 넣지 않음: 이제 Mov 탭의 페이지라, V 키·전체화면 복원이 손으로 setVisible(True)하면 Seq 탭이 보이는 동안에도
+        # Mov 목록이 보이게 됨 (사이드바 컨테이너가 이미 목록 전체를 숨기고 보임 — 보이고 숨는 모습은 예전과 같음)
         self.control_widgets = [
             sidebarContainer, self.middleScrollArea, workLabel, stopButton, self.frameRateLabel, volumeLabel, self.workComboBox, self.seasonComboBox, self.jobComboBox,
             self.loopCheckBox, self.playPauseButton, self.playSelectedButton,
-            self.volumeSlider, self.frameRateComboBox, self.wipeCheckBox, self.sidebar, self.wipeXButton, self.wipeYButton, openButtonA, openButtonB, self.volumeSlider, selectFolderButton, bookmarkButton, bookmarkListButton, workPathButton, self.listModeButton, self.thumbnailModeButton, self.refreshListButton, self.thumbnailProgressBar
+            self.volumeSlider, self.frameRateComboBox, self.wipeCheckBox, self.wipeXButton, self.wipeYButton, openButtonA, openButtonB, self.volumeSlider, selectFolderButton, bookmarkButton, bookmarkListButton, workPathButton, self.listModeButton, self.thumbnailModeButton, self.refreshListButton, self.thumbnailProgressBar
         ]
         # 시간: 줄이면 뒤쪽(전체 시간)부터 …로 ('00:00:00.000 / …'까지). 너비는 예전처럼 이 모양의 글자 너비로 고정
         self.timeLabel = ElidedLabel(Qt.ElideRight, keep_text="00:00:00.000 / 00:00:00.000",
@@ -950,14 +988,18 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
                         self.sidebar.setFocus()
                         QTimer.singleShot(10, self.load_selected_item_to_video_a)
                         return False
-                elif key == Qt.Key_Space: 
-                    self.toggle_play_pause()
-                    return True
                 elif key in (Qt.Key_Return, Qt.Key_Enter): 
                     self.play_selected_files()
                     return True
                 elif key == Qt.Key_Backslash: 
                     self.toggle_play_pause_selected()
+                    return True
+            
+            # 사이드바 목록(Mov·Seq 어느 쪽이든 목록이 포커스를 가진 채)에서 먹는 단축키: 재생/정지와 확대·축소·화면 맞춤.
+            # 선택 재생(Enter·\)·위아래 화살표로 열기는 재생목록 기계장치가 Mov 목록 전제라 위의 Mov 목록 전용
+            if source in (self.sidebar, self.seq_sidebar):
+                if key == Qt.Key_Space: 
+                    self.toggle_play_pause()
                     return True
                 elif key in [Qt.Key_Plus, Qt.Key_Equal, Qt.Key_2]: 
                     print("EventFilter - Zoom in triggered")
@@ -1032,12 +1074,15 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
                 urls = event.mimeData().urls()
                 video_files = []
                 folder_paths = []  # 폴더 경로들을 저장할 리스트
+                frame_files = []  # 영상이 아닌 파일 — 이미지 시퀀스 프레임이면 Seq 목록에 넣음 (_dropped_frames가 이름을 봄)
                 
                 for url in urls:
                     file_path = paths.normalize_native(url.toLocalFile())
                     if os.path.isfile(file_path):
                         if self.is_video_file(file_path):
                             video_files.append(file_path)
+                        else:
+                            frame_files.append(file_path)
                     elif os.path.isdir(file_path):
                         # 폴더인 경우 - 재귀적으로 비디오 파일 찾기
                         folder_paths.append(file_path)  # 폴더 경로 저장
@@ -1064,6 +1109,14 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
                     # 백그라운드 로딩 스케줄링
                     if folder_paths:
                         self.schedule_background_thumbnail_loading()
+                elif self._dropped_folders_have_sequences(folder_paths):
+                    # 시퀀스만 든 폴더: 영상 폴더를 놓을 때처럼 목록에 덧붙이되 Seq 탭을 보여 줌 (조용히 아무것도 안 하지 않음)
+                    self._show_dropped_sequence_folders(folder_paths)
+                
+                # 이미지 시퀀스 프레임 파일: 그 시퀀스를 Seq 목록에 덧붙임 (열지는 않음 — Mov 목록에 놓은 영상처럼). 영상이 함께 있으면 보던 탭 그대로
+                frames = self._dropped_frames(frame_files)
+                if frames:
+                    self._add_dropped_frames(frames, show_tab=not video_files)
                 return True
         
         return False  # 기본 이벤트 처리 허용
@@ -1526,6 +1579,7 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         ("OCR 구간 내보내기", "ocr_export_worker"),
         ("주석 영상 내보내기", "annotation_export_worker"),
         ("영상 병합", "merge_worker"),
+        ("시퀀스 MOV 만들기", "seq_export_worker"),
     )
 
     def running_jobs(self):
@@ -1538,11 +1592,11 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         return jobs
 
     def running_job_labels(self) -> list[str]:
-        """실행 중인 OCR·컷 감지/OCR 구간 내보내기/주석 영상 내보내기/영상 병합의 이름."""
+        """실행 중인 OCR·컷 감지/OCR 구간 내보내기/주석 영상 내보내기/영상 병합/시퀀스 MOV 만들기의 이름."""
         return [label for label, _worker in self.running_jobs()]
 
     def stop_running_jobs(self, timeout_ms=None):
-        """창을 닫을 때: 실행 중인 OCR 분석·컷 감지, OCR 구간 내보내기·주석 내보내기·병합을 멈추고 끝날 때까지 기다립니다
+        """창을 닫을 때: 실행 중인 OCR 분석·컷 감지, OCR 구간 내보내기·주석 내보내기·병합·시퀀스 MOV 만들기를 멈추고 끝날 때까지 기다립니다
         (최대 timeout_ms, 기본 JOB_CLOSE_WAIT_MS).
 
         멈추지 않으면 ffmpeg가 (Windows에서는 보이지 않은 채) 남아 NAS의 출력 파일을 잡고 있고,
@@ -1693,7 +1747,10 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
             
             # 워커 리스트 클리어
             self.thumbnail_workers.clear()
-            
+
+            # Seq 썸네일의 뒤 스레드 일: 결과를 버리고 도는 워커는 끝날 때까지 붙잡아 둠 (앱이 끝나기 전에 wait_for_released_workers가 기다림)
+            self._stop_seq_thumbnail_work()
+
             # 비디오 캡처 객체 정리
             if hasattr(self, 'cap_a') and self.cap_a:
                 self.cap_a.release()

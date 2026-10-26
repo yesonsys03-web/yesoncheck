@@ -3,6 +3,7 @@
 처음 불러올 때(job 고르기·폴더 불러오기·끌어다 놓기)와 목록 다시 읽기(새로고침·F5·창이 다시 활성 등)가 같은 함수를
 써서 규칙이 어긋나지 않게 한다. 목록에 넣은 곳(ListSource)마다 다시 읽어, 디스크에 없는 영상은 빼고 새 영상은
 정렬 순서 자리에 넣는 계획(plan_refresh)도 여기서 세운다 — 사이드바에 적용하는 일은 sidebar_refresh(SidebarRefreshMixin).
+이미지 시퀀스(sequence_scan)는 영상을 찾는 같은 폴더 목록에서 함께 찾아 ScanResult.sequences로 돌려준다 (폴더를 더 읽지 않음).
 
 오류(OSError)는 삼키지 않는다: 목록을 넣은 폴더 자체를 읽지 못하면 예외를 올리고, 그 안의 하위 폴더를 읽지 못하면
 결과의 unreadable에 남긴다 (그 아래 영상은 알 수 없음 → 다시 읽기는 그 영상들을 그대로 둠). 부른 쪽이 창·로그로 알린다.
@@ -10,12 +11,12 @@
 
 import locale
 import os
-import re
 import traceback
 import unicodedata
 from dataclasses import dataclass, field
 
-from yesoncheck import file_names, paths
+from yesoncheck import file_names, paths, sequence_scan
+from yesoncheck.file_names import natural_key  # 예전 위치(video_list.natural_key)의 부르는 쪽들을 위해 다시 내보냄
 
 # 폴더 불러오기·끌어다 놓기로 목록에 넣는 영상 (job 목록은 file_names.is_listed_video: .mov·.mp4만)
 VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm', '.m4v', '.3gp', '.ts', '.mts', '.m2ts'}
@@ -44,6 +45,7 @@ class ListSource:
 class ScanResult:
     videos: list  # [(표시 이름, 경로)] 목록 순서
     unreadable: list = field(default_factory=list)  # [(폴더, OSError)] 읽지 못한 하위 폴더 — 그 아래 영상은 알 수 없음
+    sequences: list = field(default_factory=list)  # [SeqInfo] 같은 폴더 목록에서 함께 찾은 이미지 시퀀스 (sort_sequences 순서)
 
     def keeps(self, path):
         """다시 읽은 목록에 path를 남길지: 읽은 영상이거나 읽지 못한 폴더 아래에 있음 (Windows는 대소문자·구분자 무시)."""
@@ -89,31 +91,60 @@ def _is_file(entry, unreadable):
         return False
 
 
-def _videos_in(folder, unreadable, files_only=False):
-    """folder 바로 안의 job 목록 영상 [(이름, 경로)]. 그 폴더가 없으면(예: frames가 없는 scene 폴더) 빈 목록,
-    읽지 못하면 unreadable에 남기고 빈 목록. files_only: 영상 이름인 폴더는 뺌 (TJS_Animatic의 예전 규칙).
+def _is_temp_frames(folder):
+    """folder가 시퀀스에서 뽑은 임시 프레임 폴더(sequence_scan.TEMP_FRAMES_DIR)인지 — 이름만 봄, 대소문자 무시 (Windows)."""
+    return os.path.basename(os.path.normpath(folder)).lower() == sequence_scan.TEMP_FRAMES_DIR.lower()
+
+
+def _may_be_frame(name):
+    """시퀀스 프레임일 수 있는 이름인지 (숨김이 아닌 이미지 확장자) — 파일인지 확인하는 항목을 줄이는 걸러내기만, 묶는 규칙은 group_sequences."""
+    return not name.startswith('.') and os.path.splitext(name)[1][1:].lower() in sequence_scan.SEQ_EXTENSIONS
+
+
+def _frame_names(entries, unreadable):
+    """entries 중 시퀀스 프레임 후보의 이름 — 파일인 것만 (폴더 항목은 group_sequences에 주지 않음)."""
+    return [entry.name for entry in entries if _may_be_frame(entry.name) and _is_file(entry, unreadable)]
+
+
+def _sequences_in(folder, frame_names):
+    """folder 바로 안의 프레임 후보 이름들에서 묶은 시퀀스. 임시 프레임 폴더(temp_frames)는 묶지 않음."""
+    return [] if _is_temp_frames(folder) else sequence_scan.group_sequences(folder, frame_names)
+
+
+def sort_sequences(sequences):
+    """시퀀스 목록 순서: 영상과 같은 번호 순서(natural_key, 가상 경로 `.seq`의 이름), 같으면 폴더 경로 순."""
+    return sorted(sequences, key=lambda s: (natural_key(s.identity), s.identity, s.ext, s.pad))
+
+
+def _read_folder(folder, unreadable, files_only=False):
+    """folder 바로 안의 job 목록 영상 [(이름, 경로)]와 이미지 시퀀스 [SeqInfo] → (영상, 시퀀스) — 폴더 목록은 한 번만 읽음.
+    그 폴더가 없으면(예: frames가 없는 scene 폴더) 둘 다 빈 목록, 읽지 못하면 unreadable에 남기고 둘 다 빈 목록.
+    files_only: 영상 이름인 폴더는 뺌 (TJS_Animatic의 예전 규칙).
 
     없다고 나오면 방금 목록에 있던 위 폴더(scene 폴더)를 확인: 그것도 확인되지 않으면 'frames 없음'이 아니라 그 위 폴더를
     읽지 못한 것 (Windows는 SMB가 잠깐 끊겨도 FileNotFoundError — 그 아래 영상을 빼지 않게).
     """
     try:
-        with os.scandir(folder) as entries:
-            return [(entry.name, entry.path) for entry in entries
-                    if file_names.is_listed_video(entry.name) and (not files_only or _is_file(entry, unreadable))]
+        with os.scandir(folder) as it:
+            entries = list(it)
+        videos = [(entry.name, entry.path) for entry in entries
+                  if file_names.is_listed_video(entry.name) and (not files_only or _is_file(entry, unreadable))]
+        return videos, _sequences_in(folder, _frame_names(entries, unreadable))
     except (FileNotFoundError, NotADirectoryError):
         parent = os.path.dirname(folder)
         try:
             os.stat(parent)
         except OSError as e:
             unreadable.append((parent, e))
-        return []
+        return [], []
     except OSError as e:
         unreadable.append((folder, e))
-        return []
+        return [], []
 
 
 def scan_job(work, base_path):
-    """작품 job 폴더의 영상 → ScanResult (목록 순서: sort_job_videos). update_playlist에서 옮긴 작품별 규칙:
+    """작품 job 폴더의 영상과 이미지 시퀀스 → ScanResult (영상 순서: sort_job_videos, 시퀀스 순서: sort_sequences).
+    시퀀스는 영상을 찾는 폴더마다 같은 폴더 목록에서 함께 찾음 (폴더를 더 읽지 않음). update_playlist에서 옮긴 작품별 규칙:
 
     - MS_Animatic: job 폴더 바로 안
     - TJS_Animatic: job 폴더 바로 안 + 숨김이 아닌 하위 폴더 한 단계 (파일만)
@@ -125,15 +156,24 @@ def scan_job(work, base_path):
     job 폴더를 읽지 못하면 OSError. 하위 폴더를 읽지 못하면 결과의 unreadable에.
     """
     unreadable = []
+    sequences = []
+
+    def read_sub(folder, files_only=False):
+        found_videos, found_sequences = _read_folder(folder, unreadable, files_only)
+        sequences.extend(found_sequences)
+        return found_videos
+
     with os.scandir(base_path) as it:
         entries = list(it)
+    # job 폴더 바로 안의 시퀀스 (영상처럼 모든 작품 규칙에 해당)
+    sequences.extend(_sequences_in(base_path, _frame_names(entries, unreadable)))
     if work == "MS_Animatic":
         videos = [(e.name, e.path) for e in entries if file_names.is_listed_video(e.name)]
     elif work == "TJS_Animatic":
         videos = [(e.name, e.path) for e in entries if file_names.is_listed_video(e.name) and _is_file(e, unreadable)]
         for entry in entries:
             if not entry.name.startswith('.') and _is_dir(entry, unreadable):
-                videos += _videos_in(entry.path, unreadable, files_only=True)
+                videos += read_sub(entry.path, files_only=True)
     else:
         videos = [(e.name, e.path) for e in entries if file_names.is_listed_video(e.name)]
         for entry in entries:
@@ -146,17 +186,17 @@ def scan_job(work, base_path):
             else:
                 sub = "frames"
             if sub and _is_dir(entry, unreadable):
-                videos += _videos_in(os.path.join(entry.path, sub), unreadable)
+                videos += read_sub(os.path.join(entry.path, sub))
         if work == "BM_Animatic":
-            videos += _videos_in(os.path.join(base_path, "ANIMATIC"), unreadable)
+            videos += read_sub(os.path.join(base_path, "ANIMATIC"))
         if work == "KOTH_Animatic":
             for entry in entries:
                 if 'ANIMATIC' in entry.name.upper() and _is_dir(entry, unreadable):
-                    videos += _videos_in(entry.path, unreadable)
+                    videos += read_sub(entry.path)
     # 하위 폴더를 읽는 사이 공유가 끊겼으면(Windows는 끊긴 SMB도 FileNotFoundError) 하위 폴더가 '없음'으로 보였을 수
     # 있음 → job 폴더를 한 번 더 확인 (확인하지 못하면 OSError: 이 결과는 쓰지 않음)
     os.stat(base_path)
-    return ScanResult(sort_job_videos(videos), unreadable)
+    return ScanResult(sort_job_videos(videos), unreadable, sort_sequences(sequences))
 
 
 def set_sort_locale():
@@ -192,20 +232,17 @@ def sort_job_videos(videos):
     return non_hd_files + hd_files
 
 
-def natural_key(file_path):
-    """번호 순서 정렬 키: 파일 이름의 숫자는 숫자로 (clip2 < clip10), 나머지는 소문자로."""
-    filename = os.path.basename(file_path)
-    return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', filename)]
-
-
 def scan_folder(folder):
     """폴더 불러오기·끌어다 놓기·북마크 규칙: 하위 폴더까지 VIDEO_EXTENSIONS 영상 ('.'으로 시작하는 파일 제외), 번호 순서
     (이름이 같으면 경로 순) → ScanResult. 폴더를 읽지 못하면 OSError, 하위 폴더를 읽지 못하거나 항목이 폴더인지
     확인하지 못하면 결과의 unreadable에 (그 아래 영상은 알 수 없음 — 예전 os.walk는 '폴더 아님'으로 넘겼음).
     읽을 수 있는 폴더에서는 예전 os.walk와 같은 영상: 폴더 링크는 따라 들어가지 않고, 깨진 링크도 이름으로 판단.
+    이미지 시퀀스(sort_sequences 순서)는 같은 폴더 목록에서 함께 찾음 — 폴더 항목이 아닌 것의 이름으로 묶고(영상처럼 깨진 링크도
+    이름으로), 임시 프레임 폴더(temp_frames)는 묶지 않음 (그 안의 영상은 모음).
     """
     unreadable = []
     videos = []
+    sequences = []
     pending = [folder]
     while pending:
         current = pending.pop()
@@ -217,16 +254,21 @@ def scan_folder(folder):
                 raise
             unreadable.append((current, e))
             continue
+        frame_names = []
         for entry in entries:
             if _is_dir(entry, unreadable):
                 if not os.path.islink(entry.path):
                     pending.append(entry.path)
-            elif not entry.name.startswith('.') and os.path.splitext(entry.name.lower())[1] in VIDEO_EXTENSIONS:
-                videos.append((entry.name, entry.path))
+            elif not entry.name.startswith('.'):
+                if os.path.splitext(entry.name.lower())[1] in VIDEO_EXTENSIONS:
+                    videos.append((entry.name, entry.path))
+                elif _may_be_frame(entry.name):
+                    frame_names.append(entry.name)
+        sequences.extend(_sequences_in(current, frame_names))
     # 하위 폴더를 읽는 사이 공유가 끊겼으면 결과를 쓰지 않음 (scan_job과 같음)
     os.stat(folder)
     videos.sort(key=lambda v: (natural_key(v[1]), v[1]))
-    return ScanResult(videos, unreadable)
+    return ScanResult(videos, unreadable, sort_sequences(sequences))
 
 
 def is_gone(path, error):
