@@ -170,6 +170,7 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         self.setStyleSheet(DARK_STYLESHEET)
         
         self.controls_visible = True  # initUI() 호출 전에 먼저 정의
+        self.middle_panel_visible = True  # N 키로 숨기는 가운데 컨트롤 열 (middleScrollArea)
         # 사이드바 Mov·Seq 탭 (initUI가 위젯을 만듦; SidebarSequencesMixin이 씀): 탭 위젯, Seq 목록(이미지 시퀀스), 폴더를 읽어 찾은 시퀀스
         # (path_key → [SeqInfo] — 영상 경로만 돌려주는 get_video_files_from_folder와 목록을 채우는 쪽 사이)
         self.sidebar_tabs = None
@@ -891,6 +892,16 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         self.setFocusPolicy(Qt.StrongFocus)
         self.setFocus()  # 초기 포커스 설정
 
+    def toggle_middle_panel(self):
+        """N 키 — 가운데 컨트롤 열(middleScrollArea) 보이기/숨기기 (왼쪽 파일 목록·비디오는 그대로)."""
+        self.middle_panel_visible = not self.middle_panel_visible
+        self.middleScrollArea.setVisible(self.middle_panel_visible and self.controls_visible)
+
+    def apply_middle_panel_state(self):
+        """컨트롤 복원(V 키·전체화면 해제) 뒤에도 N 키로 숨긴 가운데 열은 숨김을 유지."""
+        if not self.middle_panel_visible:
+            self.middleScrollArea.setVisible(False)
+
     def eventFilter(self, source, event):
         # V키가 비활성화되어 있을 때는 오버레이 컨트롤 동작하지 않음 (컨트롤 패널이 표시되어 있을 때)
         if self.controls_visible:
@@ -1032,7 +1043,8 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
                         widget.setVisible(self.controls_visible)
                     except (RuntimeError, AttributeError):
                         continue
-                
+                self.apply_middle_panel_state()
+
                 # 컨트롤이 숨겨지면 오버레이를 표시하고, 컨트롤이 보이면 오버레이를 숨김
                 if hasattr(self, 'overlayFrame'):
                     if not self.controls_visible:
@@ -1051,7 +1063,13 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
                 
                 QTimer.singleShot(100, self.force_focus)  # V키 후 포커스 복원
                 return True
-            
+
+            # N 키 처리 (가운데 컨트롤 열 보이기/숨기기) - 한글 ㅜ와 영문 N 모두 지원
+            if key == Qt.Key_N or (hasattr(event, 'text') and event.text() == 'ㅜ'):
+                self.toggle_middle_panel()
+                QTimer.singleShot(100, self.force_focus)
+                return True
+
             # R 키 처리 (썸네일 재생성)
             if key == Qt.Key_R:
                 self.regenerate_selected_thumbnails()
@@ -1413,6 +1431,7 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
 <li>먼저 <b>Open Video A</b>로 동영상을 엽니다.</li>
 <li>왼쪽(또는 사이드) 컨트롤에서 <b>▶ 수정 사항 주석</b> 칸을 펼칩니다.</li>
 <li><b>주석 모드</b> 버튼을 눌러 켭니다. (다시 누르면 꺼집니다)</li>
+<li>켜져 있는 동안에는 <b>버튼이 빨간색</b>이 되고, 영상 오른쪽 위에 <b>주석 모드</b> 배지가 보이며, 커서가 <b>십자형</b>이 됩니다 — 주석 모드인지 한눈에 알 수 있습니다.</li>
 </ul>
 
 <h4>2️⃣ 주석 그리기</h4>
@@ -1428,7 +1447,7 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
 </li>
 <li><b>색상</b>으로 빨강·노랑 등 색을 고릅니다.</li>
 <li>영상 위에서 <b>마우스로 드래그</b>하면 도형이 그려집니다.</li>
-<li><b>텍스트</b>는 클릭한 뒤, 나오는 창에 글을 입력합니다.</li>
+<li><b>텍스트</b>는 클릭한 뒤, 나오는 창에 글을 입력합니다. (글 입력 창은 <b>텍스트</b> 도구에서만 뜨고, 도형 도구에서는 드래그 없이 클릭만 하면 아무것도 그려지지 않습니다)</li>
 <li><b>표시 프레임 (시작 ~ 끝)</b>: 주석이 몇 번 프레임부터 몇 번까지 보일지 정합니다. 시작과 끝을 같게 하면 <b>한 프레임만</b> 보입니다.</li>
 </ul>
 
@@ -1462,6 +1481,7 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
 <li><b>F11</b>: 전체화면</li>
 <li><b>F1</b>: 도움말</li>
 <li><b>F5</b>: 사이드바 목록 다시 읽기 (새로고침 — 창으로 돌아올 때도 저절로). 썸네일 모드면 다시 렌더링한 영상의 썸네일도 다시 만듦</li>
+<li><b>N (ㅜ)</b>: 가운데 컨트롤 패널 보이기/숨기기</li>
 <li><b>D (ㅇ)</b>: 선택 구간 병합 (OCR 결과 검토 창)</li>
 <li><b>R (ㄱ)</b>: 전체 내보내기 (OCR 결과 검토 창)</li>
 </ul>

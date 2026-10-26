@@ -1812,6 +1812,7 @@ class PlayerPlaybackMixin:
                     widget.setVisible(self.controls_visible)
                 except (RuntimeError, AttributeError):
                     continue
+            self.apply_middle_panel_state()
             # 컨트롤이 숨겨지면 오버레이를 표시하고, 컨트롤이 보이면 오버레이를 숨김
             if hasattr(self, 'overlayFrame'):
                 if not self.controls_visible:
@@ -1826,7 +1827,14 @@ class PlayerPlaybackMixin:
             QTimer.singleShot(100, self.force_focus)  # V키 후 포커스 복원
             event.accept()
             return
-        
+
+        # N 키 처리 (한글 ㅜ와 영문 N 모두 지원) — 가운데 컨트롤 열 보이기/숨기기
+        if key == Qt.Key_N or text == 'ㅜ':
+            self.toggle_middle_panel()
+            QTimer.singleShot(100, self.force_focus)
+            event.accept()
+            return
+
         # 한글 자판 대응 단축키 매핑 (V 키 제외)
         # T-ㅅ, B-ㅠ, F-ㄹ, R-ㄱ
         # ㅅ: '\u3145', ㅠ: '\u315C', ㄹ: '\u3139', ㄱ: '\u3131'
@@ -2073,6 +2081,7 @@ class PlayerPlaybackMixin:
                 widget.setVisible(self.controls_visible)
             except (RuntimeError, AttributeError):
                 continue
+        self.apply_middle_panel_state()
 
     def wheelEvent(self, event):
         """전역 휠 이벤트 처리 - 사이드바를 제외한 모든 영역에서 프레임 이동"""
@@ -2358,7 +2367,8 @@ class PlayerPlaybackMixin:
 <h3>🖥️ 화면 모드</h3>
 • <b>F</b>: 전체화면 전환 (UI 포함)<br>
 • <b>Shift + F</b>: 동영상만 전체화면 (UI 숨김)<br>
-• <b>V</b>: 컨트롤 패널 표시/숨김
+• <b>V</b>: 컨트롤 패널 표시/숨김<br>
+• <b>N</b>: 가운데 컨트롤 패널만 표시/숨김 (파일 목록·영상은 그대로)
 
 <h3>🎛️ 테마 전환</h3>
 • <b>T</b>: 테마 전환
@@ -2397,12 +2407,14 @@ class PlayerPlaybackMixin:
 
 <h4>▶ 시작하기</h4>
 • <b>Open Video A</b>로 동영상을 연 뒤, <b>▶ 수정 사항 주석</b> 칸을 펼칩니다<br>
-• <b>주석 모드</b> 버튼을 켜면 그리기가 시작됩니다
+• <b>주석 모드</b> 버튼을 켜면 그리기가 시작됩니다<br>
+• 켜진 동안 <b>버튼이 빨간색</b>, 영상 오른쪽 위에 <b>주석 모드</b> 배지, 커서는 <b>십자형</b>
 
 <h4>▶ 그리는 방법</h4>
 • <b>도구</b>: 텍스트 / 사각형 / 타원 / 선 / 화살표 중 선택<br>
 • <b>색상</b>: 빨강, 노랑 등 원하는 색 선택<br>
 • 도형은 영상 위에서 <b>드래그</b>, 텍스트는 <b>클릭</b> 후 글 입력<br>
+• 글 입력 창은 <b>텍스트</b> 도구에서만 — 도형 도구에서 드래그 없는 클릭은 무시<br>
 • <b>표시 프레임 (시작~끝)</b>: 주석이 보일 프레임 범위 (같으면 한 프레임만)<br>
 • <b>텍스트 크기</b>, <b>선 굵기</b> 숫자로 조절
 
