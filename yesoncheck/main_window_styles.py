@@ -619,6 +619,18 @@ QPushButton:checked {
 """
 
 
+# 주석 모드 버튼: annotationModeButton — 켜짐만 빨강(비디오 위 '주석 모드' 배지와 같은 계열),
+# 꺼진 모양·hover는 테마 시트 그대로 (위젯 시트는 적은 규칙만 덮음)
+ANNOTATION_MODE_BUTTON_STYLE = """
+QPushButton:checked {
+    background: #c81e1e;
+    border: 1px solid #a01818;
+    color: white;
+    font-weight: bold;
+}
+"""
+
+
 # 사이드바 버튼: thumbnailModeButton
 THUMBNAIL_MODE_BUTTON_STYLE = """
 QPushButton {

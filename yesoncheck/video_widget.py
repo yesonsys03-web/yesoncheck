@@ -84,6 +84,16 @@ class CustomVideoWidget(QGraphicsView):
         self.zoom_label.setStyleSheet("background-color: rgba(255, 255, 255, 128); padding: 5px; border-radius: 3px;")
         self.zoom_label.hide()
 
+        # 주석 모드 배지 — 접힌 주석 패널 밖에서도 모드가 켜진 것을 알 수 있게 (enable_annotation_mode가 보임/숨김)
+        self.annotation_mode_label = QLabel("주석 모드", self)
+        self.annotation_mode_label.setAlignment(Qt.AlignCenter)
+        self.annotation_mode_label.setStyleSheet(
+            "background-color: rgba(200, 30, 30, 230); color: white; font-weight: bold; padding: 5px; border-radius: 3px;"
+        )
+        # 배지 아래의 클릭·휠이 비디오 영역에 그대로 닿게 (없으면 배지가 그 구석의 그리기·줌을 말없이 삼킴)
+        self.annotation_mode_label.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.annotation_mode_label.hide()
+
         # ROI overlay for OCR detection
         self.roi_selection_enabled = False
         self.roi_start_view_pos = None
@@ -112,11 +122,18 @@ class CustomVideoWidget(QGraphicsView):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.update_zoom_label_position()
+        self.update_annotation_mode_label_position()
         if self.is_fit_to_window:
             self.fitInView(self.video_item, Qt.KeepAspectRatio)
 
     def update_zoom_label_position(self):
         self.zoom_label.move(10, 10)
+
+    def update_annotation_mode_label_position(self):
+        self.annotation_mode_label.adjustSize()
+        self.annotation_mode_label.move(
+            max(10, self.width() - self.annotation_mode_label.width() - 10), 10
+        )
 
     def wheelEvent(self, event: QWheelEvent):
         """전역 휠 이벤트 처리 - 사이드바를 제외한 모든 영역에서 프레임 이동 또는 줌"""
@@ -521,7 +538,11 @@ class CustomVideoWidget(QGraphicsView):
         if enabled:
             self.setCursor(Qt.CrossCursor)
             self.setDragMode(QGraphicsView.NoDrag)
+            self.update_annotation_mode_label_position()
+            self.annotation_mode_label.show()
+            self.annotation_mode_label.raise_()
         else:
+            self.annotation_mode_label.hide()
             self.unsetCursor()
             if self.is_fit_to_window:
                 self.setDragMode(QGraphicsView.NoDrag)
@@ -697,9 +718,7 @@ class CustomVideoWidget(QGraphicsView):
         dx = abs(end_norm[0] - start_norm[0])
         dy = abs(end_norm[1] - start_norm[1])
         if dx < 0.005 and dy < 0.005:
-            if tool in ("line", "arrow"):
-                return
-            self.annotationTextRequested.emit(start_norm[0], start_norm[1])
+            # 드래그 없는 클릭 — 텍스트 입력은 '텍스트' 도구에서만 (도형 도구의 클릭은 아무것도 만들지 않음)
             return
 
         payload = {
