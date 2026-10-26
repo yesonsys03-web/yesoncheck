@@ -51,8 +51,9 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
 
     def dropEvent(self, event):
         urls = event.mimeData().urls()
-        # 부모 위젯을 찾아서 VideoPlayer 인스턴스를 찾기
-        parent = self.parent()
+        # 대상 VideoPlayer 찾기. 이 믹스인은 VideoPlayer 자신의 일부라 self가 open_file을 가진 최상위 창이면 self가 대상 (최상위 창은 parent()가
+        # None이라 아래 부모 탐색만으로는 대상을 찾지 못해 창 본문에 놓은 파일이 말없이 아무 일도 없었음). 다른 위젯에 붙은 경우만 부모를 따라 올라감
+        parent = self if hasattr(self, 'open_file') else self.parent()
         while parent and not hasattr(parent, 'open_file'):
             parent = parent.parent()
         
@@ -61,7 +62,7 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
             has_folder = False
             read_failed = False  # 읽지 못한 폴더가 있음 (창으로 알림 — '지원되는 비디오 파일이 없습니다'는 띄우지 않음)
             folder_paths = []  # 폴더 경로들을 저장할 리스트
-            frame_files = []  # 영상이 아닌 파일 — 이미지 시퀀스 프레임이면 그 시퀀스를 엶 (parent._dropped_frames가 이름을 봄). 이 핸들러는 실제 최상위 창에서 도달하지 않음 (위 parent 탐색: 창의 parent()는 None) — video_widget과 같은 코드를 유지
+            frame_files = []  # 영상이 아닌 파일 — 이미지 시퀀스 프레임이면 그 시퀀스를 엶 (parent._dropped_frames가 이름을 봄). video_widget의 핸들러와 같은 코드를 유지
             
             # URL들을 파일/폴더로 분류
             for url in urls:

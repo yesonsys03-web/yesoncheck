@@ -157,10 +157,12 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
     **프레임 한 장 = 그 시퀀스**: `resolve_frame_path`/`find_frame_sequence`(폴더를 한 번 읽음, 프레임 이름이 아닌 경로·`.seq`는 읽지 않음, 없는 폴더는 None, 그 밖의 읽기 오류는 그대로 올림)가
     프레임 경로를 시퀀스 가상 경로로 바꿈. `open_file`(`_frame_to_sequence_path`)이 **모든 열기 길**(Open Video A/B 대화상자 — 필터가 없어 프레임도 고를 수 있음 —·끌어다 놓기·Finder 열기·다음으로 열기)에서
     mov·`.seq` 분기 앞에서 부르므로 `filename_a/_b`에는 늘 `.seq`가 들어감. 한 장뿐인 프레임(시퀀스 아님)은 예전처럼 영상 경로. 같은 base의 시퀀스가 여럿(다른 확장자·자릿수)이면 캡처가 여는 첫 묶음의
-    프레임만 바꿈. 끌어다 놓기는 `SidebarSequencesMixin._dropped_frames`·`_add_dropped_frames`(영상 영역 `CustomVideoWidget.dropEvent`와 Mov 목록 `eventFilter`가 부름 — 영상 영역은 영상 파일처럼 A(둘이면 A·B)로 열고 Seq 탭을 보여 줌,
+    프레임만 바꿈. 끌어다 놓기는 `SidebarSequencesMixin._dropped_frames`·`_add_dropped_frames`(영상 영역 `CustomVideoWidget.dropEvent`와 Mov 목록 `eventFilter`와 메인 창 `PlayerSidebarMixin.dropEvent`가 부름 — 영상 영역·창은 영상 파일처럼 A(둘이면 A·B)로 열고 Seq 탭을 보여 줌,
     Mov 목록은 Seq 목록에만 덧붙임, 영상 파일이 함께 있으면 영상은 예전대로). 폴더 목록은 `FolderFrames`로 한 번만 묶음(프레임마다 `group_sequences`를 부르면 장수의 제곱으로 느려져 5,000장 드롭이 30초 넘게 GUI를 얼림).
-    **메인 창 핸들러 `PlayerSidebarMixin.dropEvent`는 실제 창에서 도달하지 않음**: `self.parent()`로 VideoPlayer를 찾는데 최상위 창은 `parent()`가 None이라 본문이 안 돎(영상 파일을 놓아도 마찬가지, 예전부터).
-    같은 처리를 넣어 두었지만 시험은 `parent()`가 창을 돌려주는 대역으로만 돌림 — 살리려면 영상 파일 드롭 동작도 바뀌므로 따로 결정할 것
+    **드롭 대상 (창 본문 핸들러)**: Qt는 드롭을 놓은 자리에서 위로 올라가며 `acceptDrops()`인 첫 위젯에 건넴 — 영상 영역(`CustomVideoWidget`)과 Mov 목록(`self.sidebar`, `eventFilter`가 DragEnter·Drop을 받음)은 자기가 받고,
+    드롭을 받지 않는 위젯(Seq 목록·창 가장자리·컨트롤 영역)은 최상위 창 `VideoPlayer`(`setAcceptDrops(True)`, `dragEnterEvent`가 URL이면 수락)에 가서 `PlayerSidebarMixin.dropEvent`가 돎. 드롭은 한 위젯에만 건네지므로 두 번 처리되지 않음.
+    `dropEvent`는 `self`가 `open_file`을 가진 창이면 self를 대상으로 씀 (예전에는 `self.parent()`로만 찾아서 최상위 창에서는 대상이 없어 본문이 한 번도 돌지 않았음 — 영상 파일·폴더·프레임 모두 말없이 무시). 본문은 `CustomVideoWidget.dropEvent`와 같은 코드이므로 한쪽을 고치면 다른 쪽도 고칠 것.
+    시험은 실제 `QDropEvent`를 `player.dropEvent`에 건네고(`tests/test_sequence_frame_open.py`의 `drop_files(…, "window", …)`), 위젯 위 전달(Seq 목록·영상 영역·Mov 목록)은 `QApplication.sendEvent`로 DragEnter → DragMove → Drop을 보내(`deliver_drag`) Qt의 대상 고르기까지 지킴
     EXR: Windows cv2 휠은 OpenEXR 코덱이 기본으로 꺼져 있고 `OPENCV_IO_ENABLE_OPENEXR=1`은 **cv2를 불러오기 전에** 정해 두는 것이 안전함 — `yesoncheck/__init__.py`·`tests/conftest.py`·`check_frozen_imports.py`가
     맨 위에서 정함 (cv2를 부르는 새 진입점이 생기면 그보다 앞에). 그래도 꺼진 cv2면 `exr_supported()`가 False, `decode_frame(…, "exr")`는 원인을 이은 ValueError로 크게 실패 (EXR 시험은 이때만 건너뜀)
   - `yesoncheck/sequence_export_worker.py` (335줄): `SequenceExportWorker`(`QThread`) — 시퀀스 여러 개를 `<출력 폴더>/<베이스>.mov`로, `validate_out_dir`가 원본 폴더를 거부.
@@ -619,7 +621,7 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 
 **시험은 반드시 `~/coding/p310_tf/bin/python -m pytest`로 돌릴 것** — TensorFlow가 없는 `~/coding/p310`으로 돌리면 11개가 실패함.
 
-`tests/`에 시험 파일 70개 (수집 1,780개). `python -m pytest tests -q`로 돌리며(약 8분), 이 Mac의 소스 실행에서 1,735개가 통과하고 45개는 건너뜀 —
+`tests/`에 시험 파일 70개 (수집 1,802개). `python -m pytest tests -q`로 돌리며(약 8분), 이 Mac의 소스 실행에서 1,757개가 통과하고 45개는 건너뜀 —
 다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-10-26 기준). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
 정적 빌드(`vendor/ffmpeg/`)를 씀 (`tests/conftest.py`). 시험을 건너뛰거나 지워서 통과시키지 말 것.
 

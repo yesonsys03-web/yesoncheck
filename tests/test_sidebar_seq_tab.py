@@ -7,7 +7,6 @@ dialogs가 가로챔 (실제 QMessageBox를 띄우지 않음).
 
 import os
 import time
-from types import SimpleNamespace
 
 import pytest
 from PyQt5.QtCore import QMimeData, QPoint, QPointF, Qt, QUrl
@@ -21,7 +20,6 @@ from tests.test_sidebar_refresh import refresh
 from tests.test_thumbnails import drop_folder
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 from yesoncheck import paths, video_list
-from yesoncheck.player_sidebar import PlayerSidebarMixin
 from yesoncheck.sequence_scan import SeqInfo
 
 
@@ -231,12 +229,12 @@ def test_dropping_the_same_folder_twice_does_not_duplicate(player, dialogs, tmp_
 
 
 def drop_on_window(player, folder):
-    """메인 창 핸들러(PlayerSidebarMixin.dropEvent)에 폴더를 끌어다 놓음. 최상위 창은 parent()가 없어 그 핸들러 본문이 돌지 않으므로
-    (예전부터 그랬음) parent()가 창을 돌려주는 대역으로 핸들러 코드를 그대로 돌림."""
+    """최상위 창 본문(영상 영역·Mov 목록이 아닌 곳)에 폴더를 끌어다 놓음: 실제 QDropEvent를 창의 dropEvent에 건넴 (Qt가 부르는 곳, 대역 없음)."""
     mime = QMimeData()
     mime.setUrls([QUrl.fromLocalFile(str(folder))])
     event = QDropEvent(QPointF(5, 5), Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier)
-    PlayerSidebarMixin.dropEvent(SimpleNamespace(parent=lambda: player), event)
+    assert player.parent() is None
+    player.dropEvent(event)
 
 
 def drop_any(player, target, folder):
