@@ -33,6 +33,7 @@ from yesoncheck import external_tools, paths, user_files
 from yesoncheck.user_files import UserFileError
 from yesoncheck.annotation_export import AnnotationExportWorker
 from yesoncheck.annotation_burn import burn_annotations_on_frame
+from yesoncheck.main_window_styles import ANNOTATION_MODE_BUTTON_STYLE
 from yesoncheck.frame_annotations import (
     DEFAULT_COLOR,
     DEFAULT_FONT_SIZE,
@@ -79,6 +80,7 @@ class PlayerAnnotationsMixin:
 
         self.annotationModeButton = QPushButton("주석 모드")
         self.annotationModeButton.setCheckable(True)
+        self.annotationModeButton.setStyleSheet(ANNOTATION_MODE_BUTTON_STYLE)
         self.annotationModeButton.setToolTip(
             "활성화 후 도형을 그리거나 텍스트를 입력합니다.\n"
             "기존 주석을 클릭하면 자동으로 편집(이동·크기 조절)할 수 있습니다."
