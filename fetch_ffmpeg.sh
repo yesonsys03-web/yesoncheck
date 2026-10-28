@@ -15,8 +15,11 @@ while read -r ARCH URLPATH TOOL SHA; do
         continue
     fi
     echo "받는 중: $DEST"
-    # 재시도: 이 서버가 간헐적으로 연결을 끊음 (2026-10-28 CI에서 curl 56 — reset·timeout — 세 번)
-    curl -fL --retry 8 --retry-delay 5 --retry-all-errors --connect-timeout 30 \
+    # 재시도 + 멈춤 감지: 이 서버가 간헐적으로 연결을 끊거나(curl 56 — reset·timeout 세 번) 연결만 받고
+    # 데이터를 안 줌(2026-10-28 CI에서 AppleSilicon job이 이 단계에서 2시간 넘게 멈춤 — connect-timeout은
+    # 연결까지만 제한). 30초 동안 10KB/s 미만이면 그 시도를 끊고(28) 재시도, 시도당 5분·재시도 전체 15분 상한.
+    curl -fL --retry 8 --retry-delay 5 --retry-all-errors --retry-max-time 900 \
+        --connect-timeout 30 --max-time 300 --speed-limit 10240 --speed-time 30 \
         --progress-bar -o "$TMP/$TOOL.zip" "$BASE/$URLPATH/$TOOL.zip"
     rm -f "$TMP/$TOOL"
     unzip -q -o "$TMP/$TOOL.zip" "$TOOL" -d "$TMP"
