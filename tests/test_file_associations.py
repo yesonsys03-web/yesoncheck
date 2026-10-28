@@ -283,6 +283,9 @@ def test_registers_at_start_only_in_built_windows_app(qapp, windows_app, monkeyp
         def show_user_file_problems(self):
             events.append("user_files")
 
+        def show_viewport_fallback(self):
+            events.append("viewport")  # GL 뷰포트 폴백 알림 (스플래시가 닫힌 뒤)
+
         def start_shared_config_load(self):
             events.append("load")
 
@@ -293,7 +296,7 @@ def test_registers_at_start_only_in_built_windows_app(qapp, windows_app, monkeyp
     try:
         assert app_module.launch(["yesoncheck"]) == 0
         wait_until(lambda: "register" in events)
-        assert events == ["show", ("update", None), "instances", "user_files", "load", "register"]
+        assert events == ["show", ("update", None), "instances", "user_files", "viewport", "load", "register"]
 
         # 소스 실행: 등록하지 않음 (sys.executable이 python.exe)
         events.clear()
@@ -302,7 +305,7 @@ def test_registers_at_start_only_in_built_windows_app(qapp, windows_app, monkeyp
         wait_until(lambda: "load" in events)
         for _ in range(5):
             QApplication.processEvents()
-        assert events == ["show", ("update", None), "instances", "user_files", "load"]
+        assert events == ["show", ("update", None), "instances", "user_files", "viewport", "load"]
     finally:
         for player in created:
             player.close()

@@ -10,6 +10,8 @@ os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# 개발자 셸에 GL 토글이 남아 있으면 모든 플레이어 시험이 offscreen+GL로 돌아 버림 — 시험은 늘 기본 규칙에서 시작
+os.environ.pop("YESONCHECK_VIEWPORT", None)
 
 # fetch_ffmpeg.sh / fetch_ffmpeg_windows.ps1로 받은 정적 ffmpeg를 PATH 맨 앞에 둠
 _FFMPEG_DIR = os.path.join(

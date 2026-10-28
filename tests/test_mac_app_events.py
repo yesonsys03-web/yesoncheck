@@ -334,6 +334,9 @@ class LaunchPlayer(QWidget):
     def show_user_file_problems(self):
         LaunchPlayer.events.append("user_files")
 
+    def show_viewport_fallback(self):
+        LaunchPlayer.events.append("viewport")  # GL 뷰포트 폴백 알림 (스플래시가 닫힌 뒤)
+
     def start_shared_config_load(self):
         LaunchPlayer.events.append("load")
 
@@ -396,7 +399,7 @@ def test_launch_installs_router_first_and_readies_after_window_is_shown(qapp, la
     registered = ["register"] if sys.platform == "darwin" else []
     assert events == ["install", "update_check", "splash", "show", "ready", *registered]
     wait_until(lambda: ("open", "A", str(video)) in events)
-    assert events[-5:] == ["update", "instances", "user_files", "load", ("open", "A", str(video))]
+    assert events[-6:] == ["update", "instances", "user_files", "viewport", "load", ("open", "A", str(video))]
     assert launch_env.installed[0].argv_files == [str(video)] and launch_env.spawned == []
 
 
