@@ -7,6 +7,9 @@ Homebrew ffmpeg는 빌드한 macOS 버전 이상에서만 실행되고 /usr/loca
 - 출처: https://ffmpeg.martin-riedl.de/ (release 9.0.2, 2026-10-06 다운로드, 배포처 sha256으로 zip 검증)
   - x86_64: https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_9.0.2/{ffmpeg,ffprobe}.zip
   - arm64:  https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/{ffmpeg,ffprobe}.zip
+- 미러: 이 저장소 Release `ci-ffmpeg-9.0.2` — 위 zip 그대로(2026-10-28 업로드, 아래 sha256으로 내용 검증).
+  원 서버가 GitHub 러너에서 간헐적으로 끊기거나 멈춰 fetch_ffmpeg.sh가 미러 먼저 받음(원 서버는 폴백).
+  버전을 교체하면 새 Release(`ci-ffmpeg-<버전>`)를 만들고 fetch_ffmpeg.sh의 MIRROR도 같이 고칠 것.
 
 | 파일 | sha256 |
 |---|---|

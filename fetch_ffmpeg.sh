@@ -5,6 +5,10 @@
 set -e
 cd "$(dirname "$0")"
 BASE="https://ffmpeg.martin-riedl.de/download/macos"
+# 미러: 이 저장소 Release(ci-ffmpeg-9.0.2)에 올려 둔 같은 zip — 원 서버가 GitHub 러너에서 간헐적으로
+# 끊기거나(curl 56) 연결만 받고 멈춰(10KB/s 미만 스톨 9연속) 2026-10-28 CI가 4번 실패했음.
+# 출처가 어디든 아래 sha256 고정 확인을 통과해야만 쓰임.
+MIRROR="https://github.com/yesonsys03-web/yesoncheck/releases/download/ci-ffmpeg-9.0.2"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 # 아키텍처 다운로드경로 도구 sha256
@@ -15,12 +19,19 @@ while read -r ARCH URLPATH TOOL SHA; do
         continue
     fi
     echo "받는 중: $DEST"
-    # 재시도 + 멈춤 감지: 이 서버가 간헐적으로 연결을 끊거나(curl 56 — reset·timeout 세 번) 연결만 받고
-    # 데이터를 안 줌(2026-10-28 CI에서 AppleSilicon job이 이 단계에서 2시간 넘게 멈춤 — connect-timeout은
-    # 연결까지만 제한). 30초 동안 10KB/s 미만이면 그 시도를 끊고(28) 재시도, 시도당 5분·재시도 전체 15분 상한.
-    curl -fL --retry 8 --retry-delay 5 --retry-all-errors --retry-max-time 900 \
-        --connect-timeout 30 --max-time 300 --speed-limit 10240 --speed-time 30 \
-        --progress-bar -o "$TMP/$TOOL.zip" "$BASE/$URLPATH/$TOOL.zip"
+    # 미러 먼저, 안 되면 원 서버. 멈춤 감지: 30초 동안 10KB/s 미만이면 그 시도를 끊고(curl 28) 재시도
+    # (connect-timeout은 연결까지만 제한이라 스톨에는 무력), 시도당 5분·주소당 재시도 10분 상한.
+    rm -f "$TMP/$TOOL.zip"
+    for URL in "$MIRROR/${ARCH}_${TOOL}.zip" "$BASE/$URLPATH/$TOOL.zip"; do
+        if curl -fL --retry 4 --retry-delay 5 --retry-all-errors --retry-max-time 600 \
+            --connect-timeout 30 --max-time 300 --speed-limit 10240 --speed-time 30 \
+            --progress-bar -o "$TMP/$TOOL.zip" "$URL"; then
+            break
+        fi
+        echo "받지 못함 — 다음 주소로: $URL"
+        rm -f "$TMP/$TOOL.zip"
+    done
+    [ -s "$TMP/$TOOL.zip" ] || { echo "모든 주소에서 받지 못함: $TOOL"; exit 1; }
     rm -f "$TMP/$TOOL"
     unzip -q -o "$TMP/$TOOL.zip" "$TOOL" -d "$TMP"
     GOT="$(shasum -a 256 "$TMP/$TOOL" | cut -d' ' -f1)"
