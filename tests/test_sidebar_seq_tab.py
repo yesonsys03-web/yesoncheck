@@ -85,9 +85,10 @@ def open_job(new_player, work_area):  # noqa: F811
 def test_tabs_exist_mov_page_is_existing_sidebar(player):
     tabs = player.sidebar_tabs
     assert isinstance(tabs, QTabWidget)
-    assert [tabs.tabText(i) for i in range(tabs.count())] == ["Mov", "Seq"]
+    assert [tabs.tabText(i) for i in range(tabs.count())] == ["Mov", "Seq", "All"]
     assert tabs.widget(0) is player.sidebar  # Mov 페이지는 기존 사이드바 그대로
     assert tabs.widget(1) is player.seq_sidebar
+    assert tabs.widget(2) is player.all_sidebar  # All 페이지 (tests/test_sidebar_all_tab.py)
     assert tabs.currentIndex() == 0
     assert player.seq_sidebar.count() == 0
     # 탭이 사이드바의 자리를 그대로 이어받음: 버튼들 아래, 사이드바 컨테이너 안

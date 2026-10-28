@@ -92,11 +92,11 @@ class VideoPlayer(PlayerUpdateMixin, PlayerAnnotationsMixin, PlayerSidebarMixin,
 
 큰 파일은 믹스인을 부모로 붙여 나눔 (코드는 옮기기만 했고 동작은 그대로):
 - `PlayerSidebarMixin`(`player_sidebar.py`)은 `SidebarBookmarksMixin`·`SidebarPlaylistMixin`·`SidebarConfigPathsMixin`·
-  `SidebarRefreshMixin`·`SidebarSequencesMixin`·`SidebarThumbnailsMixin` 6개를 상속
+  `SidebarRefreshMixin`·`SidebarSequencesMixin`·`SidebarAllMixin`·`SidebarThumbnailsMixin` 7개를 상속
 - `VideoPlayerBase`(`player_base.py`)는 `PlayerOcrMixin`·`PlayerOverlayMixin` 2개와 `QMainWindow`를 상속
 
 그래서 `VideoPlayer.__mro__`는 `VideoPlayer > PlayerUpdateMixin > PlayerAnnotationsMixin > PlayerSidebarMixin > SidebarBookmarksMixin >
-SidebarPlaylistMixin > SidebarConfigPathsMixin > SidebarRefreshMixin > SidebarSequencesMixin > SidebarThumbnailsMixin > PlayerPlaybackMixin > VideoPlayerBase >
+SidebarPlaylistMixin > SidebarConfigPathsMixin > SidebarRefreshMixin > SidebarSequencesMixin > SidebarAllMixin > SidebarThumbnailsMixin > PlayerPlaybackMixin > VideoPlayerBase >
 PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 것:
 - 같은 이름의 메서드를 두 믹스인에 두지 않음 (MRO에서 먼저 나오는 쪽이 가림 — `PlayerSidebarMixin`의 `dragEnterEvent`·`dropEvent`는 `QMainWindow`의 가상 함수를 가림).
   부모 믹스인 모듈(`sidebar_*`·`player_ocr`·`player_overlay`)은 상속받는 쪽(`player_sidebar`·`player_base`)을 모듈 수준에서 import하지 않음 (순환).
@@ -117,7 +117,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   앱은 이 계정에 연결 프로그램을 등록(`file_associations`) —
   시작 순서는 아래 '여러 창과 업데이트'의 '새 창·동영상 열기·기본 앱'
 - `yesoncheck/main_window.py` (12줄): 믹스인 구성 (`VideoPlayer`)
-- `yesoncheck/player_base.py` (1,816줄): 핵심 UI 및 윈도우 관리 — `VideoPlayerBase`(UI 만들기·메뉴·테마 전환·창 닫기·작업 정지·창 사이 연결).
+- `yesoncheck/player_base.py` (1,843줄): 핵심 UI 및 윈도우 관리 — `VideoPlayerBase`(UI 만들기·메뉴·테마 전환·창 닫기·작업 정지·창 사이 연결).
   OCR 묶음은 `player_ocr`, 오버레이 묶음은 `player_overlay`로 나눠 부모로 붙였고, 스타일시트 문자열은 `main_window_styles`, 붙잡아 둔 워커 정리는
   `worker_lifecycle`로 옮김 (`worker_lifecycle`의 이름은 여기서 다시 내보냄)
 - `yesoncheck/player_ocr.py` (1,845줄): `PlayerOcrMixin` — ROI·분석 방식 UI 상태, 분석 시작(OCR·애니매틱·애니매틱2)과 진행·완료 콜백, 검토 창 수명,
@@ -129,14 +129,17 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
 - `yesoncheck/worker_lifecycle.py` (76줄): 놓아 준 `QThread` 워커를 끝날 때까지 붙잡아 두기 — `release_worker`·`wait_for_released_workers`·`EXIT_WAIT_S`(30초)
 - `yesoncheck/player_playback.py` (2,625줄): 비디오 재생, 프레임 탐색 및 FFmpeg 작업 — 전역 단축키(`keyPressEvent`): V(컨트롤 전체 숨김·오버레이), N/ㅜ(가운데 컨트롤 열 숨김 — `toggle_middle_panel`, V·전체화면 복원 뒤에도 유지)
 - `yesoncheck/player_annotations.py` (1,072줄): 수정 사항 주석(프레임별 텍스트·도형) UI와 재생 연동 (`PlayerAnnotationsMixin`) — 주석 모드 버튼은 켜짐을 빨강으로 표시(`ANNOTATION_MODE_BUTTON_STYLE`)
-- `yesoncheck/player_sidebar.py` (518줄): `PlayerSidebarMixin` — 드롭·파일 넣기·폴더 불러오기, 우클릭 메뉴·파일 복사, 작품 → 시즌 → job 콤보,
+- `yesoncheck/player_sidebar.py` (555줄): `PlayerSidebarMixin` — 드롭·파일 넣기·폴더 불러오기, 우클릭 메뉴·파일 복사, 작품 → 시즌 → job 콤보,
   선택한 영상을 A에 열기. 나머지는 아래 부모 믹스인 모듈에 있고 이 모듈은 옛 import 경로를 위해 일부 이름을 다시 내보냄
   - `yesoncheck/sidebar_bookmarks.py` (216줄): `SidebarBookmarksMixin` — 북마크 읽기·더하기·지우기, 북마크 관리 창, 북마크 폴더 열기
-  - `yesoncheck/sidebar_playlist.py` (183줄): `SidebarPlaylistMixin` — 선택 재생(Play Selected) 재생목록 시작·차례대로 열기·없는 영상 건너뛰기
+  - `yesoncheck/sidebar_playlist.py` (202줄): `SidebarPlaylistMixin` — 선택 재생(Play Selected) 재생목록 시작·차례대로 열기·없는 영상 건너뛰기 (`_playlist_selection`: Mov 탭은 Mov 목록 선택, All 탭은 mov만)
   - `yesoncheck/sidebar_config_paths.py` (883줄): `SidebarConfigPathsMixin` — 공유 설정 읽기 시작·창에 넣기·문제 알림, (Windows) 변환표 자동 설정,
     작품 경로 관리 창·`get_work_path`·관리 비밀번호
   - `yesoncheck/sidebar_refresh.py` (496줄): `SidebarRefreshMixin`·`SidebarScan` — 목록 항목 모델(출처·세대·다시 읽기 보류)과 목록 다시 읽기·목록 문제 알림
-  - `yesoncheck/sidebar_sequences.py` (861줄): `SidebarSequencesMixin`·`SequenceExportDialog` — Mov·Seq 탭과 Seq 목록, 끌어다 놓은 프레임 파일 처리, Seq 우클릭 메뉴(A/B로 열기·MOV 만들기·썸네일·정보),
+  - `yesoncheck/sidebar_all.py` (177줄): `SidebarAllMixin` — All 탭(`self.all_sidebar`): Mov·Seq 목록을 복제(clone)해 한 목록에 이름 자연 정렬로 섞음(시퀀스 글자는 테마별 하늘색 `ALL_SEQ_FG`,
+    종류는 `ALL_KIND_ROLE`). 원본 모델(rowsInserted·rowsRemoved·modelReset·dataChanged)이 바뀌면 보이는 동안만 미뤄서 통째로 다시 만듦 — All은 늘 파생, 원본에서만 고침(선택 재생 강조도 이 길로 따라옴).
+    누르면 종류대로 A에 열고, 우클릭은 'Mov만 모두 선택' + 선택을 원본 목록에 비춘 뒤 그 종류의 기존 메뉴(`_build_sidebar_menu`·`_build_seq_menu`). 선택 재생은 `sidebar_playlist._playlist_selection`이 All 탭에서 mov만 고름(시퀀스 연속 재생은 메모리 한계로 안 함)
+  - `yesoncheck/sidebar_sequences.py` (873줄): `SidebarSequencesMixin`·`SequenceExportDialog` — Mov·Seq·All 탭 전환과 Seq 목록, 끌어다 놓은 프레임 파일 처리, Seq 우클릭 메뉴(A/B로 열기·MOV 만들기·썸네일·정보),
     일괄 내보내기 진행 창. 시퀀스 썸네일은 짝 `.mov`의 것을 재사용
   - `yesoncheck/sidebar_thumbnails.py` (933줄): `SidebarThumbnailsMixin` — 목록/썸네일 모드·사이드바 폭, 썸네일 반복·워커 정리, 영상 단위 확인·만들기,
     썸네일 폴더·문제 알림, 백그라운드 썸네일 읽기
@@ -410,7 +413,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
 - 재생 속도 및 오디오 제어
 - 프레임 탐색 (다음/이전 프레임, 프레임으로 이동)
 
-**PlayerSidebarMixin** (`player_sidebar.py`, 부모 `SidebarBookmarksMixin`·`SidebarPlaylistMixin`·`SidebarConfigPathsMixin`·`SidebarRefreshMixin`·`SidebarSequencesMixin`·`SidebarThumbnailsMixin`):
+**PlayerSidebarMixin** (`player_sidebar.py`, 부모 `SidebarBookmarksMixin`·`SidebarPlaylistMixin`·`SidebarConfigPathsMixin`·`SidebarRefreshMixin`·`SidebarSequencesMixin`·`SidebarAllMixin`·`SidebarThumbnailsMixin`):
 - 파일 브라우저가 있는 사이드바 UI — 파일 드래그 앤 드롭 처리, 폴더·파일을 목록에 넣기
 - 컨텍스트 메뉴 작업 (파일 복사 등)
 - 작품 → 시즌 → job 순서 (시즌이 없는 The_Johnsons·TJS_Animatic은 작품 → job): 시즌을 고르기 전에는 job 목록이 'job선택'만,
@@ -631,7 +634,7 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
   `test_instance_link`·`test_error_window`·`test_app_logging`
 - **경로·공유 설정·작품**: `test_paths`·`test_paths_windows`·`test_mac_mounts`·`test_shared_config`·`test_path_map_setup`·`test_path_map_setup_dialog`·
   `test_path_map_auto_ui`·`test_stored_paths`·`test_work_paths_ui`·`test_work_season_job`
-- **사이드바·썸네일·북마크**: `test_sidebar_refresh`·`test_video_list`·`test_thumbnails`·`test_bookmarks`
+- **사이드바·썸네일·북마크**: `test_sidebar_refresh`·`test_video_list`·`test_thumbnails`·`test_bookmarks`·`test_sidebar_all_tab`
 - **워커·OCR·내보내기**: `test_workers_split`·`test_workers_transnetv2_guard`·`test_ocr_worker_lifetime`·`test_animatic2_availability`·`test_transnetv2_detect`·
   `test_runtime`·`test_export`·`test_unsaved_ocr_flag`·`test_review_sync`
 - **창 모양**: `test_stylesheet_freeze`(테마 시트를 해시로 고정)·`test_scrollbar_style`·`test_slider_click`·`test_window_resize`·`test_high_dpi`·`test_force_focus`·`test_middle_panel_toggle`

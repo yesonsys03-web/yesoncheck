@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import (
 
 from yesoncheck import paths, video_list
 # PlayerSidebarMixin의 부모 믹스인 (북마크, 선택 재생, 공유 설정·작품 경로, 목록 다시 읽기, Seq 탭, 썸네일)
+from yesoncheck.sidebar_all import SidebarAllMixin
 from yesoncheck.sidebar_bookmarks import SidebarBookmarksMixin
 from yesoncheck.sidebar_playlist import SidebarPlaylistMixin
 from yesoncheck.sidebar_config_paths import SidebarConfigPathsMixin
@@ -40,7 +41,7 @@ from yesoncheck.sidebar_items import (
 )
 
 
-class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin, SidebarRefreshMixin, SidebarSequencesMixin, SidebarThumbnailsMixin):
+class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin, SidebarRefreshMixin, SidebarSequencesMixin, SidebarAllMixin, SidebarThumbnailsMixin):
 
     def dragEnterEvent(self, event):
         """메인 윈도우에 파일 드래그앤드롭 이벤트"""
@@ -210,39 +211,42 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         index = self.sidebar.indexAt(pos)
         if index.isValid():
             menu = QMenu(self.sidebar)
-            open_video_a_action = menu.addAction("비디오 A 열기")
-            open_video_a_action.triggered.connect(lambda: self.open_video_a(index))
-            open_video_b_action = menu.addAction("비디오 B 열기")
-            open_video_b_action.triggered.connect(lambda: self.open_video_b(index))
-
-            # 구분선 추가
-            menu.addSeparator()
-
-            merge_videos_action = menu.addAction("애니매틱 하나로 합치기")
-            merge_videos_action.triggered.connect(self.merge_videos)
-
-            # 구분선 추가
-            menu.addSeparator()
-
-            copy_file_action = menu.addAction("파일 복사")
-            copy_file_action.triggered.connect(self.copy_selected_files)  # copy_selected_files 메서드 호출
-
-            # 구분선 추가
-            menu.addSeparator()
-
-            # 썸네일 재생성 메뉴 추가
-            regenerate_thumbnail_action = menu.addAction("썸네일 재생성")
-            regenerate_thumbnail_action.triggered.connect(lambda: self.regenerate_selected_thumbnails())
-
-            # 구분선 추가
-            menu.addSeparator()
-
-            video_info_action = menu.addAction("미디어 정보")
-            video_info_action.triggered.connect(lambda: self.show_video_info(index))
-
+            self._build_sidebar_menu(menu, index)
             # 메뉴가 떠 있는 동안·고른 일을 하는 동안 목록 다시 읽기는 미룸 (index는 줄 번호 — 목록이 바뀌면 다른 영상을 가리킴)
             with self._hold_sidebar_refresh():
                 menu.exec_(self.sidebar.viewport().mapToGlobal(pos))
+
+    def _build_sidebar_menu(self, menu, index):
+        """Mov 항목 메뉴의 동작들 (index는 Mov 목록의 줄 — All 탭도 선택을 비춘 뒤 같은 동작을 씀)."""
+        open_video_a_action = menu.addAction("비디오 A 열기")
+        open_video_a_action.triggered.connect(lambda: self.open_video_a(index))
+        open_video_b_action = menu.addAction("비디오 B 열기")
+        open_video_b_action.triggered.connect(lambda: self.open_video_b(index))
+
+        # 구분선 추가
+        menu.addSeparator()
+
+        merge_videos_action = menu.addAction("애니매틱 하나로 합치기")
+        merge_videos_action.triggered.connect(self.merge_videos)
+
+        # 구분선 추가
+        menu.addSeparator()
+
+        copy_file_action = menu.addAction("파일 복사")
+        copy_file_action.triggered.connect(self.copy_selected_files)  # copy_selected_files 메서드 호출
+
+        # 구분선 추가
+        menu.addSeparator()
+
+        # 썸네일 재생성 메뉴 추가
+        regenerate_thumbnail_action = menu.addAction("썸네일 재생성")
+        regenerate_thumbnail_action.triggered.connect(lambda: self.regenerate_selected_thumbnails())
+
+        # 구분선 추가
+        menu.addSeparator()
+
+        video_info_action = menu.addAction("미디어 정보")
+        video_info_action.triggered.connect(lambda: self.show_video_info(index))
 
     def copy_selected_files(self):
         selected_items = self.sidebar.selectedItems()

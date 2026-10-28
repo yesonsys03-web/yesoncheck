@@ -723,11 +723,21 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         self.seq_sidebar.installEventFilter(self)  # Mov 목록처럼 목록이 포커스를 가져도 전역 단축키(프레임 이동 등)가 먹게
         self.seq_sidebar.setFocusPolicy(Qt.StrongFocus)
         self.sidebar.model().modelAboutToBeReset.connect(self._clear_seq_items)
+        # All 탭: Mov·Seq 목록을 한 목록에 섞어 보여 줌 (항목은 복제 — 만들기·동작은 sidebar_all.SidebarAllMixin)
+        self.all_sidebar = QListWidget(); self.all_sidebar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.all_sidebar.setSelectionMode(QListWidget.ExtendedSelection)
+        self.all_sidebar.itemClicked.connect(self.on_all_item_clicked)
+        self.all_sidebar.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.all_sidebar.customContextMenuRequested.connect(self.show_all_context_menu)
+        self.all_sidebar.installEventFilter(self)  # 목록이 포커스를 가져도 전역 단축키(프레임 이동 등)가 먹게
+        self.all_sidebar.setFocusPolicy(Qt.StrongFocus)
         self.sidebar_tabs = QTabWidget()
         self.sidebar_tabs.addTab(self.sidebar, 'Mov')
         self.sidebar_tabs.addTab(self.seq_sidebar, 'Seq')
+        self.sidebar_tabs.addTab(self.all_sidebar, 'All')
         self.sidebar_tabs.setFocusPolicy(Qt.NoFocus)
         self.sidebar_tabs.currentChanged.connect(self._on_sidebar_tab_changed)
+        self._init_all_tab_hooks()  # Mov·Seq 모델 변화 → All 목록 미룬 다시 만들기
         selectFolderButton = QPushButton('Select Folder'); selectFolderButton.clicked.connect(self.select_folder)
         selectFolderButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         
@@ -999,16 +1009,30 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
                         self.sidebar.setFocus()
                         QTimer.singleShot(10, self.load_selected_item_to_video_a)
                         return False
-                elif key in (Qt.Key_Return, Qt.Key_Enter): 
+                elif key in (Qt.Key_Return, Qt.Key_Enter):
                     self.play_selected_files()
                     return True
-                elif key == Qt.Key_Backslash: 
+                elif key == Qt.Key_Backslash:
                     self.toggle_play_pause_selected()
                     return True
-            
-            # 사이드바 목록(Mov·Seq 어느 쪽이든 목록이 포커스를 가진 채)에서 먹는 단축키: 재생/정지와 확대·축소·화면 맞춤.
-            # 선택 재생(Enter·\)·위아래 화살표로 열기는 재생목록 기계장치가 Mov 목록 전제라 위의 Mov 목록 전용
-            if source in (self.sidebar, self.seq_sidebar):
+
+            # All 목록: 위아래 화살표는 고른 항목을 종류대로 열고, Enter·\는 선택 재생 (mov만 — sidebar_playlist가 거름)
+            if source == self.all_sidebar:
+                if key in [Qt.Key_Up, Qt.Key_Down]:
+                    if not self.all_sidebar.hasFocus():
+                        self.all_sidebar.setFocus()
+                    QTimer.singleShot(10, self.load_selected_all_item)
+                    return False  # 기본 동작(선택 이동) 허용
+                elif key in (Qt.Key_Return, Qt.Key_Enter):
+                    self.play_selected_files()
+                    return True
+                elif key == Qt.Key_Backslash:
+                    self.toggle_play_pause_selected()
+                    return True
+
+            # 사이드바 목록(Mov·Seq·All 어느 쪽이든 목록이 포커스를 가진 채)에서 먹는 단축키: 재생/정지와 확대·축소·화면 맞춤.
+            # 선택 재생(Enter·\)·위아래 화살표로 열기는 재생목록 기계장치가 Mov 경로 전제라 위의 Mov·All 목록 전용
+            if source in (self.sidebar, self.seq_sidebar, self.all_sidebar):
                 if key == Qt.Key_Space: 
                     self.toggle_play_pause()
                     return True
@@ -1232,10 +1256,12 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
     def set_dark_theme(self):
         self.setStyleSheet(DARK_STYLESHEET)
         self.current_theme = 'dark'
+        self._schedule_all_rebuild()  # All 탭 시퀀스 글자 색을 테마에 맞춤
 
     def set_light_theme(self):
         self.setStyleSheet(LIGHT_STYLESHEET)
         self.current_theme = 'light'
+        self._schedule_all_rebuild()  # All 탭 시퀀스 글자 색을 테마에 맞춤
 
     def toggle_theme(self):
         if self.current_theme == 'dark':

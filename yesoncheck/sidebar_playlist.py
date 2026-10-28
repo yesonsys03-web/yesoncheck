@@ -17,21 +17,40 @@ from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import QMessageBox
 
 from yesoncheck import paths, video_list
+from yesoncheck.sidebar_items import ALL_KIND_ROLE
 
 
 class SidebarPlaylistMixin:
     """VideoPlayer의 선택 재생(Play Selected) — 재생목록 시작·차례대로 열기·없는 영상 건너뛰기·강조 색·끝 처리."""
 
+    def _playlist_selection(self):
+        """선택 재생이 쓸 항목 (목록 순서): Mov 탭은 Mov 목록의 선택 그대로, All 탭은 All 목록의 선택 중 mov만 —
+        시퀀스는 건너뜀 (시퀀스 연속 재생은 메모리 한계로 하지 않음, 사용자 결정)."""
+        if self.sidebar_tabs.currentWidget() is self.all_sidebar:
+            widget = self.all_sidebar
+            items = [item for item in widget.selectedItems() if item.data(ALL_KIND_ROLE) == "mov"]
+        else:
+            widget = self.sidebar
+            items = list(widget.selectedItems())
+        items.sort(key=lambda x: widget.row(x))
+        return items
+
     def play_selected_files(self):
-        selected_items = self.sidebar.selectedItems()
+        selected_items = self._playlist_selection()
         if selected_items:
-            selected_items.sort(key=lambda x: self.sidebar.row(x))
             self.playlist = [item.toolTip() for item in selected_items]
             self.current_playlist_index = 0
             self.is_playlist_playing = True
             self._playlist_played_any = False
             print(f"Play Selected: {len(selected_items)} files selected, starting playback")
             self.play_current_playlist_item()
+        elif (self.sidebar_tabs.currentWidget() is self.all_sidebar
+              and self.all_sidebar.selectedItems()):
+            # All 탭에서 시퀀스만 선택함 — 무엇이 왜 재생되지 않는지 알림 (조용히 무시하지 않음)
+            print("Play Selected: 선택에 mov가 없음 (시퀀스는 선택 재생에서 건너뜀)")
+            QMessageBox.information(self, "Play Selected",
+                                    "선택에 mov가 없습니다 — 시퀀스는 선택 재생에서 건너뜁니다.\n"
+                                    "재생할 mov를 선택하세요 (우클릭 → 'Mov만 모두 선택').")
         else:
             print("No files selected")
             # 사용자에게 선택된 파일이 없다는 것을 알림
