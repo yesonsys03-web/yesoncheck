@@ -15,7 +15,9 @@ while read -r ARCH URLPATH TOOL SHA; do
         continue
     fi
     echo "받는 중: $DEST"
-    curl -fL --progress-bar -o "$TMP/$TOOL.zip" "$BASE/$URLPATH/$TOOL.zip"
+    # 재시도: 이 서버가 간헐적으로 연결을 끊음 (2026-10-28 CI에서 curl 56 — reset·timeout — 세 번)
+    curl -fL --retry 8 --retry-delay 5 --retry-all-errors --connect-timeout 30 \
+        --progress-bar -o "$TMP/$TOOL.zip" "$BASE/$URLPATH/$TOOL.zip"
     rm -f "$TMP/$TOOL"
     unzip -q -o "$TMP/$TOOL.zip" "$TOOL" -d "$TMP"
     GOT="$(shasum -a 256 "$TMP/$TOOL" | cut -d' ' -f1)"
