@@ -20,6 +20,7 @@ THUMBNAIL_VIDEO_PROBLEM = "영상 확인 실패"  # 썸네일을 만들 영상�
 THUMBNAIL_MAKE_FAILED = "썸네일 만들기 실패"  # 영상은 있지만 썸네일을 만들지 못함 — OpenCV가 열지 못함 등 (창 제목)
 THUMBNAIL_CONTEXT_ROLE = Qt.UserRole + 1  # 사이드바 항목 데이터: 그 영상의 썸네일 자리 (ThumbnailContext)
 SIDEBAR_SOURCE_ROLE = Qt.UserRole + 2  # 사이드바 항목 데이터: 그 영상이 들어온 곳 (video_list.ListSource, 따로 넣은 파일은 None)
+ALL_KIND_ROLE = Qt.UserRole + 3  # All 탭 항목 데이터: 항목 종류 ("mov" 또는 "seq" — Mov·Seq 목록에서 복제해 올 때 적음)
 LIST_READ_FAILED = "목록 폴더를 읽지 못함"  # 영상 목록을 만들거나 다시 읽을 폴더를 읽지 못함 (창 제목)
 LIST_FOLDER_GONE = "목록 폴더 없음"  # 목록에 영상을 넣은 폴더가 지워짐 (창 제목)
 ACTIVATION_REFRESH_GAP_S = 2.0  # 앱이 다시 활성될 때 이 시간 안에 이미 목록을 읽었으면 또 읽지 않음

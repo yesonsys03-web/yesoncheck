@@ -445,6 +445,12 @@ class SidebarSequencesMixin:
         self._sync_selected_play_buttons()
         if self.sidebar_tabs.widget(index) is self.seq_sidebar:
             self._load_seq_thumbnails()
+        elif self.sidebar_tabs.widget(index) is self.all_sidebar:
+            # All 탭: 숨은 동안의 Mov·Seq 변화를 한 번에 반영. 썸네일 모드면 Seq 썸네일도 다시 읽음
+            # (아이콘은 Seq 목록에 쓰이고 dataChanged → 미룬 다시 만들기로 All에 복제됨)
+            self._rebuild_all_list()
+            if self.is_thumbnail_mode:
+                self._load_seq_thumbnails()
 
     def _sync_selected_play_buttons(self):
         """선택 재생 단추를 보이는 탭에 맞춤. Seq 탭에서는 'Play Selected'뿐 아니라 짝 단추 'Play/Pause Selected'(멈춰 있을 때 라벨
@@ -474,16 +480,19 @@ class SidebarSequencesMixin:
     def _apply_seq_display_mode(self, *_checked):
         """List/Thumb 단추 (Mov 쪽 슬롯 다음에 이어 놓음 → is_thumbnail_mode가 이미 바뀌어 있음): Seq 목록을 전역 표시 모드에 맞춤.
         어느 탭이 보이든 같음 — 두 목록이 모드 하나를 따름. 사이드바 폭은 두 탭이 같은 칸이라 Mov 쪽이 바꾼 그대로."""
-        widget = self.seq_sidebar
+        for widget in (self.seq_sidebar, self.all_sidebar):  # All 탭도 같은 전역 표시 모드를 따름 (아이콘은 복제로 따라옴)
+            if self.is_thumbnail_mode:
+                widget.setIconSize(QSize(self.thumbnail_size, self.thumbnail_size))
+                widget.setSpacing(10)
+            else:
+                widget.setSpacing(0)
         if self.is_thumbnail_mode:
-            widget.setIconSize(QSize(self.thumbnail_size, self.thumbnail_size))
-            widget.setSpacing(10)
             self._load_seq_thumbnails()
         else:
-            widget.setSpacing(0)
             self._stop_seq_thumbnail_work()
-            for i in range(widget.count()):
-                widget.item(i).setIcon(QIcon())
+            for widget in (self.seq_sidebar, self.all_sidebar):
+                for i in range(widget.count()):
+                    widget.item(i).setIcon(QIcon())
 
     def _load_seq_thumbnails(self, followup=False):
         """썸네일 모드면 Seq 목록의 썸네일을 뒤 스레드로 읽어 아이콘만 붙임 (목록 모드면 아무것도 하지 않음).
@@ -679,8 +688,15 @@ class SidebarSequencesMixin:
         if not item.isSelected():
             self.seq_sidebar.clearSelection()
             item.setSelected(True)
-        identity = item.data(Qt.UserRole).identity
         menu = QMenu(self.seq_sidebar)
+        self._build_seq_menu(menu, item)
+        # 메뉴가 떠 있는 동안·고른 일을 하는 동안 목록 다시 읽기는 미룸 (Mov 목록 메뉴와 같음 — 항목이 바뀌지 않게)
+        with self._hold_sidebar_refresh():
+            menu.exec_(self.seq_sidebar.viewport().mapToGlobal(pos))
+
+    def _build_seq_menu(self, menu, item):
+        """Seq 항목 메뉴의 동작들 (item은 Seq 목록의 항목 — All 탭도 선택을 비춘 뒤 같은 동작을 씀)."""
+        identity = item.data(Qt.UserRole).identity
         menu.addAction("비디오 A로 열기").triggered.connect(lambda: self.open_file('A', identity))
         menu.addAction("비디오 B로 열기").triggered.connect(lambda: self.open_file('B', identity))
         menu.addSeparator()
@@ -689,9 +705,6 @@ class SidebarSequencesMixin:
         menu.addAction("썸네일 다시 만들기").triggered.connect(lambda: self.regenerate_seq_thumbnails(self._selected_seq_items()))
         menu.addSeparator()
         menu.addAction("정보 보기").triggered.connect(lambda: self.show_seq_info(item))
-        # 메뉴가 떠 있는 동안·고른 일을 하는 동안 목록 다시 읽기는 미룸 (Mov 목록 메뉴와 같음 — 항목이 바뀌지 않게)
-        with self._hold_sidebar_refresh():
-            menu.exec_(self.seq_sidebar.viewport().mapToGlobal(pos))
 
     def show_seq_info(self, item):
         """'정보 보기': 범위·개수·빠짐은 목록의 값, 프레임 속도·해상도는 시퀀스를 잠깐 열어 읽음 (바로 놓음 — 첫 프레임을 디코드하므로

@@ -59,6 +59,43 @@ def test_fullscreen_restore_keeps_hidden_middle_panel(player):
     assert player.middleScrollArea.isHidden()
 
 
+def test_n_restores_panel_width_after_thumbnail_mode_resize(player, qapp):
+    """숨긴 동안 Thumb 전환(사이드바 폭 2배)이 스플리터 setSizes로 숨은 칸을 0으로 적어도, N이 패널을
+    원래 폭으로 되살린다 — 예전에는 보이기만 하고 폭 0(접힌 채)이라 N을 다시 눌러도 복구되지 않았음 (사용자 재현)."""
+    player.resize(900, 400)
+    player.show()  # offscreen — 스플리터 크기가 잡혀야 재현됨
+    qapp.processEvents()
+    player.initialize_sidebar_width()
+    assert player.mainSplitter.sizes()[1] > 0
+
+    press(player, Qt.Key_N, "n")           # 가운데 열 숨김
+    player.switch_to_thumbnail_mode()       # 숨긴 동안 사이드바 폭 2배 — setSizes가 숨은 칸에 0을 적음
+    press(player, Qt.Key_N, "n")           # 다시 보임
+    qapp.processEvents()
+
+    assert not player.middleScrollArea.isHidden()
+    assert player.mainSplitter.sizes()[1] > 0
+
+
+def test_n_restores_panel_width_after_list_mode_resize(player, qapp):
+    """숨긴 동안 List/Thumb 전환이 스플리터 폭을 다시 정해도(숨은 칸은 0으로 적힘) N이 패널을 원래 폭으로 되살린다 —
+    예전에는 0폭(접힌 채)으로 나타나 N을 다시 눌러도 복구되지 않았음 (사용자 재현)."""
+    player.resize(900, 400)
+    player.show()  # offscreen — 스플리터 크기가 잡혀야 재현됨
+    qapp.processEvents()
+    player.initialize_sidebar_width()
+    before = player.mainSplitter.sizes()[1]
+    assert before > 0
+
+    press(player, Qt.Key_N, "n")        # 가운데 열 숨김
+    player.switch_to_list_mode()         # 숨긴 동안 사이드바 폭 복원 경로가 setSizes를 부름
+    press(player, Qt.Key_N, "n")        # 다시 보임
+    qapp.processEvents()
+
+    assert not player.middleScrollArea.isHidden()
+    assert player.mainSplitter.sizes()[1] > 0
+
+
 def test_other_control_widgets_untouched_by_n(player):
     press(player, Qt.Key_N, "n")
     assert not player.sidebar_tabs.isHidden()  # 왼쪽 파일 목록은 그대로

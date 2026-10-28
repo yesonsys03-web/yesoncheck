@@ -2085,8 +2085,8 @@ class PlayerPlaybackMixin:
 
     def wheelEvent(self, event):
         """전역 휠 이벤트 처리 - 사이드바를 제외한 모든 영역에서 프레임 이동"""
-        # 사이드바 영역(Mov·Seq 목록)에서는 휠 이벤트를 무시
-        if self.sidebar.underMouse() or self.seq_sidebar.underMouse():
+        # 사이드바 영역(Mov·Seq·All 목록)에서는 휠 이벤트를 무시
+        if self.sidebar.underMouse() or self.seq_sidebar.underMouse() or self.all_sidebar.underMouse():
             event.ignore()
             return
             
@@ -2347,7 +2347,9 @@ class PlayerPlaybackMixin:
 • <b>드래그앤드롭</b>: 파일을 윈도우나 사이드바에 드래그하여 로드<br>
 • <b>단일 파일</b>: Video A에 자동 로드<br>
 • <b>두 개 파일</b>: Video A와 B에 각각 로드<br>
-• <b>여러 파일</b>: 사이드바에 추가
+• <b>여러 파일</b>: 사이드바에 추가<br>
+• <b>All 탭</b>: 영상·시퀀스를 한 목록에 (시퀀스 글자는 하늘색) — 선택 재생은 <b>mov만</b> 이어서 재생(시퀀스 건너뜀),
+  우클릭 → <b>Mov만 모두 선택</b>
 
 <h3>▶️ 재생 제어</h3>
 • <b>Space</b>: 재생/일시정지<br>

@@ -171,6 +171,7 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         
         self.controls_visible = True  # initUI() 호출 전에 먼저 정의
         self.middle_panel_visible = True  # N 키로 숨기는 가운데 컨트롤 열 (middleScrollArea)
+        self._middle_panel_width = 220  # 숨기기 전 가운데 열의 스플리터 폭 (초기 setSizes의 220 — 숨긴 동안 0이 적히면 복원용)
         # 사이드바 Mov·Seq 탭 (initUI가 위젯을 만듦; SidebarSequencesMixin이 씀): 탭 위젯, Seq 목록(이미지 시퀀스), 폴더를 읽어 찾은 시퀀스
         # (path_key → [SeqInfo] — 영상 경로만 돌려주는 get_video_files_from_folder와 목록을 채우는 쪽 사이)
         self.sidebar_tabs = None
@@ -723,11 +724,21 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         self.seq_sidebar.installEventFilter(self)  # Mov 목록처럼 목록이 포커스를 가져도 전역 단축키(프레임 이동 등)가 먹게
         self.seq_sidebar.setFocusPolicy(Qt.StrongFocus)
         self.sidebar.model().modelAboutToBeReset.connect(self._clear_seq_items)
+        # All 탭: Mov·Seq 목록을 한 목록에 섞어 보여 줌 (항목은 복제 — 만들기·동작은 sidebar_all.SidebarAllMixin)
+        self.all_sidebar = QListWidget(); self.all_sidebar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.all_sidebar.setSelectionMode(QListWidget.ExtendedSelection)
+        self.all_sidebar.itemClicked.connect(self.on_all_item_clicked)
+        self.all_sidebar.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.all_sidebar.customContextMenuRequested.connect(self.show_all_context_menu)
+        self.all_sidebar.installEventFilter(self)  # 목록이 포커스를 가져도 전역 단축키(프레임 이동 등)가 먹게
+        self.all_sidebar.setFocusPolicy(Qt.StrongFocus)
         self.sidebar_tabs = QTabWidget()
         self.sidebar_tabs.addTab(self.sidebar, 'Mov')
         self.sidebar_tabs.addTab(self.seq_sidebar, 'Seq')
+        self.sidebar_tabs.addTab(self.all_sidebar, 'All')
         self.sidebar_tabs.setFocusPolicy(Qt.NoFocus)
         self.sidebar_tabs.currentChanged.connect(self._on_sidebar_tab_changed)
+        self._init_all_tab_hooks()  # Mov·Seq 모델 변화 → All 목록 미룬 다시 만들기
         selectFolderButton = QPushButton('Select Folder'); selectFolderButton.clicked.connect(self.select_folder)
         selectFolderButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         
@@ -895,12 +906,31 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
     def toggle_middle_panel(self):
         """N 키 — 가운데 컨트롤 열(middleScrollArea) 보이기/숨기기 (왼쪽 파일 목록·비디오는 그대로)."""
         self.middle_panel_visible = not self.middle_panel_visible
-        self.middleScrollArea.setVisible(self.middle_panel_visible and self.controls_visible)
+        if not (self.middle_panel_visible and self.controls_visible):
+            sizes = self.mainSplitter.sizes()
+            if sizes[1] > 0:
+                self._middle_panel_width = sizes[1]
+            self.middleScrollArea.setVisible(False)
+            return
+        self.middleScrollArea.setVisible(True)
+        self._restore_middle_panel_width()
+
+    def _restore_middle_panel_width(self):
+        """가운데 열을 다시 보일 때 스플리터 폭 복원: 숨긴 동안 List/Thumb 폭 조절이 setSizes를 부르면 숨은 칸에
+        0이 적혀, setVisible(True)만으로는 0폭(접힌 채)으로 나타남 — 기억한 폭을 영상 칸에서 가져와 되살림."""
+        sizes = self.mainSplitter.sizes()
+        if sizes[1] > 0:
+            return
+        sizes[1] = self._middle_panel_width
+        sizes[2] = max(0, sizes[2] - self._middle_panel_width)
+        self.mainSplitter.setSizes(sizes)
 
     def apply_middle_panel_state(self):
-        """컨트롤 복원(V 키·전체화면 해제) 뒤에도 N 키로 숨긴 가운데 열은 숨김을 유지."""
+        """컨트롤 복원(V 키·전체화면 해제) 뒤에도 N 키로 숨긴 가운데 열은 숨김을 유지하고, 보이는 열은 폭을 되살림."""
         if not self.middle_panel_visible:
             self.middleScrollArea.setVisible(False)
+        elif not self.middleScrollArea.isHidden():
+            self._restore_middle_panel_width()
 
     def eventFilter(self, source, event):
         # V키가 비활성화되어 있을 때는 오버레이 컨트롤 동작하지 않음 (컨트롤 패널이 표시되어 있을 때)
@@ -999,16 +1029,30 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
                         self.sidebar.setFocus()
                         QTimer.singleShot(10, self.load_selected_item_to_video_a)
                         return False
-                elif key in (Qt.Key_Return, Qt.Key_Enter): 
+                elif key in (Qt.Key_Return, Qt.Key_Enter):
                     self.play_selected_files()
                     return True
-                elif key == Qt.Key_Backslash: 
+                elif key == Qt.Key_Backslash:
                     self.toggle_play_pause_selected()
                     return True
-            
-            # 사이드바 목록(Mov·Seq 어느 쪽이든 목록이 포커스를 가진 채)에서 먹는 단축키: 재생/정지와 확대·축소·화면 맞춤.
-            # 선택 재생(Enter·\)·위아래 화살표로 열기는 재생목록 기계장치가 Mov 목록 전제라 위의 Mov 목록 전용
-            if source in (self.sidebar, self.seq_sidebar):
+
+            # All 목록: 위아래 화살표는 고른 항목을 종류대로 열고, Enter·\는 선택 재생 (mov만 — sidebar_playlist가 거름)
+            if source == self.all_sidebar:
+                if key in [Qt.Key_Up, Qt.Key_Down]:
+                    if not self.all_sidebar.hasFocus():
+                        self.all_sidebar.setFocus()
+                    QTimer.singleShot(10, self.load_selected_all_item)
+                    return False  # 기본 동작(선택 이동) 허용
+                elif key in (Qt.Key_Return, Qt.Key_Enter):
+                    self.play_selected_files()
+                    return True
+                elif key == Qt.Key_Backslash:
+                    self.toggle_play_pause_selected()
+                    return True
+
+            # 사이드바 목록(Mov·Seq·All 어느 쪽이든 목록이 포커스를 가진 채)에서 먹는 단축키: 재생/정지와 확대·축소·화면 맞춤.
+            # 선택 재생(Enter·\)·위아래 화살표로 열기는 재생목록 기계장치가 Mov 경로 전제라 위의 Mov·All 목록 전용
+            if source in (self.sidebar, self.seq_sidebar, self.all_sidebar):
                 if key == Qt.Key_Space: 
                     self.toggle_play_pause()
                     return True
@@ -1232,10 +1276,12 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
     def set_dark_theme(self):
         self.setStyleSheet(DARK_STYLESHEET)
         self.current_theme = 'dark'
+        self._schedule_all_rebuild()  # All 탭 시퀀스 글자 색을 테마에 맞춤
 
     def set_light_theme(self):
         self.setStyleSheet(LIGHT_STYLESHEET)
         self.current_theme = 'light'
+        self._schedule_all_rebuild()  # All 탭 시퀀스 글자 색을 테마에 맞춤
 
     def toggle_theme(self):
         if self.current_theme == 'dark':
