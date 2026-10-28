@@ -43,8 +43,8 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck.video_widget import CustomVideoWidget
-from yesoncheck import bookmarks, build_info, default_app, external_tools, file_associations, instance_link, \
-    instances, paths, timing_log, video_list
+from yesoncheck import bookmarks, build_info, default_app, error_window, external_tools, file_associations, \
+    instance_link, instances, paths, timing_log, video_list
 from yesoncheck.main_window_styles import (
     BOOKMARK_BUTTON_STYLE,
     BOOKMARK_LIST_REFRESH_BUTTON_STYLE,
@@ -333,6 +333,7 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
     def initUI(self):
         self.current_theme = 'dark'  # 기본 테마
         self.videoWidget = CustomVideoWidget(self)
+        self.videoWidget.apply_theme_background(self.current_theme)  # 시작 테마가 바뀌어도 GL 여백 색이 따라오게
         self.videoWidget.wipePositionChanged.connect(self.update_frame)
         self.videoWidget.roiSelectionFinished.connect(self.on_roi_selected)
         self.init_annotation_system()
@@ -1276,11 +1277,13 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
     def set_dark_theme(self):
         self.setStyleSheet(DARK_STYLESHEET)
         self.current_theme = 'dark'
+        self.videoWidget.apply_theme_background('dark')  # GL 뷰포트는 스타일시트 배경 칠을 받지 않음
         self._schedule_all_rebuild()  # All 탭 시퀀스 글자 색을 테마에 맞춤
 
     def set_light_theme(self):
         self.setStyleSheet(LIGHT_STYLESHEET)
         self.current_theme = 'light'
+        self.videoWidget.apply_theme_background('light')  # GL 뷰포트는 스타일시트 배경 칠을 받지 않음
         self._schedule_all_rebuild()  # All 탭 시퀀스 글자 색을 테마에 맞춤
 
     def toggle_theme(self):
@@ -1861,3 +1864,10 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         pending, self._user_file_problems = self._user_file_problems or [], None
         for title, text in pending:
             QMessageBox.warning(self, title, text)
+
+    def show_viewport_fallback(self):
+        """GL 뷰포트 폴백 사유(video_widget이 만들 때 기록에 남기고 모아 둠)를 창으로 알림 — app.launch가
+        스플래시를 닫은 뒤 부름 (위젯 생성 중 모달은 splash.finish 안에서 열려 시작 순서를 멈춤)."""
+        reason, self.videoWidget.viewport_fallback_reason = self.videoWidget.viewport_fallback_reason, None
+        if reason:
+            error_window.show_window(reason)  # 기록(print)은 위젯이 만들 때 남겼음 — 꺼내며 비워 두 번 뜨지 않음

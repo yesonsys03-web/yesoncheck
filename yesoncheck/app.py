@@ -360,6 +360,9 @@ def launch(argv=None):
     QTimer.singleShot(0, player.start_instance_link)
     # 시작할 때 읽은 사용자 파일(북마크·오버레이·내보내기 폴더 설정)에 문제가 있었으면 알림 (스플래시가 닫힌 뒤라 가려지지 않음)
     QTimer.singleShot(0, player.show_user_file_problems)
+    # GL 뷰포트 폴백(Mac에서 OpenGL 컨텍스트 생성 실패 — video_widget이 만들 때 사유를 남김) 알림 — 같은 이유로
+    # 스플래시가 닫힌 뒤 (위젯 생성 중에 띄우면 splash.finish 안에서 모달이 열려 '로딩 중'처럼 멈춰 보임)
+    QTimer.singleShot(0, player.show_viewport_fallback)
     # 공유 설정(설정 폴더·작품 경로·변환표)은 창을 보인 뒤 백그라운드에서 읽고, 끝나면 문제를 알림
     # (스플래시가 닫힌 뒤라 대화상자가 가려지지 않음)
     QTimer.singleShot(0, player.start_shared_config_load)

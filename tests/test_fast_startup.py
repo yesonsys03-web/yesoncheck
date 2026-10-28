@@ -367,6 +367,9 @@ def test_launch_shows_window_then_loads_shared_config(qapp, monkeypatch):
         def show_user_file_problems(self):
             events.append("user_files")  # 시작할 때 읽은 북마크·설정 파일의 문제 알림
 
+        def show_viewport_fallback(self):
+            events.append("viewport")  # GL 뷰포트 폴백 알림 (스플래시가 닫힌 뒤)
+
         def start_instance_link(self):
             events.append("instances")  # 창 기록·창 사이 연결 서버 (다른 창의 업데이트가 이 창을 셈)
 
@@ -377,7 +380,7 @@ def test_launch_shows_window_then_loads_shared_config(qapp, monkeypatch):
     wait_until(lambda: "load" in events)
     # 업데이트 결과(지난번 업데이트의 기록 — 로컬 파일만)는 창을 보인 뒤 맨 먼저: 새 버전의 "잘 켜짐" 표시를 바로 남김.
     # 이어서 창 기록(다른 창의 업데이트가 이 창을 세고 닫기를 요청할 수 있게)
-    assert events[1:] == ["show", "update", "instances", "user_files", "load"]
+    assert events[1:] == ["show", "update", "instances", "user_files", "viewport", "load"]
     created[0].close()
 
 
@@ -406,6 +409,9 @@ def test_launch_opens_command_line_file_after_window_is_shown(qapp, monkeypatch,
         def show_user_file_problems(self):
             events.append("user_files")  # 시작할 때 읽은 북마크·설정 파일의 문제 알림
 
+        def show_viewport_fallback(self):
+            events.append("viewport")  # GL 뷰포트 폴백 알림 (스플래시가 닫힌 뒤)
+
         def start_instance_link(self):
             events.append("instances")  # 창 기록·창 사이 연결 서버 (다른 창의 업데이트가 이 창을 셈)
 
@@ -417,15 +423,15 @@ def test_launch_opens_command_line_file_after_window_is_shown(qapp, monkeypatch,
     try:
         assert app_module.launch(["yesoncheck", str(video)]) == 0
         assert events == ["show"]  # launch 안에서는 열지 않음
-        wait_until(lambda: len(events) == 6)
-        assert events == ["show", "update", "instances", "user_files", "load", ("open", "A", str(video))]
+        wait_until(lambda: len(events) == 7)
+        assert events == ["show", "update", "instances", "user_files", "viewport", "load", ("open", "A", str(video))]
 
         # 없는 파일도 open_file로 — 열지 못하면 open_file이 오류 창 (예전에는 기록 한 줄만 남기고 빈 창 — 설계 3-2)
         events.clear()
         missing = str(tmp_path / "없음.mov")
         assert app_module.launch(["yesoncheck", missing]) == 0
-        wait_until(lambda: len(events) == 6)
-        assert events == ["show", "update", "instances", "user_files", "load", ("open", "A", missing)]
+        wait_until(lambda: len(events) == 7)
+        assert events == ["show", "update", "instances", "user_files", "viewport", "load", ("open", "A", missing)]
         assert f"Opening file: {missing}" in capsys.readouterr().out
     finally:
         for player in created:

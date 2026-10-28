@@ -10,16 +10,19 @@ from PyQt5.QtGui import (
     QColor,
     QBrush,
     QImage,
+    QOpenGLContext,
     QPainter,
     QPainterPath,
     QPen,
     QPixmap,
     QPolygonF,
+    QSurfaceFormat,
     QTransform,
     QWheelEvent,
 )
 
 from PyQt5.QtWidgets import (
+    QApplication,
     QGraphicsEllipseItem,
     QGraphicsLineItem,
     QGraphicsPathItem,
@@ -29,9 +32,47 @@ from PyQt5.QtWidgets import (
     QGraphicsView,
     QLabel,
     QMessageBox,
+    QOpenGLWidget,
 )
 
 from yesoncheck import paths
+
+VIEWPORT_ENV = "YESONCHECK_VIEWPORT"
+VIEWPORT_MODES = ("gl", "raster")
+
+# 영상 주변 여백 색 — main_window_styles의 테마 배경과 짝 (어두운: QWidget #232323, 밝은: QMainWindow #fafafa).
+# GL 뷰포트는 스타일시트 배경 칠을 받지 않아(WA_OpaquePaintEvent) backgroundBrush로 GPU가 칠함.
+# 시트는 해시로 얼어 있어(tests/test_stylesheet_freeze.py) 값이 어긋날 일 없음.
+VIDEO_BG = {"dark": "#232323", "light": "#fafafa"}
+
+
+def viewport_mode(platform_name, env):
+    """뷰포트 종류를 정함 — "gl" 또는 "raster".
+
+    풀스크린 재생 FPS 저하는 Mac 레티나의 CPU 확대 블릿이 원인이라 cocoa에서만 GL이 기본
+    (풀스크린 13.5→24.8fps, 창 모드는 동일 — 2026-10-28 실측). Windows는 풀스크린 저하가 없고(사용자 실측),
+    offscreen(시험·CI)은 QOpenGLWidget을 지원하지 않음(컨텍스트 생성 실패). YESONCHECK_VIEWPORT=gl|raster로
+    명시해서 바꿀 수 있고, 그 밖의 값은 ValueError — 조용한 폴백 금지.
+    """
+    forced = env.get(VIEWPORT_ENV)
+    if forced is not None:
+        if forced not in VIEWPORT_MODES:
+            raise ValueError(
+                f"{VIEWPORT_ENV}는 {' 또는 '.join(VIEWPORT_MODES)}여야 합니다: {forced!r}"
+            )
+        return forced
+    return "gl" if platform_name == "cocoa" else "raster"
+
+
+def viewport_forced(env):
+    """토글(YESONCHECK_VIEWPORT)로 명시했는지 — 강제한 GL은 컨텍스트 확인 없이 말 그대로 강제."""
+    return env.get(VIEWPORT_ENV) is not None
+
+
+def gl_context_available():
+    """OpenGL 컨텍스트를 실제로 만들 수 있는지 — cocoa에서도 드물게 실패할 수 있음(원격 세션·드라이버 문제)."""
+    return QOpenGLContext().create()
+
 
 class CustomVideoWidget(QGraphicsView):
     wipePositionChanged = pyqtSignal()
@@ -79,6 +120,34 @@ class CustomVideoWidget(QGraphicsView):
         # 키보드 이벤트가 메인 윈도우로 전달되도록 포커스 정책 설정
         self.setFocusPolicy(Qt.NoFocus)
 
+        # Mac(cocoa) 풀스크린 재생: 라스터 페인트의 CPU 확대 블릿이 병목이라 GL 뷰포트로 확대를 GPU에 맡김.
+        # 자리 조건 둘: setAcceptDrops(True) 뒤(새 뷰포트가 드롭 수락을 물려받음), 아래 라벨들을 만들기 전 —
+        # setViewport()는 새 뷰포트를 자식 맨 끝(쌓임 맨 위)에 두므로 라벨을 그 뒤에 만들어야 GL 위에 보임
+        # (아래로 깔린 형제는 hole punch로 지워짐 — 쌓임 순서는 test_gl_viewport가 지킴).
+        self.viewport_fallback_reason = None  # GL을 쓰려다 못 쓴 사유 — show_viewport_fallback(스플래시 뒤)이 창으로 알림
+        mode = viewport_mode(QApplication.platformName(), os.environ)
+        if mode == "gl" and not viewport_forced(os.environ) and not gl_context_available():
+            # 조용한 폴백 금지: 기록에 바로 남기고, 창은 여기서 띄우지 않음 — 위젯 생성 중 모달은
+            # splash.finish의 processEvents 안에서 열려 시작 순서를 멈춤(업데이트 '잘 켜짐' 표시까지 늦어짐 — 검토 실측).
+            # 사유를 남겨 두면 app.launch가 스플래시를 닫은 뒤 show_viewport_fallback으로 알림.
+            print("[뷰포트] OpenGL 컨텍스트 생성 실패 — raster로 계속 (풀스크린 재생이 느릴 수 있음)")
+            self.viewport_fallback_reason = (
+                "OpenGL을 쓸 수 없어 기본 화면 그리기로 계속합니다 — 풀스크린 재생이 느릴 수 있습니다."
+            )
+        elif mode == "gl":
+            gl_viewport = QOpenGLWidget()
+            msaa = QSurfaceFormat(gl_viewport.format())
+            msaa.setSamples(4)  # GL2 페인트 엔진의 안티앨리어싱은 MSAA뿐 — 와이프 선·ROI·주석 미리보기 계단 방지
+            gl_viewport.setFormat(msaa)
+            self.setViewport(gl_viewport)
+            self.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)  # GL은 부분 갱신이 안 됨
+            self.viewport().setMouseTracking(True)  # setViewport()가 꺼 둠 — 와이프 선 커서 등
+            # FullViewportUpdate라 매 페인트가 뷰포트 전체를 덮음 — 불투명 선언. 없으면 창 전체 스타일시트
+            # 폴리시 뒤 뷰포트가 불투명으로 인정되지 않아 풀스크린 FPS가 24.8→16으로 떨어짐 (2026-10-28 실측)
+            self.viewport().setAttribute(Qt.WA_OpaquePaintEvent, True)
+            self.apply_theme_background("dark")  # 안전 기본값 — 창을 만드는 쪽과 테마 전환이 다시 맞춰 줌
+            print("[뷰포트] GL(QOpenGLWidget) 사용 — 풀스크린 재생 확대를 GPU로")
+
         self.zoom_label = QLabel(self)
         self.zoom_label.setAlignment(Qt.AlignCenter)
         self.zoom_label.setStyleSheet("background-color: rgba(255, 255, 255, 128); padding: 5px; border-radius: 3px;")
@@ -118,6 +187,13 @@ class CustomVideoWidget(QGraphicsView):
         self.annotation_edit_target = None
         self.annotation_edit_handle_items = []
         self.annotation_edit_interaction = False
+
+    def apply_theme_background(self, theme):
+        """영상 주변 여백을 테마 배경색으로 — GL 뷰포트에서만 (raster는 스타일시트가 칠하므로 그대로 둠)."""
+        if theme not in VIDEO_BG:
+            raise ValueError(f"테마는 {' 또는 '.join(VIDEO_BG)}여야 합니다: {theme!r}")
+        if isinstance(self.viewport(), QOpenGLWidget):
+            self.setBackgroundBrush(QColor(VIDEO_BG[theme]))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

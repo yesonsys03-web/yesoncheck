@@ -1,5 +1,5 @@
 """예상된 실패·예상 못 한 오류를 기록과 오류 창으로 — default_app(Mac 기본 앱)·file_associations(Windows 파일 연결)·
-mac_app_events(파일 열기·앱 다시 열기)가 함께 씀.
+mac_app_events(파일 열기·앱 다시 열기)·player_base(GL 뷰포트 폴백 알림 show_viewport_fallback)가 함께 씀.
 
 오류 창(show_window)은 빌드 앱이면 앱의 예외 창(app.make_excepthook가 sys.excepthook.dialog로 둔 app._ErrorDialog — 기록 파일
 경로를 붙이고, 이미 떠 있으면 기록에만 — 같은 실패가 되풀이돼도 창이 쌓이지 않음), 그 창이 없으면(소스 실행) 같은 제목(TITLE)의

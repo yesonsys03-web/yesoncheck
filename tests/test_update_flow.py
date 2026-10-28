@@ -1546,6 +1546,9 @@ class LaunchedPlayer(QWidget):
     def start_instance_link(self):
         pass
 
+    def show_viewport_fallback(self):
+        pass
+
 
 @pytest.fixture
 def launched(monkeypatch):

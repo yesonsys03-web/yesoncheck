@@ -107,6 +107,9 @@ class QuickPlayer(QWidget):
     def start_instance_link(self):
         pass  # 창 기록·창 사이 연결 서버 — 이 시험의 대상이 아님
 
+    def show_viewport_fallback(self):
+        pass  # GL 뷰포트 폴백 알림 — 이 시험의 대상이 아님
+
 
 app_module.VideoPlayer = QuickPlayer
 code = app_module.launch([sys.argv[0]])

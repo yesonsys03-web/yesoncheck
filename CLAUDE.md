@@ -107,7 +107,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   `player_sidebar`(`SidebarScan`·`ThumbnailContext`·`gather_shared_config` 등).
 
 **주요 파일**:
-- `yesoncheck/app.py` (397줄): 애플리케이션 부트스트랩 및 CLI 진입점 — 빌드 앱은 `setup_app_logging`이 stdout·stderr를
+- `yesoncheck/app.py` (400줄): 애플리케이션 부트스트랩 및 CLI 진입점 — 빌드 앱은 `setup_app_logging`이 stdout·stderr를
   창(프로세스)마다 기록 파일 `yesoncheck_<날짜>_<pid>.log`로(Mac `~/Library/Logs/YesonCheck`, Windows
   `%LOCALAPPDATA%\YesonCheck\logs` — update.log와 같은 폴더, 30일 지난 것은 켤 때 지움) 보내고 예외 창(`sys.excepthook`)을
   설치. 업데이트 중(다른 창이 넘긴 업데이트 — 도우미가 `--update-result`로 켠 앱은 빼고)에 켜면 창을 만들지 않고
@@ -117,7 +117,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   앱은 이 계정에 연결 프로그램을 등록(`file_associations`) —
   시작 순서는 아래 '여러 창과 업데이트'의 '새 창·동영상 열기·기본 앱'
 - `yesoncheck/main_window.py` (12줄): 믹스인 구성 (`VideoPlayer`)
-- `yesoncheck/player_base.py` (1,843줄): 핵심 UI 및 윈도우 관리 — `VideoPlayerBase`(UI 만들기·메뉴·테마 전환·창 닫기·작업 정지·창 사이 연결).
+- `yesoncheck/player_base.py` (1,873줄): 핵심 UI 및 윈도우 관리 — `VideoPlayerBase`(UI 만들기·메뉴·테마 전환·창 닫기·작업 정지·창 사이 연결).
   OCR 묶음은 `player_ocr`, 오버레이 묶음은 `player_overlay`로 나눠 부모로 붙였고, 스타일시트 문자열은 `main_window_styles`, 붙잡아 둔 워커 정리는
   `worker_lifecycle`로 옮김 (`worker_lifecycle`의 이름은 여기서 다시 내보냄)
 - `yesoncheck/player_ocr.py` (1,845줄): `PlayerOcrMixin` — ROI·분석 방식 UI 상태, 분석 시작(OCR·애니매틱·애니매틱2)과 진행·완료 콜백, 검토 창 수명,
@@ -151,7 +151,9 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
 - `yesoncheck/player_update.py` (1,408줄): 자동 업데이트 믹스인(`PlayerUpdateMixin`) — 확인 일정(켤 때 + 3시간마다
   + Help → 업데이트 확인…), 알림 띠 처리, '업데이트'를 누른 뒤 받기·다른 창 닫기·도우미에 넘기기, 다시 켜진 앱의 성공/실패
   판정 (여러 창일 때의 순서는 아래 '여러 창과 업데이트')
-- `yesoncheck/video_widget.py` (906줄): 줌, 팬, ROI 선택 기능이 있는 커스텀 비디오 뷰포트 — 주석 모드 동안 오른쪽 위에 '주석 모드' 배지(마우스 투과), 텍스트 입력 요청은 '텍스트' 도구에서만(도형 도구의 드래그 없는 클릭은 무시)
+- `yesoncheck/video_widget.py` (982줄): 줌, 팬, ROI 선택 기능이 있는 커스텀 비디오 뷰포트 — 주석 모드 동안 오른쪽 위에 '주석 모드' 배지(마우스 투과), 텍스트 입력 요청은 '텍스트' 도구에서만(도형 도구의 드래그 없는 클릭은 무시).
+  **GL 뷰포트(Mac 전용)**: cocoa에서만 `QOpenGLWidget` 뷰포트가 기본 — 풀스크린 재생이 레티나 CPU 확대 블릿 때문에 13.5fps로 떨어지던 것을 GPU 확대로 24.8fps로 되돌림(창 모드는 동일 — 2026-10-28 실측). Windows는 풀스크린 저하가 없고(사용자 실측) offscreen(시험·CI)은 QOpenGLWidget 미지원이라 raster 그대로 — CI의 실행 시험·`ci/screenshot_check.py`도 전부 offscreen/windows라 GL 경로는 CI를 타지 않음(cocoa 실기 확인 몫).
+  `YESONCHECK_VIEWPORT=gl|raster`로 명시 전환(그 밖의 값은 ValueError — 조용한 폴백 금지, `viewport_mode`; 시험은 `tests/conftest.py`가 이 변수를 지우고 시작). cocoa 기본 GL은 먼저 `gl_context_available`로 컨텍스트 생성을 확인하고, 실패하면 기록에 바로 남기고 raster로 계속하며 사유를 `viewport_fallback_reason`에 남김 — 오류 창은 `app.launch`가 스플래시를 닫은 뒤 `show_viewport_fallback`으로(위젯 생성 중 모달은 `splash.finish`의 processEvents 안에서 열려 시작 순서를 멈추고 업데이트 '잘 켜짐' 표시까지 늦춤). 조용한 빈 화면 금지; 토글로 강제한 GL은 확인 없이 그대로(`viewport_forced`). GL일 때 지키는 것(전부 실측 근거): ① 블록 위치 — `setAcceptDrops(True)` 뒤·줌/배지 라벨 생성 앞(`setViewport`가 새 뷰포트를 쌓임 맨 위에 둬서, 라벨이 뒤에 만들어져야 가려지지 않음 — hole punch) ② `setViewport`가 끄는 뷰포트 마우스 추적 다시 켬 ③ `FullViewportUpdate` ④ MSAA 4(GL2 엔진의 AA는 MSAA뿐 — 없으면 와이프 선·ROI·주석 미리보기가 계단짐; FPS 영향 없음 실측) ⑤ `WA_OpaquePaintEvent`(없으면 창 스타일시트 폴리시 뒤 풀스크린이 다시 16fps — 스타일시트 배경을 매 프레임 CPU로 칠하게 됨) ⑥ 영상 주변 여백은 스타일시트 대신 `backgroundBrush`로 테마 색을 GPU가 칠함(`apply_theme_background` — 창 생성과 `set_dark_theme`/`set_light_theme`가 부름, 색 `VIDEO_BG`는 시트의 테마 배경과 짝). 알고 둔 한계: GL 선 AA는 MSAA라 raster의 해석적 AA보다 거칢(눈 확인 통과 기준), `GL_MAX_TEXTURE_SIZE`(보통 16384) 초과 프레임은 미확인, raster를 골랐을 때는 로그가 없음(기록에 `[뷰포트] GL` 줄이 있으면 GL 경로), 컨텍스트 확인은 통과했는데 위젯 초기화(컨텍스트 공유·MSAA FBO)가 실패하는 드문 경우는 qWarning만 남음, GL이 안 되는 Mac은 창(프로세스)마다 폴백 알림이 뜸(조용히 넘기지 않는 쪽을 택함). 시험 `tests/test_gl_viewport.py`
 - 이미지 시퀀스 (`<베이스>-NNNN.<확장자>` 프레임들을 영상처럼 열어 재생·비교, Seq 탭, 시퀀스 → MOV 일괄 만들기 — 사용자 설명은 README '이미지 시퀀스 재생'):
   - `yesoncheck/sequence_scan.py` (137줄): 파일 이름에서 시퀀스를 묶는 규칙 `group_sequences`·`SeqInfo`·프레임 이름 해석 `parse_frame_name`·한 프레임의 시퀀스 찾기 `sequence_of_frame`·여러 프레임용 색인 `FolderFrames` — Qt·디스크 없음. **시퀀스의 정체성은 가상 경로
     `<폴더>/<베이스>.seq`(`SeqInfo.identity`, `is_sequence_path`로 판별)**: 진짜 파일이 아니며 목록·`filename_a`·주석 파일 이름(`<베이스>_seq_annotations.json`)·
@@ -227,7 +229,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   `ensure_registered`(읽어서 없거나 다른 것만 쓰고, 쓴 것이 있으면 `SHChangeNotify`), `register_at_start`(빌드 Windows 앱이 켤 때 이 계정에
   등록), `open_default_apps_settings`(Help → "동영상 기본 앱 설정 열기…" — `ms-settings:defaultapps?registeredAppUser=YesonCheck`).
   `winreg`·`shell32`는 쓸 때 불러와 Mac에서도 모듈이 불림 — 설치 파일 `installer/yesoncheck.iss [Registry]`와 같은 내용(BUILD.md 8-2)
-- `yesoncheck/error_window.py` (43줄): `default_app`·`file_associations`·`mac_app_events`가 함께 쓰는 오류 알림 — `show_error(prefix, text)`는 기록(stderr)에
+- `yesoncheck/error_window.py` (43줄): `default_app`·`file_associations`·`mac_app_events`·`player_base`(GL 뷰포트 폴백)가 함께 쓰는 오류 알림 — `show_error(prefix, text)`는 기록(stderr)에
   남기고 `show_window`: 앱의 예외 창(`sys.excepthook.dialog` = `app._ErrorDialog.show_text` — 기록 파일 경로를 붙이고 한 번에 하나만), 없으면(소스 실행)
   `QMessageBox.critical`; `show_unexpected`는 예외 처리 중에 트레이스백째(기록에는 전부, 창에는 `with_details` — 무엇이 실패했는지는 그대로, 트레이스백은 끝
   `DETAILS_LIMIT`(3000) 글자). 잡히지 않은 예외(`_ErrorDialog.show_error`)는 트레이스백만이라 끝 3000자
@@ -316,7 +318,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
 2. 업데이트 중이면(`update_in_progress_at_start`, 도우미가 켠 앱은 빼고) 창 없이 "업데이트 중" 창만 보이고 끝 — 그때 받은 파일은 열지 않고 기록.
 3. `load_mount_map` → 스플래시 + `processEvents`(여기서 AppKit `-[NSApplication finishLaunching]`이 자기 'rapp' 처리기를 등록) → `VideoPlayer` → `show()`.
 4. `QTimer.singleShot(0)`로 줄 세운 시작 일: 지난 업데이트 결과 판정(끝나면 동영상 기본 앱 묻기를 줄 맨 뒤에 세움) → 창 기록·연결 서버 → 사용자 파일
-   문제 → 공유 설정 읽기 → (Windows 빌드 앱) 연결 프로그램 등록.
+   문제 → GL 뷰포트 폴백 알림(`show_viewport_fallback` — 위젯 생성 중 모달 금지) → 공유 설정 읽기 → (Windows 빌드 앱) 연결 프로그램 등록.
 5. `router.ready(open_here)` — 4의 일이 하나도 돌기 전에 launch 안에서 **동기로** 불림: 받은 첫 파일 열기(나머지 파일은 새 창)를 4의 일 뒤에 줄 세움.
    그래서 실제로 도는 차례는 4의 일 → 받은 첫 파일 열기 → (Mac 빌드 앱, `--update-result`로 켠 앱은 건너뜀) 동영상 기본 앱 묻기(창 기록이 이미 남아 있어
    다른 창이 이 창을 셈). 창을 보인 **뒤** Mac은 여기서 reopen 처리기를 **동기로** 등록(`register_reopen_handler`). 그 전에(`finishLaunching` 전)
@@ -467,7 +469,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
 - ROI 종횡비 보존
 
 **CustomVideoWidget** (`video_widget.py`):
-- QGraphicsView를 사용한 비디오 프레임 렌더링
+- QGraphicsView를 사용한 비디오 프레임 렌더링 — Mac(cocoa)은 GL 뷰포트 기본(풀스크린 FPS, 위 '주요 파일' 참고)
 - 줌, 팬 및 윈도우에 맞추기 컨트롤
 - A/B 비교를 위한 와이프 효과 (X/Y축)
 - OCR을 위한 ROI(관심 영역) 선택
@@ -624,8 +626,8 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 
 **시험은 반드시 `~/coding/p310_tf/bin/python -m pytest`로 돌릴 것** — TensorFlow가 없는 `~/coding/p310`으로 돌리면 11개가 실패함.
 
-`tests/`에 시험 파일 73개 (수집 1,841개). `python -m pytest tests -q`로 돌리며(약 9분), 이 Mac의 소스 실행에서 1,796개가 통과하고 45개는 건너뜀 —
-다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-10-26 기준). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
+`tests/`에 시험 파일 74개 (수집 1,871개). `python -m pytest tests -q`로 돌리며(약 9분), 이 Mac의 소스 실행에서 1,826개가 통과하고 45개는 건너뜀 —
+다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-10-28 기준). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
 정적 빌드(`vendor/ffmpeg/`)를 씀 (`tests/conftest.py`). 시험을 건너뛰거나 지워서 통과시키지 말 것.
 
 시험 구성 (파일 이름 기준):
@@ -637,7 +639,7 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 - **사이드바·썸네일·북마크**: `test_sidebar_refresh`·`test_video_list`·`test_thumbnails`·`test_bookmarks`·`test_sidebar_all_tab`
 - **워커·OCR·내보내기**: `test_workers_split`·`test_workers_transnetv2_guard`·`test_ocr_worker_lifetime`·`test_animatic2_availability`·`test_transnetv2_detect`·
   `test_runtime`·`test_export`·`test_unsaved_ocr_flag`·`test_review_sync`
-- **창 모양**: `test_stylesheet_freeze`(테마 시트를 해시로 고정)·`test_scrollbar_style`·`test_slider_click`·`test_window_resize`·`test_high_dpi`·`test_force_focus`·`test_middle_panel_toggle`
+- **창 모양**: `test_stylesheet_freeze`(테마 시트를 해시로 고정)·`test_scrollbar_style`·`test_slider_click`·`test_window_resize`·`test_high_dpi`·`test_force_focus`·`test_middle_panel_toggle`·`test_gl_viewport`(Mac GL 뷰포트 — 선택 규칙·GL 적용 시 보존 설정·테마 배경)
 - **그 밖**: `test_smoke`·`test_fast_startup`·`test_files`·`test_user_files`·`test_frame_annotations_merge`·`test_annotation_click`·`test_external_tools`·`test_build_info`·
   `test_check_frozen_imports`·`test_release_tool`·`test_print_crash_reports`·`test_screenshot_check`·`test_refactor_checks`
 

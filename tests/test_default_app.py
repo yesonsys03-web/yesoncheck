@@ -526,6 +526,9 @@ def test_first_run_ask_only_in_built_mac_app_after_update_result(qapp, monkeypat
         def show_user_file_problems(self):
             events.append("user_files")
 
+        def show_viewport_fallback(self):
+            events.append("viewport")
+
         def start_shared_config_load(self):
             events.append("load")
 
@@ -536,14 +539,14 @@ def test_first_run_ask_only_in_built_mac_app_after_update_result(qapp, monkeypat
     try:
         assert app_module.launch(["yesoncheck"]) == 0
         wait_until(lambda: any(isinstance(e, tuple) and e[0] == "ask" for e in events))
-        assert events == ["show", ("update", None), "instances", "user_files", "load", ("ask", created[0])]
+        assert events == ["show", ("update", None), "instances", "user_files", "viewport", "load", ("ask", created[0])]
 
         events.clear()
         assert app_module.launch(["yesoncheck", "--update-result", "tok"]) == 0
         wait_until(lambda: "load" in events)
         for _ in range(5):
             QApplication.processEvents()
-        assert events == ["show", ("update", "tok"), "instances", "user_files", "load"]
+        assert events == ["show", ("update", "tok"), "instances", "user_files", "viewport", "load"]
     finally:
         for player in created:
             player.close()
