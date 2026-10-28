@@ -127,7 +127,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
 - `yesoncheck/main_window_styles.py` (940줄): 어두운·밝은 테마 시트(`DARK_STYLESHEET`·`LIGHT_STYLESHEET`)와 큰 인라인 시트 상수 — 데이터만 있는 잎 모듈
   (한 글자도 바뀌지 않게 `tests/test_stylesheet_freeze.py`가 해시로 지킴)
 - `yesoncheck/worker_lifecycle.py` (76줄): 놓아 준 `QThread` 워커를 끝날 때까지 붙잡아 두기 — `release_worker`·`wait_for_released_workers`·`EXIT_WAIT_S`(30초)
-- `yesoncheck/player_playback.py` (2,630줄): 비디오 재생, 프레임 탐색 및 FFmpeg 작업 — 전역 단축키(`keyPressEvent`): V(컨트롤 전체 숨김·오버레이), N/ㅜ(가운데 컨트롤 열 숨김 — `toggle_middle_panel`, V·전체화면 복원 뒤에도 유지)
+- `yesoncheck/player_playback.py` (2,635줄): 비디오 재생, 프레임 탐색 및 FFmpeg 작업 — 화살표·휠 프레임 이동 모두 오버레이(V 모드) 슬라이더를 함께 갱신(`_update_ui_fast`도 `update_overlay_controls`를 부름 — tests/test_overlay_slider_sync.py) — 전역 단축키(`keyPressEvent`): V(컨트롤 전체 숨김·오버레이), N/ㅜ(가운데 컨트롤 열 숨김 — `toggle_middle_panel`, V·전체화면 복원 뒤에도 유지)
 - `yesoncheck/player_annotations.py` (1,072줄): 수정 사항 주석(프레임별 텍스트·도형) UI와 재생 연동 (`PlayerAnnotationsMixin`) — 주석 모드 버튼은 켜짐을 빨강으로 표시(`ANNOTATION_MODE_BUTTON_STYLE`)
 - `yesoncheck/player_sidebar.py` (555줄): `PlayerSidebarMixin` — 드롭·파일 넣기·폴더 불러오기, 우클릭 메뉴·파일 복사, 작품 → 시즌 → job 콤보,
   선택한 영상을 A에 열기. 나머지는 아래 부모 믹스인 모듈에 있고 이 모듈은 옛 import 경로를 위해 일부 이름을 다시 내보냄
@@ -626,7 +626,7 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 
 **시험은 반드시 `~/coding/p310_tf/bin/python -m pytest`로 돌릴 것** — TensorFlow가 없는 `~/coding/p310`으로 돌리면 11개가 실패함.
 
-`tests/`에 시험 파일 74개 (수집 1,871개). `python -m pytest tests -q`로 돌리며(약 9분), 이 Mac의 소스 실행에서 1,826개가 통과하고 45개는 건너뜀 —
+`tests/`에 시험 파일 75개 (수집 1,875개). `python -m pytest tests -q`로 돌리며(약 9분), 이 Mac의 소스 실행에서 1,830개가 통과하고 45개는 건너뜀 —
 다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-10-28 기준). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
 정적 빌드(`vendor/ffmpeg/`)를 씀 (`tests/conftest.py`). 시험을 건너뛰거나 지워서 통과시키지 말 것.
 
@@ -639,7 +639,7 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 - **사이드바·썸네일·북마크**: `test_sidebar_refresh`·`test_video_list`·`test_thumbnails`·`test_bookmarks`·`test_sidebar_all_tab`
 - **워커·OCR·내보내기**: `test_workers_split`·`test_workers_transnetv2_guard`·`test_ocr_worker_lifetime`·`test_animatic2_availability`·`test_transnetv2_detect`·
   `test_runtime`·`test_export`·`test_unsaved_ocr_flag`·`test_review_sync`
-- **창 모양**: `test_stylesheet_freeze`(테마 시트를 해시로 고정)·`test_scrollbar_style`·`test_slider_click`·`test_window_resize`·`test_high_dpi`·`test_force_focus`·`test_middle_panel_toggle`·`test_gl_viewport`(Mac GL 뷰포트 — 선택 규칙·GL 적용 시 보존 설정·테마 배경)
+- **창 모양**: `test_stylesheet_freeze`(테마 시트를 해시로 고정)·`test_scrollbar_style`·`test_slider_click`·`test_window_resize`·`test_high_dpi`·`test_force_focus`·`test_middle_panel_toggle`·`test_gl_viewport`(Mac GL 뷰포트 — 선택 규칙·GL 적용 시 보존 설정·테마 배경)·`test_overlay_slider_sync`(화살표 프레임 이동의 오버레이 슬라이더 동기화·대체 탐색 경로 한 칸 어긋남)
 - **그 밖**: `test_smoke`·`test_fast_startup`·`test_files`·`test_user_files`·`test_frame_annotations_merge`·`test_annotation_click`·`test_external_tools`·`test_build_info`·
   `test_check_frozen_imports`·`test_release_tool`·`test_print_crash_reports`·`test_screenshot_check`·`test_refactor_checks`
 

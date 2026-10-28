@@ -1719,16 +1719,17 @@ class PlayerPlaybackMixin:
             print(f"_seek_sequential_fast: 현재위치={current_pos}, 목표위치={target_frame_idx}")
                 
             if target_frame_idx >= current_pos:
-                # 앞으로 이동하는 경우
+                # 앞으로 이동하는 경우 — read()는 current_pos 다음 프레임을 주므로 '증가 → 비교' 순서여야 함
+                # (_seek_direct_fast와 같음; 예전엔 읽기 전 위치와 비교해 목표의 다음 프레임을 보여 줬음 — 한 칸 어긋남)
                 frames_to_read = target_frame_idx - current_pos
                 for _ in range(frames_to_read + 1):
                     ret_a, frame_a = self.cap_a.read()
                     if ret_a and frame_a is not None:
+                        current_pos += 1
                         if current_pos == target_frame_idx:
                             self.frame_a = self.process_frame(frame_a)
                             self._update_ui_fast(target_frame_idx, total_frames)
                             return True
-                        current_pos += 1
                     else:
                         break
             else:
@@ -1785,6 +1786,10 @@ class PlayerPlaybackMixin:
             self.positionScroll.blockSignals(True)
             self.positionScroll.setValue(scroll_val)
             self.positionScroll.blockSignals(False)
+
+        # 오버레이(V 모드) 슬라이더·라벨도 함께 — 휠 경로(update_frame)는 부르는데 여기만 빠져 있어서
+        # 화살표 프레임 이동 때 오버레이 핸들이 멈춰 있었음 (Mac·Windows 공통, 2026-10-28 사용자 보고)
+        self.update_overlay_controls()
         
         # 시간 정보 업데이트
         original_fps = self.cap_a.get(cv2.CAP_PROP_FPS)
