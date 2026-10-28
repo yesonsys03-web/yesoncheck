@@ -161,6 +161,33 @@ def test_play_buttons_enabled_on_all_tab(player, qapp, tmp_path):
     assert not player.playSelectedButton.isEnabled()
 
 
+# ---------------------------------------------------------------- 사이드바 폭 (List/Thumb)
+
+
+def test_thumb_and_list_width_stable_on_all_tab(player, qapp):
+    """All 탭이 보일 때 Thumb/List를 거듭 눌러도 사이드바 칸 폭이 누적되지 않는다 — 예전에는 숨은 Mov 페이지의
+    낡은 width()로 차액을 계산해 Thumb마다 계속 커지고 List는 반대로 갔음 (사용자 재현)."""
+    player.resize(900, 400)
+    player.show()  # offscreen — 레이아웃이 잡혀야 페이지 폭이 생김
+    qapp.processEvents()
+    player.initialize_sidebar_width()
+    show_all_tab(player, qapp)
+
+    player.switch_to_thumbnail_mode()
+    qapp.processEvents()
+    first = player.mainSplitter.sizes()[0]
+    player.switch_to_thumbnail_mode()
+    qapp.processEvents()
+    assert abs(player.mainSplitter.sizes()[0] - first) <= 2
+
+    player.switch_to_list_mode()
+    qapp.processEvents()
+    restored = player.mainSplitter.sizes()[0]
+    player.switch_to_list_mode()
+    qapp.processEvents()
+    assert abs(player.mainSplitter.sizes()[0] - restored) <= 2
+
+
 # ---------------------------------------------------------------- Mov만 모두 선택
 
 

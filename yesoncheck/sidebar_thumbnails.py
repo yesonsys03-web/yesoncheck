@@ -150,9 +150,13 @@ class SidebarThumbnailsMixin:
 
     def _resize_sidebar_column(self, list_width):
         """사이드바 목록이 list_width가 되도록 메인 스플리터의 왼쪽 칸 너비를 바꿈 — 늘어난 만큼 영상 쪽에서 가져오고
-        줄어든 만큼 영상 쪽에 줌. 창이 좁아 다 못 가져오면 스플리터가 최소 너비 안에서 맞춤."""
+        줄어든 만큼 영상 쪽에 줌. 창이 좁아 다 못 가져오면 스플리터가 최소 너비 안에서 맞춤.
+
+        지금 목록 폭은 보이는 탭 페이지에서 읽음 — 숨은 페이지(Seq·All 탭이 보일 때의 Mov 목록)의 width()는
+        레이아웃이 돌지 않아 낡은 값이라, 그걸 쓰면 누를 때마다 차액이 누적돼 칸이 계속 커지거나 작아짐."""
         sizes = self.mainSplitter.sizes()
-        column = sizes[0] + list_width - self.sidebar.width()
+        page = self.sidebar_tabs.currentWidget()
+        column = sizes[0] + list_width - page.width()
         sizes[2] = max(0, sizes[2] - (column - sizes[0]))
         sizes[0] = column
         self.mainSplitter.setSizes(sizes)
