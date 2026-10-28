@@ -490,8 +490,9 @@ class SidebarSequencesMixin:
             self._load_seq_thumbnails()
         else:
             self._stop_seq_thumbnail_work()
-            for i in range(widget.count()):
-                widget.item(i).setIcon(QIcon())
+            for widget in (self.seq_sidebar, self.all_sidebar):
+                for i in range(widget.count()):
+                    widget.item(i).setIcon(QIcon())
 
     def _load_seq_thumbnails(self, followup=False):
         """썸네일 모드면 Seq 목록의 썸네일을 뒤 스레드로 읽어 아이콘만 붙임 (목록 모드면 아무것도 하지 않음).
