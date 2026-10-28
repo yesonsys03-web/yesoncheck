@@ -171,6 +171,7 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         
         self.controls_visible = True  # initUI() 호출 전에 먼저 정의
         self.middle_panel_visible = True  # N 키로 숨기는 가운데 컨트롤 열 (middleScrollArea)
+        self._middle_panel_width = 220  # 숨기기 전 가운데 열의 스플리터 폭 (초기 setSizes의 220 — 숨긴 동안 0이 적히면 복원용)
         # 사이드바 Mov·Seq 탭 (initUI가 위젯을 만듦; SidebarSequencesMixin이 씀): 탭 위젯, Seq 목록(이미지 시퀀스), 폴더를 읽어 찾은 시퀀스
         # (path_key → [SeqInfo] — 영상 경로만 돌려주는 get_video_files_from_folder와 목록을 채우는 쪽 사이)
         self.sidebar_tabs = None
@@ -905,12 +906,31 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
     def toggle_middle_panel(self):
         """N 키 — 가운데 컨트롤 열(middleScrollArea) 보이기/숨기기 (왼쪽 파일 목록·비디오는 그대로)."""
         self.middle_panel_visible = not self.middle_panel_visible
-        self.middleScrollArea.setVisible(self.middle_panel_visible and self.controls_visible)
+        if not (self.middle_panel_visible and self.controls_visible):
+            sizes = self.mainSplitter.sizes()
+            if sizes[1] > 0:
+                self._middle_panel_width = sizes[1]
+            self.middleScrollArea.setVisible(False)
+            return
+        self.middleScrollArea.setVisible(True)
+        self._restore_middle_panel_width()
+
+    def _restore_middle_panel_width(self):
+        """가운데 열을 다시 보일 때 스플리터 폭 복원: 숨긴 동안 List/Thumb 폭 조절이 setSizes를 부르면 숨은 칸에
+        0이 적혀, setVisible(True)만으로는 0폭(접힌 채)으로 나타남 — 기억한 폭을 영상 칸에서 가져와 되살림."""
+        sizes = self.mainSplitter.sizes()
+        if sizes[1] > 0:
+            return
+        sizes[1] = self._middle_panel_width
+        sizes[2] = max(0, sizes[2] - self._middle_panel_width)
+        self.mainSplitter.setSizes(sizes)
 
     def apply_middle_panel_state(self):
-        """컨트롤 복원(V 키·전체화면 해제) 뒤에도 N 키로 숨긴 가운데 열은 숨김을 유지."""
+        """컨트롤 복원(V 키·전체화면 해제) 뒤에도 N 키로 숨긴 가운데 열은 숨김을 유지하고, 보이는 열은 폭을 되살림."""
         if not self.middle_panel_visible:
             self.middleScrollArea.setVisible(False)
+        elif not self.middleScrollArea.isHidden():
+            self._restore_middle_panel_width()
 
     def eventFilter(self, source, event):
         # V키가 비활성화되어 있을 때는 오버레이 컨트롤 동작하지 않음 (컨트롤 패널이 표시되어 있을 때)
