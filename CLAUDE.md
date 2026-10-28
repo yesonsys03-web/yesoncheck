@@ -127,7 +127,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
 - `yesoncheck/main_window_styles.py` (940줄): 어두운·밝은 테마 시트(`DARK_STYLESHEET`·`LIGHT_STYLESHEET`)와 큰 인라인 시트 상수 — 데이터만 있는 잎 모듈
   (한 글자도 바뀌지 않게 `tests/test_stylesheet_freeze.py`가 해시로 지킴)
 - `yesoncheck/worker_lifecycle.py` (76줄): 놓아 준 `QThread` 워커를 끝날 때까지 붙잡아 두기 — `release_worker`·`wait_for_released_workers`·`EXIT_WAIT_S`(30초)
-- `yesoncheck/player_playback.py` (2,625줄): 비디오 재생, 프레임 탐색 및 FFmpeg 작업 — 전역 단축키(`keyPressEvent`): V(컨트롤 전체 숨김·오버레이), N/ㅜ(가운데 컨트롤 열 숨김 — `toggle_middle_panel`, V·전체화면 복원 뒤에도 유지)
+- `yesoncheck/player_playback.py` (2,630줄): 비디오 재생, 프레임 탐색 및 FFmpeg 작업 — 전역 단축키(`keyPressEvent`): V(컨트롤 전체 숨김·오버레이), N/ㅜ(가운데 컨트롤 열 숨김 — `toggle_middle_panel`, V·전체화면 복원 뒤에도 유지)
 - `yesoncheck/player_annotations.py` (1,072줄): 수정 사항 주석(프레임별 텍스트·도형) UI와 재생 연동 (`PlayerAnnotationsMixin`) — 주석 모드 버튼은 켜짐을 빨강으로 표시(`ANNOTATION_MODE_BUTTON_STYLE`)
 - `yesoncheck/player_sidebar.py` (555줄): `PlayerSidebarMixin` — 드롭·파일 넣기·폴더 불러오기, 우클릭 메뉴·파일 복사, 작품 → 시즌 → job 콤보,
   선택한 영상을 A에 열기. 나머지는 아래 부모 믹스인 모듈에 있고 이 모듈은 옛 import 경로를 위해 일부 이름을 다시 내보냄
@@ -136,14 +136,14 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   - `yesoncheck/sidebar_config_paths.py` (883줄): `SidebarConfigPathsMixin` — 공유 설정 읽기 시작·창에 넣기·문제 알림, (Windows) 변환표 자동 설정,
     작품 경로 관리 창·`get_work_path`·관리 비밀번호
   - `yesoncheck/sidebar_refresh.py` (496줄): `SidebarRefreshMixin`·`SidebarScan` — 목록 항목 모델(출처·세대·다시 읽기 보류)과 목록 다시 읽기·목록 문제 알림
-  - `yesoncheck/sidebar_all.py` (177줄): `SidebarAllMixin` — All 탭(`self.all_sidebar`): Mov·Seq 목록을 복제(clone)해 한 목록에 이름 자연 정렬로 섞음(시퀀스 글자는 테마별 하늘색 `ALL_SEQ_FG`,
+  - `yesoncheck/sidebar_all.py` (206줄): `SidebarAllMixin` — All 탭(`self.all_sidebar`): Mov·Seq 목록을 복제(clone)해 한 목록에 이름 자연 정렬로 섞음(시퀀스 글자는 테마별 하늘색 `ALL_SEQ_FG`,
     종류는 `ALL_KIND_ROLE`). 원본 모델(rowsInserted·rowsRemoved·modelReset·dataChanged)이 바뀌면 보이는 동안만 미뤄서 통째로 다시 만듦 — All은 늘 파생, 원본에서만 고침(선택 재생 강조도 이 길로 따라옴).
     누르면 종류대로 A에 열고, 우클릭은 'Mov만 모두 선택' + 선택을 원본 목록에 비춘 뒤 그 종류의 기존 메뉴(`_build_sidebar_menu`·`_build_seq_menu`). 선택 재생은 `sidebar_playlist._playlist_selection`이 All 탭에서 mov만 고름(시퀀스 연속 재생은 메모리 한계로 안 함)
-  - `yesoncheck/sidebar_sequences.py` (873줄): `SidebarSequencesMixin`·`SequenceExportDialog` — Mov·Seq·All 탭 전환과 Seq 목록, 끌어다 놓은 프레임 파일 처리, Seq 우클릭 메뉴(A/B로 열기·MOV 만들기·썸네일·정보),
+  - `yesoncheck/sidebar_sequences.py` (874줄): `SidebarSequencesMixin`·`SequenceExportDialog` — Mov·Seq·All 탭 전환과 Seq 목록, 끌어다 놓은 프레임 파일 처리, Seq 우클릭 메뉴(A/B로 열기·MOV 만들기·썸네일·정보),
     일괄 내보내기 진행 창. 시퀀스 썸네일은 짝 `.mov`의 것을 재사용
   - `yesoncheck/sidebar_thumbnails.py` (933줄): `SidebarThumbnailsMixin` — 목록/썸네일 모드·사이드바 폭, 썸네일 반복·워커 정리, 영상 단위 확인·만들기,
     썸네일 폴더·문제 알림, 백그라운드 썸네일 읽기
-  - `yesoncheck/sidebar_items.py` (37줄): 사이드바 항목 상수(창 제목·안내 문구·항목 데이터 역할)와 `ThumbnailContext` — 잎 모듈
+  - `yesoncheck/sidebar_items.py` (38줄): 사이드바 항목 상수(창 제목·안내 문구·항목 데이터 역할)와 `ThumbnailContext` — 잎 모듈
   - `yesoncheck/shared_config_load.py` (308줄): 공유 설정 읽기 코드 — `gather_shared_config`·`SharedConfigState`·`SharedConfigLoad`(`QThread`)·
     `list_works_not_opening`. 창·위젯을 건드리지 않음 (창에 넣는 일은 `SidebarConfigPathsMixin`)
 - `yesoncheck/player_review.py` (7,032줄): 3패널 레이아웃 및 세그먼트 편집 기능이 있는 OCR 리뷰 대화상자 (`OCRReviewDialog`)
@@ -624,7 +624,7 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 
 **시험은 반드시 `~/coding/p310_tf/bin/python -m pytest`로 돌릴 것** — TensorFlow가 없는 `~/coding/p310`으로 돌리면 11개가 실패함.
 
-`tests/`에 시험 파일 72개 (수집 1,822개). `python -m pytest tests -q`로 돌리며(약 8분), 이 Mac의 소스 실행에서 1,777개가 통과하고 45개는 건너뜀 —
+`tests/`에 시험 파일 73개 (수집 1,838개). `python -m pytest tests -q`로 돌리며(약 9분), 이 Mac의 소스 실행에서 1,793개가 통과하고 45개는 건너뜀 —
 다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-10-26 기준). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
 정적 빌드(`vendor/ffmpeg/`)를 씀 (`tests/conftest.py`). 시험을 건너뛰거나 지워서 통과시키지 말 것.
 
