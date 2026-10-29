@@ -699,8 +699,9 @@ def maybe_pipe_capture(path):
     - "cv2": probe도 하지 않고 None — 1.5.0 동작으로 돌리는 킬 스위치.
     - "auto": probe_movie → pipe_eligible이면 캡처(로그 한 줄), 아니면 None(어느 조건이 어긋났는지 로그 한 줄).
     - "pipe": ① 코덱만 면제하고 정확도 조건 ②~⑥을 요구 — 어긋나면 PipeCaptureError (비 CFR 파일을 조용히 틀어 주지 않음).
-    예외의 경계: ffprobe가 파일을 못 읽음(RuntimeError — 깨진 파일·확인 불가, 파일 쪽 문제)만 스택 트레이스·stderr 전문을 로그에
-    남기고 None(cv2도 못 열면 기존 오류 창). ffprobe 실행 파일이 없음(ToolNotFoundError — 빌드 깨짐)·probe 결과 해석 오류
+    예외의 경계: ffprobe가 파일을 못 읽음(RuntimeError — 깨진 파일·확인 불가, 파일 쪽 문제)은 auto에서만 스택 트레이스·stderr 전문을
+    로그에 남기고 None(cv2도 못 열면 기존 오류 창) — pipe 모드는 PipeCaptureError로 감싸 올림(원인 체인 유지, cv2로 조용히 가지 않음).
+    ffprobe 실행 파일이 없음(ToolNotFoundError — 빌드 깨짐)·probe 결과 해석 오류
     (KeyError·ValueError… — 코드 버그)·캡처 생성의 PipeCaptureError는 잡지 않고 그대로 올린다 (조용히 숨기면 안 됨).
     """
     mode = movie_source_mode()
@@ -709,7 +710,9 @@ def maybe_pipe_capture(path):
     name = os.path.basename(path)
     try:
         probe = probe_movie(path)
-    except RuntimeError:  # ffprobe 종료 코드 ≠ 0 — 파일 쪽 문제: 전문을 남기고 기존 경로 (ToolNotFoundError는 RuntimeError가 아님)
+    except RuntimeError as exc:  # ffprobe 종료 코드 ≠ 0 — 파일 쪽 문제 (ToolNotFoundError는 RuntimeError가 아님)
+        if mode == "pipe":  # 강제 모드는 cv2로 조용히 돌리지 않음 — 사용자는 파이프로 재생 중이라고 믿게 됨
+            raise PipeCaptureError(f"{SOURCE_MODE_ENV}=pipe지만 ffprobe가 파일을 읽지 못했습니다: {path}\n{exc}", [], "") from exc
         print(f"{PLAY_LOG_PREFIX} ffprobe가 파일을 읽지 못해 기존 cv2 경로로 엽니다: {name}")
         traceback.print_exc()
         return None

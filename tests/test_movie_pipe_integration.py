@@ -206,6 +206,20 @@ def test_probe_failure_falls_to_cv2_with_log(tmp_path, capsys):
     assert "Traceback" in captured.err and "ffprobe로 읽지 못했습니다" in captured.err and str(broken) in captured.err
 
 
+def test_mode_pipe_probe_failure_is_loud(tmp_path, monkeypatch, capsys):
+    """pipe 모드에서 ffprobe가 못 읽는 파일은 cv2로 조용히 가지 않고 PipeCaptureError (원인 RuntimeError 체인·ffprobe stderr 전문 유지)."""
+    broken = tmp_path / "broken.mov"
+    broken.write_bytes(b"this is not a movie" * 100)
+    monkeypatch.setenv(ENV, "pipe")
+    with pytest.raises(PipeCaptureError) as excinfo:
+        open_any_capture(str(broken))
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert str(broken) in str(excinfo.value) and "ffprobe로 읽지 못했습니다" in str(excinfo.value)
+    assert "cv2 경로" not in capsys.readouterr().out  # cv2로 간다는 로그가 없음
+    monkeypatch.setenv(ENV, "auto")  # 대조: auto는 같은 파일을 기존처럼 cv2로 (위 test_probe_failure_falls_to_cv2_with_log)
+    assert type(open_any_capture(str(broken))) is cv2.VideoCapture
+
+
 def test_tool_not_found_propagates(prores_clip, monkeypatch):
     """ffprobe 실행 파일이 없음(번들 깨짐)은 cv2로 보내지 않고 그대로 — 조용히 숨기면 안 됨."""
     monkeypatch.setenv("PATH", "")
