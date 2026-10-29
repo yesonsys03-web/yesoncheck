@@ -26,6 +26,7 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck.frame_utils import FrameCalculator
+from yesoncheck.movie_pipe_source import PipeCaptureError, maybe_pipe_capture
 from yesoncheck.sequence_scan import is_sequence_path
 from yesoncheck.sequence_source import ImageSequenceCapture, open_any_capture, resolve_frame_path
 from yesoncheck.workers import FFmpegWorker
@@ -385,6 +386,18 @@ class PlayerPlaybackMixin:
             QMessageBox.critical(self, "영상을 열 수 없음",
                                  f"영상을 확인하지 못했습니다 (NAS 연결 끊김·권한 등): {file_path}\n이유: {reason}")
             return None
+        # ffmpeg 파이프 게이트(ProRes류만 양성): 양성이면 파이프 캡처로 반환, 음성이면 None이라 아래 기존 줄이 그대로 돎
+        try:
+            cap = maybe_pipe_capture(file_path)
+        except PipeCaptureError as e:
+            details = traceback.format_exc()
+            print(f"ffmpeg 파이프로 영상을 열지 못함: {file_path}")
+            traceback.print_exc()
+            QMessageBox.critical(self, "영상을 열 수 없음",
+                                 f"영상을 ffmpeg 파이프로 열지 못했습니다: {file_path}\n이유: {type(e).__name__}: {e}\n\n{details}")
+            return None
+        if cap is not None:
+            return cap
         cap = cv2.VideoCapture(file_path)
         if not cap.isOpened():
             print(f"Failed to open video file: {file_path}")

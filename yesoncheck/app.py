@@ -16,16 +16,16 @@ if __package__ in (None, ""):
     sys.path.append(os.path.dirname(os.path.dirname(__file__)))
     from yesoncheck.main_window import VideoPlayer  # type: ignore  # pylint: disable=import-error
     from yesoncheck import (  # type: ignore  # pylint: disable=import-error
-        build_info, default_app, error_window, file_associations, launch_args, mac_app_events, mac_mounts, new_window,
-        paths, timing_log, update_install,
+        build_info, default_app, error_window, file_associations, launch_args, mac_app_events, mac_mounts, movie_pipe_source,
+        new_window, paths, timing_log, update_install,
     )
     from yesoncheck.player_base import EXIT_WAIT_S, wait_for_released_workers  # type: ignore  # pylint: disable=import-error
     from yesoncheck.player_update import BOX_TITLE_PROPERTY  # type: ignore  # pylint: disable=import-error
 else:
     from .main_window import VideoPlayer
     from . import (
-        build_info, default_app, error_window, file_associations, launch_args, mac_app_events, mac_mounts, new_window,
-        paths, timing_log, update_install,
+        build_info, default_app, error_window, file_associations, launch_args, mac_app_events, mac_mounts, movie_pipe_source,
+        new_window, paths, timing_log, update_install,
     )
     from .player_base import EXIT_WAIT_S, wait_for_released_workers
     from .player_update import BOX_TITLE_PROPERTY
@@ -323,6 +323,8 @@ def launch(argv=None):
     # (Mac) 공유를 다른 곳에 붙인 Mac: 공유 설정 폴더·작품 경로를 열기 전에 이 Mac에서 공유가 붙은 곳을 읽음
     # (스플래시 전에 — 예상 못 한 오류 창이 항상 위인 스플래시에 가려지지 않게)
     load_mount_map()
+    # 영상 소스 토글(YESONCHECK_MOVIE_SOURCE)의 나쁜 값은 시작 때 ValueError로 크게 — 첫 영상을 열 때 뒤늦게 알게 되지 않게 (스플래시 전에)
+    movie_pipe_source.movie_source_mode()
 
     # 스플래시 스크린 생성 (즉시 표시)
     pixmap = QPixmap(500, 300)

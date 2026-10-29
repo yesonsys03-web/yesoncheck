@@ -10,6 +10,9 @@
 실패는 캡처 안에서 끝난다 (스펙 §5.5): 생성자만 PipeCaptureError를 올리고, 그 뒤의 read·get·set은 예외를 내지 않는다 — 도중에
 끊기면 죽은 cv2 캡처와 같은 겉모습이 되고, 기록(stderr)에 한 번, 오류 창은 Qt 루프에서 한 번 알린다.
 Qt(PyQt5)와 error_window는 알릴 때만 불러온다 — 판정은 Qt 없이도 쓴다.
+
+열기 경로 연결 (스펙 §5.2): maybe_pipe_capture(path)가 모드(YESONCHECK_MOVIE_SOURCE)·판정·캡처 생성을 한 함수로 묶어, open_any_capture와
+VideoPlayer._open_movie_capture의 삽입 분기가 같이 부른다 — 양성이면 캡처, 음성이면 None(부른 쪽의 기존 cv2 줄이 그대로 돎).
 """
 
 import collections
@@ -98,21 +101,30 @@ def probe_movie(path):
     )
 
 
-def pipe_eligible(probe):
-    """ffmpeg 파이프로 읽어도 되는 파일인가 (스펙 §5.2 ①~⑥ 전부)."""
-    if probe.codec not in PIPE_CODECS:  # ①
-        return False
+def ineligible_reason(probe, check_codec=True):
+    """ffmpeg 파이프로 읽으면 안 되는 이유 한 줄 (스펙 §5.2 ①~⑥ 중 처음 어긋난 조건, 앞에 조건 번호) — 모두 통과하면 None.
+    check_codec=False면 ① 코덱을 보지 않음 (pipe 모드: 정확도 조건 ②~⑥만 요구)."""
+    if check_codec and probe.codec not in PIPE_CODECS:  # ①
+        return f"① 코덱 {probe.codec or '(영상 트랙 없음)'}은(는) 파이프 대상({', '.join(PIPE_CODECS)})이 아님"
     if probe.r is None or not 0 < probe.r <= MAX_FRAME_RATE or probe.avg != probe.r:  # ②
-        return False
+        return f"② 프레임 속도가 일정하지 않음 (r_frame_rate {probe.r}, avg_frame_rate {probe.avg})"
     if probe.nb_frames is None or probe.nb_frames < 1 or probe.width * probe.height < 1:  # ③
-        return False
+        return f"③ 프레임 수·크기를 알 수 없음 (nb_frames {probe.nb_frames}, 크기 {probe.width}×{probe.height})"
     # ④ 프레임 수·길이·속도 삼자 일치 — 편집 목록으로 잘린 파일(nb_frames 120인데 재생 118)과 한 프레임이 머무는 파일을 거름
     if probe.duration_ts is None or probe.time_base is None \
             or Fraction(probe.nb_frames, 1) / probe.r != probe.duration_ts * probe.time_base:
-        return False
+        return (f"④ 프레임 수·길이·속도가 맞지 않음 (nb_frames {probe.nb_frames}, r {probe.r}, "
+                f"duration_ts {probe.duration_ts}, time_base {probe.time_base})")
     if probe.rotation != 0 or not probe.sar_ok:  # ⑤
-        return False
-    return math.isfinite(probe.video_start) and math.isfinite(probe.format_start)  # ⑥ 오프셋은 탐색이 보정
+        return f"⑤ 회전({probe.rotation}°) 또는 1:1이 아닌 화소 비율"
+    if not (math.isfinite(probe.video_start) and math.isfinite(probe.format_start)):  # ⑥ 오프셋은 탐색이 보정
+        return f"⑥ 시작 시각을 알 수 없음 (영상 {probe.video_start}, 컨테이너 {probe.format_start})"
+    return None
+
+
+def pipe_eligible(probe, check_codec=True):
+    """ffmpeg 파이프로 읽어도 되는 파일인가 (스펙 §5.2 ①~⑥ 전부, check_codec=False면 ① 코덱만 면제) — ineligible_reason이 None."""
+    return ineligible_reason(probe, check_codec) is None
 
 
 def movie_source_mode():
@@ -672,3 +684,42 @@ def _last_resort(message):
     if stream is not None:
         stream.write(f"{LOG_PREFIX} 오류를 알리지 못했습니다 — {message}\n{traceback.format_exc()}\n")
         stream.flush()
+
+
+# ---------------------------------------------------------------- 열기 경로 연결 (스펙 §5.2·§5.7)
+
+PLAY_LOG_PREFIX = "[재생]"
+
+
+def maybe_pipe_capture(path):
+    """영상 파일 path를 ffmpeg 파이프로 읽어야 하면 FFmpegPipeCapture, 아니면 None (부른 쪽이 기존 cv2.VideoCapture로 엶).
+
+    open_any_capture(annotation_export)와 VideoPlayer._open_movie_capture의 삽입 분기가 같은 이 함수를 부른다 — 판정 중복 없음.
+    게이트는 양성 증거로만 켜진다(opt-in). 모드(YESONCHECK_MOVIE_SOURCE, movie_source_mode):
+    - "cv2": probe도 하지 않고 None — 1.5.0 동작으로 돌리는 킬 스위치.
+    - "auto": probe_movie → pipe_eligible이면 캡처(로그 한 줄), 아니면 None(어느 조건이 어긋났는지 로그 한 줄).
+    - "pipe": ① 코덱만 면제하고 정확도 조건 ②~⑥을 요구 — 어긋나면 PipeCaptureError (비 CFR 파일을 조용히 틀어 주지 않음).
+    예외의 경계: ffprobe가 파일을 못 읽음(RuntimeError — 깨진 파일·확인 불가, 파일 쪽 문제)만 스택 트레이스·stderr 전문을 로그에
+    남기고 None(cv2도 못 열면 기존 오류 창). ffprobe 실행 파일이 없음(ToolNotFoundError — 빌드 깨짐)·probe 결과 해석 오류
+    (KeyError·ValueError… — 코드 버그)·캡처 생성의 PipeCaptureError는 잡지 않고 그대로 올린다 (조용히 숨기면 안 됨).
+    """
+    mode = movie_source_mode()
+    if mode == "cv2":
+        return None
+    name = os.path.basename(path)
+    try:
+        probe = probe_movie(path)
+    except RuntimeError:  # ffprobe 종료 코드 ≠ 0 — 파일 쪽 문제: 전문을 남기고 기존 경로 (ToolNotFoundError는 RuntimeError가 아님)
+        print(f"{PLAY_LOG_PREFIX} ffprobe가 파일을 읽지 못해 기존 cv2 경로로 엽니다: {name}")
+        traceback.print_exc()
+        return None
+    reason = ineligible_reason(probe, check_codec=mode != "pipe")
+    if reason is not None:
+        if mode == "pipe":
+            raise PipeCaptureError(f"{SOURCE_MODE_ENV}=pipe지만 이 파일은 파이프로 읽을 수 없습니다 — {reason}: {path}", [], "")
+        print(f"{PLAY_LOG_PREFIX} cv2: {name} (파이프 아님 — {reason})")
+        return None
+    capture = FFmpegPipeCapture(path, probe)
+    print(f"{PLAY_LOG_PREFIX} ffmpeg 파이프: {name} ({probe.codec} {probe.width}×{probe.height} {float(probe.avg):g}fps, "
+          f"프레임 {probe.nb_frames})")
+    return capture
