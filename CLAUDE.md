@@ -179,7 +179,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   **왜**: 4K ProRes 4444(3840×2160 24fps)가 cv2로는 디코드만으로 22fps라 실시간에 못 미침. 원인은 cv2 내장 FFmpeg의 단일 스레드 픽셀 변환(12bit 4:4:4 → BGR)으로 **보임**(간접 실측 2026-10-29:
   번들 ffmpeg도 단일 스레드로 돌리면 8.5fps, cv2에 `OPENCV_FFMPEG_CAPTURE_OPTIONS="threads;0"`은 효과 없음 23.0fps) — 번들 ffmpeg의 디코드+bgr24 변환은 8코어를 써서 50.7fps(이 Mac Intel 8코어 실측;
   코덱·기계 탓이 아님 — 다른 재생기는 같은 파일을 실시간으로 틀었음). 새 의존성 없음(ffmpeg·ffprobe는 이미 번들, `external_tools` 경로).
-  **앱 안에서의 실측(같은 Mac, 4K 4444 334장 처음부터 끝까지 재생)**: 처음 구현(stdout 파이프 전송) 22.0초(15.2fps) → 소켓 전송 18.54초(18.0fps) → 중복 그리기 제거 등을 거친 **16.57초(20.2fps)**(링 보관본 복사를 읽기 스레드로 옮긴 판에서 잰 값 — 그 이동은 되돌렸고 fps에 차이가 보이지 않아 같은 값으로 씀).
+  **앱 안에서의 실측(같은 Mac, 4K 4444 334장 처음부터 끝까지 재생)**: 처음 구현(stdout 파이프 전송) 22.0초(15.2fps) → 소켓 전송 18.54초(18.0fps) → 중복 그리기 제거 등을 거친 **16.57초(20.2fps)** — 링 보관본 복사를 읽기 스레드로 옮긴 판(그 이동은 되돌림)에서 잰 값이고, 최종 판 재측정은 내부 눈 확인 항목.
   1080p ProRes는 실시간, **4K는 이전보다 빨라졌지만 완전한 실시간이 아님** — 남은 병목은 표시 경로(아래 '알고 둔 한계' ⑦).
   - **게이트 `pipe_eligible(probe)`** (`probe_movie`가 ffprobe 1회로 `MovieProbe`를 읽음; **양성 증거로만 켜지는 opt-in** — 한 조건이라도 확인 못 하면 거짓): ① 코덱 `prores`(`PIPE_CODECS`)
     ② `r_frame_rate` 유효(0 < r ≤ 240)이고 `avg_frame_rate == r`(Fraction 등식) ③ nb_frames ≥ 1·크기 ≥ 1 ④ **정확 등식** `Fraction(nb_frames,1)/r == duration_ts × time_base`(프레임 수·길이·속도 삼자 일치)
@@ -187,7 +187,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
     ④⑤가 필요한 이유(전부 경계 클립으로 재현한 실측): 느슨한 비율(0.5%) 판정은 편집 목록으로 앞 2장이 잘린 파일(nb_frames 120인데 실제 118장 — cv2·ffmpeg 동일)과 한 프레임이 길게 머무는 파일(avg가 r과 0.33%만 다름)을
     통과시켜 EOF 불변식이 매번 거짓 경보를 내거나 정지 프레임 뒤부터 탐색이 한 칸 일찍 착지함. 회전 메타(90°) 파일은 ffprobe가 320×180인데 cv2는 180×320을 줘서 바이트 수가 같은 채 reshape만 조용히 깨짐. h264 등 나머지와 게이트 음성 ProRes는 기존 cv2 줄이 그대로 돎.
   - **진입점**: `maybe_pipe_capture(path)` 한 함수가 모드·판정·캡처 생성을 묶고(양성이면 캡처, 음성이면 `None`), `sequence_source.open_any_capture`(주석 내보내기)와 `VideoPlayer._open_movie_capture`(영상 열기) 둘이 같은 함수를 부름 —
-    판정 중복 금지. `_open_movie_capture`의 `PipeCaptureError`는 트레이스째 오류 창 + `None`(`_open_sequence_capture`처럼 보던 영상은 그대로), `open_any_capture`는 받지 않고 그대로 올리며 `AnnotationExportWorker.run`의 기존 `except Exception`이 받아 error 신호로 알림.
+    판정 중복 금지. `_open_movie_capture`의 `PipeCaptureError`는 트레이스째 오류 창(끝 줄은 킬 스위치 안내) + `None`(`_open_sequence_capture`처럼 보던 영상은 그대로), `open_any_capture`는 받지 않고 그대로 올리며 `AnnotationExportWorker.run`의 기존 `except Exception`이 받아 error 신호로 알림.
     **기존 재생·탐색 코드는 수정하지 않음**(사용자 최우선 제약: 기존 파일 재생 무회귀) — 바뀐 열기 경로는 `_open_movie_capture`의 삽입 분기와 `open_any_capture`의 한 호출뿐이고, 기존 표시 코드를 바꾼 유일한 곳은 사용자가 승인한
     `update_frame`의 중복 그리기 제거(위 `player_playback.py` 항목). OCR·씬 감지·썸네일 워커, OCR 검토 창·타임라인의 미리보기 캡처, 미디어 정보 창은 `cv2.VideoCapture`를 직접 열어 cv2 그대로(4K ProRes에서는 여전히 느림 — 필요해지면 별도 작업).
   - **토글 `YESONCHECK_MOVIE_SOURCE=auto|pipe|cv2`** (진단·킬 스위치, `YESONCHECK_VIEWPORT` 선례): 없거나 비면 `auto`, 대소문자 무시, 그 밖의 값은 ValueError(조용한 폴백 금지) — `app.launch`가 시작 때 한 번 `movie_source_mode()`로 검증(스플래시 전).
@@ -201,7 +201,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
     Windows는 `subprocess_kwargs()`(CREATE_NO_WINDOW). 출력 대상은 POSIX `pipe:1`, Windows `tcp://127.0.0.1:<포트>?send_buffer_size=32768`.
   - **전송 — 왜 stdout 파이프가 아니라 소켓인가(실측)**: 처음에는 ffmpeg stdout 파이프를 읽었는데, 4K 한 장(24.9MB)이 64KB 파이프에서 ~467번의 read로 들어오고 호출마다 읽기 스레드가 GIL을 다시 잡아야 해서
     GUI 스레드가 파이썬을 실행 중이면(재생 틱의 `process_frame`·`update_frame`) 매번 switch interval(5ms)을 기다림 → 읽기 스레드 기아(메인이 GIL을 쥔 결정 실험에서 공급 28fps → 0.4fps, 실제 재생 15fps).
-    소켓에서 `recv_into(..., MSG_WAITALL)`은 커널이 한 장을 다 채울 때까지 GIL을 놓은 채 syscall 한 번이라 **프레임당 recv 1회**(`recv_calls`로 시험이 구조 단언 — 무부하에서는 정확히 1회이고, 메모리 대역 경합 아래서는 커널이 `MSG_WAITALL`을 드물게(~300장에 한 번) 일찍 돌려주므로 시험은 `프레임 수 + 1 + 2%`까지 허용; 조각 읽기로 돌아가는 회귀는 한 장에 수십~수백 번이라 여전히 잡힘) — 메인이 GIL을 쥐고 있어도 공급이 유지됨.
+    소켓에서 `recv_into(..., MSG_WAITALL)`은 커널이 한 장을 다 채울 때까지 GIL을 놓은 채 syscall 한 번이라 **프레임당 recv 1회**(`recv_calls`로 시험이 구조 단언 — 무부하에서는 정확히 1회이고, 메모리 대역 경합 아래서는 커널이 `MSG_WAITALL`을 일찍 돌려준 일이 관측 1회(메모리 대역을 먹는 프로세스 4개 아래 295장에 +2) 있어 시험은 `프레임 수 + 1 + 2%`까지 허용; 조각 읽기로 돌아가는 회귀는 한 장에 수십~수백 번이라 여전히 잡힘) — 메인이 GIL을 쥐고 있어도 공급이 유지됨.
     **POSIX**는 `socketpair(AF_UNIX)`의 한 끝을 ffmpeg의 stdout으로 넘김(명령의 출력 대상은 `pipe:1` 그대로; `Popen` 직후 부모에서 자식 쪽 끝을 닫아야 EOF가 옴). 측정(4K 정상 상태 60장, 메인 idle/40ms GIL 쥠):
     ffmpeg가 직접 여는 `unix://` 리스너 12~22fps(macOS 로컬 소켓 기본 버퍼가 8KB이고 ffmpeg unix 프로토콜에 버퍼 옵션이 없음), TCP 루프백 21~33fps, socketpair 30~43fps — 가장 빠르고 리스너·임시 폴더·경로 길이·접속 상대 확인이 없음.
     **Windows**는 socketpair 끝을 자식 stdout으로 넘길 수 없어(소켓 핸들은 CRT fd가 아님) 127.0.0.1 임시 포트 TCP 리스너에 ffmpeg가 접속(`accept`는 하나만, 상대가 127.0.0.1인지 확인, 대기 한도
@@ -211,13 +211,14 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
     `sys.platform` 바꿔치기로 이 플랫폼에서도 돌림(Windows 실기는 CI).
   - **세션과 선읽기**: `_PipeSession` = ffmpeg 프로세스 하나 + 전송 소켓·읽기 스레드·stderr 스레드(상시 비움)·유한 큐·정지 플래그 한 덩어리. 탐색 재시작·`release`가 세션을 통째로 버려 옛 프로세스의 프레임·실패가 새 큐에 섞이지 않음. 소켓은 읽기 스레드만 읽음.
     선읽기 `READAHEAD_FRAMES=6` — 디코드와 표시를 떼어 프레임당 시간이 합이 아니라 max가 되게 하고 NAS 순간 끊김을 누그러뜨림; 큐가 비면 채워질 때까지 기다림(자연 감속, 프레임을 건너뛰지 않음).
-    **링 보관본 복사는 `read()`가 GUI 스레드에서 함**(4K 24.9MB, idle에서 ~3ms; 호출자에게 주는 배열은 늘 새 배열이고, 링이 가득 차면 가장 오래된 보관 배열에 덮어써 새 할당이 없음). 읽기 스레드로 옮겨 본 판(버퍼 풀 재활용)이 있었으나 **되돌림** — 틱 ~3ms 절감이 paint 병목 아래에서 fps를 바꾸지 못하고, 캡처당 메모리가 +~200MB, 메모리 대역 경합 때 읽기 스레드 공급이 약해지고 시험이 불안정했음(재검토 실측).
+    **링 보관본 복사는 `read()`가 GUI 스레드에서 함**(4K 24.9MB, idle에서 ~3ms; 호출자에게 주는 배열은 늘 새 배열이고, 링이 가득 차면 가장 오래된 보관 배열에 덮어써 새 할당이 없음). 읽기 스레드로 옮겨 본 판(버퍼 풀 재활용)이 있었으나 **되돌림** — 틱 ~3ms 절감이 paint 병목 아래에서 fps를 바꾸지 못하고, 캡처당 메모리가 약 174MB(쌍 7장분) 늘고, 메모리 대역 경합 때 읽기 스레드 공급이 약해지고 시험이 불안정했음(재검토 실측).
     **캡처당 메모리(4K bgr24 24.9MB/장, 십진 MB)**: 선읽기 큐 6장 ≈149MB + 링 8장 ≈199MB + 읽기 스레드가 손에 든 1장 ≈25MB ≈ **~373MB**, A/B 와이프에 4K 둘이면 **~750MB**(호출자가 쥔 프레임 — 플레이어의 `frame_a` 등 — 은 따로). 스레드는 데몬, GUI 스레드는 무한 join하지 않음(NFS hard mount에서 kill해도 안 죽는
     프로세스는 데몬 스레드가 거둠). `weakref.finalize`가 `release` 없이 버려진 캡처의 ffmpeg를 끝냄. A/B 와이프는 ffmpeg 2개.
   - **탐색**: `set(CAP_PROP_POS_FRAMES, n)`은 **지연(lazy)** — 목표만 기록하고(cv2처럼 0~count로 자르고 소수 버림, `get`은 곧바로 그 값) 실제 이동은 다음 `read()` 머리에서: 제자리 → 링 버퍼 안(`KEEP_BEHIND=8`장 보관 —
     뒤로 한 칸이 재시작 없이; 없으면 4K에서 449~634ms로 cv2의 329~372ms보다 느려지는 실측 회귀) → 앞쪽 `SEEK_FORWARD_MAX=24`장 안이면 꺼내 버림 → 그 밖은 `-ss` 재시작(`SEEK_BACK_K=0`).
     **재시작 `-ss`는 `t = n/r + (영상 트랙 start − 컨테이너 start)`로 트랙 오프셋 보정 필수** — `-ss`는 컨테이너 start 기준이라 빼면 영상 start 0.5s 파일에서 12프레임 앞에 착지(`external_tools`의 선례와 같은 보정).
-    연속 set(슬라이더 드래그)은 이동 한 번으로 합쳐지고, 곧 release될 캡처의 set(`stop_video` → `seek_to_frame(1)`)은 공짜. **링(8장)을 넘어 뒤로 가면 ← 한 번마다 재시작(~0.5초)** — 재시작한 세션의 링은
+    지연 set은 연속 set을 이동 한 번으로 합칠 수 있지만 **앱에서는 그 병합이 발동하지 않음** — 앱의 모든 탐색 경로(`seek_to_frame`·`_quick_preview_seek`·`_seek_direct_fast` 등)가 set 직후 read함
+    (그래서 슬라이더 드래그도 미리보기 장마다 이동하고, 새 파일을 열 때 옛 캡처의 `seek_to_frame(1)`도 실제로 돎 — 아래 '알고 둔 한계' ⑧⑨). **링(8장)을 넘어 뒤로 가면 ← 한 번마다 재시작(~0.5초)** — 재시작한 세션의 링은
     그 자리에서 새로 시작하므로(슬라이더 점프가 재시작을 일으킨 경우 — 링 밖이거나 24장을 넘게 앞 — 그 프레임에서 ←를 눌러도 마찬가지, 링 안의 짧은 점프 뒤는 즉시) 즉시인 것은 링에 남은 최근 장수 안뿐이고, 앞으로 가는 방향은 큐·스트림에서 이어짐.
   - **프레임 정확도(데이터 계약)**: 주석 JSON의 프레임 번호는 NAS에서 cv2 기반 옛 버전 PC와 함께 쓰고 OCR·씬 워커도 cv2라 "파이프 번호 = cv2 번호"가 깨지면 다른 PC·기능의 주석·구간이 어긋남. 위치는 자체 카운터(순차 전달이라 구조상 정확),
     전체 수는 ffprobe `nb_frames`(cv2 `FRAME_COUNT`와 같은 출처 — 실파일 334 일치), `get(FPS)`는 `float(avg)`(cv2와 같은 출처), 탐색 시각은 정확한 분수 r(병합용 `pick_frame_rate`의 표준값 스냅을 쓰면 2분대부터 반 프레임 어긋남).
@@ -236,8 +237,11 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   - **알고 둔 한계**: ① 모든 영상 열기에 ffprobe 1회(~45ms, GUI 스레드·timeout 없음 — NAS가 멈추면 기존 `os.stat`과 같은 성질) ② 소스 실행에서 PATH에 ffmpeg·ffprobe가 없으면 h264 열기도 `ToolNotFoundError`(빌드 앱은 번들이라 해당 없음; `YESONCHECK_MOVIE_SOURCE=cv2`면 probe를 안 하므로 피함)
     ③ 파이프가 죽은 뒤 Play를 누르면 `get(FPS)`가 0이라 영상 타이머는 안 켜지지만 단추는 Pause로 바뀌고 소리 재생기는 시작함(오류 창은 이미 떴음 — 다시 열면 정상) ④ 죽은 캡처는 `release` 전까지 링 버퍼(4K ≈199MB)를 쥐고 있음
     ⑤ 1GbE 링크 PC는 4K ProRes 첫 재생이 네트워크 대역 한계(131MB/s 필요 — 이 Mac은 10GbE 실측이라 해당 없음, 2회째부터는 캐시) ⑥ 같은 캡처를 두 스레드가 동시에 read하는 건 미지원(계약)
-    ⑦ **4K는 이 Mac에서 약 20fps(334장 16.57초)로 완전 실시간이 아님, Windows 4K는 표시 경로가 병목일 것으로 추정**: 남은 병목은 디코드가 아니라 4K `QPixmap`의 GL paint 48ms/프레임(`QImage`를 직접 그리면 24ms이고 그중 ~20ms는 33MB 텍스처 업로드 하한).
+    ⑦ **4K는 이 Mac에서 약 20fps(334장 16.57초 — 측정한 판은 위 '앱 안에서의 실측')로 완전 실시간이 아님, Windows 4K는 표시 경로가 병목일 것으로 추정**: 남은 병목은 디코드가 아니라 4K `QPixmap`의 GL paint 48ms/프레임(`QImage`를 직접 그리면 24ms이고 그중 ~20ms는 33MB 텍스처 업로드 하한).
     이 Mac에서 raster 뷰포트로 재면 paint가 107ms(≈9.3fps), 틱 전체는 131ms(≈7.6fps) 실측 — Windows(raster)의 4K도 그 수준일 것이라는 추정이고 Windows 실기는 미측정. 1080p ProRes는 실시간.
+    ⑧ 새 파일을 열면 옛 캡처를 놓기 직전 `stop_video` → `seek_to_frame(1)`이 옛 캡처에서 돌아 ffmpeg를 한 번 더 띄움(~0.5초, cv2는 ~0.33초)
+    ⑨ 4K 슬라이더 드래그는 링·앞 24장 밖으로 뛰는 미리보기 장마다 재시작(449~634ms)이라 cv2(329~372ms)보다 무거움
+    ⑩ Windows에서 보안 소프트웨어가 127.0.0.1 루프백 TCP를 막으면 ProRes 열기가 실패함(오류 창 끝 줄에 킬 스위치 안내) — 탈출구는 `YESONCHECK_MOVIE_SOURCE=cv2`(Windows 설정법은 README).
   - **다음 후보 — Windows offscreen의 텍스트 주석 굽기**: `render_text_patch`가 글자를 Qt 글꼴로 그리는데 Windows offscreen(CI)에서 글리프가 하나도 안 그려져 구운 그림이 원본과 같았음(글꼴 부재로 추정, 기존 동작 — 이 브랜치와 무관) — 글꼴 가드와 시험이 필요함. 이 브랜치의 `test_display_single_draw`는 도형(사각형) 주석으로 우회.
   - **다음 후보 — 4K 표시 경로**: 직접 GL 텍스처 스트리밍(PBO 등)·Windows GL 뷰포트. `QPixmap` → `QImage` 직접 그리기는 틱이 약 41ms로 예산(41.7ms)에 걸쳐 확실한 실시간이 안 돼 사용자 결정으로 하지 않음. 근거 스크립트
     (`yc_paint_fmt_exp.py`·`yc_sock_exp.py`·`yc_pipe_read_exp.py`·`yc_microbench.py`)와 하니스(`profile_4k_playback.py`)는 내부(비공개) 저장소의 `docs/superpowers/records/2026-10-29-prores-pipe-design/`.
@@ -699,7 +703,7 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 
 **시험은 반드시 `~/coding/p310_tf/bin/python -m pytest`로 돌릴 것** — TensorFlow가 없는 `~/coding/p310`으로 돌리면 11개가 실패함.
 
-`tests/`에 시험 파일 84개 (수집 2,008개). `python -m pytest tests -q`로 돌리며(약 11분), 이 Mac의 소스 실행에서 1,963개가 통과하고 45개는 건너뜀 —
+`tests/`에 시험 파일 84개 (수집 2,011개). `python -m pytest tests -q`로 돌리며(약 11분), 이 Mac의 소스 실행에서 1,966개가 통과하고 45개는 건너뜀 —
 다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-10-29 기준; `test_fast_startup`의 종료 플레이크 1건은 러너 상태에 따라 간헐 실패 — 이 브랜치와 무관). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
 정적 빌드(`vendor/ffmpeg/`)를 씀 (`tests/conftest.py`). 시험을 건너뛰거나 지워서 통과시키지 말 것.
 
@@ -715,10 +719,10 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 - **창 모양**: `test_stylesheet_freeze`(테마 시트를 해시로 고정)·`test_scrollbar_style`·`test_slider_click`·`test_window_resize`·`test_high_dpi`·`test_force_focus`·`test_middle_panel_toggle`·`test_gl_viewport`(Mac GL 뷰포트 — 선택 규칙·GL 적용 시 보존 설정·테마 배경)·`test_overlay_slider_sync`(화살표 프레임 이동의 오버레이 슬라이더 동기화·대체 탐색 경로 한 칸 어긋남)
 - **ffmpeg 파이프 재생(ProRes)**: 실제 ffprobe·ffmpeg로 클립 공장(`tests/prores_clips.py` — numpy 프레임을 `prores_ks`에 파이프, 글꼴 의존인 drawtext 금지; 번호 클립·유채색 클립·경계 클립 voff·held·neg·rot·audio_first·truncated·vfr_h264)의 클립을 읽음 (mock 없음 — 오류 창 호출만 바꿔치기)
   - `test_pipe_spike`: 플랫폼 가정을 고정하는 스파이크 — 클립 공장 자가 검증, 파이프(`-fps_mode passthrough`) 대 cv2의 프레임 정렬과 바이트 기준(4:4:4 동일·4:2:2 ≤5), `-ss` 착지(K=0·K=2), 재시작 시간(시간은 print만)
-  - `test_movie_pipe_gate`: 게이트 ①~⑥ — 좋은 probe의 필드 하나만 바꾼 사본으로 조건별 경계, 경계 클립의 판정
-  - `test_movie_pipe_capture`: 캡처 코어 — 순차 읽기의 cv2 의미(EOF·`get`·`set`)·cv2와 바이트 대조·도중 실패의 자체 완결(예외 없이 죽음 + 기록 1회 + 오류 창 1회)·`release`/GC 뒤 프로세스 종료
+  - `test_movie_pipe_gate`: 게이트 ①~⑥ — 좋은 probe의 필드 하나만 바꾼 사본으로 조건별 경계, 경계 클립의 판정, ffprobe의 time_base 분모 0("1/0")은 예외 없이 음성
+  - `test_movie_pipe_capture`: 캡처 코어 — 순차 읽기의 cv2 의미(EOF·`get`·`set`)·cv2와 바이트 대조·도중 실패의 자체 완결(예외 없이 죽음 + 기록 1회 + 오류 창 1회 — 기록·원래 stderr 쓰기나 알릴 글 만들기가 실패해도 read는 예외 없음)·`release`/GC 뒤 프로세스 종료
   - `test_movie_pipe_seek`: 지연 set과 이동 경로(그대로·링 버퍼·앞으로 버리기·`-ss` 재시작+트랙 오프셋) — 정답은 프레임에 그린 번호, 어느 경로를 탔는지는 시간이 아니라 세션(프로세스) 수·pid로 실증
-  - `test_movie_pipe_transport`: 전송 계층 — 프레임당 recv 1회 남짓(`recv_calls ≤ 프레임 수 + 1 + 2%`)·**상대 기준** GIL 시험: 메인 스레드가 GIL을 쥐는 50ms 창과 놓는 50ms 창을 번갈아 읽기 스레드 공급을 재 busy/idle 비율 ≥ 0.5 단언 (실측: 현재 코드 무부하 0.89~1.06·메모리를 먹는 프로세스 6개 0.67~0.85, 옛 stdout 파이프 0.05~0.18)과 idle 공급 > 0 안전망 — 절대 기준(몇 회 안에 큐 충만)은 공유 러너·메모리 경합에서 전송과 무관하게 떨어져 뺌·release가 막힌 recv를 깨움(shutdown+close)·Windows 경로(TCP 리스너의 accept·EOF·정리·접속 실패)를 `sys.platform` 바꿔치기로
+  - `test_movie_pipe_transport`: 전송 계층 — 프레임당 recv 1회 남짓(`recv_calls ≤ 프레임 수 + 1 + 2%`)·GIL 시험: 메인 스레드가 GIL을 쥐는 50ms 창과 놓는 50ms 창을 번갈아 읽기 스레드 공급을 재 **busy 창 평균 ≥ 0.5장(GIL을 쥔 동안 10fps — 제품 하한)** 단언과 idle 공급 > 0 안전망, busy/idle 비율은 출력만 (실측 busy 창 평균: 현재 코드 이 Mac 1.95~3.05·Apple Silicon CI 2.45, 옛 stdout 파이프 0.05~0.60 — 창 사이에 받아 둔 장이 섞여 이 하한만으로는 파이프 회귀를 늘 가르지 못하고, 그 회귀는 프레임당 recv 단언이 결정적으로 잡음; 비율은 러너 속도에 따라 0.44~1.06이라 기준으로 맞지 않음)·release가 막힌 recv를 깨움(shutdown+close)·Windows 경로(TCP 리스너의 accept·EOF·정리·접속 실패)를 `sys.platform` 바꿔치기로
   - `test_display_single_draw`: 재생 틱 한 번에 `updateFrame` 정확히 한 번(주석을 구운 마지막 그림)·`redraw=False`에서도 편집 대상·목록·상태 라벨 갱신은 그대로·다른 호출처는 여전히 그림·드래그 + OCR 검토 창 분기는 와이프가 켜져 있을 때만 다시 그림 — 사용자 승인 예외(중복 그리기 제거)의 보증. 주석은 전부 사각형(도형): 텍스트 주석의 굽기(`render_text_patch`)는 Windows offscreen에서 글리프가 비어 쓰지 않음
   - `test_movie_pipe_integration`: `maybe_pipe_capture`의 모드(auto·pipe·cv2)·예외 경계, `open_any_capture`와 `_open_movie_capture`의 삽입 분기, `app.launch`의 모드 검증 — **게이트 음성 파일은 어떤 모드에서도 `FFmpegPipeCapture`를 만들지 않고 `cv2.VideoCapture`가 열림**(만들면 실패하는 센티널로 바꿔 증명 = cv2 경로 무변경 단언)
   - `test_pipe_player`: 실제 `VideoPlayer`(offscreen)에서 열기·화살표/휠·슬라이더·A/B 와이프·주석 내보내기·재생 도중 ffmpeg 사망(앱 생존·오류 창 1회·재오픈)과 끝난 뒤 프로세스·스레드 잔존 없음
@@ -903,8 +907,8 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
   새 모듈 `movie_pipe_source.py`(`FFmpegPipeCapture`)를 `ImageSequenceCapture` 선례의 덕타이핑 캡처로 열기 경로에 꽂음: 게이트 ①~⑥을 전부 통과한 파일만(opt-in), 나머지는 기존 cv2 그대로
 - **기존 재생·탐색 코드는 수정하지 않음**: 바뀐 열기 경로는 `_open_movie_capture`의 삽입 분기·`open_any_capture`·`app.launch`의 모드 검증뿐. 도중 실패는 캡처가 스스로 죽은 cv2 캡처의 겉모습 + 기록 1회 + 오류 창 1회로 끝냄(예외는 열 때만)
 - 눈 확인 중 4K가 실시간에 못 미치는 것을 발견해 고침: ① **전송을 stdout 파이프에서 소켓으로**(POSIX `socketpair`, Windows TCP 127.0.0.1 — 프레임당 `recv` 1회, GUI가 GIL을 쥐고 있어도 읽기 스레드가 굶지 않음)
-  (링 보관본 복사를 읽기 스레드로 옮기는 것도 해 봤으나 틱 ~3ms 절감이 fps를 못 바꾸고 캡처당 메모리만 +~200MB여서 되돌림.) 그리고 사용자가 승인한 예외로 ② **`update_frame`의 중복 그리기 제거**(틱당 `updateFrame` 2→1, 픽셀 동일 — 이 브랜치에서 기존 표시 코드를 바꾼 유일한 곳)
-- 4K 4444 334장 재생(이 Mac): 22.0초(15.2fps, 처음 구현) → 18.54초(18.0fps, 소켓 전송) → **16.57초(20.2fps, 최종 — 링 복사 이동을 되돌리기 전 판에서 잼, fps 차이는 보이지 않았음)**. 1080p ProRes는 실시간. **4K는 완전한 실시간이 아님** — 남은 병목은 4K `QPixmap`의 GL paint(48ms/프레임),
+  (링 보관본 복사를 읽기 스레드로 옮기는 것도 해 봤으나 틱 ~3ms 절감이 fps를 못 바꾸고 캡처당 메모리만 약 174MB(쌍 7장분) 늘어 되돌림.) 그리고 사용자가 승인한 예외로 ② **`update_frame`의 중복 그리기 제거**(틱당 `updateFrame` 2→1, 픽셀 동일 — 이 브랜치에서 기존 표시 코드를 바꾼 유일한 곳)
+- 4K 4444 334장 재생(이 Mac): 22.0초(15.2fps, 처음 구현) → 18.54초(18.0fps, 소켓 전송) → **16.57초(20.2fps)** — 링 복사 이동(되돌림)이 포함된 판에서 잰 값이고, 최종 판 재측정은 내부 눈 확인 항목. 1080p ProRes는 실시간. **4K는 완전한 실시간이 아님** — 남은 병목은 4K `QPixmap`의 GL paint(48ms/프레임),
   Windows(raster) 4K는 더 느릴 것으로 추정(이 Mac에서 raster로 재면 틱 전체 131ms ≈ 7.6fps, Windows 실기 미측정). 다음 후보: 4K 표시 경로(직접 GL 텍스처 스트리밍·Windows GL 뷰포트) — '주요 파일'의 `movie_pipe_source.py` 항목
 - 토글 `YESONCHECK_MOVIE_SOURCE=auto|pipe|cv2`(`cv2`는 킬 스위치). 로그 `[재생] ffmpeg 파이프: …` 줄이 있으면 파이프 경로
 - 지켜야 할 것: `-fps_mode passthrough`·`-map 0:V:0`, 재시작 `-ss`의 트랙 오프셋 보정, 정확 등식 게이트(④), 소켓은 blocking(타임아웃을 걸지 말 것), 4:2:2는 Apple Silicon에서 cv2 대비 ±4 레벨(4:4:4는 완전 동일)
