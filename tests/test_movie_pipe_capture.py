@@ -8,6 +8,7 @@
 import dataclasses
 import gc
 import subprocess
+import sys
 import threading
 import time
 import weakref
@@ -303,6 +304,39 @@ def test_frame_count_mismatch_dies(prores_clip, claimed, qapp, windows, capsys):
         assert f"파일의 프레임 수 {claimed}" in windows[0].text
     finally:
         cap.release()
+
+
+@pytest.mark.parametrize("stderr_text", ["[prores @ 0x1] warning: something odd\n", ""], ids=["stderr", "no_stderr"])
+def test_clean_eof_with_stderr_logged_once(tmp_path, monkeypatch, stderr_text, qapp, windows, capsys):
+    """정상 끝(종료 코드 0·받은 수 == nb_frames)인데 ffmpeg가 stderr에 글을 남겼으면 그 글을 기록에 한 번 (창 없음, 상태 그대로 —
+    가시화만). stderr가 비면 아무것도 남기지 않음. 실제 클립으로는 이 경우를 결정적으로 못 만들어 ffmpeg 대역 프로세스(파이썬:
+    번호 프레임 3장 + stderr 글, 종료 코드 0)를 명령 자리에 꽂는다 — 세션·스레드·파이프는 진짜."""
+    width, height, count = 4, 2, 3
+    script = ("import sys; sys.stderr.write(sys.argv[1]); sys.stderr.flush(); "
+              f"sys.stdout.buffer.write(b''.join(bytes([i]) * {width * height * 3} for i in range({count})))")
+    monkeypatch.setattr(movie_pipe_source, "_pipe_command", lambda path: [sys.executable, "-c", script, stderr_text])
+    probe = MovieProbe(codec="prores", width=width, height=height, r=Fraction(24), avg=Fraction(24), nb_frames=count,
+                       duration_ts=count * 512, time_base=Fraction(1, 12288), video_start=0.0, format_start=0.0,
+                       rotation=0, sar_ok=True)
+    path = str(tmp_path / "stand_in.mov")
+    cap = FFmpegPipeCapture(path, probe)
+    try:
+        frames = read_until_false(cap)
+        assert [int(f.max()) for f in frames] == list(range(count))
+        for _ in range(2):  # 끝에서 거듭 읽어도 한 번만
+            assert cap.read() == (False, None)
+        assert cap.isOpened() and cap.get(POS) == float(count)  # 정상 끝 — 죽음 아님
+    finally:
+        cap.release()
+    log = capsys.readouterr().err
+    if stderr_text:
+        assert log.count("ffmpeg stderr:\n") == 1 and path in log  # (대역의 명령 줄에도 글이 있어 글 자체는 세지 않음)
+        assert f"ffmpeg stderr:\n{stderr_text.strip()}" in log
+    else:
+        assert log == ""
+    assert FAILURE_HEADLINE not in log
+    qapp.processEvents()
+    assert windows == []
 
 
 def test_broken_file_raises_in_ctor(tmp_path, monkeypatch):

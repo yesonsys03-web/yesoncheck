@@ -177,6 +177,7 @@ class _PipeSession:
         self._stopped = False  # 정지 플래그: stop()이 일부러 끝냄
         self._finished = False  # 읽기 스레드가 끝남: 더 올 프레임 없음, 프로세스는 거둬졌고 failure는 확정
         self.failure = None  # 읽기 스레드가 본 실패 원인 (정상 끝·정지면 None)
+        self.eof_noted = False  # 정상 끝의 stderr를 기록했는지 (세션당 한 번 — 캡처의 _lock이 지킴)
         self._stderr_chunks = []
         self.proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      **subprocess_kwargs())
@@ -340,10 +341,17 @@ class FFmpegPipeCapture:
             if outcome == _FRAME and self._pos < self._count:
                 self._pos += 1
                 return True, value
-            if outcome == _END and self._pos == self._count:
-                return False, None  # 정상 끝: cv2처럼 pos 그대로, 열린 채
-            reason = self._failure_reason(outcome, value)
-            self._session = None  # 죽음 전이 — 이 줄에 닿는 것은 세션마다 한 번
+            clean_end = outcome == _END and self._pos == self._count  # 정상 끝: cv2처럼 pos 그대로, 열린 채
+            if clean_end:
+                leftover = "" if session.eof_noted else session.stderr_text()  # 끝났으니 stderr는 전부 받음
+                session.eof_noted = True
+            else:
+                reason = self._failure_reason(outcome, value)
+                self._session = None  # 죽음 전이 — 이 줄에 닿는 것은 세션마다 한 번
+        if clean_end:
+            if leftover.strip():
+                self._log_eof_stderr(session, leftover)
+            return False, None
         self._die(session, reason)
         return False, None
 
@@ -397,6 +405,16 @@ class FFmpegPipeCapture:
         if outcome == _TIMEOUT:
             return f"ffmpeg가 {READ_TIMEOUT_S:g}초 동안 다음 프레임을 주지 않았습니다 ({self._pos}장을 받은 뒤)"
         return f"ffmpeg 세션이 멈춰 있습니다 ({self._pos}장을 받은 뒤)"
+
+    def _log_eof_stderr(self, session, stderr):
+        """정상 끝(종료 코드 0·받은 수 == nb_frames)인데 ffmpeg가 stderr에 남긴 글 — 기록에만 한 번 (창 없음, 상태 그대로).
+        디코드 오류 글이면 그 프레임이 깨졌을 수 있다 (cv2는 같은 상황에 조용함). 예외를 내지 않음 (read 안)."""
+        try:
+            print(f"{LOG_PREFIX} 끝까지 읽었지만(프레임 {self._count}장, 종료 코드 0) ffmpeg가 stderr에 글을 남겼습니다 — "
+                  f"프레임이 깨졌을 수 있습니다: {self._path}\n명령: {session.command}\nffmpeg stderr:\n{stderr.rstrip()}",
+                  file=sys.stderr, flush=True)
+        except Exception:
+            _last_resort(f"ffmpeg stderr를 기록하지 못했습니다: {self._path}")
 
     def _die(self, session, reason):
         """죽음 전이 뒤의 뒤처리 (read가 _lock 밖에서 한 번): 세션 정리 → 기록 한 번 → 오류 창은 Qt 루프에서 한 번."""
