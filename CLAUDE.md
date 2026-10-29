@@ -699,8 +699,8 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 
 **시험은 반드시 `~/coding/p310_tf/bin/python -m pytest`로 돌릴 것** — TensorFlow가 없는 `~/coding/p310`으로 돌리면 11개가 실패함.
 
-`tests/`에 시험 파일 84개 (수집 2,008개). `python -m pytest tests -q`로 돌리며(약 14분), 이 Mac의 소스 실행에서 ____개가 통과하고 ____개는 건너뜀 —
-다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-10-29 기준; 통과·건너뜀 수는 전체 스위트 결과로 채울 것). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
+`tests/`에 시험 파일 84개 (수집 2,008개). `python -m pytest tests -q`로 돌리며(약 11분), 이 Mac의 소스 실행에서 1,963개가 통과하고 45개는 건너뜀 —
+다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-10-29 기준; `test_fast_startup`의 종료 플레이크 1건은 러너 상태에 따라 간헐 실패 — 이 브랜치와 무관). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
 정적 빌드(`vendor/ffmpeg/`)를 씀 (`tests/conftest.py`). 시험을 건너뛰거나 지워서 통과시키지 말 것.
 
 시험 구성 (파일 이름 기준):
