@@ -26,6 +26,11 @@ PRORES_PIX_FMTS = ("yuv422p10le", "yuv444p10le", "yuva444p10le")
 TIMEOUT_ENCODE = 120  # 초 — 320x180 120장 인코드는 1초 안쪽, 넉넉히
 TIMEOUT_PROBE = 30
 TIMEOUT_PIPE = 60
+# 파이프 대 cv2 허용 오차 (최대 |차이|, 8비트 값). 4:4:4 계열(4444·알파·HQ 4:4:4)은 바이트 완전 동일, 4:2:2는 5까지.
+# 422 허용 오차는 사용자 결정(2026-10-29) — 스펙 §5.4. 근거: CI 실측 — Apple Silicon에서 422 단색 +1~+2, 유채색 -3~+4
+# (swscale SIMD 경로 차이), 4:4:4와 Windows는 전부 동일. 프레임 정렬은 허용 오차와 무관하게 늘 완벽해야 한다.
+BYTE_EXACT = 0
+TOLERANCE_422 = 5
 # 번호 인코딩: i = hi * RADIX + lo. 회색 두 블록의 밝기(8비트 눈금)가 hi * STEP, lo * STEP — 바깥(전체 바탕) 블록이 hi,
 # 가운데 직사각형(프레임의 가운데 절반)이 lo. 한 값에 번호를 그대로 싣던 처음 방식은 CI Mac의 cv2 디코드가 밝기를 1~2 레벨
 # 틀어 버려(위치 1~10 → 0,1,2,2,3,4,5,6,8,9) 자가 검증이 깨졌다. 레벨 간격 STEP이면 복호가 +-(STEP/2 - 0.5) 레벨 드리프트까지
@@ -226,6 +231,60 @@ def _verify_chromatic(path, count):
             raise ValueError(f"유채색 클립인데 {i}번 프레임이 거의 회색입니다 (|B-R| 평균 {spread:.1f}): {path}")
         if i and frame.tobytes() == frames[i - 1].tobytes():
             raise ValueError(f"유채색 클립의 {i - 1}·{i}번 프레임이 바이트까지 같습니다: {path}")
+
+
+def frame_alignment_problem(cv2_frames, pipe_frames, numbered):
+    """프레임 i끼리 같은 그림인지. 같으면 None, 아니면 설명 글.
+
+    번호 클립은 frame_number 수열이 같은지(이것이 프레임 정확도 계약의 본체). 유채색 클립은 번호가 없으므로 각 파이프 프레임에
+    가장 가까운(블록 평균 거리) cv2 프레임이 같은 위치인지 본다. 설명 글은 print에도 쓰이므로 ASCII만.
+    """
+    if numbered:
+        cv2_numbers = [frame_number(f) for f in cv2_frames]
+        pipe_numbers = [frame_number(f) for f in pipe_frames]
+        if pipe_numbers == cv2_numbers:
+            return None
+        first = next(i for i, (a, b) in enumerate(zip(cv2_numbers, pipe_numbers)) if a != b)
+        return (f"frame_number sequences differ: first mismatch at index {first}, cv2 {cv2_numbers[first:first + 5]} "
+                f"pipe {pipe_numbers[first:first + 5]}")
+
+    def signature(frame):
+        return frame.astype(np.float32).reshape(HEIGHT // 6, 6, WIDTH // 5, 5, 3).mean(axis=(1, 3)).ravel()
+
+    cv2_sigs = np.stack([signature(f) for f in cv2_frames])
+    wrong = []
+    for i, frame in enumerate(pipe_frames):
+        nearest = int(np.argmin(((cv2_sigs - signature(frame)) ** 2).sum(axis=1)))
+        if nearest != i:
+            wrong.append((i, nearest))
+    return f"nearest cv2 frame is at a different index (pipe index, cv2 index) {wrong[:5]}" if wrong else None
+
+
+def byte_diff_stats(cv2_frames, pipe_frames):
+    """같은 장수의 두 프레임열 비교 통계 — 다른 프레임 수, 최대 |차이|(int16), 다른 화소·값 %, 부호 있는 차이(파이프-cv2) 분포."""
+    differing, max_abs, pixels, samples, total_pixels, total_samples = [], 0, 0, 0, 0, 0
+    histogram = {}
+    for i, (cv2_frame, pipe_frame) in enumerate(zip(cv2_frames, pipe_frames)):
+        delta = pipe_frame.astype(np.int16) - cv2_frame.astype(np.int16)
+        changed = delta != 0
+        if changed.any():
+            differing.append(i)
+        max_abs = max(max_abs, int(np.abs(delta).max()))
+        pixels += int(changed.any(axis=2).sum())
+        samples += int(changed.sum())
+        total_pixels += changed.shape[0] * changed.shape[1]
+        total_samples += changed.size
+        values, counts = np.unique(delta[changed], return_counts=True)
+        for value, count in zip(values, counts):
+            histogram[int(value)] = histogram.get(int(value), 0) + int(count)
+    return {"differing": differing, "frames": len(cv2_frames), "max_abs": max_abs,
+            "pixel_pct": 100.0 * pixels / total_pixels, "sample_pct": 100.0 * samples / total_samples,
+            "histogram": dict(sorted(histogram.items(), key=lambda kv: -kv[1])[:8])}
+
+
+def stats_summary(stats):
+    return (f"differing frames {len(stats['differing'])}/{stats['frames']}, max |diff| {stats['max_abs']}, "
+            f"differing pixels {stats['pixel_pct']:.4f}%, diff histogram (pipe-cv2) {stats['histogram']}")
 
 
 def make_numbered_clip(path, count=120, fps="24", profile="3", pix_fmt="yuv444p10le"):

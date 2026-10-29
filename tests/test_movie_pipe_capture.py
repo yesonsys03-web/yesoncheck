@@ -20,7 +20,8 @@ import numpy as np
 import pytest
 
 from tests.prores_clips import (
-    HEIGHT, WIDTH, frame_number, make_audio_first, make_chroma_clip, make_numbered_clip, make_truncated, read_all_frames,
+    BYTE_EXACT, HEIGHT, TOLERANCE_422, WIDTH, byte_diff_stats, frame_alignment_problem, frame_number, make_audio_first,
+    make_chroma_clip, make_numbered_clip, make_truncated, read_all_frames, stats_summary,
 )
 from yesoncheck import error_window, external_tools, movie_pipe_source
 from yesoncheck.movie_pipe_source import (
@@ -160,8 +161,14 @@ def test_cv2_semantics_parity(prores_clip):
 
 
 def test_all_frames_byte_equal_cv2(prores_clip, prores_422_clip, chroma_clip):
-    """전 프레임 바이트 == cv2 (스펙 §3b·§5.4 근거의 영구 고정): 4444·422(23.976)·유채색 422. 프레임끼리는 서로 다름."""
-    for path in (prores_clip, prores_422_clip, chroma_clip):
+    """전 프레임이 cv2와 같은 그림 (스펙 §3b·§5.4 근거의 영구 고정): 4444·422(23.976)·유채색 422. 프레임끼리는 서로 다름.
+
+    프레임 정렬은 늘 완벽, 값 기준은 4:4:4 계열 바이트 완전 동일(BYTE_EXACT) / 4:2:2 계열 최대 |차이| <= TOLERANCE_422.
+    422 허용 오차는 사용자 결정(2026-10-29) — 스펙 §5.4.
+    """
+    # (경로, 번호 클립인가, 허용 최대 |차이|) — 4:4:4 계열 BYTE_EXACT, 4:2:2 계열 TOLERANCE_422
+    for path, numbered, allowed in ((prores_clip, True, BYTE_EXACT), (prores_422_clip, True, TOLERANCE_422),
+                                    (chroma_clip, False, TOLERANCE_422)):
         expected = read_all_frames(path)
         cap = open_capture(path)
         try:
@@ -170,8 +177,9 @@ def test_all_frames_byte_equal_cv2(prores_clip, prores_422_clip, chroma_clip):
             cap.release()
         assert len(frames) == len(expected), path
         assert all(f.shape == (HEIGHT, WIDTH, 3) and f.dtype == np.uint8 for f in frames), path
-        differing = [i for i in range(len(expected)) if not np.array_equal(frames[i], expected[i])]
-        assert not differing, f"{path}: cv2와 다른 프레임 {differing[:10]}"
+        assert frame_alignment_problem(expected, frames, numbered) is None, path
+        stats = byte_diff_stats(expected, frames)
+        assert stats["max_abs"] <= allowed, f"{path}: cv2와의 차이가 허용 오차 {allowed} 초과 - {stats_summary(stats)}"
         assert all(frames[i].tobytes() != frames[i + 1].tobytes() for i in range(len(frames) - 1)), path
 
 

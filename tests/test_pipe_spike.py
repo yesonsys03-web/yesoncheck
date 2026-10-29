@@ -1,11 +1,14 @@
 """ProRes 파이프 스파이크: 클립 공장 자가 검증 + 가정 확정 (앱 코드 없이 ffmpeg subprocess 직접).
 
 확정할 것 (계획서 Task 1 Step 7): ① ffmpeg 파이프(-fps_mode passthrough) 대 cv2 — 먼저 프레임 정렬(같은 그림끼리 같은
-위치인가), 그다음 바이트 동일성(회색 번호 클립 + 유채색 클립), ② -ss 착지가 K=0·K=2 각각 정확한지, ③ 세션 재시작 시간.
+위치인가), 그다음 바이트 기준(회색 번호 클립 + 유채색 클립: 4:4:4 계열은 바이트 완전 동일, 4:2:2는 최대 |차이| <= 5), ② -ss 착지가 K=0·K=2 각각 정확한지, ③ 세션 재시작 시간.
 수치는 print("SPIKE ...")로 남는다 (ASCII만 — Windows 러너 콘솔 인코딩 대비) — 바이트 동일성은 단언 직전에 클립별 통계
 (다른 프레임 수·최대 차이·다른 화소 %·부호 있는 차이 분포)를 찍어서, 실패해도 pytest가 보여 주는 captured stdout에 수치가 남는다.
-통과한 시험의 print는 pytest -s 또는 -rP 로 봄. 시간은 단언하지 않고(러너마다 다름) 디코드 결과의 정확성(프레임 번호·장수)만 단언한다. 모든 외부 프로세스에 timeout이 있고,
-파이프 읽기가 모자라면 kill 뒤 stderr를 읽어 예외 메시지에 싣는다.
+통과한 시험의 print는 pytest -s 또는 -rP 로 봄. 시간은 단언하지 않고(러너마다 다름) 디코드 결과의 정확성(프레임 번호·장수)만
+단언한다. 모든 외부 프로세스에 timeout이 있고, 파이프 읽기가 모자라면 kill 뒤 stderr를 읽어 예외 메시지에 싣는다.
+
+바이트 기준: 4:2:2 허용 오차는 사용자 결정(2026-10-29) — 스펙 §5.4 (상수 prores_clips.TOLERANCE_422, 근거 주석 거기).
+각 클립이 어느 기준을 따르는지는 아래 시험의 클립 표에 명시한다 (4:4:4 계열 BYTE_EXACT, 4:2:2 계열 TOLERANCE_422).
 """
 
 import json
@@ -25,9 +28,10 @@ import numpy as np
 import pytest
 
 from tests.prores_clips import (
-    HEIGHT, MAX_COUNT, TIMEOUT_PIPE, TIMEOUT_PROBE, WIDTH, ToolTimeout, ffmpeg_exe, frame_number, ideal_frame,
-    make_audio_first, make_chroma_clip, make_held, make_neg, make_numbered_clip, make_rot, make_truncated,
-    make_vfr_h264, make_voff, read_all_frames, run_tool,
+    BYTE_EXACT, HEIGHT, MAX_COUNT, TIMEOUT_PIPE, TIMEOUT_PROBE, TOLERANCE_422, WIDTH, ToolTimeout, byte_diff_stats,
+    ffmpeg_exe, frame_alignment_problem, frame_number, ideal_frame, make_audio_first, make_chroma_clip, make_held,
+    make_neg, make_numbered_clip, make_rot, make_truncated, make_vfr_h264, make_voff, read_all_frames, run_tool,
+    stats_summary,
 )
 
 FRAME_BYTES = WIDTH * HEIGHT * 3
@@ -215,57 +219,10 @@ def pipe_restart(path, n, k_back, fps, start_offset):
     return frames, elapsed
 
 
-def frame_alignment_problem(cv2_frames, pipe_frames, numbered):
-    """프레임 i끼리 같은 그림인지. 같으면 None, 아니면 설명 글.
-
-    번호 클립은 frame_number 수열이 같은지(이것이 프레임 정확도 계약의 본체). 유채색 클립은 번호가 없으므로 각 파이프 프레임에
-    가장 가까운(블록 평균 거리) cv2 프레임이 같은 위치인지 본다. 설명 글은 print에도 쓰이므로 ASCII만.
-    """
-    if numbered:
-        cv2_numbers = [frame_number(f) for f in cv2_frames]
-        pipe_numbers = [frame_number(f) for f in pipe_frames]
-        if pipe_numbers == cv2_numbers:
-            return None
-        first = next(i for i, (a, b) in enumerate(zip(cv2_numbers, pipe_numbers)) if a != b)
-        return (f"frame_number sequences differ: first mismatch at index {first}, cv2 {cv2_numbers[first:first + 5]} "
-                f"pipe {pipe_numbers[first:first + 5]}")
-
-    def signature(frame):
-        return frame.astype(np.float32).reshape(HEIGHT // 6, 6, WIDTH // 5, 5, 3).mean(axis=(1, 3)).ravel()
-
-    cv2_sigs = np.stack([signature(f) for f in cv2_frames])
-    wrong = []
-    for i, frame in enumerate(pipe_frames):
-        nearest = int(np.argmin(((cv2_sigs - signature(frame)) ** 2).sum(axis=1)))
-        if nearest != i:
-            wrong.append((i, nearest))
-    return f"nearest cv2 frame is at a different index (pipe index, cv2 index) {wrong[:5]}" if wrong else None
-
-
-def byte_diff_stats(cv2_frames, pipe_frames):
-    """같은 장수의 두 프레임열 비교 통계 — 다른 프레임 수, 최대 |차이|(int16), 다른 화소·값 %, 부호 있는 차이(파이프-cv2) 분포."""
-    differing, max_abs, pixels, samples, total_pixels, total_samples = [], 0, 0, 0, 0, 0
-    histogram = {}
-    for i, (cv2_frame, pipe_frame) in enumerate(zip(cv2_frames, pipe_frames)):
-        delta = pipe_frame.astype(np.int16) - cv2_frame.astype(np.int16)
-        changed = delta != 0
-        if changed.any():
-            differing.append(i)
-        max_abs = max(max_abs, int(np.abs(delta).max()))
-        pixels += int(changed.any(axis=2).sum())
-        samples += int(changed.sum())
-        total_pixels += changed.shape[0] * changed.shape[1]
-        total_samples += changed.size
-        values, counts = np.unique(delta[changed], return_counts=True)
-        for value, count in zip(values, counts):
-            histogram[int(value)] = histogram.get(int(value), 0) + int(count)
-    return {"differing": differing, "frames": len(cv2_frames), "max_abs": max_abs,
-            "pixel_pct": 100.0 * pixels / total_pixels, "sample_pct": 100.0 * samples / total_samples,
-            "histogram": dict(sorted(histogram.items(), key=lambda kv: -kv[1])[:8])}
-
-
-def report_pipe_vs_cv2(label, name, cv2_frames, pipe_frames, numbered):
+def report_pipe_vs_cv2(label, name, cv2_frames, pipe_frames, numbered, allowed):
     """정렬 문제와 바이트 통계를 계산해 단언보다 먼저 print. (문제 글 또는 None, 통계 또는 None) 반환.
+
+    allowed: 허용하는 최대 |차이| (BYTE_EXACT 또는 TOLERANCE_422) — 단언은 호출자가 하고 여기서는 print에 같이 적는다.
 
     장수·모양이 다르면 통계를 낼 수 없으므로 그 사실을 문제 글로 돌려주고 통계는 None — 호출자는 루프가 끝난 뒤에 단언하므로
     다른 클립의 통계는 항상 출력된다. 문제 글은 print에도 쓰이므로 ASCII만.
@@ -278,15 +235,10 @@ def report_pipe_vs_cv2(label, name, cv2_frames, pipe_frames, numbered):
     problem = frame_alignment_problem(cv2_frames, pipe_frames, numbered)
     stats = byte_diff_stats(cv2_frames, pipe_frames)
     print(f"SPIKE {label} {name}: aligned {problem is None}" + (f" ({problem})" if problem else ""))
-    print(f"SPIKE {label} {name}: differing_frames {len(stats['differing'])}/{stats['frames']} max_abs_diff {stats['max_abs']}"
+    print(f"SPIKE {label} {name}: allowed_max_abs_diff {allowed} differing_frames {len(stats['differing'])}/{stats['frames']} max_abs_diff {stats['max_abs']}"
           f" differing_pixels {stats['pixel_pct']:.4f}% differing_samples {stats['sample_pct']:.4f}%"
           f" pipe_minus_cv2 {stats['histogram']} first_differing_frames {stats['differing'][:8]}")
     return problem, stats
-
-
-def stats_summary(stats):
-    return (f"differing frames {len(stats['differing'])}/{stats['frames']}, max |diff| {stats['max_abs']}, "
-            f"differing pixels {stats['pixel_pct']:.4f}%, diff histogram (pipe-cv2) {stats['histogram']}")
 
 
 def seek_targets(count, seed):
@@ -461,31 +413,37 @@ def test_spike_byte_identity(prores_clip, prores_422_clip, prores_alpha_clip, pr
                              prores_4444_chroma_clip):
     """4444·422·알파(회색 번호 클립)와 422·4444 유채색 클립: ffmpeg 파이프(-fps_mode passthrough) 대 cv2.
 
-    (a) 프레임 정렬(번호 클립은 frame_number 수열 동일) 먼저, (b) 그다음 전 프레임 바이트 동일. 클립별 통계는 단언 전에 모두 print.
+    (a) 프레임 정렬(번호 클립은 frame_number 수열 동일) 먼저 — 모든 클립 완벽, (b) 그다음 최대 |차이| 기준: 4:4:4 계열은 0(바이트
+    완전 동일), 4:2:2 계열은 <= TOLERANCE_422. 클립별 통계는 단언 전에 모두 print (기준 초과가 아니어도 — 플랫폼 드리프트 감시 재료).
     회색만으로는 chroma 경로 차이를 못 보므로 유채색 클립(시드 고정 무작위 블록 색)을 함께 본다.
+    422 허용 오차는 사용자 결정(2026-10-29) — 스펙 §5.4.
     """
     ffmpeg_line = run_tool([ffmpeg_exe(), "-version"], "ffmpeg 버전", TIMEOUT_PROBE).stdout.decode().splitlines()[0]
     print(f"\nSPIKE env: {platform.system()} {platform.machine()} | cv2 {cv2.__version__} | {ffmpeg_line}")
-    clips = (("4444", prores_clip, True), ("422", prores_422_clip, True), ("alpha", prores_alpha_clip, True),
-             ("422_chroma", prores_422_chroma_clip, False), ("4444_chroma", prores_4444_chroma_clip, False))
-    misaligned, not_identical = [], []
-    for name, path, numbered in clips:
-        problem, stats = report_pipe_vs_cv2("byte_identity", name, read_all_frames(path), pipe_all(path), numbered)
+    # (이름, 경로, 번호 클립인가, 허용 최대 |차이|) — 4:4:4 계열 BYTE_EXACT, 4:2:2 계열 TOLERANCE_422
+    clips = (("4444", prores_clip, True, BYTE_EXACT), ("422", prores_422_clip, True, TOLERANCE_422),
+             ("alpha", prores_alpha_clip, True, BYTE_EXACT),
+             ("422_chroma", prores_422_chroma_clip, False, TOLERANCE_422),
+             ("4444_chroma", prores_4444_chroma_clip, False, BYTE_EXACT))
+    misaligned, over_limit = [], []
+    for name, path, numbered, allowed in clips:
+        problem, stats = report_pipe_vs_cv2("byte_identity", name, read_all_frames(path), pipe_all(path), numbered, allowed)
         if problem:
             misaligned.append((name, problem))
-        if stats and stats["differing"]:
-            not_identical.append((name, stats_summary(stats)))
+        if stats and stats["max_abs"] > allowed:
+            over_limit.append((name, f"allowed max |diff| {allowed}: " + stats_summary(stats)))
     assert not misaligned, f"(a) 프레임 정렬 어긋남: {misaligned}"
-    assert not not_identical, f"(b) cv2와 파이프 바이트 불일치 (클립, 통계): {not_identical}"
+    assert not over_limit, f"(b) cv2와 파이프 차이가 허용 오차 초과 (클립, 기준: 통계): {over_limit}"
 
 
 def test_spike_passthrough_frame_count(voff_clip, held_clip):
-    """voff·held: passthrough가 있으면 cv2와 장수 일치 → 프레임 정렬(frame_number 수열) → 바이트 일치, 없으면 복제 프레임으로 장수가 어긋남.
+    """voff·held(둘 다 4:2:2): passthrough가 있으면 cv2와 장수 일치 → 프레임 정렬(frame_number 수열) → 최대 |차이| <= TOLERANCE_422,
+    없으면 복제 프레임으로 장수가 어긋남.
 
-    정렬과 바이트 통계는 단언 전에 print.
+    정렬과 바이트 통계는 단언 전에 print. 422 허용 오차는 사용자 결정(2026-10-29) — 스펙 §5.4.
     """
-    misaligned, not_identical = [], []
-    for name, path in (("voff", voff_clip), ("held", held_clip)):
+    misaligned, over_limit = [], []
+    for name, path, allowed in (("voff", voff_clip, TOLERANCE_422), ("held", held_clip, TOLERANCE_422)):
         cv2_frames = read_all_frames(path)
         with_pass = pipe_all(path, passthrough=True)
         without = pipe_all(path, passthrough=False)
@@ -495,13 +453,13 @@ def test_spike_passthrough_frame_count(voff_clip, held_clip):
         if len(without) <= len(cv2_frames):
             misaligned.append((name, f"without passthrough the frame count is not larger ({len(without)} vs cv2 "
                                      f"{len(cv2_frames)}) - the command difference is gone"))
-        problem, stats = report_pipe_vs_cv2("passthrough_bytes", name, cv2_frames, with_pass, numbered=True)
+        problem, stats = report_pipe_vs_cv2("passthrough_bytes", name, cv2_frames, with_pass, True, allowed)
         if problem:
             misaligned.append((name, problem))
-        if stats and stats["differing"]:
-            not_identical.append((name, stats_summary(stats)))
+        if stats and stats["max_abs"] > allowed:
+            over_limit.append((name, f"allowed max |diff| {allowed}: " + stats_summary(stats)))
     assert not misaligned, f"(a) passthrough 파이프와 cv2의 프레임 정렬 어긋남: {misaligned}"
-    assert not not_identical, f"(b) passthrough인데 cv2와 바이트가 다름 (클립, 통계): {not_identical}"
+    assert not over_limit, f"(b) passthrough 파이프와 cv2의 차이가 허용 오차 초과 (클립, 기준: 통계): {over_limit}"
 
 
 def test_spike_seek_landing(prores_clip, prores_422_clip, voff_clip):
