@@ -1,6 +1,7 @@
 """ProRes 시험 클립 공장 — numpy 프레임을 stdin 파이프로 prores_ks에 넣어 만든다 (drawtext 금지: 글꼴 의존).
 
-번호 클립: 프레임 i는 단색이고, cv2로 읽으면 BGR (i, i, i). 유채색 클립: 시드 고정 무작위 블록 색 (chroma 경로 시험용).
+번호 클립: 프레임 i를 회색 블록 두 개의 밝기로 인코딩 (아래 frame_number 참고) — 디코더마다 밝기가 몇 레벨 어긋나도 번호는
+정확히 복호된다. 유채색 클립: 시드 고정 무작위 블록 색 (chroma 경로 시험용).
 경계 클립(voff·held·neg·rot·audio_first·truncated·vfr_h264)은 실제로 겪은 문제 파일의 재현 (설계 때 실측한 ffprobe
 성질에 맞춤: 영상 start 오프셋·정지 프레임·편집 목록·회전 메타·트랙 순서·꼬리 잘림). 전부 320x180, 번호/경계 120장(5초).
 ffmpeg는 PATH에서 찾는다 (tests/conftest.py가 저장소의 정적 빌드를 PATH 맨 앞에 둠).
@@ -25,11 +26,13 @@ PRORES_PIX_FMTS = ("yuv422p10le", "yuv444p10le", "yuva444p10le")
 TIMEOUT_ENCODE = 120  # 초 — 320x180 120장 인코드는 1초 안쪽, 넉넉히
 TIMEOUT_PROBE = 30
 TIMEOUT_PIPE = 60
-# 번호 i의 밝기는 i + 오프셋 (8비트 눈금). 정수 i 그대로 넣으면 10비트 4:2:2 디코드(swscale)의 내림 때문에 이웃 번호가 같은
-# 값으로 합쳐지고(1→0, 3→2, ...), 4:4:4는 반올림이라 반 칸 가까이 올리면 올림으로 넘어간다. 실측(cv2 4.6/FFmpeg 4.4, 인코더
-# 입력은 네이티브 10비트)으로 0~199 전부 왕복 정확한 범위: 4:2:2 +0.15~+0.85, 4:4:4(HQ·4444·알파 동일) -0.35~+0.35.
-# 각 범위 안에서 내림/반올림 어느 디코더에도 여유가 남는 자리: 4:2:2 0.4, 4:4:4 0.1. (4:2:0은 H.264용이라 번호 검증 안 함)
-_LEVEL_OFFSETS = {"422": 0.4, "444": 0.1, "420": 0.25}
+# 번호 인코딩: i = hi * RADIX + lo. 회색 두 블록의 밝기(8비트 눈금)가 hi * STEP, lo * STEP — 바깥(전체 바탕) 블록이 hi,
+# 가운데 직사각형(프레임의 가운데 절반)이 lo. 한 값에 번호를 그대로 싣던 처음 방식은 CI Mac의 cv2 디코드가 밝기를 1~2 레벨
+# 틀어 버려(위치 1~10 → 0,1,2,2,3,4,5,6,8,9) 자가 검증이 깨졌다. 레벨 간격 STEP이면 복호가 +-(STEP/2 - 0.5) 레벨 드리프트까지
+# 정확하다 (STEP 18 -> +-8). MAX_COUNT 200까지: hi 최대 14*18 = 252, lo 최대 13*18 = 234가 255 안에 든다.
+RADIX = 14
+STEP = 18
+assert (MAX_COUNT - 1) // RADIX * STEP <= 255 and (RADIX - 1) * STEP <= 255
 AUDIO_SECONDS = 6
 _HELD_FPS = "24"
 _PLANAR = re.compile(r"yuv(a?)(420|422|444)p(\d*)(?:le)?")
@@ -65,10 +68,22 @@ def run_ffmpeg(args, purpose, stdin_bytes=None, timeout=TIMEOUT_ENCODE):
     return run_tool([ffmpeg_exe(), "-y", "-v", "warning", *args], purpose, timeout, stdin_bytes)
 
 
+def _digit(level_mean):
+    return int(round(float(level_mean) / STEP))
+
+
 def frame_number(arr):
-    """번호 클립 프레임의 번호: 중앙 영역 평균을 반올림."""
+    """번호 클립 프레임의 번호 = hi * RADIX + lo.
+
+    lo: 가운데 상자의 안쪽(프레임의 3/8~5/8) 평균 / STEP 반올림, hi: 네 모서리 조각(가로·세로 1/8) 평균 / STEP 반올림.
+    위치가 모두 90도 회전에 대해 닫혀 있어서 회전 메타 클립(cv2가 180x320으로 돌려 줌)도 같은 번호로 복호된다.
+    번호 클립이 아닌 프레임(유채색 클립 등)에는 뜻이 없다.
+    """
     h, w = arr.shape[:2]
-    return int(round(float(arr[h // 4:h * 3 // 4, w // 4:w * 3 // 4].mean())))
+    lo = arr[3 * h // 8:5 * h // 8, 3 * w // 8:5 * w // 8].mean()
+    hi = np.mean([arr[:h // 8, :w // 8].mean(), arr[:h // 8, w - w // 8:].mean(),
+                  arr[h - h // 8:, :w // 8].mean(), arr[h - h // 8:, w - w // 8:].mean()])
+    return _digit(hi) * RADIX + _digit(lo)
 
 
 def _layout(pix_fmt):
@@ -88,21 +103,26 @@ def _check_count(count):
         raise ValueError(f"count는 1~{MAX_COUNT}: {count}")
 
 
-def _numbered_raw(count, pix_fmt):
-    """번호 count장의 원시 프레임 바이트, pix_fmt(평면 YUV) 그대로.
+def _luma_code(level, depth):
+    """8비트 눈금 밝기 level(0~255) -> depth비트 제한 범위 Y 코드."""
+    return round((16 + 219 * level / 255) * 2 ** (depth - 8))
 
-    인코더 앞에서 색 변환(swscale)을 거치면 변환 쪽 오차가 번호를 흔들어서, 목표 pix_fmt의 평면을 직접 만든다.
-    밝기(Y)는 제한 범위, 색차는 중립 → 디코드하면 B=G=R=i. 알파(yuva)는 가로 그라데이션 — 알파가 비어 있지 않아야
-    알파 트랙 시험이 됨.
+
+def _numbered_raw(count, pix_fmt):
+    """번호 count장의 원시 프레임 바이트, pix_fmt(평면 YUV) 그대로. 번호 인코딩은 위 RADIX·STEP 설명.
+
+    인코더 앞에서 색 변환(swscale)을 거치면 변환 쪽 오차가 밝기를 흔들어서, 목표 pix_fmt의 평면을 직접 만든다.
+    색차는 중립 → 디코드하면 B=G=R. 알파(yuva)는 가로 그라데이션 — 알파가 비어 있지 않아야 알파 트랙 시험이 됨.
     """
     _check_count(count)
-    alpha, subsampling, depth, dtype, chroma_w, chroma_h = _layout(pix_fmt)
+    alpha, _, depth, dtype, chroma_w, chroma_h = _layout(pix_fmt)
     neutral = 2 ** (depth - 1)
     chunks = []
     for i in range(count):
-        luma = round((16 + 219 * (i + _LEVEL_OFFSETS[subsampling]) / 255) * 2 ** (depth - 8))
-        planes = [np.full((HEIGHT, WIDTH), luma, dtype), np.full((chroma_h, chroma_w), neutral, dtype),
-                  np.full((chroma_h, chroma_w), neutral, dtype)]
+        hi, lo = divmod(i, RADIX)
+        luma = np.full((HEIGHT, WIDTH), _luma_code(hi * STEP, depth), dtype)
+        luma[HEIGHT // 4:HEIGHT * 3 // 4, WIDTH // 4:WIDTH * 3 // 4] = _luma_code(lo * STEP, depth)
+        planes = [luma, np.full((chroma_h, chroma_w), neutral, dtype), np.full((chroma_h, chroma_w), neutral, dtype)]
         if alpha:
             planes.append(np.tile(np.linspace(0, 2 ** depth - 1, WIDTH).astype(dtype), (HEIGHT, 1)))
         chunks.extend(plane.tobytes() for plane in planes)
@@ -193,7 +213,8 @@ def _verify_chromatic(path, count):
 
 
 def make_numbered_clip(path, count=120, fps="24", profile="3", pix_fmt="yuv444p10le"):
-    """프레임 i = BGR (i, i, i) 단색(count <= 200) 번호 클립. 만든 뒤 cv2로 전 프레임 왕복 검증 (실패하면 ValueError).
+    """프레임 i를 회색 블록 두 개로 인코딩한 번호 클립(count <= 200, frame_number로 복호). 만든 뒤 cv2로 읽어 복호한 번호열이
+    range(count)인지 검증 (실패하면 ValueError) — 밝기 레벨 정확도는 요구하지 않음.
 
     profile은 prores_ks 번호(0 proxy, 1 lt, 2 standard, 3 hq, 4 4444, 5 4444xq). 진짜 4444는 profile="4"
     (profile="3"에 4:4:4 pix_fmt를 주면 HQ 표지의 4:4:4 10비트가 나옴). pix_fmt는 PRORES_PIX_FMTS 중 하나이고,
