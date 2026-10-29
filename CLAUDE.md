@@ -107,7 +107,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   `player_sidebar`(`SidebarScan`·`ThumbnailContext`·`gather_shared_config` 등).
 
 **주요 파일**:
-- `yesoncheck/app.py` (400줄): 애플리케이션 부트스트랩 및 CLI 진입점 — 빌드 앱은 `setup_app_logging`이 stdout·stderr를
+- `yesoncheck/app.py` (402줄): 애플리케이션 부트스트랩 및 CLI 진입점 — 영상 소스 토글(`YESONCHECK_MOVIE_SOURCE`)의 나쁜 값은 스플래시 전에 `movie_source_mode()`를 불러 시작 때 ValueError로 — 빌드 앱은 `setup_app_logging`이 stdout·stderr를
   창(프로세스)마다 기록 파일 `yesoncheck_<날짜>_<pid>.log`로(Mac `~/Library/Logs/YesonCheck`, Windows
   `%LOCALAPPDATA%\YesonCheck\logs` — update.log와 같은 폴더, 30일 지난 것은 켤 때 지움) 보내고 예외 창(`sys.excepthook`)을
   설치. 업데이트 중(다른 창이 넘긴 업데이트 — 도우미가 `--update-result`로 켠 앱은 빼고)에 켜면 창을 만들지 않고
@@ -127,7 +127,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
 - `yesoncheck/main_window_styles.py` (940줄): 어두운·밝은 테마 시트(`DARK_STYLESHEET`·`LIGHT_STYLESHEET`)와 큰 인라인 시트 상수 — 데이터만 있는 잎 모듈
   (한 글자도 바뀌지 않게 `tests/test_stylesheet_freeze.py`가 해시로 지킴)
 - `yesoncheck/worker_lifecycle.py` (76줄): 놓아 준 `QThread` 워커를 끝날 때까지 붙잡아 두기 — `release_worker`·`wait_for_released_workers`·`EXIT_WAIT_S`(30초)
-- `yesoncheck/player_playback.py` (2,635줄): 비디오 재생, 프레임 탐색 및 FFmpeg 작업 — 화살표·휠 프레임 이동 모두 오버레이(V 모드) 슬라이더를 함께 갱신(`_update_ui_fast`도 `update_overlay_controls`를 부름 — tests/test_overlay_slider_sync.py) — 전역 단축키(`keyPressEvent`): V(컨트롤 전체 숨김·오버레이), N/ㅜ(가운데 컨트롤 열 숨김 — `toggle_middle_panel`, V·전체화면 복원 뒤에도 유지)
+- `yesoncheck/player_playback.py` (2,648줄): 비디오 재생, 프레임 탐색 및 FFmpeg 작업 — `_open_movie_capture`는 `os.stat` 확인 뒤·`cv2.VideoCapture` 앞에 ffmpeg 파이프 게이트(`maybe_pipe_capture`)를 끼움(아래 `movie_pipe_source`; 음성이면 기존 cv2 줄이 그대로 돎) — 화살표·휠 프레임 이동 모두 오버레이(V 모드) 슬라이더를 함께 갱신(`_update_ui_fast`도 `update_overlay_controls`를 부름 — tests/test_overlay_slider_sync.py) — 전역 단축키(`keyPressEvent`): V(컨트롤 전체 숨김·오버레이), N/ㅜ(가운데 컨트롤 열 숨김 — `toggle_middle_panel`, V·전체화면 복원 뒤에도 유지)
 - `yesoncheck/player_annotations.py` (1,072줄): 수정 사항 주석(프레임별 텍스트·도형) UI와 재생 연동 (`PlayerAnnotationsMixin`) — 주석 모드 버튼은 켜짐을 빨강으로 표시(`ANNOTATION_MODE_BUTTON_STYLE`)
 - `yesoncheck/player_sidebar.py` (555줄): `PlayerSidebarMixin` — 드롭·파일 넣기·폴더 불러오기, 우클릭 메뉴·파일 복사, 작품 → 시즌 → job 콤보,
   선택한 영상을 A에 열기. 나머지는 아래 부모 믹스인 모듈에 있고 이 모듈은 옛 import 경로를 위해 일부 이름을 다시 내보냄
@@ -158,7 +158,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   - `yesoncheck/sequence_scan.py` (137줄): 파일 이름에서 시퀀스를 묶는 규칙 `group_sequences`·`SeqInfo`·프레임 이름 해석 `parse_frame_name`·한 프레임의 시퀀스 찾기 `sequence_of_frame`·여러 프레임용 색인 `FolderFrames` — Qt·디스크 없음. **시퀀스의 정체성은 가상 경로
     `<폴더>/<베이스>.seq`(`SeqInfo.identity`, `is_sequence_path`로 판별)**: 진짜 파일이 아니며 목록·`filename_a`·주석 파일 이름(`<베이스>_seq_annotations.json`)·
     창 제목이 모두 이 문자열을 씀. 시퀀스 경로를 `os.path.exists`·`cv2.VideoCapture`에 그대로 넘기지 말 것 (`open_any_capture`가 가름, OCR 류는 `is_sequence_active`로 막음)
-  - `yesoncheck/sequence_source.py` (595줄): `decode_frame`(TGA·PNG·JPG·TIF는 PIL, EXR은 cv2)·`ImageSequenceCapture`(`cv2.VideoCapture` 자리에 꽂는 캡처, 선읽기 버퍼)·`open_any_capture`
+  - `yesoncheck/sequence_source.py` (600줄): `decode_frame`(TGA·PNG·JPG·TIF는 PIL, EXR은 cv2)·`ImageSequenceCapture`(`cv2.VideoCapture` 자리에 꽂는 캡처, 선읽기 버퍼)·`open_any_capture`(`.seq` → 시퀀스 캡처, 아니면 `maybe_pipe_capture`가 파이프 캡처를 주고 음성이면 `cv2.VideoCapture`)
     **프레임 한 장 = 그 시퀀스**: `resolve_frame_path`/`find_frame_sequence`(폴더를 한 번 읽음, 프레임 이름이 아닌 경로·`.seq`는 읽지 않음, 없는 폴더는 None, 그 밖의 읽기 오류는 그대로 올림)가
     프레임 경로를 시퀀스 가상 경로로 바꿈. `open_file`(`_frame_to_sequence_path`)이 **모든 열기 길**(Open Video A/B 대화상자 — 필터가 없어 프레임도 고를 수 있음 —·끌어다 놓기·Finder 열기·다음으로 열기)에서
     mov·`.seq` 분기 앞에서 부르므로 `filename_a/_b`에는 늘 `.seq`가 들어감. 한 장뿐인 프레임(시퀀스 아님)은 예전처럼 영상 경로. 같은 base의 시퀀스가 여럿(다른 확장자·자릿수)이면 캡처가 여는 첫 묶음의
@@ -173,6 +173,53 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   - `yesoncheck/sequence_export_worker.py` (335줄): `SequenceExportWorker`(`QThread`) — 시퀀스 여러 개를 `<출력 폴더>/<베이스>.mov`로, `validate_out_dir`가 원본 폴더를 거부.
     읽지 못한 프레임을 직전 프레임으로 채운 수는 `ImageSequenceCapture.read_failure_count`로 세어 항목마다(`item_done`)·끝날 때(`substitutions`) 진행 창 로그와 콘솔에 알림 — 오류 아님(길이 보존, `finished` 나감)
   - `check_frozen_imports.py`가 TGA·EXR 한 장씩 `decode_frame`을 실행함 — PIL 플러그인은 지연 import라 동결 앱에서 빠져도 시험이 못 잡음 (cv2에 EXR이 꺼져 있으면 EXR만 건너뛰고 결과 줄에 적음)
+- `yesoncheck/movie_pipe_source.py` (728줄): **ffmpeg 파이프 프레임 소스** — ProRes류 CFR mov를 번들 ffmpeg(`-f rawvideo -pix_fmt bgr24 pipe:1`)로 디코드해
+  `cv2.VideoCapture` 자리에 꽂는 덕타이핑 캡처 `FFmpegPipeCapture`(`isOpened`·`read`·`get`·`set`·`release`, `ImageSequenceCapture`와 같은 계약)와 그것을 고르는 게이트.
+  **왜**: cv2 내장 FFmpeg의 단일 스레드 픽셀 변환(12bit 4:4:4 → BGR)이 8코어를 놀려 4K ProRes 4444(3840×2160 24fps)가 22fps로 실시간에 못 미침 — 번들 ffmpeg의 디코드+bgr24 변환은 50.7fps
+  (이 Mac Intel 8코어 실측 2026-10-29; 코덱·기계 탓이 아니라 cv2의 변환 경로 — 다른 재생기는 같은 파일을 실시간으로 틀었음). 새 의존성 없음(ffmpeg·ffprobe는 이미 번들, `external_tools` 경로).
+  - **게이트 `pipe_eligible(probe)`** (`probe_movie`가 ffprobe 1회로 `MovieProbe`를 읽음; **양성 증거로만 켜지는 opt-in** — 한 조건이라도 확인 못 하면 거짓): ① 코덱 `prores`(`PIPE_CODECS`)
+    ② `r_frame_rate` 유효(0 < r ≤ 240)이고 `avg_frame_rate == r`(Fraction 등식) ③ nb_frames ≥ 1·크기 ≥ 1 ④ **정확 등식** `Fraction(nb_frames,1)/r == duration_ts × time_base`(프레임 수·길이·속도 삼자 일치)
+    ⑤ 회전 0이고 화소 비율(SAR) 없음/1:1 ⑥ 영상 트랙·컨테이너 시작 시각이 유한한 값(0이 아니어도 됨 — 탐색이 오프셋을 보정). 어긋난 첫 조건을 `ineligible_reason`이 조건 번호와 함께 한 줄로 알려 줌.
+    ④⑤가 필요한 이유(전부 경계 클립으로 재현한 실측): 느슨한 비율(0.5%) 판정은 편집 목록으로 앞 2장이 잘린 파일(nb_frames 120인데 실제 118장 — cv2·ffmpeg 동일)과 한 프레임이 길게 머무는 파일(avg가 r과 0.33%만 다름)을
+    통과시켜 EOF 불변식이 매번 거짓 경보를 내거나 정지 프레임 뒤부터 탐색이 한 칸 일찍 착지함. 회전 메타(90°) 파일은 ffprobe가 320×180인데 cv2는 180×320을 줘서 바이트 수가 같은 채 reshape만 조용히 깨짐. h264 등 나머지와 게이트 음성 ProRes는 기존 cv2 줄이 그대로 돎.
+  - **진입점**: `maybe_pipe_capture(path)` 한 함수가 모드·판정·캡처 생성을 묶고(양성이면 캡처, 음성이면 `None`), `sequence_source.open_any_capture`(주석 내보내기)와 `VideoPlayer._open_movie_capture`(영상 열기) 둘이 같은 함수를 부름 —
+    판정 중복 금지. `_open_movie_capture`의 `PipeCaptureError`는 트레이스째 오류 창 + `None`(`_open_sequence_capture`처럼 보던 영상은 그대로). **기존 재생·탐색 코드 수정 0곳**(사용자 최우선 제약: 기존 파일 재생 무회귀) —
+    바뀐 열기 경로는 `_open_movie_capture`의 삽입 분기와 `open_any_capture`의 한 호출뿐. OCR·씬 감지·썸네일 워커, OCR 검토 창·타임라인의 미리보기 캡처, 미디어 정보 창은 `cv2.VideoCapture`를 직접 열어 cv2 그대로(4K ProRes에서는 여전히 느림 — 필요해지면 별도 작업).
+  - **토글 `YESONCHECK_MOVIE_SOURCE=auto|pipe|cv2`** (진단·킬 스위치, `YESONCHECK_VIEWPORT` 선례): 없거나 비면 `auto`, 대소문자 무시, 그 밖의 값은 ValueError(조용한 폴백 금지) — `app.launch`가 시작 때 한 번 `movie_source_mode()`로 검증(스플래시 전).
+    `cv2`는 킬 스위치(probe도 하지 않고 1.5.0 동작 그대로). `pipe`는 ① 코덱만 면제하고 정확도 조건 ②~⑥은 유지 — 불통과면 열 때 `PipeCaptureError`로 크게 실패(어긋날 파일을 강제로 틀어 주지 않음),
+    ffprobe가 파일을 못 읽어도 cv2로 조용히 가지 않고 같은 예외. 시험은 `tests/conftest.py`가 이 변수를 지우고 시작.
+  - **로그**(print): 파이프를 골랐으면 `[재생] ffmpeg 파이프: <이름> (prores 3840×2160 24fps, 프레임 334)` — **기록에 이 줄이 있으면 파이프 경로**. 게이트 음성이면 `[재생] cv2: <이름> (파이프 아님 — ② 프레임 속도가 일정하지 않음 …)`처럼
+    사유 한 줄. `auto`에서 ffprobe가 파일을 못 읽으면(`RuntimeError` — 깨진 파일·확인 불가) 스택 트레이스·stderr 전문을 남기고 cv2로 엶(cv2도 못 열면 기존 오류 창). `ToolNotFoundError`(번들 ffprobe 없음)·probe 해석 오류(`KeyError` 등 코드 버그)·
+    캡처 생성의 `PipeCaptureError`는 잡지 않고 그대로 올림.
+  - **ffmpeg 명령**(`_pipe_command`): `ffmpeg -nostdin -v error [-ss <t>] -i <파일> -map 0:V:0 -fps_mode passthrough -f rawvideo -pix_fmt bgr24 pipe:1` — **`-fps_mode passthrough` 필수**(없으면 rawvideo가 CFR에 맞추려
+    프레임을 복제해 섞음: 영상 start 0.5s 클립에서 파이프 132장 vs cv2 120장), **`-map 0:V:0`** 대문자 V(attached_pic 제외 — `probe_movie`가 고른 트랙과 같음; 소문자 `v:0`은 attached_pic을 포함). 경로는 인자 리스트 그대로(비ASCII 안전),
+    Windows는 `subprocess_kwargs()`(CREATE_NO_WINDOW).
+  - **세션과 선읽기**: `_PipeSession` = ffmpeg 프로세스 하나 + 읽기 스레드·stderr 스레드(상시 비움)·유한 큐·정지 플래그 한 덩어리. 탐색 재시작·`release`가 세션을 통째로 버려 옛 프로세스의 프레임·실패가 새 큐에 섞이지 않음. stdout은 읽기 스레드만 읽음.
+    선읽기 `READAHEAD_FRAMES=6`(4K bgr24 ≈ 24MB/장 → 캡처당 ≈143MB) — 디코드와 표시를 떼어 프레임당 시간이 합이 아니라 max가 되게 하고 NAS 순간 끊김을 누그러뜨림; 큐가 비면 채워질 때까지 기다림(자연 감속, 프레임을 건너뛰지 않음).
+    스레드는 데몬, GUI 스레드는 무한 join하지 않음(NFS hard mount에서 kill해도 안 죽는 프로세스는 데몬 스레드가 거둠). `weakref.finalize`가 `release` 없이 버려진 캡처의 ffmpeg를 끝냄. A/B 와이프는 ffmpeg 2개.
+  - **탐색**: `set(CAP_PROP_POS_FRAMES, n)`은 **지연(lazy)** — 목표만 기록하고(cv2처럼 0~count로 자르고 소수 버림, `get`은 곧바로 그 값) 실제 이동은 다음 `read()` 머리에서: 제자리 → 링 버퍼 안(`KEEP_BEHIND=8`장 보관,
+    4K ≈199MB/캡처 — 뒤로 한 칸이 재시작 없이; 없으면 4K에서 449~634ms로 cv2의 329~372ms보다 느려지는 실측 회귀) → 앞쪽 `SEEK_FORWARD_MAX=24`장 안이면 꺼내 버림 → 그 밖은 `-ss` 재시작(`SEEK_BACK_K=0`).
+    **재시작 `-ss`는 `t = n/r + (영상 트랙 start − 컨테이너 start)`로 트랙 오프셋 보정 필수** — `-ss`는 컨테이너 start 기준이라 빼면 영상 start 0.5s 파일에서 12프레임 앞에 착지(`external_tools`의 선례와 같은 보정).
+    연속 set(슬라이더 드래그)은 이동 한 번으로 합쳐지고, 곧 release될 캡처의 set(`stop_video` → `seek_to_frame(1)`)은 공짜. 재시작하면 링이 그 자리에서 새로 시작하므로, 슬라이더로 옮겨 온 바로 그 프레임에서 ←를 누르면 한 번 더 재시작함(그 자리에서 앞으로 읽은 만큼은 링에서 즉시).
+  - **프레임 정확도(데이터 계약)**: 주석 JSON의 프레임 번호는 NAS에서 cv2 기반 옛 버전 PC와 함께 쓰고 OCR·씬 워커도 cv2라 "파이프 번호 = cv2 번호"가 깨지면 다른 PC·기능의 주석·구간이 어긋남. 위치는 자체 카운터(순차 전달이라 구조상 정확),
+    전체 수는 ffprobe `nb_frames`(cv2 `FRAME_COUNT`와 같은 출처 — 실파일 334 일치), `get(FPS)`는 `float(avg)`(cv2와 같은 출처), 탐색 시각은 정확한 분수 r(병합용 `pick_frame_rate`의 표준값 스냅을 쓰면 2분대부터 반 프레임 어긋남).
+    EOF 불변식: 정상 끝은 스트림 위치 == nb_frames에서의 EOF뿐 — 모자라거나 넘치면 도중 실패. 단 끝까지 재생해야 걸리므로 중간 어긋남의 실질 방어는 게이트와 시험.
+  - **실패 처리(B 방식 — 사용자 확정)**: `PipeCaptureError`(원인·파일·명령·stderr 전문)는 **생성자에서만** 올라옴 → 받는 곳은 새로 넣은 두 분기뿐. 생성 뒤의 `read`·`get`·`set`은 예외를 내지 않음 — 도중 실패(프로세스 사망·프레임 중간에서 끊김·
+    종료 코드 ≠ 0·EOF 수 불일치·`READ_TIMEOUT_S`=30초 동안 프레임 없음·재시작할 ffmpeg를 띄우지 못함)는 큐에 남은 정상 프레임을 다 준 뒤 캡처가 스스로 '죽음' 상태가 되고(죽은 cv2 캡처와 같은 겉모습: `read` `(False, None)`·`isOpened` False·`get` 0.0·`set` False)
+    기록(stderr)에 **즉시 1회**(원인·읽던 곳의 호출 스택·명령·stderr 전문) + **Qt 루프에서 오류 창 1회**(`error_window.show_window` — 큐드 연결이라 재생 타이머 슬롯 안에서 모달을 열지 않음; QApplication이 없으면 기록만). 재생은 영상 끝에 닿은 것처럼 멈추고
+    다시 열면 정상. **왜 호출처가 아니라 캡처 안에서 끝내나**: 기존 호출처 10여 곳이 read 예외를 삼키거나 print만 하고(매일 쓰는 h264 재생도 지나는 길이라 손대면 회귀 위험), 재생 타이머 슬롯 `next_frame_playback`은 try가 없어
+    예외가 올라오면 소스 실행의 PyQt5가 프로세스를 abort함(exit 134 실측). `read()`는 한 번에 한 스레드만 부름(같은 캡처를 두 스레드가 동시에 read하는 건 미지원), `get`·`set`·`release`는 다른 스레드에서 불러도 됨.
+  - **픽셀 동일성(스파이크 실측 2026-10-29, CI 세 플랫폼)**: 프레임 정렬(수·순서)은 전 플랫폼·전 클립 완벽. 바이트는 **4:4:4(4444·알파)가 세 플랫폼에서 cv2와 완전 동일**(실파일은 여기), **4:2:2는 Apple Silicon에서만 cv2 대비 ±4 레벨 이내**
+    (단색 ±2, 색 경계 ±4 — chroma 보간의 CPU별 swscale 경로 차, 눈으로 구분 불가). 사용자 결정(2026-10-29): 4:2:2도 파이프에 포함 — 시험 기준은 4:4:4 = 바이트 완전 동일, 4:2:2 = 프레임 정렬 완벽 + 최대 차이 ≤ 5
+    (`tests/prores_clips.py`의 `BYTE_EXACT`·`TOLERANCE_422`). 앱 의미: Apple Silicon에서 ProRes 422의 표시 색(주석 굽기 내보내기도)이 이전과 최대 4 레벨 다를 수 있음, 프레임 번호는 불변. bitexact 플래그는 cv2와 달라질 수 있어 안 씀(cv2 동일성 우선).
+  - **시험 클립 함정**: CI Mac 러너의 cv2 디코드가 밝기를 레벨 ±2 틀어 버려(프레임 번호를 밝기 한 값에 그대로 실은 처음 방식이 깨짐) 번호를 회색 블록 두 개의 두 자리 수(`RADIX` 14·`STEP` 18 — ±8 레벨까지 견고)로 실음 — `tests/prores_clips.py`의 `frame_number`.
+    정답은 늘 프레임에 그려 넣은 번호이고 cv2 픽셀에 기대지 않음(플랫폼 픽셀 차와 탐색 버그를 가르려고).
+  - **알고 둔 한계**: ① 모든 영상 열기에 ffprobe 1회(~45ms, GUI 스레드·timeout 없음 — NAS가 멈추면 기존 `os.stat`과 같은 성질) ② 소스 실행에서 PATH에 ffmpeg·ffprobe가 없으면 h264 열기도 `ToolNotFoundError`(빌드 앱은 번들이라 해당 없음; `YESONCHECK_MOVIE_SOURCE=cv2`면 probe를 안 하므로 피함)
+    ③ 파이프가 죽은 뒤 Play를 누르면 `get(FPS)`가 0이라 영상 타이머는 안 켜지지만 단추는 Pause로 바뀌고 소리 재생기는 시작함(오류 창은 이미 떴음 — 다시 열면 정상) ④ 죽은 캡처는 `release` 전까지 링 버퍼(4K ≈199MB)를 쥐고 있음
+    ⑤ 1GbE 링크 PC는 4K ProRes 첫 재생이 네트워크 대역 한계(131MB/s 필요 — 이 Mac은 10GbE 실측이라 해당 없음, 2회째부터는 캐시) ⑥ 같은 캡처를 두 스레드가 동시에 read하는 건 미지원(계약).
+  - 빌드 앱 `yesoncheck/smoke_test.py`의 'ProRes 파이프 열기' 단계(`prores_pipe_open` — 번들 ffmpeg로 소형 ProRes mov를 만들어 `open_any_capture`로 열고 읽기·탐색, `YESONCHECK_MOVIE_SOURCE`가 auto가 아니면 실패): 빌드 앱의
+    `_MEIPASS` ffmpeg와 Windows CREATE_NO_WINDOW 파이프가 실제로 실행되는 유일한 자리. 4K 실물 재생·탐색·와이프·주석은 CI가 못 보므로 눈 확인 몫 — 내부(비공개) 저장소의
+    `docs/superpowers/records/2026-10-29-prores-pipe-design/eye-check.md`. 시험은 아래 '테스트 전략'.
 - `yesoncheck/video_list.py` (427줄): 사이드바 영상 목록 규칙 (job·폴더 읽기, 정렬, 다시 읽기 계획, 없어진 영상 판정 `check_gone`) — Qt 없음
 - `yesoncheck/mac_mounts.py`: (Mac) 이 Mac에서 공유가 붙은 곳 — 자동 연결(autofs) 설정(`/etc/auto_master`와 간접 맵)과
   `/etc/fstab`을 읽어, 공유 설정의 앞부분(`/USA_DB`, path_map.json의 "mac", 제자리가 아닌 공유의 `/<이름>`)이 이 Mac에
@@ -575,6 +622,7 @@ OCR 리뷰 윈도우가 열려있을 때:
 - 4K 자동 감지 (비디오 너비 ≥1920px)
 - 차이 임계값 기반 스마트 프레임 건너뛰기
 - 하드웨어 가속 지원 (CUDA/OpenCL)
+- ProRes류 CFR mov는 ffmpeg 파이프 프레임 소스(`movie_pipe_source`)로 재생 — 4K ProRes 4444에서 cv2 22fps → 파이프 50.7fps (위 '주요 파일'의 해당 항목: 게이트·토글·실패 처리·알고 둔 한계)
 
 ### OCR 분석
 - 픽셀 차이 임계값 기반 프레임 건너뛰기
@@ -626,8 +674,8 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 
 **시험은 반드시 `~/coding/p310_tf/bin/python -m pytest`로 돌릴 것** — TensorFlow가 없는 `~/coding/p310`으로 돌리면 11개가 실패함.
 
-`tests/`에 시험 파일 75개 (수집 1,875개). `python -m pytest tests -q`로 돌리며(약 9분), 이 Mac의 소스 실행에서 1,830개가 통과하고 45개는 건너뜀 —
-다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-10-28 기준). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
+`tests/`에 시험 파일 82개 (수집 1,983개). `python -m pytest tests -q`로 돌리며(약 13분), 이 Mac의 소스 실행에서 1,938개가 통과하고 45개는 건너뜀 —
+다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-10-29 기준). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
 정적 빌드(`vendor/ffmpeg/`)를 씀 (`tests/conftest.py`). 시험을 건너뛰거나 지워서 통과시키지 말 것.
 
 시험 구성 (파일 이름 기준):
@@ -640,6 +688,14 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 - **워커·OCR·내보내기**: `test_workers_split`·`test_workers_transnetv2_guard`·`test_ocr_worker_lifetime`·`test_animatic2_availability`·`test_transnetv2_detect`·
   `test_runtime`·`test_export`·`test_unsaved_ocr_flag`·`test_review_sync`
 - **창 모양**: `test_stylesheet_freeze`(테마 시트를 해시로 고정)·`test_scrollbar_style`·`test_slider_click`·`test_window_resize`·`test_high_dpi`·`test_force_focus`·`test_middle_panel_toggle`·`test_gl_viewport`(Mac GL 뷰포트 — 선택 규칙·GL 적용 시 보존 설정·테마 배경)·`test_overlay_slider_sync`(화살표 프레임 이동의 오버레이 슬라이더 동기화·대체 탐색 경로 한 칸 어긋남)
+- **ffmpeg 파이프 재생(ProRes)**: 실제 ffprobe·ffmpeg로 클립 공장(`tests/prores_clips.py` — numpy 프레임을 `prores_ks`에 파이프, 글꼴 의존인 drawtext 금지; 번호 클립·유채색 클립·경계 클립 voff·held·neg·rot·audio_first·truncated·vfr_h264)의 클립을 읽음 (mock 없음 — 오류 창 호출만 바꿔치기)
+  - `test_pipe_spike`: 플랫폼 가정을 고정하는 스파이크 — 클립 공장 자가 검증, 파이프(`-fps_mode passthrough`) 대 cv2의 프레임 정렬과 바이트 기준(4:4:4 동일·4:2:2 ≤5), `-ss` 착지(K=0·K=2), 재시작 시간(시간은 print만)
+  - `test_movie_pipe_gate`: 게이트 ①~⑥ — 좋은 probe의 필드 하나만 바꾼 사본으로 조건별 경계, 경계 클립의 판정
+  - `test_movie_pipe_capture`: 캡처 코어 — 순차 읽기의 cv2 의미(EOF·`get`·`set`)·cv2와 바이트 대조·도중 실패의 자체 완결(예외 없이 죽음 + 기록 1회 + 오류 창 1회)·`release`/GC 뒤 프로세스 종료
+  - `test_movie_pipe_seek`: 지연 set과 이동 경로(그대로·링 버퍼·앞으로 버리기·`-ss` 재시작+트랙 오프셋) — 정답은 프레임에 그린 번호, 어느 경로를 탔는지는 시간이 아니라 세션(프로세스) 수·pid로 실증
+  - `test_movie_pipe_integration`: `maybe_pipe_capture`의 모드(auto·pipe·cv2)·예외 경계, `open_any_capture`와 `_open_movie_capture`의 삽입 분기, `app.launch`의 모드 검증 — **게이트 음성 파일은 어떤 모드에서도 `FFmpegPipeCapture`를 만들지 않고 `cv2.VideoCapture`가 열림**(만들면 실패하는 센티널로 바꿔 증명 = cv2 경로 무변경 단언)
+  - `test_pipe_player`: 실제 `VideoPlayer`(offscreen)에서 열기·화살표/휠·슬라이더·A/B 와이프·주석 내보내기·재생 도중 ffmpeg 사망(앱 생존·오류 창 1회·재오픈)과 끝난 뒤 프로세스·스레드 잔존 없음
+  - `test_smoke_pipe_step`: 실행 시험(`smoke_test.py`)의 'ProRes 파이프 열기' 단계 단위 시험 — 성공·게이트가 cv2를 주면 실패·모드가 auto가 아니면 실패 (번들 ffmpeg는 CI의 빌드 앱 smoke가 봄)
 - **그 밖**: `test_smoke`·`test_fast_startup`·`test_files`·`test_user_files`·`test_frame_annotations_merge`·`test_annotation_click`·`test_external_tools`·`test_build_info`·
   `test_check_frozen_imports`·`test_release_tool`·`test_print_crash_reports`·`test_screenshot_check`·`test_refactor_checks`
 
@@ -671,6 +727,7 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 10. 북마크 생성 및 탐색
 11. 프레임 탐색 및 재생
 12. OCR 리뷰 대화상자와 메인 윈도우 간 실시간 동기화
+13. 4K ProRes 재생(ffmpeg 파이프) — 캐시 없는 파일의 첫 재생 fps·소리·탐색·와이프·주석·h264 무회귀·킬 스위치: 내부(비공개) 저장소의 `docs/superpowers/records/2026-10-29-prores-pipe-design/eye-check.md`
 
 씬 감지 테스트 시:
 - 하드 컷이 포함된 콘텐츠로 Animatic 모드 테스트 (전통적인 편집)
@@ -779,6 +836,9 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 - 씬 감지 로그는 프레임별 분석 표시 (TransNetV2는 컷 유형 분류 포함)
 - FFmpeg stderr는 인코딩 진단 제공
 - 프레임 캐시 통계 사용 가능: `cache_hits` 및 `cache_misses`
+- **`재생: n FPS` 라벨은 측정값이 아님**: `update_playback_fps`가 1초마다 영상의 원래 fps(`cap_a.get(CAP_PROP_FPS)`)를 다시 쓸 뿐이라 실제로 느리게 돌아도 24로 보임
+  (`playback_fps_counter`는 세기만 하고 읽는 곳이 없음). 재생 속도는 처음부터 끝까지 재생한 시간(프레임 수 ÷ fps — 재생 타이머 간격이 `int(1000/fps)`ms라 약간 짧을 수 있음)이나
+  캡처 `read()` 처리량으로 잼
 - ROI 좌표는 픽셀과 백분율로 모두 표시
 - 애니매틱2를 숨기면 시작 로그에 `애니매틱2(TransNetV2) 항목 숨김 — 이 빌드/환경에 없는 것: [...]`
 - 애니매틱2 분석 로그: `[애니매틱2 …] TensorFlow 불러오는 중…/불러옴 (n초)`, 모델 불러옴/다시 씀
@@ -810,6 +870,14 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 5. 다양한 비디오 콘텐츠 유형으로 테스트
 
 ## 최근 변경 사항
+
+### 2026-10-29 (4K ProRes 실시간 재생 — ffmpeg 파이프 프레임 소스)
+- 4K ProRes 4444 mov가 실시간 재생이 안 되던 원인은 cv2 내장 FFmpeg의 단일 스레드 픽셀 변환(cv2 22fps). ProRes류 CFR mov를 번들 ffmpeg 파이프(rawvideo bgr24)로 디코드하는
+  새 모듈 `movie_pipe_source.py`(`FFmpegPipeCapture` — 번들 ffmpeg 50.7fps 실측)를 `ImageSequenceCapture` 선례의 덕타이핑 캡처로 열기 경로에 꽂음: 게이트 ①~⑥을 전부 통과한 파일만(opt-in), 나머지는 기존 cv2 그대로
+- **기존 재생 코드 수정 0곳**: 바뀐 공유 경로는 `_open_movie_capture`의 삽입 분기·`open_any_capture`·`app.launch`의 모드 검증뿐. 도중 실패는 캡처가 스스로 죽은 cv2 캡처의 겉모습 + 기록 1회 + 오류 창 1회로 끝냄(예외는 생성자에서만)
+- 토글 `YESONCHECK_MOVIE_SOURCE=auto|pipe|cv2`(`cv2`는 킬 스위치). 로그 `[재생] ffmpeg 파이프: …` 줄이 있으면 파이프 경로
+- 지켜야 할 것: `-fps_mode passthrough`·`-map 0:V:0`, 재시작 `-ss`의 트랙 오프셋 보정, 정확 등식 게이트(④), 4:2:2는 Apple Silicon에서 cv2 대비 ±4 레벨(4:4:4는 완전 동일)
+- 시험 파일 7개(+ 공장 `tests/prores_clips.py`)·빌드 앱 smoke 단계 추가. 전체 1,938 passed / 45 skipped. 눈 확인(실물 4K ProRes — 이 Mac 필수, Windows 1회)은 사용자 몫
 
 ### 2026-10-22 (큰 파일 나누기 — 동작은 그대로)
 - **`workers.py`**(3,189줄 — 쓰이지 않는 메서드를 지운 뒤 나누기 직전)를 워커별 모듈 5개(`ocr_worker`·`ocr_export_worker`·`scene_workers`·`thumbnail_workers`·`ffmpeg_worker`)로 나누고, `workers.py`는 다시 내보내기만 하는 18줄 모듈로 남김
