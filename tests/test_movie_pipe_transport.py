@@ -25,14 +25,16 @@ from tests.test_movie_pipe_capture import (  # noqa: F401 (windows: fixture)
 )
 from yesoncheck import external_tools, movie_pipe_source
 from yesoncheck.movie_pipe_source import (
-    FAILURE_HEADLINE, READAHEAD_FRAMES, FFmpegPipeCapture, MovieProbe, PipeCaptureError, probe_movie,
+    FAILURE_HEADLINE, KEEP_BEHIND, READAHEAD_FRAMES, FFmpegPipeCapture, MovieProbe, PipeCaptureError, probe_movie,
 )
 
 COUNT = 120
-UHD_WIDTH, UHD_HEIGHT, UHD_COUNT = 3840, 2160, 40
-GIL_HOLD_MS = 50  # 메인 스레드가 GIL을 쥐는 시간 (4K 재생 틱의 GUI 파이썬 몫 ~22ms보다 넉넉히 — 근거는 그 시험)
-GIL_ROUNDS = 24
-WARMUP_ROUNDS = 4  # 생성자가 남긴 1장에서 큐가 차오르는 회차 — 평균에서 뺌
+UHD_WIDTH, UHD_HEIGHT = 3840, 2160
+GIL_HOLD_MS = 50  # 메인 스레드가 GIL을 쥐는 시간 (4K 재생 틱의 GUI 파이썬 몫 ~22ms보다 넉넉히 — 40ms가 아닌 근거는 그 시험)
+GIL_ROUNDS = 24  # 정상 상태에서 재는 회차
+WARM_FRAMES = KEEP_BEHIND + READAHEAD_FRAMES + 2  # 읽기 스레드가 이만큼 받으면 보관본 풀이 한 바퀴 — 새 할당이 끝난 정상 상태
+WARMUP_ROUNDS_MAX = 40  # 이 안에 큐가 한 번도 차지 않으면(정상 상태에 닿지 못하면) 실패 — 파이프면 여기서 떨어짐
+UHD_COUNT = WARMUP_ROUNDS_MAX + GIL_ROUNDS + READAHEAD_FRAMES + 2  # 기동이 한도까지 걸려도 재는 동안 끝에 닿지 않게
 QUEUED_MEAN_MIN = READAHEAD_FRAMES - 1  # 근거: test_reader_keeps_up_while_main_thread_holds_gil
 TCP_OUTPUT = re.compile(r"tcp://127\.0\.0\.1:\d+\?send_buffer_size=" + str(movie_pipe_source.SOCKET_BUFFER_BYTES // 2))
 
@@ -113,45 +115,69 @@ def color_source_command(path, output, seek_seconds=None):
             "-f", "rawvideo", "-pix_fmt", "bgr24", output]
 
 
+def queue_under_gil(cap, hold_ms):
+    """[GIL을 hold_ms 쥠 → 큐 길이 기록 → read()]를 돌림 → (기동 회차 수 또는 None, 기동 중 큐, 정상 상태 GIL_ROUNDS회의 큐).
+
+    기동: 큐가 한 번이라도 가득(READAHEAD_FRAMES)이 됐고 읽기 스레드가 WARM_FRAMES장 이상 받을 때까지 — 보관본 풀이 한 바퀴 돌아
+    새 4K 할당·첫 페이지 폴트가 끝난 정상 상태. WARMUP_ROUNDS_MAX회 안에 닿지 못하면 None (큐가 끝내 한 번도 안 참 — 실패).
+    그 뒤 GIL_ROUNDS회를 잰다. test_reader_keeps_up_while_main_thread_holds_gil과 그 재측정 하니스가 같이 쓴다."""
+    session = cap._session
+    warm, full_seen = [], False
+    while not (full_seen and session.frames_received >= WARM_FRAMES):
+        if len(warm) == WARMUP_ROUNDS_MAX:
+            return None, warm, []
+        hold_gil(hold_ms)
+        warm.append(len(session._frames))
+        full_seen = full_seen or warm[-1] >= READAHEAD_FRAMES
+        ok, frame = cap.read()
+        assert ok and frame.shape == (UHD_HEIGHT, UHD_WIDTH, 3), len(warm)
+    queued = []
+    for i in range(GIL_ROUNDS):
+        hold_gil(hold_ms)
+        queued.append(len(session._frames))  # 메인이 GIL을 쥔 동안 읽기 스레드가 받아 둔 결과
+        ok, frame = cap.read()
+        assert ok and frame.shape == (UHD_HEIGHT, UHD_WIDTH, 3), i
+    return len(warm), warm, queued
+
+
 def test_reader_keeps_up_while_main_thread_holds_gil(monkeypatch, tmp_path):
     """이 전송 교체의 존재 이유: 메인 스레드가 GIL을 GIL_HOLD_MS(50ms) 쥘 때마다(4K 재생 틱의 GUI 파이썬 몫) 읽기 스레드는 그동안
-    프레임을 받아 둔다 — 24회 [GIL 50ms 쥠 → read()]에서 read() 직전 큐에 받아 둔 장 수의 평균(앞 4회 기동 제외) ≥ 5
-    (READAHEAD_FRAMES − 1 — 거의 늘 가득). 4K bgr24(24.9MB/장)를 디코드 없는 단색 입력으로 (color_source_command).
+    프레임을 받아 둔다. 4K bgr24(24.9MB/장)를 디코드 없는 단색 입력으로(color_source_command) [GIL 50ms 쥠 → read()]를 돌려
+    (queue_under_gil): ① 큐가 WARMUP_ROUNDS_MAX회 안에 한 번은 가득 차고 보관본 풀이 한 바퀴 돎(정상 상태에 닿음) ② 그 뒤 24회의
+    read() 직전 큐 평균 ≥ 5 (READAHEAD_FRAMES − 1 — 거의 늘 가득).
 
     겹침이 되면(소켓 + MSG_WAITALL: 한 장을 GIL을 놓은 채 syscall 한 번으로 받음) 큐는 늘 가득이다. 파이프면 한 장이 read 수백 번이고
-    호출마다 GIL을 다시 잡아야 해서 메인이 쥔 동안 진척이 느려 큐가 비어 간다. 측정 (2026-10-29 Mac x86_64, 같은 입력·순서, 교체 전
-    코드를 나란히), 큐 평균:
-    - 파이프: 0.10 (쥐는 시간 40·50·60ms 각 8회, 부하 평균 3~7) / 0.65~4.0 (40ms, 부하 평균 70~90 — 다른 프로세스에 메인이 밀려
-      읽기 스레드가 틈을 얻음).
-    - 소켓 + 읽기 스레드가 링 보관본도 만듦(지금 코드 — 한 장에 GIL을 recv 뒤·복사 뒤 두 번 다시 잡음): 50ms 5.85~5.95 (20회),
-      40ms 5.05~5.50 (20회 — 한도에 너무 가까워 50ms로 둠), 60ms 6.00.
-    - 소켓 + 보관본을 GUI 스레드가 만들던 판(한 장에 GIL 한 번): 40·50ms 모두 6.00 (각 20회).
-    마진: 소켓은 20회 합계로 20칸 넘게 비어야(공급이 GIL을 쥔 메인 아래 ~20fps 밑으로 이어져야) 떨어지고 — 디코드가 없어 전송·복사·GIL
-    주고받기만 든다 — 파이프는 부하 속 최고값보다 평균 1장 넘게 올라야 붙는다. 프레임당 여러 번 읽는 전송으로 돌아가는 회귀는 결정적인
-    test_one_recv_per_frame이 먼저 잡는다. 1080p는 macOS 파이프(커지는 버퍼)로도 0.8~5.8로 흔들려 가르지 못했고, 실제 ProRes 클립은
-    러너의 디코드 속도가 섞여(1440p ProRes에서 파이프가 한 번 붙음) 단색 입력을 쓴다.
+    호출마다 GIL을 다시 잡아야 해서 메인이 쥔 동안 진척이 느려 큐가 비어 간다 — 큐가 끝내 차지 않아 ①에서 떨어진다. 정상 상태만 재는
+    까닭: 읽기 스레드가 링 보관본도 만들게 된 뒤(한 장에 GIL을 recv 뒤·복사 뒤 두 번 다시 잡음) 기동 구간 — 보관본 풀이 새 4K 버퍼
+    ~16개를 할당하며 첫 페이지 폴트를 치르는 동안 — 만 느려, 부하 아래 처음 8~15회차 큐가 1~2에 머물다 6으로 올라 머무는 모양으로
+    흔들렸다(기동 4회만 빼던 옛 지표: 부하 6~16에서 50ms로도 12/40 실패). 정상 상태는 그와 무관하게 가득이다.
+    측정 (2026-10-29 Mac x86_64, 이 지표 그대로 — /tmp 재측정 하니스가 queue_under_gil을 불러 판을 번갈아 돌림. "GUI 복사"는
+    보관본 복사를 GUI 스레드에서 하던 판의 흉내, "파이프"는 교체 전 모듈):
+    - 50ms(채택): 지금 코드 실패 0/64 — 부하 17~35에서 24회(기동 10~21회, 정상 상태 평균 최소 6.00), 바쁜 프로세스 8개를 더한
+      부하 17~30에서 20회(기동 10~16, 최소 5.67·중앙 5.94), 16개를 더한 부하 ~110에서 20회(기동 10~12, 6.00). GUI 복사 판 0/64(기동
+      10~12). 파이프는 4/4 실패 — 40회 내내 큐 0~1.
+    - 40ms: 지금 코드 2/24 실패(부하 12 — 큐가 다섯~여섯 회차마다 한 장씩만 차올라 40회 안에 가득에 못 닿음, 기동 16~36, 정상 상태
+      최소 5.33), 바쁜 프로세스 8개를 더하면 0/20이지만 정상 상태 최소 5.21. 읽기 스레드가 한 장에 GIL을 recv 뒤·복사 뒤 두 번 다시
+      잡느라 40ms 쥠 아래 공급이 소비를 겨우 넘어서라, 50ms로 둔다(GUI 복사 판은 40ms에서도 기동 10회·6.00). 파이프는 40ms에서도 0~1.
+    프레임당 여러 번 읽는 전송으로 돌아가는 회귀는 결정적인 test_one_recv_per_frame이 먼저 잡는다. 1080p는 macOS 파이프(커지는
+    버퍼)로도 흔들려 가르지 못했고, 실제 ProRes 클립은 러너의 디코드 속도가 섞여 단색 입력을 쓴다.
 
     read()의 대기 시간은 단언하지 않는다: 큐 상태·링 처리·깨어난 읽기 스레드와의 GIL 주고받기가 섞여 전송을 바로 보지 못한다
-    (보관본을 GUI가 만들던 판의 1080p ProRes 측정: 파이프 3.6~7.3ms, 소켓 4.4~16.1ms — 거꾸로이기도).
-    받아 둔 장 수는 전송이 GIL에 막히는지를 바로 보는 값이다. 재시도·다수결 같은 완화는 쓰지 않는다 (실패하면 진짜 회귀이거나 러너가
-    한도 밖으로 느린 것 — 메시지의 회차별 큐·대기로 가린다; Windows는 TCP 전송의 처리량도 함께 본다)."""
+    (1080p ProRes 측정: 파이프 3.6~7.3ms, 소켓 4.4~16.1ms — 거꾸로이기도). 받아 둔 장 수는 전송이 GIL에 막히는지를 바로 보는 값이다.
+    재시도·다수결 같은 완화는 쓰지 않는다 (실패하면 진짜 회귀이거나 러너가 한도 밖으로 느린 것 — 메시지의 회차별 큐로 가린다;
+    Windows는 TCP 전송의 처리량도 함께 본다)."""
     monkeypatch.setattr(movie_pipe_source, "_pipe_command", color_source_command)
     cap = FFmpegPipeCapture(str(tmp_path / "color.mov"), stand_in_probe(UHD_COUNT, UHD_WIDTH, UHD_HEIGHT))
     try:
         session = cap._session
-        queued, waits = [], []
-        for i in range(GIL_ROUNDS):
-            hold_gil(GIL_HOLD_MS)
-            queued.append(len(session._frames))  # 메인이 GIL을 쥔 동안 읽기 스레드가 받아 둔 결과
-            started = time.perf_counter()
-            ok, frame = cap.read()
-            waits.append(round((time.perf_counter() - started) * 1000, 1))
-            assert ok and frame.shape == (UHD_HEIGHT, UHD_WIDTH, 3), i
+        warm_rounds, warm, queued = queue_under_gil(cap, GIL_HOLD_MS)
     finally:
         cap.release()
-    mean = statistics.fmean(queued[WARMUP_ROUNDS:])
-    assert mean >= QUEUED_MEAN_MIN, (f"GIL을 {GIL_HOLD_MS}ms 쥔 뒤 큐에 받아 둔 장 수 평균 {mean:.2f} < {QUEUED_MEAN_MIN} — "
-                                     f"회차별 큐 {queued}, read 대기(ms) {waits}")
+    assert warm_rounds is not None, (f"GIL을 {GIL_HOLD_MS}ms 쥐는 동안 큐가 {WARMUP_ROUNDS_MAX}회 안에 한 번도 차지 않았습니다 "
+                                     f"(받은 장 {session.frames_received}) — 기동 중 큐 {warm}")
+    mean = statistics.fmean(queued)
+    assert mean >= QUEUED_MEAN_MIN, (f"GIL을 {GIL_HOLD_MS}ms 쥔 뒤(정상 상태 — 기동 {warm_rounds}회 뒤) 큐에 받아 둔 장 수 평균 "
+                                     f"{mean:.2f} < {QUEUED_MEAN_MIN} — 회차별 큐 {queued}, 기동 중 큐 {warm}")
     # 4K 한 장(24.9MB)도 MSG_WAITALL로 recv 한 번 — release가 받던 장을 끊었으면 그 덜 받은 한 번이 더 (+1)
     session.reader.join(WAIT_S)
     assert not session.reader.is_alive()

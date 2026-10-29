@@ -24,7 +24,7 @@ from PyQt5.QtGui import QImage, QWheelEvent
 from PyQt5.QtTest import QTest
 
 from tests.prores_clips import frame_number, make_numbered_clip, read_all_frames, run_ffmpeg
-from tests.test_movie_pipe_capture import assert_session_gone, wait_for
+from tests.test_movie_pipe_capture import KILL_SLACK, assert_session_gone, wait_for
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 from yesoncheck import error_window, external_tools, movie_pipe_source
 from yesoncheck.annotation_export import AnnotationExportWorker
@@ -375,18 +375,27 @@ def test_player_survives_mid_death(player, pipe_log, prores_clip, windows, dialo
     session.proc.kill()
     assert wait_for(lambda: session.proc.poll() is not None)
 
-    # 재생 틱이 몇 번 도는 동안 앱은 죽지 않음: 큐에 남은 정상 프레임(큐 READAHEAD_FRAMES장 + 읽기 스레드가 손에 든 1장까지)은
-    # 끊김 없이 이어 보이고(5 다음 번호부터), 그 뒤 끊김을 만나 재생이 끝남 (예외 없이). 영상 끝으로 위장하지 않으려고 번호 연속성을 본다.
-    max_ticks = READAHEAD_FRAMES + 6
+    # 재생 틱이 도는 동안 앱은 죽지 않음 (예외 없이). 죽인 뒤에도 전송 소켓에 이미 써 둔 정상 프레임이 몇 장 더 나올 수 있다 — 그
+    # 양은 전송·플랫폼마다 다르니(macOS TCP ~2장) 기대지 않는다(capture 쪽 test_kill_mid_read_is_failure_not_eof와 같은 짜임):
+    # 읽기 스레드가 살아 있는 동안 한 틱씩 — 번호가 5 다음부터 끊김 없이 이어짐(영상 끝으로 위장하지 않음, 상한 READAHEAD+KILL_SLACK)
+    # → 읽기 스레드가 끊김에 닿아 끝나는 순간 큐는 READAHEAD−1~READAHEAD장(끊긴 곳에서만 끝나고 그때 큐는 차 있음) → 그 큐를 다
+    # 보여 준 뒤에야 다음 틱에서 재생이 끝남.
     shown = []
-    for _ in range(max_ticks):
+    while session.reader.is_alive():
+        assert len(shown) < READAHEAD_FRAMES + KILL_SLACK, f"사망 뒤 {len(shown)}틱 동안 읽기 스레드가 끝나지 않았습니다"
         tick(player)
-        if not player.timer.isActive():
-            break
+        assert player.timer.isActive(), f"큐에 정상 프레임이 남았는데 재생이 끝났습니다 (본 번호 {shown})"
         shown.append(frame_number(player.frame_a))
-    assert not player.timer.isActive(), f"사망 뒤 {max_ticks}틱 안에 재생이 끝나지 않았습니다 (본 번호 {shown})"
+        assert wait_for(lambda: len(session._frames) == READAHEAD_FRAMES or not session.reader.is_alive())
+    queued = len(session._frames)
+    assert READAHEAD_FRAMES - 1 <= queued <= READAHEAD_FRAMES
+    for _ in range(queued):
+        tick(player)
+        assert player.timer.isActive(), f"큐에 남은 정상 프레임을 다 보여 주기 전에 재생이 끝났습니다 (본 번호 {shown})"
+        shown.append(frame_number(player.frame_a))
+    tick(player)
+    assert not player.timer.isActive(), f"남은 큐를 다 보여 준 뒤에도 재생이 끝나지 않았습니다 (본 번호 {shown})"
     assert shown == list(range(6, 6 + len(shown)))
-    assert len(shown) >= READAHEAD_FRAMES - 1  # 큐에 남은 정상 프레임을 다 보여 준 뒤에야 끝남
 
     # 끝난 모습: 재생 단추 Play, 죽은 cv2 캡처와 같은 겉모습 (read가 (False, None))
     assert player.playPauseButton.text() == "Play"

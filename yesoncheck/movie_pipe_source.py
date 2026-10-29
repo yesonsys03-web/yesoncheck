@@ -20,6 +20,10 @@ macOS 로컬 소켓의 기본 버퍼는 8KB(net.local.stream.sendspace)라 ffmpe
 TCP 리스너(tcp://127.0.0.1:<포트>)에 ffmpeg가 접속한다 — 접속은 하나만, 상대가 127.0.0.1인지 확인. 소켓은 blocking이다: 소켓
 타임아웃(settimeout)은 CPython이 내부적으로 non-blocking으로 바꾸는데 Windows는 non-blocking 소켓의 MSG_WAITALL을 WSAEOPNOTSUPP로
 거절한다. 멈춘 ffmpeg에 대한 보호는 read의 READ_TIMEOUT_S 실패 → stop()의 shutdown+close가 막힌 recv를 깨우는 길로.
+
+메모리: 링 보관본(뒤로 탐색용 복사)은 읽기 스레드가 만들어 큐에 (내줄 배열, 보관본) 쌍으로 둔다(GUI 스레드의 read는 복사하지 않음 —
+_BufferPool). 그래서 4K 캡처 하나가 ~550MB(큐 6쌍 ~299MB + 링 8장 ~199MB + 읽기 스레드 손 1쌍 ~50MB — 보관본을 GUI가 만들던 때
+~350MB), A/B 와이프의 두 캡처면 ~1.1GB를 쓴다.
 실패는 캡처 안에서 끝난다 (스펙 §5.5): 생성자만 PipeCaptureError를 올리고, 그 뒤의 read·get·set은 예외를 내지 않는다 — 도중에
 끊기면 죽은 cv2 캡처와 같은 겉모습이 되고, 기록(stderr)에 한 번, 오류 창은 Qt 루프에서 한 번 알린다.
 Qt(PyQt5)와 error_window는 알릴 때만 불러온다 — 판정은 Qt 없이도 쓴다.
@@ -55,7 +59,9 @@ SOURCE_MODES = ("auto", "pipe", "cv2")  # 환경 변수가 받는 값 (없거나
 UNSPECIFIED_SAR = (None, "1:1", "0:1")  # ffprobe의 sample_aspect_ratio: 없음·정사각형·미지정(0:1)
 
 # 캡처마다 미리 받아 두는 프레임 수 — 스펙 §5.3. 큐 항목은 (내줄 배열, 링 보관본) 쌍이라 4K bgr24(24.9MB/장)면 ~299MB
-# (보관본을 GUI 스레드가 아니라 읽기 스레드가 미리 만들어 두는 값 — _BufferPool)
+# (보관본을 GUI 스레드가 아니라 읽기 스레드가 미리 만들어 두는 값 — _BufferPool).
+# 캡처당 메모리 총량 (4K): 큐 6쌍 ~299MB + 링 KEEP_BEHIND 8장 ~199MB + 읽기 스레드 손 1쌍 ~50MB ≈ ~550MB (보관본을 GUI가 만들던
+# 때 ~350MB) — A/B 와이프로 두 캡처면 ~1.1GB. 호출자가 쥔 프레임(플레이어의 frame_a 등)은 따로.
 READAHEAD_FRAMES = 6
 READ_TIMEOUT_S = 30.0  # read()·생성자가 빈 큐를 기다리는 한도: 넘으면 멈춘 ffmpeg(NFS hard mount 등)로 보고 실패 처리
 # 전송 소켓 버퍼 (Task 3b): POSIX socketpair는 양 끝 SO_SNDBUF·SO_RCVBUF를 이 값으로, Windows TCP는 우리 SO_RCVBUF와 ffmpeg
@@ -333,9 +339,11 @@ def _log_wake_error(step):
 class _BufferPool:
     """링 보관본 버퍼의 재활용 목록 (캡처마다 하나, 프레임 모양 하나) — 읽기 스레드가 꺼내(get) 보관본을 만들고, 링이 밀어낸·비운
     보관본과 정지한 세션의 큐에 남은 보관본을 돌려받는다(put). 호출자에게 준 배열은 절대 들어오지 않는다(보관본은 밖으로 나가지 않음
-    — 링에서 내줄 때도 새 복사본). 그래서 새로 만드는 보관본 수는 링 용량 + 큐 길이 + 손에 든 몫(2)이고(allocated — 시험용),
-    목록도 그만큼(limit)까지만 쥔다. 읽기 스레드와 캡처(_lock 안)가 같이 쓰므로 자기 잠금(RLock — GC finalize가 어느 스레드에서
-    stop을 불러도 막히지 않게)."""
+    — 링에서 내줄 때도 새 복사본). 상한은 둘: 목록이 쥐는 수는 limit(링 + 큐 + 2 = 16)까지, 한 세션이 이어 읽는 동안 살아 있는
+    보관본은 링 8 + 큐 6 + 읽기 스레드 손 1 + read 도중 1 = 16 이하라 새로 만드는 수(allocated — 시험용)도 그만큼에서 멎는다.
+    탐색 재시작으로 옛 세션의 읽기 스레드가 끝나기 전에 새 세션이 돌면 옛 쪽이 손에 든 1장이 잠깐 더 살아 있을 수 있다(그 뒤
+    목록이 limit에서 받지 않아 버려짐 — 무해). 읽기 스레드와 캡처(_lock 안)가 같이 쓰므로 자기 잠금(RLock — GC finalize가 어느
+    스레드에서 stop을 불러도 막히지 않게)."""
 
     def __init__(self, shape, limit):
         self.shape = shape
