@@ -21,7 +21,7 @@ import pytest
 
 from tests.prores_clips import frame_number, make_numbered_clip
 from tests.test_movie_pipe_capture import (  # noqa: F401 (windows: fixture)
-    assert_dead, assert_session_gone, open_capture, read_until_false, stand_in_command, wait_for, windows,
+    WAIT_S, assert_dead, assert_session_gone, open_capture, read_until_false, stand_in_command, use_tcp, wait_for, windows,
 )
 from yesoncheck import external_tools, movie_pipe_source
 from yesoncheck.movie_pipe_source import (
@@ -48,15 +48,6 @@ def prores_clip(tmp_path_factory):
 
 
 # ---------------------------------------------------------------- 도구
-
-def use_tcp(monkeypatch):
-    """Windows 경로(TCP 리스너)를 이 플랫폼에서: sys.platform을 "win32"로. ffmpeg·ffprobe 경로는 미리 찾아 고정한다 —
-    shutil.which가 sys.platform을 보고 .exe(PATHEXT)를 찾으므로 바꾼 뒤에는 못 찾음. probe는 이 함수 전에 할 것."""
-    ffmpeg, ffprobe = external_tools.ffmpeg_path(), external_tools.ffprobe_path()
-    monkeypatch.setattr(movie_pipe_source, "ffmpeg_path", lambda: ffmpeg)
-    monkeypatch.setattr(movie_pipe_source, "ffprobe_path", lambda: ffprobe)
-    monkeypatch.setattr(sys, "platform", "win32")
-
 
 def stand_in_probe(count, width=4, height=2):
     """대역 프로세스용 probe (bgr24 width×height, 24fps, count장)."""
@@ -108,7 +99,7 @@ def test_one_recv_per_frame(prores_clip):
         assert session.proc.stdout is None  # ffmpeg 출력은 파이프가 아님
         assert [frame_number(f) for f in read_until_false(cap)] == list(range(COUNT))
         assert cap.isOpened()  # 정상 EOF
-        assert session.recv_calls == COUNT
+        assert session.recv_calls == session.frames_received == COUNT
     finally:
         cap.release()
     assert_session_gone(session)
@@ -156,6 +147,11 @@ def test_reader_keeps_up_while_main_thread_holds_gil(monkeypatch, tmp_path):
     mean = statistics.fmean(queued[WARMUP_ROUNDS:])
     assert mean >= QUEUED_MEAN_MIN, (f"GIL을 {GIL_HOLD_MS}ms 쥔 뒤 큐에 받아 둔 장 수 평균 {mean:.2f} < {QUEUED_MEAN_MIN} — "
                                      f"회차별 큐 {queued}, read 대기(ms) {waits}")
+    # 4K 한 장(24.9MB)도 MSG_WAITALL로 recv 한 번 — release가 받던 장을 끊었으면 그 덜 받은 한 번이 더 (+1)
+    session.reader.join(WAIT_S)
+    assert not session.reader.is_alive()
+    assert session.frames_received >= GIL_ROUNDS and session.recv_calls <= session.frames_received + 1, \
+        (session.recv_calls, session.frames_received)
 
 
 # ---------------------------------------------------------------- 막힌 recv 깨우기 (hang 보호)

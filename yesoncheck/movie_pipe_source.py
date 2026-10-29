@@ -56,17 +56,15 @@ UNSPECIFIED_SAR = (None, "1:1", "0:1")  # ffprobe의 sample_aspect_ratio: 없음
 
 READAHEAD_FRAMES = 6  # 캡처마다 미리 받아 두는 프레임 수 (4K bgr24 ≈ 24MB/장 → ~143MB) — 스펙 §5.3
 READ_TIMEOUT_S = 30.0  # read()·생성자가 빈 큐를 기다리는 한도: 넘으면 멈춘 ffmpeg(NFS hard mount 등)로 보고 실패 처리
-# 전송 소켓 버퍼 (Task 3b): ffmpeg가 써 두고 우리가 아직 받지 않은 바이트의 상한을 정한다 — POSIX socketpair는 양 끝 SO_SNDBUF·
-# SO_RCVBUF를 이 값으로, Windows TCP는 우리 SO_RCVBUF와 ffmpeg send_buffer_size를 절반씩(TCP는 둘을 합친 만큼 머무름).
-# 64KiB인 근거 세 가지 — "키우면 빨라지겠지"로 바꾸지 말 것:
-# ① 속도: 4K 공급은 8KB(macOS 기본) 26~29fps → 32KB부터 꺾여 34~39fps이고, 64KB·128KB·4MB는 서로 잡음 수준(35~39fps) — 더 키워도
-#    빨라지지 않음 (2026-10-29 Mac x86_64, socketpair, 정상 상태 60장, 메인 idle/GIL 40ms 쥠).
-# ② 사망 뒤 모습: 소켓에 머무는 양은 실측 SO_SNDBUF + ffmpeg 쓰기 한 번(32KiB) = 96KiB로 320×180 프레임(172.8KB) 한 장보다 작다.
-#    8MB면 ffmpeg가 죽은 뒤에도 커널 버퍼에서 정상 프레임이 수십 장(320×180 기준 48장) 더 나와, "큐 + 손에 든 1장을 보여 준 뒤
-#    끝난 모습"(사용자 체감·test_kill_mid_read_is_failure_not_eof·test_player_survives_mid_death의 전제)이 깨진다.
-# ③ 안전: 구형 XNU는 kern.ipc.maxsockbuf(8MB)에 가까운 SO_SNDBUF를 ENOBUFS로 거절할 수 있음 — 64KiB는 어디서나 받아들여짐.
+# 전송 소켓 버퍼 (Task 3b): POSIX socketpair는 양 끝 SO_SNDBUF·SO_RCVBUF를 이 값으로, Windows TCP는 우리 SO_RCVBUF와 ffmpeg
+# send_buffer_size를 절반씩. 근거는 처리량뿐 — "키우면 빨라지겠지"로 바꾸지 말 것: 4K 공급은 8KB(macOS 기본) 26~29fps → 32KB부터
+# 꺾여 34~39fps이고, 64KB·128KB·4MB는 서로 잡음 수준(35~39fps)이라 더 키워도 빨라지지 않는다 (2026-10-29 Mac x86_64, socketpair,
+# 정상 상태 60장, 메인 idle/GIL 40ms 쥠). Windows TCP의 절반씩(32K+32K)은 재 보지 않은 값이다 — 이 기계에서는 Windows 실기를 잴 수
+# 없어 POSIX와 같은 총량으로 맞춰 둔 것뿐 (Windows 4K 처리량은 CI의 test_reader_keeps_up_while_main_thread_holds_gil이 함께 본다).
 SOCKET_BUFFER_BYTES = 64 * 1024
-CONNECT_TIMEOUT_S = 10  # (Windows TCP) ffmpeg가 출력 소켓에 접속하기를 기다리는 한도 — 넘으면 실패 (생성자면 PipeCaptureError)
+# (Windows TCP) ffmpeg가 출력 소켓에 접속하기를 기다리는 한도 — ffmpeg는 입력을 연 뒤에 접속하므로 첫 프레임 한도와 같게 둔다
+# (따로 짧으면 느린 SMB·NAS에서 열기·재시작이 Windows에서만 실패). 넘으면 실패 (생성자면 PipeCaptureError)
+CONNECT_TIMEOUT_S = READ_TIMEOUT_S
 ACCEPT_SLICE_S = 0.05  # (Windows TCP) accept 대기를 이 간격으로 끊어 ffmpeg 종료·세션 정지를 봄
 LOOPBACK = "127.0.0.1"
 # 탐색 (스펙 §5.4 — 값은 Task 1 스파이크가 CI 세 플랫폼에서 단언으로 확정)
@@ -208,11 +206,12 @@ class _Transport:
       스레드가 accept로 접속 하나만 받고(connect) 리스너를 닫는다.
     conn은 blocking이다 (모듈 docstring — Windows의 MSG_WAITALL). 버퍼는 SOCKET_BUFFER_BYTES (근거는 그 상수의 주석).
     _lock이 지키는 것: 소켓을 닫는 일과 _woken — wake()(다른 스레드)와 connect·close(읽기 스레드)가 엇갈려도 막힌 recv를 놓치지
-    않고 닫힌 소켓을 다시 만지지 않게.
+    않고 닫힌 소켓을 다시 만지지 않게. RLock: _lock을 쥔 읽기 스레드에서 GC가 캡처의 weakref.finalize(→ stop → wake)를 돌려도
+    스스로 막히지 않게.
     """
 
     def __init__(self):
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._woken = False  # wake()가 불림 — 그 뒤에 받은 접속은 쓰지 않고 닫음
         self.conn = None  # 우리 끝 (읽기 스레드만 recv)
         self._listener = None
@@ -221,7 +220,10 @@ class _Transport:
             listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self._listener = listener
             try:
-                # TCP에 머무는 양 = 보내는 쪽 버퍼 + 받는 쪽 버퍼 → 절반씩. 리스너에 정하면 받은 접속이 물려받음 (listen 전에)
+                if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):  # Windows 파이썬에만 있음 (시험이 sys.platform만 바꾼 Mac에는 없음)
+                    listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)  # 같은 포트에 남이 끼어 묶지 못하게
+                # 보내는 쪽(ffmpeg send_buffer_size)과 절반씩. Windows는 받은 접속이 리스너의 옵션을 물려받는다(listen 전에 정함) —
+                # macOS는 물려받지 않음 (실측: 받은 소켓 SO_RCVBUF 326,640 — 이 플랫폼 흉내에서는 이 줄이 효과 없음)
                 listener.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SOCKET_BUFFER_BYTES // 2)
                 listener.bind((LOOPBACK, 0))
                 listener.listen(1)
@@ -290,9 +292,9 @@ class _Transport:
     def wake(self):
         """(stop — 다른 스레드에서) recv에서 막힌 읽기 스레드를 깨움: shutdown(SHUT_RDWR) 뒤 close. macOS는 close만으로는 막힌 recv가
         깨지 않을 수 있고, Windows는 closesocket이 막힌 호출을 취소한다 — 둘 다 한다. 상대가 이미 끊었으면 shutdown이
-        ENOTCONN·ECONNRESET(깨울 recv가 없음 — EOF가 이미 와 있음)이라 넘어간다. 그 밖의 shutdown 오류는 뜻밖이라 기록(트레이스백)에
-        남기되 올리지 않는다 — stop은 read(탐색 재시작)·release·GC 안에서 불리고(§5.5: read 밖으로 예외 없음), 뒤의 close·kill이
-        어차피 recv를 끝낸다. close는 늘 한다."""
+        ENOTCONN·ECONNRESET(깨울 recv가 없음 — EOF가 이미 와 있음)이라 넘어간다. 그 밖의 shutdown 오류와 close 오류는 뜻밖이라
+        기록(트레이스백)에 남기되 올리지 않는다 — stop은 read(탐색 재시작)·release·GC 안에서 불리고(§5.5: read 밖으로 예외 없음), 뒤의
+        kill이 어차피 recv를 끝낸다. close는 늘 시도한다."""
         with self._lock:
             self._woken = True
             conn = self.conn
@@ -302,10 +304,11 @@ class _Transport:
                 conn.shutdown(socket.SHUT_RDWR)
             except OSError as exc:
                 if exc.errno not in (errno.ENOTCONN, errno.ECONNRESET):
-                    print(f"{LOG_PREFIX} 막힌 recv를 깨우려던 shutdown이 뜻밖의 오류로 실패했습니다 — close·kill로 이어 갑니다:\n"
-                          f"{traceback.format_exc()}", file=sys.stderr, flush=True)
-            finally:
+                    _log_wake_error("shutdown")
+            try:
                 conn.close()
+            except OSError:
+                _log_wake_error("close")
 
     def close(self):
         """만든 소켓을 모두 닫음 (읽기 스레드의 끝·세션을 세우지 못한 쪽, 여러 번 불러도 됨)."""
@@ -315,13 +318,24 @@ class _Transport:
                     sock.close()
 
 
+def _log_wake_error(step):
+    """(except 블록 안에서) wake의 shutdown·close가 뜻밖의 오류로 실패함 — 기록에 트레이스백째 남기고 올리지 않음 (stop은 read·release·
+    GC 안). 기록마저 실패하면 _last_resort."""
+    try:
+        print(f"{LOG_PREFIX} 막힌 recv를 깨우려던 {step}이(가) 뜻밖의 오류로 실패했습니다 — kill로 이어 갑니다:\n{traceback.format_exc()}",
+              file=sys.stderr, flush=True)
+    except Exception:
+        _last_resort(f"전송 소켓 {step} 실패를 기록하지 못했습니다")
+
+
 class _PipeSession:
     """ffmpeg 프로세스 하나와 그 둘레 한 덩어리 — 전송 소켓·읽기 스레드·stderr 스레드·유한 큐·실패 칸·정지 플래그 (스펙 §5.3).
 
     캡처는 세션을 통째로 버린다(stop) — 옛 프로세스의 프레임·실패가 다른 세션에 섞이지 않는다.
     - 전송 소켓(transport — _Transport)은 읽기 스레드만 recv한다: 프레임 크기(height*width*3바이트)씩 새 배열에 바로 받아
       (recv_into(MSG_WAITALL) — 정상이면 한 장에 recv 한 번, 따로 복사하지 않음) 큐에 넣고, 큐가 차면(READAHEAD_FRAMES) _cond에서
-      기다린다. stop()이 그 기다림과 막힌 recv(transport.wake)를 깨운다. recv_calls: 프레임 바이트를 받은 recv 호출 수 (시험용).
+      기다린다. stop()이 그 기다림과 막힌 recv(transport.wake)를 깨운다. recv_calls·frames_received: 프레임 바이트를 받은 recv 호출
+      수·다 받은 프레임 수 (시험용).
     - stderr는 전용 스레드가 늘 비운다 (안 비우면 파이프가 차서 ffmpeg가 멈춤) — 모아서 실패 글에 싣는다.
     - 읽기 스레드가 끝날 때 전송 소켓을 닫고 프로세스를 거둔다(wait — 좀비 없음) (stderr는 그 스레드가 닫음). kill해도 안 죽는
       프로세스(NFS hard mount의 D 상태)면 이 데몬 스레드만 남아 기다리고, 부른 스레드(GUI)는 막히지 않는다.
@@ -344,6 +358,7 @@ class _PipeSession:
         self.failure = None  # 읽기 스레드가 본 실패 원인 (정상 끝·정지면 None)
         self.eof_noted = False  # 정상 끝의 stderr를 기록했는지 (세션당 한 번 — 캡처의 _lock이 지킴)
         self.recv_calls = 0  # 프레임 바이트를 받은 recv 호출 수 (읽기 스레드만 셈 — 정상이면 프레임당 1)
+        self.frames_received = 0  # 다 받은 프레임 수 (읽기 스레드만 셈 — recv_calls와 견주는 시험용)
         self._stderr_chunks = []
         try:
             self.proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=transport.child_stdout,
@@ -415,6 +430,7 @@ class _PipeSession:
                     if filled:
                         failure = f"프레임 중간에서 출력이 끊겼습니다 ({filled}/{frame.nbytes}바이트)"
                     break
+                self.frames_received += 1
                 with self._cond:
                     while len(self._frames) >= READAHEAD_FRAMES and not self._stopped:
                         self._cond.wait()

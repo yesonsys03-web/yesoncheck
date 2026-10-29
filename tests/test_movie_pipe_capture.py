@@ -29,6 +29,7 @@ from yesoncheck.movie_pipe_source import (
 
 COUNT = 120
 WAIT_S = 10  # 프로세스·스레드가 끝나기를 기다리는 한도 (보통 수십 ms)
+KILL_SLACK = 20  # ffmpeg를 죽인 뒤 전송에 남아 더 나올 수 있는 정상 프레임 수의 상한 (큐 밖 — 실측 macOS TCP ~2장)
 POS = cv2.CAP_PROP_POS_FRAMES
 PROPS = (cv2.CAP_PROP_FPS, cv2.CAP_PROP_FRAME_COUNT, POS, cv2.CAP_PROP_FRAME_WIDTH, cv2.CAP_PROP_FRAME_HEIGHT)
 # ffmpeg 명령의 출력 대상 (_Transport.output): POSIX는 stdout(= socketpair의 한 끝), Windows는 127.0.0.1 TCP 리스너
@@ -121,6 +122,15 @@ def wait_for(condition, timeout=WAIT_S):
             return False
         time.sleep(0.01)
     return True
+
+
+def use_tcp(monkeypatch):
+    """Windows 경로(TCP 리스너)를 이 플랫폼에서: sys.platform을 "win32"로. ffmpeg·ffprobe 경로는 미리 찾아 고정한다 —
+    shutil.which가 sys.platform을 보고 .exe(PATHEXT)를 찾으므로 바꾼 뒤에는 못 찾음. probe는 이 함수 전에 할 것."""
+    ffmpeg, ffprobe = external_tools.ffmpeg_path(), external_tools.ffprobe_path()
+    monkeypatch.setattr(movie_pipe_source, "ffmpeg_path", lambda: ffmpeg)
+    monkeypatch.setattr(movie_pipe_source, "ffprobe_path", lambda: ffprobe)
+    monkeypatch.setattr(sys, "platform", "win32")
 
 
 def stand_in_command(script, *args):
@@ -277,11 +287,21 @@ def test_truncated_dies_loud(truncated_clip, qapp, windows, capsys):
         cap.release()
 
 
-def test_kill_mid_read_is_failure_not_eof(prores_clip, qapp, windows, capsys, monkeypatch):
+@pytest.mark.parametrize("transport", ["native", "tcp"])
+def test_kill_mid_read_is_failure_not_eof(prores_clip, transport, qapp, windows, capsys, monkeypatch):
     """밖에서 ffmpeg를 죽이면: 읽기 스레드가 실패를 먼저 알아도 큐에 남은 정상 프레임을 다 준 뒤에야 죽음 상태 — 영상 끝으로
-    위장하지 않음. 읽기를 일꾼 스레드에서 해도(전달자 QObject도 거기서 처음 만들어져도) 오류 창은 GUI 스레드의 Qt 루프에서 한 번."""
+    위장하지 않음. 읽기를 일꾼 스레드에서 해도(전달자 QObject도 거기서 처음 만들어져도) 오류 창은 GUI 스레드의 Qt 루프에서 한 번.
+
+    죽인 뒤에도 전송 소켓에 이미 써 둔 정상 프레임이 몇 장 더 나올 수 있다 — 그 양은 전송·플랫폼마다 다르다(macOS TCP는 커널이
+    버퍼를 키워 ~2장). 그래서 버퍼 양에 기대지 않는다: 한 장씩 자리를 내 주며 번호가 끊김 없이 이어지는지 보다가(상한
+    READAHEAD + KILL_SLACK장), 읽기 스레드가 끊김에 닿아 끝나는 순간의 큐가 READAHEAD−1~READAHEAD장인지 본다 — 읽기 스레드는 끊긴
+    곳에서만 끝나고 그때 큐는 (방금 비운 자리를 들고 있던 장으로 채워) 차 있다. 그 큐를 다 준 뒤에야 죽음. "native"는 이 플랫폼의
+    전송(POSIX socketpair), "tcp"는 Windows 경로(TCP 리스너)를 sys.platform 바꿔치기로."""
     monkeypatch.setattr(movie_pipe_source, "_RELAY", None)  # 앞 시험이 GUI 스레드에서 만든 전달자를 쓰지 않게
-    cap = open_capture(prores_clip)
+    probe = probe_movie(prores_clip)
+    if transport == "tcp":
+        use_tcp(monkeypatch)
+    cap = FFmpegPipeCapture(prores_clip, probe)
     try:
         for i in range(10):
             ok, frame = cap.read()
@@ -290,10 +310,15 @@ def test_kill_mid_read_is_failure_not_eof(prores_clip, qapp, windows, capsys, mo
         assert wait_for(lambda: len(session._frames) == READAHEAD_FRAMES)  # 선읽기 큐가 참 (유한)
         session.proc.kill()
         assert wait_for(lambda: session.proc.poll() is not None)
-        ok, frame = cap.read()  # 자리를 내 주면 읽기 스레드가 들고 있던 장을 넣고 끊김을 봄
-        assert ok and frame_number(frame) == 10
-        assert wait_for(lambda: not session.reader.is_alive())  # 실패를 적어 둔 채 끝남 — 큐에는 정상 프레임이 남음
-        queued = len(session._frames)
+        expected = 10
+        while session.reader.is_alive():  # 전송에 남은 정상 프레임 — 한 장씩 자리를 내 줌
+            assert expected < 10 + READAHEAD_FRAMES + KILL_SLACK, f"사망 뒤 {expected - 10}장을 받도록 읽기 스레드가 끝나지 않았습니다"
+            ok, frame = cap.read()
+            assert ok and frame_number(frame) == expected  # 끊김 없이 이어짐 — 영상 끝으로 위장하지 않음
+            expected += 1
+            # 읽기 스레드가 빈 자리를 채워 큐가 다시 차거나(살아 있음), 끊김에 닿아 끝날 때까지
+            assert wait_for(lambda: len(session._frames) == READAHEAD_FRAMES or not session.reader.is_alive())
+        queued = len(session._frames)  # 실패를 적어 둔 채 끝남 — 큐에는 정상 프레임이 남음
         assert READAHEAD_FRAMES - 1 <= queued <= READAHEAD_FRAMES
 
         result = {}
@@ -302,7 +327,7 @@ def test_kill_mid_read_is_failure_not_eof(prores_clip, qapp, windows, capsys, mo
         worker.join(WAIT_S)
         assert not worker.is_alive()
         frames = result["frames"]
-        assert [frame_number(f) for f in frames] == list(range(11, 11 + queued))  # 남은 정상 프레임을 다 받은 뒤 끝
+        assert [frame_number(f) for f in frames] == list(range(expected, expected + queued))  # 남은 정상 프레임을 다 받은 뒤 끝
         assert_dead(cap)
         assert capsys.readouterr().err.count(FAILURE_HEADLINE) == 1
 
