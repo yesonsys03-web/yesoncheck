@@ -7,7 +7,6 @@
 
 import dataclasses
 import gc
-import subprocess
 import sys
 import threading
 import time
@@ -32,6 +31,17 @@ COUNT = 120
 WAIT_S = 10  # 프로세스·스레드가 끝나기를 기다리는 한도 (보통 수십 ms)
 POS = cv2.CAP_PROP_POS_FRAMES
 PROPS = (cv2.CAP_PROP_FPS, cv2.CAP_PROP_FRAME_COUNT, POS, cv2.CAP_PROP_FRAME_WIDTH, cv2.CAP_PROP_FRAME_HEIGHT)
+# ffmpeg 명령의 출력 대상 (_Transport.output): POSIX는 stdout(= socketpair의 한 끝), Windows는 127.0.0.1 TCP 리스너
+OUTPUT_MARK = "tcp://127.0.0.1:" if sys.platform == "win32" else "pipe:1"
+# ffmpeg 대역(파이썬 -c)의 머리말: open_output(출력 대상)이 쓸 곳을 연다 — "pipe:1"이면 stdout(POSIX: socketpair 끝), tcp://면 접속
+STAND_IN_PRELUDE = (
+    "import socket, sys\n"
+    "def open_output(target):\n"
+    "    if target == 'pipe:1':\n"
+    "        return sys.stdout.buffer\n"
+    "    host, port = target.removeprefix('tcp://').split('?')[0].rsplit(':', 1)\n"
+    "    return socket.create_connection((host, int(port))).makefile('wb')\n"
+)
 
 
 # ---------------------------------------------------------------- 클립 (session: 인코딩 반복 방지)
@@ -113,11 +123,19 @@ def wait_for(condition, timeout=WAIT_S):
     return True
 
 
+def stand_in_command(script, *args):
+    """_pipe_command 자리에 꽂는 ffmpeg 대역: [파이썬, -c, 머리말 + script, 출력 대상, *args] — script는 open_output(sys.argv[1])로
+    출력을 열고, args는 sys.argv[2:]."""
+    return lambda path, output, seek_seconds=None: [sys.executable, "-c", STAND_IN_PRELUDE + script, output, *args]
+
+
 def assert_session_gone(session):
-    """ffmpeg가 끝나 거둬졌고(종료 코드 있음), stdout·stderr 파이프가 닫혔고, 두 스레드가 끝남 — 좀비·FD·스레드 누수 없음."""
+    """ffmpeg가 끝나 거둬졌고(종료 코드 있음), 전송 소켓(우리 끝·자식에게 넘긴 끝·리스너)과 stderr 파이프가 닫혔고, 두 스레드가
+    끝남 — 좀비·FD·스레드 누수 없음."""
     proc = session.proc
     assert wait_for(lambda: proc.poll() is not None), f"ffmpeg(pid {proc.pid})가 {WAIT_S}초 안에 끝나지 않았습니다"
-    assert wait_for(lambda: proc.stdout.closed and proc.stderr.closed), "파이프가 닫히지 않았습니다"
+    assert proc.stdout is None  # ffmpeg 출력은 파이프가 아니라 전송 소켓
+    assert wait_for(lambda: session.transport.closed and proc.stderr.closed), "전송 소켓·stderr 파이프가 닫히지 않았습니다"
     for thread in (session.reader, session.stderr_reader):
         thread.join(WAIT_S)
         assert not thread.is_alive(), f"{thread.name} 스레드가 끝나지 않았습니다"
@@ -235,7 +253,7 @@ def test_truncated_dies_loud(truncated_clip, qapp, windows, capsys):
 
         log = capsys.readouterr().err
         assert log.count(FAILURE_HEADLINE) == 1, log
-        assert truncated_clip in log and "pipe:1" in log  # 명령
+        assert truncated_clip in log and OUTPUT_MARK in log  # 명령
         assert "partial file" in log  # ffmpeg stderr 전문
         assert "test_truncated_dies_loud" in log  # 읽던 곳의 호출 스택
 
@@ -318,11 +336,11 @@ def test_frame_count_mismatch_dies(prores_clip, claimed, qapp, windows, capsys):
 def test_clean_eof_with_stderr_logged_once(tmp_path, monkeypatch, stderr_text, qapp, windows, capsys):
     """정상 끝(종료 코드 0·받은 수 == nb_frames)인데 ffmpeg가 stderr에 글을 남겼으면 그 글을 기록에 한 번 (창 없음, 상태 그대로 —
     가시화만). stderr가 비면 아무것도 남기지 않음. 실제 클립으로는 이 경우를 결정적으로 못 만들어 ffmpeg 대역 프로세스(파이썬:
-    번호 프레임 3장 + stderr 글, 종료 코드 0)를 명령 자리에 꽂는다 — 세션·스레드·파이프는 진짜."""
+    번호 프레임 3장 + stderr 글, 종료 코드 0)를 명령 자리에 꽂는다 — 세션·스레드·전송 소켓은 진짜."""
     width, height, count = 4, 2, 3
-    script = ("import sys; sys.stderr.write(sys.argv[1]); sys.stderr.flush(); "
-              f"sys.stdout.buffer.write(b''.join(bytes([i]) * {width * height * 3} for i in range({count})))")
-    monkeypatch.setattr(movie_pipe_source, "_pipe_command", lambda path: [sys.executable, "-c", script, stderr_text])
+    script = ("sys.stderr.write(sys.argv[2]); sys.stderr.flush(); out = open_output(sys.argv[1]); "
+              f"out.write(b''.join(bytes([i]) * {width * height * 3} for i in range({count}))); out.flush()")
+    monkeypatch.setattr(movie_pipe_source, "_pipe_command", stand_in_command(script, stderr_text))
     probe = MovieProbe(codec="prores", width=width, height=height, r=Fraction(24), avg=Fraction(24), nb_frames=count,
                        duration_ts=count * 512, time_base=Fraction(1, 12288), video_start=0.0, format_start=0.0,
                        rotation=0, sar_ok=True)
@@ -348,31 +366,34 @@ def test_clean_eof_with_stderr_logged_once(tmp_path, monkeypatch, stderr_text, q
 
 
 def test_broken_file_raises_in_ctor(tmp_path, monkeypatch):
-    """깨진 파일·없는 파일: 생성자가 PipeCaptureError(명령·stderr 전문)로 실패하고, 띄운 ffmpeg는 거둬지고 파이프도 닫힘."""
+    """깨진 파일·없는 파일: 생성자가 PipeCaptureError(명령·stderr 전문)로 실패하고, 띄운 ffmpeg는 거둬지고 전송 소켓·stderr
+    파이프도 닫힘. 명령의 출력 대상은 전송 소켓 (POSIX pipe:1 = stdout인 socketpair 끝, Windows tcp://127.0.0.1:<포트>)."""
     probe = MovieProbe(codec="prores", width=WIDTH, height=HEIGHT, r=Fraction(24), avg=Fraction(24), nb_frames=COUNT,
                        duration_ts=COUNT * 512, time_base=Fraction(1, 12288), video_start=0.0, format_start=0.0,
                        rotation=0, sar_ok=True)
     started = []
 
-    class RecordingPopen(subprocess.Popen):
+    class RecordingSession(movie_pipe_source._PipeSession):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             started.append(self)
 
-    monkeypatch.setattr(subprocess, "Popen", RecordingPopen)
+    monkeypatch.setattr(movie_pipe_source, "_PipeSession", RecordingSession)
     broken = tmp_path / "broken.mov"
     broken.write_bytes(b"this is not a movie" * 100)
     for path, cause in ((str(broken), "Invalid data"), (str(tmp_path / "missing.mov"), "No such file")):
         with pytest.raises(PipeCaptureError) as raised:
             FFmpegPipeCapture(path, probe)
         error = raised.value
-        assert error.command == [external_tools.ffmpeg_path(), "-nostdin", "-v", "error", "-i", path, "-map", "0:V:0",
-                                 "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1"]
+        assert error.command[:-1] == [external_tools.ffmpeg_path(), "-nostdin", "-v", "error", "-i", path, "-map",
+                                      "0:V:0", "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "bgr24"]
+        assert error.command[-1] == started[-1].transport.output and error.command[-1].startswith(OUTPUT_MARK)
         assert cause in error.stderr
         assert path in str(error) and cause in str(error)
-        proc = started[-1]
+        proc = started[-1].proc
         assert wait_for(lambda: proc.poll() is not None)
-        assert wait_for(lambda: proc.stdout.closed and proc.stderr.closed)
+        assert proc.stdout is None
+        assert wait_for(lambda: started[-1].transport.closed and proc.stderr.closed)
     assert len(started) == 2
 
 
@@ -385,7 +406,7 @@ def test_release_logs_unsurfaced_failure(prores_clip, windows, qapp, capsys):
     assert wait_for(lambda: session.proc.poll() is not None)
     cap.release()
     log = capsys.readouterr().err
-    assert log.count("release") == 1 and prores_clip in log and "pipe:1" in log
+    assert log.count("release") == 1 and prores_clip in log and OUTPUT_MARK in log
     assert_session_gone(session)
     cap.release()
     assert capsys.readouterr().err == ""

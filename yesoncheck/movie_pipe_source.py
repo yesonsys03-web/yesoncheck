@@ -5,8 +5,21 @@
 기존 cv2 경로로 간다. probe_movie는 오류를 삼키지 않는다: ffprobe가 파일을 못 읽으면(RuntimeError)도, 결과 해석이 어긋나도
 (KeyError·ValueError·TypeError…) 그대로 올라간다 — cv2로 돌릴지는 부른 쪽이 정한다.
 
-캡처: ffmpeg 프로세스 하나(세션)가 bgr24 원시 프레임을 stdout으로 내보내고, 읽기 스레드가 그것을 유한 큐에 미리 받아 둔다.
+캡처: ffmpeg 프로세스 하나(세션)가 bgr24 원시 프레임을 소켓으로 내보내고, 읽기 스레드가 그것을 유한 큐에 미리 받아 둔다.
 탐색은 지연 실행 (스펙 §5.4): set은 목표만 적고 다음 read가 링 버퍼·앞으로 버리기·-ss 재시작 중 하나로 옮긴다.
+
+전송 (Task 3b — 왜 파이프가 아니라 소켓이고 왜 플랫폼별로 다른가): stdout 파이프였을 때는 4K 한 장(24.9MB)이 64KB씩 ~467번의
+read로 들어왔고, 호출마다 읽기 스레드가 GIL을 다시 잡아야 해서 GUI 스레드가 파이썬을 실행하는 동안(재생 틱의 process_frame·
+update_frame) 한 번에 switch interval(5ms)씩 기다렸다 — 메인이 GIL을 쥔 실험에서 공급 28fps → 0.4fps, 실제 재생 15fps(334장 22초).
+소켓에서 recv_into(MSG_WAITALL)는 커널이 한 장을 다 채울 때까지 GIL을 놓은 채 syscall 한 번이라(프레임당 recv 1회) 메인이 GIL을
+쥐고 있어도 공급이 유지된다. POSIX는 socketpair(AF_UNIX)의 한 끝을 ffmpeg의 stdout으로 넘긴다(명령의 출력 대상은 pipe:1 그대로) —
+macOS 로컬 소켓의 기본 버퍼는 8KB(net.local.stream.sendspace)라 ffmpeg가 직접 여는 unix:// 소켓은 키울 길이 없는데(ffmpeg unix
+프로토콜에 버퍼 옵션 없음) socketpair는 양 끝을 우리가 만들어 버퍼를 정한다. 측정(2026-10-29 Mac x86_64, 4K ProRes 정상 상태 60장,
+메인 idle/40ms GIL 쥠): unix:// 리스너 12~22fps, TCP 루프백 21~33fps, socketpair 30~43fps — 가장 빠르고 리스너·임시 폴더·경로 길이·
+접속 상대 확인이 아예 없다. Windows는 socketpair 끝을 자식 stdout으로 넘길 수 없어(소켓 핸들은 CRT fd가 아님) 127.0.0.1 임시 포트
+TCP 리스너(tcp://127.0.0.1:<포트>)에 ffmpeg가 접속한다 — 접속은 하나만, 상대가 127.0.0.1인지 확인. 소켓은 blocking이다: 소켓
+타임아웃(settimeout)은 CPython이 내부적으로 non-blocking으로 바꾸는데 Windows는 non-blocking 소켓의 MSG_WAITALL을 WSAEOPNOTSUPP로
+거절한다. 멈춘 ffmpeg에 대한 보호는 read의 READ_TIMEOUT_S 실패 → stop()의 shutdown+close가 막힌 recv를 깨우는 길로.
 실패는 캡처 안에서 끝난다 (스펙 §5.5): 생성자만 PipeCaptureError를 올리고, 그 뒤의 read·get·set은 예외를 내지 않는다 — 도중에
 끊기면 죽은 cv2 캡처와 같은 겉모습이 되고, 기록(stderr)에 한 번, 오류 창은 Qt 루프에서 한 번 알린다.
 Qt(PyQt5)와 error_window는 알릴 때만 불러온다 — 판정은 Qt 없이도 쓴다.
@@ -16,11 +29,14 @@ VideoPlayer._open_movie_capture의 삽입 분기가 같이 부른다 — 양성�
 """
 
 import collections
+import errno
 import math
 import os
+import socket
 import subprocess
 import sys
 import threading
+import time
 import traceback
 import weakref
 from dataclasses import dataclass
@@ -40,6 +56,19 @@ UNSPECIFIED_SAR = (None, "1:1", "0:1")  # ffprobe의 sample_aspect_ratio: 없음
 
 READAHEAD_FRAMES = 6  # 캡처마다 미리 받아 두는 프레임 수 (4K bgr24 ≈ 24MB/장 → ~143MB) — 스펙 §5.3
 READ_TIMEOUT_S = 30.0  # read()·생성자가 빈 큐를 기다리는 한도: 넘으면 멈춘 ffmpeg(NFS hard mount 등)로 보고 실패 처리
+# 전송 소켓 버퍼 (Task 3b): ffmpeg가 써 두고 우리가 아직 받지 않은 바이트의 상한을 정한다 — POSIX socketpair는 양 끝 SO_SNDBUF·
+# SO_RCVBUF를 이 값으로, Windows TCP는 우리 SO_RCVBUF와 ffmpeg send_buffer_size를 절반씩(TCP는 둘을 합친 만큼 머무름).
+# 64KiB인 근거 세 가지 — "키우면 빨라지겠지"로 바꾸지 말 것:
+# ① 속도: 4K 공급은 8KB(macOS 기본) 26~29fps → 32KB부터 꺾여 34~39fps이고, 64KB·128KB·4MB는 서로 잡음 수준(35~39fps) — 더 키워도
+#    빨라지지 않음 (2026-10-29 Mac x86_64, socketpair, 정상 상태 60장, 메인 idle/GIL 40ms 쥠).
+# ② 사망 뒤 모습: 소켓에 머무는 양은 실측 SO_SNDBUF + ffmpeg 쓰기 한 번(32KiB) = 96KiB로 320×180 프레임(172.8KB) 한 장보다 작다.
+#    8MB면 ffmpeg가 죽은 뒤에도 커널 버퍼에서 정상 프레임이 수십 장(320×180 기준 48장) 더 나와, "큐 + 손에 든 1장을 보여 준 뒤
+#    끝난 모습"(사용자 체감·test_kill_mid_read_is_failure_not_eof·test_player_survives_mid_death의 전제)이 깨진다.
+# ③ 안전: 구형 XNU는 kern.ipc.maxsockbuf(8MB)에 가까운 SO_SNDBUF를 ENOBUFS로 거절할 수 있음 — 64KiB는 어디서나 받아들여짐.
+SOCKET_BUFFER_BYTES = 64 * 1024
+CONNECT_TIMEOUT_S = 10  # (Windows TCP) ffmpeg가 출력 소켓에 접속하기를 기다리는 한도 — 넘으면 실패 (생성자면 PipeCaptureError)
+ACCEPT_SLICE_S = 0.05  # (Windows TCP) accept 대기를 이 간격으로 끊어 ffmpeg 종료·세션 정지를 봄
+LOOPBACK = "127.0.0.1"
 # 탐색 (스펙 §5.4 — 값은 Task 1 스파이크가 CI 세 플랫폼에서 단언으로 확정)
 KEEP_BEHIND = 8  # 링 버퍼: 최근 스트림에서 꺼낸 프레임 보관 수 (뒤로 한 칸이 재시작 없이 — 4K ≈ 199MB/캡처)
 SEEK_FORWARD_MAX = 24  # 앞으로 이만큼까지는 큐·스트림에서 꺼내 버림 (그보다 멀면 재시작 — 4K 재시작 ≈ 24장 디코드)
@@ -153,44 +182,159 @@ class PipeCaptureError(Exception):
 _FRAME, _END, _FAILED, _STOPPED, _TIMEOUT = "frame", "end", "failed", "stopped", "timeout"
 
 
-def _pipe_command(path, seek_seconds=None):
-    """bgr24 원시 프레임을 끝까지 stdout으로 내는 ffmpeg 명령 (스펙 §5.3) — seek_seconds가 있으면 그 시각(-ss, 입력 앞 = 컨테이너
-    start 기준 시각, 소수 6자리)부터, 없으면 처음부터. -fps_mode passthrough: 없으면 rawvideo가 CFR에 맞추려고 프레임을 복제해
-    섞음(§3b). -map 0:V:0: attached_pic을 뺀 첫 영상 트랙 — probe_movie가 고른 트랙과 같음. 경로는 인자 그대로 (비ASCII 안전).
-    ffmpeg가 없으면 ToolNotFoundError."""
+def _pipe_command(path, output, seek_seconds=None):
+    """bgr24 원시 프레임을 끝까지 output으로 내는 ffmpeg 명령 (스펙 §5.3) — seek_seconds가 있으면 그 시각(-ss, 입력 앞 = 컨테이너
+    start 기준 시각, 소수 6자리)부터, 없으면 처음부터. output: 출력 대상 = _Transport.output — POSIX "pipe:1"(ffmpeg의 stdout이
+    socketpair의 한 끝), Windows "tcp://127.0.0.1:<포트>?send_buffer_size=…"(우리 리스너). 플랫폼별로 다른 까닭은 모듈 docstring의
+    '전송' 단락. -fps_mode passthrough: 없으면 rawvideo가 CFR에 맞추려고 프레임을 복제해 섞음(§3b). -map 0:V:0: attached_pic을 뺀
+    첫 영상 트랙 — probe_movie가 고른 트랙과 같음. 경로는 인자 그대로 (비ASCII 안전). ffmpeg가 없으면 ToolNotFoundError."""
     seek = [] if seek_seconds is None else ["-ss", f"{seek_seconds:.6f}"]
     return [ffmpeg_path(), "-nostdin", "-v", "error", *seek, "-i", path, "-map", "0:V:0", "-fps_mode", "passthrough",
-            "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1"]
+            "-f", "rawvideo", "-pix_fmt", "bgr24", output]
 
 
-def _read_into(stream, view):
-    """바이트 memoryview를 다 채울 때까지 stream에서 읽음 → 읽은 바이트 수 (EOF면 len(view)보다 적음)."""
-    filled = 0
-    while filled < len(view):
-        count = stream.readinto(view[filled:])
-        if not count:
-            break
-        filled += count
-    return filled
+class _TransportError(Exception):
+    """(Windows TCP) ffmpeg가 출력 소켓에 제대로 접속하지 않음 — 시간 초과·접속 전에 끝남·127.0.0.1이 아닌 상대. 읽기 스레드가
+    세션의 실패 원인으로 적는다 (그 뒤는 다른 도중 실패와 같은 길 — 생성자면 PipeCaptureError, 그 뒤면 죽음 전이·알림)."""
+
+
+class _Transport:
+    """ffmpeg 출력이 들어오는 소켓 한 벌 — ffmpeg를 띄우기(Popen) 전에 만들고, 세션이 넘겨받는다 (모듈 docstring '전송' 단락).
+
+    - POSIX: socketpair(AF_UNIX) — 한 끝(conn)은 우리 것, 다른 끝은 ffmpeg의 stdout(child_stdout)으로 넘기고 Popen 직후 부모에서
+      닫는다(spawned — 안 닫으면 ffmpeg가 끝나도 EOF가 오지 않음). 출력 대상 "pipe:1". 두 끝은 non-inheritable(파이썬 기본)이라
+      다른 자식 프로세스로 새지 않고, Popen이 ffmpeg의 fd 1로 dup2한 것만 넘어간다.
+    - Windows: 127.0.0.1 임시 포트 TCP 리스너, 출력 대상 "tcp://127.0.0.1:<포트>?send_buffer_size=…", stdout은 DEVNULL. 읽기
+      스레드가 accept로 접속 하나만 받고(connect) 리스너를 닫는다.
+    conn은 blocking이다 (모듈 docstring — Windows의 MSG_WAITALL). 버퍼는 SOCKET_BUFFER_BYTES (근거는 그 상수의 주석).
+    _lock이 지키는 것: 소켓을 닫는 일과 _woken — wake()(다른 스레드)와 connect·close(읽기 스레드)가 엇갈려도 막힌 recv를 놓치지
+    않고 닫힌 소켓을 다시 만지지 않게.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._woken = False  # wake()가 불림 — 그 뒤에 받은 접속은 쓰지 않고 닫음
+        self.conn = None  # 우리 끝 (읽기 스레드만 recv)
+        self._listener = None
+        self._child_end = None
+        if sys.platform == "win32":
+            listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self._listener = listener
+            try:
+                # TCP에 머무는 양 = 보내는 쪽 버퍼 + 받는 쪽 버퍼 → 절반씩. 리스너에 정하면 받은 접속이 물려받음 (listen 전에)
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SOCKET_BUFFER_BYTES // 2)
+                listener.bind((LOOPBACK, 0))
+                listener.listen(1)
+                listener.settimeout(ACCEPT_SLICE_S)
+            except BaseException:
+                listener.close()
+                raise
+            self.output = f"tcp://{LOOPBACK}:{listener.getsockname()[1]}?send_buffer_size={SOCKET_BUFFER_BYTES // 2}"
+            self.child_stdout = subprocess.DEVNULL
+        else:
+            self.conn, self._child_end = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                self.conn.setblocking(True)  # socket.setdefaulttimeout가 어디서 불렸어도 blocking으로 (모듈 docstring '전송')
+                self.conn.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SOCKET_BUFFER_BYTES)
+                self._child_end.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SOCKET_BUFFER_BYTES)
+            except BaseException:
+                self.close()
+                raise
+            self.output = "pipe:1"
+            self.child_stdout = self._child_end.fileno()
+
+    @property
+    def closed(self):
+        """만든 소켓(우리 끝·리스너·자식에게 넘긴 끝)이 모두 닫혔는가 — 수명 확인용."""
+        return all(sock is None or sock.fileno() == -1 for sock in (self.conn, self._listener, self._child_end))
+
+    def spawned(self):
+        """(Popen 직후 — 성공·실패 모두) 자식에게 넘긴 끝을 부모에서 닫음. 안 닫으면 ffmpeg가 끝나도 그 끝이 열려 있어 EOF가 오지 않는다."""
+        with self._lock:
+            if self._child_end is not None:
+                self._child_end.close()
+
+    def connect(self, proc, stopped):
+        """(읽기 스레드) 우리 끝을 돌려줌 — socketpair는 이미 있고, TCP는 접속 하나를 받는다: ACCEPT_SLICE_S씩 끊어 기다리며
+        ffmpeg 종료(proc.poll)·세션 정지(stopped())·CONNECT_TIMEOUT_S를 본다. → conn, 정지(wake)됐으면 None. 접속 실패는
+        _TransportError. 받은 접속은 blocking으로, 상대가 127.0.0.1인지 확인, 리스너는 닫는다 (접속은 하나만)."""
+        if self._listener is None:
+            with self._lock:
+                return None if self._woken else self.conn
+        deadline = time.monotonic() + CONNECT_TIMEOUT_S
+        exited = False
+        while True:
+            try:
+                conn, peer = self._listener.accept()
+                break
+            except socket.timeout:
+                pass
+            if stopped():
+                return None
+            if exited:  # 끝난 뒤 한 번 더 받아 봤는데도 없음 (끝나기 전에 한 접속은 큐에 남아 있어 위 accept가 받음)
+                raise _TransportError(f"ffmpeg가 출력 소켓({self.output})에 접속하지 않고 끝났습니다")
+            if time.monotonic() > deadline:
+                raise _TransportError(f"ffmpeg가 {CONNECT_TIMEOUT_S:g}초 안에 출력 소켓({self.output})에 접속하지 않았습니다")
+            exited = proc.poll() is not None
+        conn.setblocking(True)  # 리스너의 타임아웃을 물려받지 않게 — non-blocking이면 Windows MSG_WAITALL이 WSAEOPNOTSUPP
+        with self._lock:
+            self._listener.close()
+            if self._woken:
+                conn.close()
+                return None
+            self.conn = conn
+        if peer[0] != LOOPBACK:
+            raise _TransportError(f"출력 소켓에 {LOOPBACK}이 아닌 상대({peer[0]}:{peer[1]})가 접속했습니다 — 받지 않고 끊습니다")
+        return conn
+
+    def wake(self):
+        """(stop — 다른 스레드에서) recv에서 막힌 읽기 스레드를 깨움: shutdown(SHUT_RDWR) 뒤 close. macOS는 close만으로는 막힌 recv가
+        깨지 않을 수 있고, Windows는 closesocket이 막힌 호출을 취소한다 — 둘 다 한다. 상대가 이미 끊었으면 shutdown이
+        ENOTCONN·ECONNRESET(깨울 recv가 없음 — EOF가 이미 와 있음)이라 넘어간다. 그 밖의 shutdown 오류는 뜻밖이라 기록(트레이스백)에
+        남기되 올리지 않는다 — stop은 read(탐색 재시작)·release·GC 안에서 불리고(§5.5: read 밖으로 예외 없음), 뒤의 close·kill이
+        어차피 recv를 끝낸다. close는 늘 한다."""
+        with self._lock:
+            self._woken = True
+            conn = self.conn
+            if conn is None or conn.fileno() == -1:
+                return
+            try:
+                conn.shutdown(socket.SHUT_RDWR)
+            except OSError as exc:
+                if exc.errno not in (errno.ENOTCONN, errno.ECONNRESET):
+                    print(f"{LOG_PREFIX} 막힌 recv를 깨우려던 shutdown이 뜻밖의 오류로 실패했습니다 — close·kill로 이어 갑니다:\n"
+                          f"{traceback.format_exc()}", file=sys.stderr, flush=True)
+            finally:
+                conn.close()
+
+    def close(self):
+        """만든 소켓을 모두 닫음 (읽기 스레드의 끝·세션을 세우지 못한 쪽, 여러 번 불러도 됨)."""
+        with self._lock:
+            for sock in (self.conn, self._listener, self._child_end):
+                if sock is not None:
+                    sock.close()
 
 
 class _PipeSession:
-    """ffmpeg 프로세스 하나와 그 둘레 한 덩어리 — 읽기 스레드·stderr 스레드·유한 큐·실패 칸·정지 플래그 (스펙 §5.3).
+    """ffmpeg 프로세스 하나와 그 둘레 한 덩어리 — 전송 소켓·읽기 스레드·stderr 스레드·유한 큐·실패 칸·정지 플래그 (스펙 §5.3).
 
     캡처는 세션을 통째로 버린다(stop) — 옛 프로세스의 프레임·실패가 다른 세션에 섞이지 않는다.
-    - stdout은 읽기 스레드만 읽는다: 프레임 크기(height*width*3바이트)씩 새 배열에 바로 읽어(readinto — 따로 복사하지 않음) 큐에
-      넣고, 큐가 차면(READAHEAD_FRAMES) _cond에서 기다린다. stop()이 그 기다림을 깨운다.
+    - 전송 소켓(transport — _Transport)은 읽기 스레드만 recv한다: 프레임 크기(height*width*3바이트)씩 새 배열에 바로 받아
+      (recv_into(MSG_WAITALL) — 정상이면 한 장에 recv 한 번, 따로 복사하지 않음) 큐에 넣고, 큐가 차면(READAHEAD_FRAMES) _cond에서
+      기다린다. stop()이 그 기다림과 막힌 recv(transport.wake)를 깨운다. recv_calls: 프레임 바이트를 받은 recv 호출 수 (시험용).
     - stderr는 전용 스레드가 늘 비운다 (안 비우면 파이프가 차서 ffmpeg가 멈춤) — 모아서 실패 글에 싣는다.
-    - 읽기 스레드가 끝날 때 프로세스를 거두고(wait — 좀비 없음) stdout을 닫는다 (stderr는 그 스레드가 닫음). kill해도 안 죽는
+    - 읽기 스레드가 끝날 때 전송 소켓을 닫고 프로세스를 거둔다(wait — 좀비 없음) (stderr는 그 스레드가 닫음). kill해도 안 죽는
       프로세스(NFS hard mount의 D 상태)면 이 데몬 스레드만 남아 기다리고, 부른 스레드(GUI)는 막히지 않는다.
-    - 실패(프레임 중간에서 끊김·0이 아닌 종료 코드·읽기 오류)는 failure에 적어 두기만 한다 — 드러내는 것은 큐를 다 비운 read()의
-      몫. stop()으로 일부러 끝낸 뒤의 끊김·종료 코드는 실패가 아니다 (정지 플래그).
+    - 실패(프레임 중간에서 끊김·0이 아닌 종료 코드·읽기 오류·접속 실패)는 failure에 적어 두기만 한다 — 드러내는 것은 큐를 다
+      비운 read()의 몫. stop()으로 일부러 끝낸 뒤의 끊김·종료 코드는 실패가 아니다 (정지 플래그).
     _cond가 지키는 것: _frames·_stopped·_finished·failure.
     start: 이 세션이 내줄 첫 프레임의 번호 (처음 연 세션 0, 탐색 재시작은 -ss로 겨눈 번호).
+    transport는 만든 쪽이 넘기고, 이 생성자가 성공하면 세션 것이다 (실패하면 만든 쪽이 닫는다 — 캡처의 생성자·_restart).
     """
 
-    def __init__(self, command, height, width, start=0):
+    def __init__(self, command, transport, height, width, start=0):
         self.command = command
+        self.transport = transport
         self.start = start
         self._shape = (height, width, 3)
         self._cond = threading.Condition()
@@ -199,9 +343,13 @@ class _PipeSession:
         self._finished = False  # 읽기 스레드가 끝남: 더 올 프레임 없음, 프로세스는 거둬졌고 failure는 확정
         self.failure = None  # 읽기 스레드가 본 실패 원인 (정상 끝·정지면 None)
         self.eof_noted = False  # 정상 끝의 stderr를 기록했는지 (세션당 한 번 — 캡처의 _lock이 지킴)
+        self.recv_calls = 0  # 프레임 바이트를 받은 recv 호출 수 (읽기 스레드만 셈 — 정상이면 프레임당 1)
         self._stderr_chunks = []
-        self.proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                     **subprocess_kwargs())
+        try:
+            self.proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=transport.child_stdout,
+                                         stderr=subprocess.PIPE, **subprocess_kwargs())
+        finally:
+            transport.spawned()
         self.stderr_reader = threading.Thread(target=self._drain_stderr, name="ffmpeg-pipe-stderr", daemon=True)
         self.reader = threading.Thread(target=self._read_frames, name="ffmpeg-pipe-read", daemon=True)
         self.stderr_reader.start()
@@ -237,13 +385,16 @@ class _PipeSession:
         return None if returncode in (None, 0) else f"ffmpeg가 이미 끝나 있었습니다 (종료 코드 {returncode})"
 
     def stop(self):
-        """일부러 끝냄 (release·GC·실패 정리, 여러 번 불러도 됨): 정지 플래그 → put 대기를 깨우고 큐 비움 → kill.
-        기다리지 않는다 — 거두기·파이프 닫기는 두 스레드가."""
+        """일부러 끝냄 (release·GC·실패 정리, 여러 번 불러도 됨): 정지 플래그 → put 대기를 깨우고 큐 비움 → 막힌 recv 깨우기
+        (transport.wake: shutdown+close) → kill. 기다리지 않는다 — 거두기·남은 소켓·파이프 닫기는 두 스레드가."""
         with self._cond:
             self._stopped = True
             self._frames.clear()
             self._cond.notify_all()
-        self.proc.kill()  # 이미 끝난 프로세스면 아무것도 안 함
+        try:
+            self.transport.wake()
+        finally:
+            self.proc.kill()  # 이미 끝난 프로세스면 아무것도 안 함
 
     def _drain_stderr(self):
         stream = self.proc.stderr
@@ -255,11 +406,11 @@ class _PipeSession:
 
     def _read_frames(self):
         failure = None
-        stdout = self.proc.stdout
         try:
-            while True:
+            conn = self.transport.connect(self.proc, lambda: self._stopped)
+            while conn is not None:
                 frame = np.empty(self._shape, np.uint8)  # 프레임마다 새 배열 — read()가 그대로 호출자에게 줌 (재사용 금지)
-                filled = _read_into(stdout, memoryview(frame).cast("B"))
+                filled = self._recv_into(conn, memoryview(frame).cast("B"))
                 if filled < frame.nbytes:
                     if filled:
                         failure = f"프레임 중간에서 출력이 끊겼습니다 ({filled}/{frame.nbytes}바이트)"
@@ -271,14 +422,28 @@ class _PipeSession:
                         break
                     self._frames.append(frame)
                     self._cond.notify_all()
-        except Exception:  # 파이프 읽기 오류 — 삼키지 않고 실패 원인으로
+        except _TransportError as exc:  # 출력 소켓 접속 실패 (Windows TCP)
+            failure = str(exc)
+        except Exception:  # 소켓 읽기 오류 — 삼키지 않고 실패 원인으로
             failure = f"ffmpeg 출력을 읽다 오류가 났습니다:\n{traceback.format_exc()}"
         finally:
-            self._finish(failure, stdout)
+            self._finish(failure)
 
-    def _finish(self, failure, stdout):
-        """읽기 스레드의 끝: stdout 닫기 → (실패면 kill) → 거두기 → stderr 다 받기 → 실패 확정(정지가 아니었을 때만)·알림."""
-        stdout.close()
+    def _recv_into(self, conn, view):
+        """바이트 memoryview를 다 채울 때까지 conn에서 받음 → 받은 바이트 수 (EOF면 len(view)보다 적음). MSG_WAITALL: 커널이 다
+        채울 때까지 GIL을 놓은 채 기다려 정상이면 한 장에 recv 한 번 (shutdown·EOF·신호면 덜 채우고 돌아옴 — 이어 받거나 끝)."""
+        filled = 0
+        while filled < len(view):
+            count = conn.recv_into(view[filled:], len(view) - filled, socket.MSG_WAITALL)
+            if not count:
+                break
+            self.recv_calls += 1
+            filled += count
+        return filled
+
+    def _finish(self, failure):
+        """읽기 스레드의 끝: 전송 소켓 닫기 → (실패면 kill) → 거두기 → stderr 다 받기 → 실패 확정(정지가 아니었을 때만)·알림."""
+        self.transport.close()
         if failure is not None:
             self.proc.kill()
         returncode = self.proc.wait()
@@ -392,11 +557,20 @@ class FFmpegPipeCapture:
         self._pos = 0  # 다음에 내줄 프레임 번호
         self._ring = _FrameRing(KEEP_BEHIND)  # 최근 꺼낸 프레임 — 링의 end가 스트림 위치
         self._target = None  # set()이 기록한 탐색 목표 (0~count 정수, 다음 read()가 실행 — get(POS_FRAMES)는 이것을 보임)
-        command = _pipe_command(path)
         try:
-            session = _PipeSession(command, probe.height, probe.width)
+            transport = _Transport()  # ffmpeg 출력을 받을 소켓 — Popen 전에
         except OSError as exc:
+            raise PipeCaptureError(f"ffmpeg 출력을 받을 소켓을 만들지 못했습니다 ({exc}): {path}", (), "") from exc
+        command = ()
+        try:
+            command = _pipe_command(path, transport.output)  # ffmpeg가 없으면 ToolNotFoundError — 아래에서 소켓만 닫고 그대로
+            session = _PipeSession(command, transport, probe.height, probe.width)
+        except OSError as exc:
+            transport.close()
             raise PipeCaptureError(f"ffmpeg를 실행하지 못했습니다 ({exc}): {path}", command, "") from exc
+        except BaseException:
+            transport.close()
+            raise
         self._finalizer = weakref.finalize(self, session.stop)  # 세션을 멈추는 단 하나의 길 (release·죽음·GC·재시작이 같이 씀)
         outcome, value = session.take(READ_TIMEOUT_S, remove=False)
         if outcome != _FRAME:
@@ -459,8 +633,9 @@ class FFmpegPipeCapture:
             return True
 
     def release(self):
-        """닫기 (여러 번 불러도 됨): 세션을 떼고 링을 비움 → 정지 플래그 → kill (거두기·파이프 닫기는 세션의 데몬 스레드 — 여기서
-        기다리지 않음) → 큐 비움. 드러나기 전의 실패(멈춰 둔 사이 죽은 ffmpeg)가 있었으면 기록에만 한 번 남김 (닫는 영상이라 창은 없음)."""
+        """닫기 (여러 번 불러도 됨): 세션을 떼고 링을 비움 → 세션 stop(정지 플래그·큐 비움·막힌 recv 깨우기·kill — 거두기와 남은
+        소켓·파이프 닫기는 세션의 데몬 스레드, 여기서 기다리지 않음). 드러나기 전의 실패(멈춰 둔 사이 죽은 ffmpeg)가 있었으면
+        기록에만 한 번 남김 (닫는 영상이라 창은 없음)."""
         with self._lock:
             session, self._session = self._session, None
             self._pos, self._target = 0, None
@@ -499,12 +674,15 @@ class FFmpegPipeCapture:
         """(read 안, _lock 밖) 세션 재시작: 목표 K장 앞(start)을 -ss로 겨눈 새 ffmpeg → 캡처의 세션·GC 안전망을 새 세션으로 바꾸고
         링을 start로 비움 → 옛 세션 정지. → 새 세션, 또는 None (띄우지 못해 죽음 — 알림까지 끝냄 / 띄우는 사이 release됨)."""
         start = target - min(SEEK_BACK_K, target)
-        command = ()
+        command, transport = (), None
         try:
-            command = _pipe_command(self._path, self._seek_seconds(start))
-            new = _PipeSession(command, self._height, self._width, start)
-        except Exception:  # §5.5: read 밖으로 내보내지 않음 — 실행 파일 없음(OSError·ToolNotFoundError)·스레드 시작 실패
+            transport = _Transport()
+            command = _pipe_command(self._path, transport.output, self._seek_seconds(start))
+            new = _PipeSession(command, transport, self._height, self._width, start)
+        except Exception:  # §5.5: read 밖으로 내보내지 않음 — 소켓·실행 파일 없음(OSError·ToolNotFoundError)·스레드 시작 실패
             reason = f"{target}번 프레임으로 탐색하려고 ffmpeg를 다시 띄우지 못했습니다:\n{traceback.format_exc()}"
+            if transport is not None:
+                transport.close()  # 세션이 서지 못함 — 만든 소켓은 여기서
             with self._lock:
                 dying = self._session is old
                 if dying:

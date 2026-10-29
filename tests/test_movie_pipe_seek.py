@@ -146,10 +146,11 @@ def wait_for(condition, timeout=WAIT_S):
 
 
 def assert_session_gone(session):
-    """ffmpeg가 끝나 거둬졌고(종료 코드 있음), stdout·stderr 파이프가 닫혔고, 두 스레드가 끝남."""
+    """ffmpeg가 끝나 거둬졌고(종료 코드 있음), 전송 소켓과 stderr 파이프가 닫혔고, 두 스레드가 끝남."""
     proc = session.proc
     assert wait_for(lambda: proc.poll() is not None), f"ffmpeg(pid {proc.pid})가 {WAIT_S}초 안에 끝나지 않았습니다"
-    assert wait_for(lambda: proc.stdout.closed and proc.stderr.closed), "파이프가 닫히지 않았습니다"
+    assert proc.stdout is None  # ffmpeg 출력은 파이프가 아니라 전송 소켓
+    assert wait_for(lambda: session.transport.closed and proc.stderr.closed), "전송 소켓·stderr 파이프가 닫히지 않았습니다"
     for thread in (session.reader, session.stderr_reader):
         thread.join(WAIT_S)
         assert not thread.is_alive(), f"{thread.name} 스레드가 끝나지 않았습니다"
@@ -501,7 +502,7 @@ def test_restart_spawn_failure_dies_without_raising(prores_clip, cause, monkeypa
         assert read_number(cap) == 0
         old = cap._session
 
-        def broken_command(path, seek_seconds=None):
+        def broken_command(path, output, seek_seconds=None):
             if cause == "ffmpeg_not_found":
                 raise external_tools.ToolNotFoundError("ffmpeg를 찾지 못했습니다 (시험)")
             return [str(prores_clip) + ".no-such-ffmpeg", "-ss", f"{seek_seconds:.6f}", "-i", path]
