@@ -15,7 +15,7 @@ from yesoncheck.external_tools import MAX_FRAME_RATE, _frame_rate, _probe, _star
 
 PIPE_CODECS = ("prores",)
 SOURCE_MODE_ENV = "YESONCHECK_MOVIE_SOURCE"
-SOURCE_MODES = ("pipe", "cv2")  # 환경 변수가 받는 값 (없으면 "auto")
+SOURCE_MODES = ("auto", "pipe", "cv2")  # 환경 변수가 받는 값 (없거나 비어 있으면 "auto")
 UNSPECIFIED_SAR = (None, "1:1", "0:1")  # ffprobe의 sample_aspect_ratio: 없음·정사각형·미지정(0:1)
 
 
@@ -90,11 +90,9 @@ def pipe_eligible(probe):
 
 
 def movie_source_mode():
-    """환경 변수 YESONCHECK_MOVIE_SOURCE: 없거나 비면 "auto", "pipe"·"cv2"(대소문자 무시)는 소문자로, 그 밖은 ValueError."""
+    """환경 변수 YESONCHECK_MOVIE_SOURCE: 없거나 비면 "auto", "auto"·"pipe"·"cv2"(대소문자 무시)는 소문자로, 그 밖은 ValueError."""
     given = os.environ.get(SOURCE_MODE_ENV, "")
-    mode = given.lower()
-    if not mode:
-        return "auto"
+    mode = given.lower() or "auto"
     if mode not in SOURCE_MODES:
-        raise ValueError(f"{SOURCE_MODE_ENV}는 {' 또는 '.join(SOURCE_MODES)}이어야 합니다 (비우면 자동): {given!r}")
+        raise ValueError(f"{SOURCE_MODE_ENV}는 {', '.join(SOURCE_MODES)} 중 하나여야 합니다 (비우면 auto): {given!r}")
     return mode

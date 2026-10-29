@@ -224,7 +224,8 @@ def test_probe_runtime_error_propagates(tmp_path):
 def test_movie_source_mode(monkeypatch):
     monkeypatch.delenv("YESONCHECK_MOVIE_SOURCE", raising=False)
     assert movie_source_mode() == "auto"
-    for given, expected in (("", "auto"), ("pipe", "pipe"), ("cv2", "cv2"), ("PIPE", "pipe"), ("Cv2", "cv2")):
+    for given, expected in (("", "auto"), ("auto", "auto"), ("AUTO", "auto"), ("pipe", "pipe"), ("cv2", "cv2"),
+                            ("PIPE", "pipe"), ("Cv2", "cv2")):
         monkeypatch.setenv("YESONCHECK_MOVIE_SOURCE", given)
         assert movie_source_mode() == expected, given
     for bad in ("x", "pipe cv2", " pipe"):
