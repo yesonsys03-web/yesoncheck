@@ -800,16 +800,17 @@ class PlayerAnnotationsMixin:
             f"프레임 {start_frame + 1}~{end_frame + 1}에 텍스트 주석 추가 (자동 저장)"
         )
 
-    def _redraw_frame_with_annotations(self):
+    def _redraw_frame_with_annotations(self, draw=True):
         if self.frame_a is None:
             return
-        frame_a_to_show = self.prepare_frame_for_display(self.frame_a)
-        frame_b_to_show = (
-            self.frame_b
-            if (self.videoWidget.wipe_enabled_x or self.videoWidget.wipe_enabled_y)
-            else None
-        )
-        self.videoWidget.updateFrame(frame_a_to_show, frame_b_to_show)
+        if draw:
+            frame_a_to_show = self.prepare_frame_for_display(self.frame_a)
+            frame_b_to_show = (
+                self.frame_b
+                if (self.videoWidget.wipe_enabled_x or self.videoWidget.wipe_enabled_y)
+                else None
+            )
+            self.videoWidget.updateFrame(frame_a_to_show, frame_b_to_show)
         if self.annotationModeButton.isChecked():
             if self._editing_annotation:
                 self._set_edit_target(self._editing_annotation)
@@ -1060,7 +1061,7 @@ class PlayerAnnotationsMixin:
             self.annotation_export_dialog = None
         self.annotation_export_worker = None
 
-    def refresh_frame_annotations_display(self):
+    def refresh_frame_annotations_display(self, redraw=True):
         if not hasattr(self, "annotation_store"):
             return
         frame_idx = self.get_current_frame_index()
@@ -1069,4 +1070,4 @@ class PlayerAnnotationsMixin:
         self._last_annotation_frame_idx = frame_idx
         self._update_annotation_list_ui(frame_idx)
         self._update_annotation_status_label()
-        self._redraw_frame_with_annotations()
+        self._redraw_frame_with_annotations(draw=redraw)

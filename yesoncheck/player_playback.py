@@ -548,7 +548,9 @@ class PlayerPlaybackMixin:
             frame_b_to_show = None  # OCR 검토 창이 열려있을 때는 B 프레임도 스킵
             self.videoWidget.updateFrame(frame_a_to_show, frame_b_to_show)
             if hasattr(self, 'refresh_frame_annotations_display'):
-                self.refresh_frame_annotations_display()
+                # 위에서 같은 입력으로 이미 그림. 단 와이프가 켜져 있으면 위 그림은 B를 뺐고 다시 그리는 그림은 B를 실으므로 그때만 다시 그림
+                self.refresh_frame_annotations_display(
+                    redraw=bool(self.videoWidget.wipe_enabled_x or self.videoWidget.wipe_enabled_y))
             return  # OCR 검토 창 업데이트 스킵
         
         # OCR 검토 창이 열려있고 재생 중일 때도 업데이트 빈도를 줄임
@@ -599,7 +601,8 @@ class PlayerPlaybackMixin:
         
         self.videoWidget.updateFrame(frame_a_to_show, frame_b_to_show)
         if hasattr(self, 'refresh_frame_annotations_display'):
-            self.refresh_frame_annotations_display()
+            # 바로 위에서 같은 입력(frame_a·frame_b)으로 이미 그렸으므로 다시 그리지 않음 (목록·상태·편집 대상 갱신은 그대로)
+            self.refresh_frame_annotations_display(redraw=False)
         self.update_position_info()
 
     def overlay_text(self, frame):
