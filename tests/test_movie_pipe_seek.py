@@ -8,6 +8,7 @@ pid로 실증한다 — 시간 단언 없음. 세션 수는 movie_pipe_source._P
 """
 
 import gc
+import itertools
 import random
 import threading
 import time
@@ -21,7 +22,7 @@ import pytest
 from tests.prores_clips import frame_number, make_numbered_clip, make_truncated, make_voff
 from yesoncheck import error_window, external_tools, movie_pipe_source
 from yesoncheck.movie_pipe_source import (
-    FAILURE_HEADLINE, KEEP_BEHIND, SEEK_BACK_K, SEEK_FORWARD_MAX, FFmpegPipeCapture, probe_movie,
+    FAILURE_HEADLINE, KEEP_BEHIND, READAHEAD_FRAMES, SEEK_BACK_K, SEEK_FORWARD_MAX, FFmpegPipeCapture, probe_movie,
 )
 
 COUNT = 120
@@ -323,6 +324,34 @@ def test_release_frees_ring(prores_clip):
     finally:
         cap.release()
     assert len(cap._ring._frames) == 0
+
+
+def test_ring_copy_made_by_reader_and_recycled(prores_clip):
+    """링 보관본은 읽기 스레드가 만든다 — GUI 스레드의 read는 복사하지 않음(4K면 24.9MB): 큐 항목은 (내줄 배열, 보관본) 쌍(같은
+    그림, 메모리는 따로)이고, read가 링에 두는 것은 그 보관본 그대로, 호출자가 받는 것은 내줄 배열 그대로. 보관본 버퍼는 링에서
+    밀려나면 재활용돼 끝까지 읽어도 새로 만든 보관본은 링 + 큐 + 2 이하(메모리 상한). 내준 배열은 재활용하지 않음 — 서로, 그리고
+    보관본과 메모리를 나누지 않음. release하면 재활용 목록도 비움."""
+    cap = open_capture(prores_clip)
+    try:
+        session = cap._session
+        assert wait_for(lambda: len(session._frames) == READAHEAD_FRAMES)
+        frame, kept = session._frames[0]
+        assert np.array_equal(frame, kept) and not np.shares_memory(frame, kept)
+        ok, first = cap.read()
+        assert ok and first is frame and cap._ring._frames[-1] is kept  # read는 복사 없이 옮기기만
+        delivered = [first]
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            delivered.append(frame)
+        assert [frame_number(f) for f in delivered] == list(range(COUNT))
+        assert cap._pool.allocated <= KEEP_BEHIND + READAHEAD_FRAMES + 2, cap._pool.allocated
+        assert not any(np.shares_memory(a, b) for a, b in itertools.combinations(delivered, 2))
+        assert not any(np.shares_memory(k, d) for k in cap._ring._frames for d in delivered)
+    finally:
+        cap.release()
+    assert cap._pool._free == [] and len(cap._ring._frames) == 0
 
 
 def test_lazy_set_coalesces(prores_clip, sessions):

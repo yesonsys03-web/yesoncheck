@@ -54,7 +54,9 @@ SOURCE_MODE_ENV = "YESONCHECK_MOVIE_SOURCE"
 SOURCE_MODES = ("auto", "pipe", "cv2")  # 환경 변수가 받는 값 (없거나 비어 있으면 "auto")
 UNSPECIFIED_SAR = (None, "1:1", "0:1")  # ffprobe의 sample_aspect_ratio: 없음·정사각형·미지정(0:1)
 
-READAHEAD_FRAMES = 6  # 캡처마다 미리 받아 두는 프레임 수 (4K bgr24 ≈ 24MB/장 → ~143MB) — 스펙 §5.3
+# 캡처마다 미리 받아 두는 프레임 수 — 스펙 §5.3. 큐 항목은 (내줄 배열, 링 보관본) 쌍이라 4K bgr24(24.9MB/장)면 ~299MB
+# (보관본을 GUI 스레드가 아니라 읽기 스레드가 미리 만들어 두는 값 — _BufferPool)
+READAHEAD_FRAMES = 6
 READ_TIMEOUT_S = 30.0  # read()·생성자가 빈 큐를 기다리는 한도: 넘으면 멈춘 ffmpeg(NFS hard mount 등)로 보고 실패 처리
 # 전송 소켓 버퍼 (Task 3b): POSIX socketpair는 양 끝 SO_SNDBUF·SO_RCVBUF를 이 값으로, Windows TCP는 우리 SO_RCVBUF와 ffmpeg
 # send_buffer_size를 절반씩. 근거는 처리량뿐 — "키우면 빨라지겠지"로 바꾸지 말 것: 4K 공급은 8KB(macOS 기본) 26~29fps → 32KB부터
@@ -328,14 +330,50 @@ def _log_wake_error(step):
         _last_resort(f"전송 소켓 {step} 실패를 기록하지 못했습니다")
 
 
+class _BufferPool:
+    """링 보관본 버퍼의 재활용 목록 (캡처마다 하나, 프레임 모양 하나) — 읽기 스레드가 꺼내(get) 보관본을 만들고, 링이 밀어낸·비운
+    보관본과 정지한 세션의 큐에 남은 보관본을 돌려받는다(put). 호출자에게 준 배열은 절대 들어오지 않는다(보관본은 밖으로 나가지 않음
+    — 링에서 내줄 때도 새 복사본). 그래서 새로 만드는 보관본 수는 링 용량 + 큐 길이 + 손에 든 몫(2)이고(allocated — 시험용),
+    목록도 그만큼(limit)까지만 쥔다. 읽기 스레드와 캡처(_lock 안)가 같이 쓰므로 자기 잠금(RLock — GC finalize가 어느 스레드에서
+    stop을 불러도 막히지 않게)."""
+
+    def __init__(self, shape, limit):
+        self.shape = shape
+        self._limit = limit
+        self._free = []
+        self._closed = False
+        self._lock = threading.RLock()
+        self.allocated = 0
+
+    def get(self):
+        with self._lock:
+            if self._free:
+                return self._free.pop()
+            self.allocated += 1
+        return np.empty(self.shape, np.uint8)
+
+    def put(self, buffer):
+        with self._lock:
+            if not self._closed and len(self._free) < self._limit:
+                self._free.append(buffer)
+
+    def close(self):
+        """닫음 (release·죽음 — 세션 stop 뒤): 목록을 비우고 이 뒤로는 돌려받지 않음 — 닫힌 캡처가 4K 보관본을 붙들지 않게
+        (늦게 끝나는 읽기 스레드가 돌려주는 것도 버림). get은 그래도 새로 만들어 준다."""
+        with self._lock:
+            self._closed = True
+            self._free.clear()
+
+
 class _PipeSession:
     """ffmpeg 프로세스 하나와 그 둘레 한 덩어리 — 전송 소켓·읽기 스레드·stderr 스레드·유한 큐·실패 칸·정지 플래그 (스펙 §5.3).
 
     캡처는 세션을 통째로 버린다(stop) — 옛 프로세스의 프레임·실패가 다른 세션에 섞이지 않는다.
-    - 전송 소켓(transport — _Transport)은 읽기 스레드만 recv한다: 프레임 크기(height*width*3바이트)씩 새 배열에 바로 받아
-      (recv_into(MSG_WAITALL) — 정상이면 한 장에 recv 한 번, 따로 복사하지 않음) 큐에 넣고, 큐가 차면(READAHEAD_FRAMES) _cond에서
-      기다린다. stop()이 그 기다림과 막힌 recv(transport.wake)를 깨운다. recv_calls·frames_received: 프레임 바이트를 받은 recv 호출
-      수·다 받은 프레임 수 (시험용).
+    - 전송 소켓(transport — _Transport)은 읽기 스레드만 recv한다: 프레임 크기(pool.shape)씩 새 배열에 바로 받아(recv_into(MSG_WAITALL)
+      — 정상이면 한 장에 recv 한 번) 링 보관본도 여기서 만든다(pool에서 꺼낸 버퍼에 복사 — GIL을 놓는 numpy 복사, GUI 스레드의 read는
+      복사하지 않음). 큐 항목은 (내줄 배열, 보관본) 쌍. 큐가 차면(READAHEAD_FRAMES) _cond에서 기다린다. stop()이 그 기다림과 막힌
+      recv(transport.wake)를 깨우고, 큐에 남은 보관본은 pool로 돌린다. recv_calls·frames_received: 프레임 바이트를 받은 recv 호출 수·
+      다 받은 프레임 수 (시험용).
     - stderr는 전용 스레드가 늘 비운다 (안 비우면 파이프가 차서 ffmpeg가 멈춤) — 모아서 실패 글에 싣는다.
     - 읽기 스레드가 끝날 때 전송 소켓을 닫고 프로세스를 거둔다(wait — 좀비 없음) (stderr는 그 스레드가 닫음). kill해도 안 죽는
       프로세스(NFS hard mount의 D 상태)면 이 데몬 스레드만 남아 기다리고, 부른 스레드(GUI)는 막히지 않는다.
@@ -344,13 +382,14 @@ class _PipeSession:
     _cond가 지키는 것: _frames·_stopped·_finished·failure.
     start: 이 세션이 내줄 첫 프레임의 번호 (처음 연 세션 0, 탐색 재시작은 -ss로 겨눈 번호).
     transport는 만든 쪽이 넘기고, 이 생성자가 성공하면 세션 것이다 (실패하면 만든 쪽이 닫는다 — 캡처의 생성자·_restart).
+    pool(_BufferPool)은 캡처의 것 — 세션들이 차례로 같이 쓴다.
     """
 
-    def __init__(self, command, transport, height, width, start=0):
+    def __init__(self, command, transport, pool, start=0):
         self.command = command
         self.transport = transport
         self.start = start
-        self._shape = (height, width, 3)
+        self._pool = pool
         self._cond = threading.Condition()
         self._frames = collections.deque()
         self._stopped = False  # 정지 플래그: stop()이 일부러 끝냄
@@ -375,8 +414,9 @@ class _PipeSession:
         return decode_output(b"".join(list(self._stderr_chunks)))
 
     def take(self, timeout, remove=True):
-        """다음 프레임을 기다림 → (_FRAME, 배열) / (_END, None) 정상 끝 / (_FAILED, 원인) / (_STOPPED, None) / (_TIMEOUT, None).
-        큐에 남은 프레임은 실패보다 먼저 준다. remove=False면 프레임을 큐에 둔 채 알리기만 함 (생성자의 첫 프레임 — 첫 read가 씀)."""
+        """다음 프레임을 기다림 → (_FRAME, (내줄 배열, 보관본)) / (_END, None) 정상 끝 / (_FAILED, 원인) / (_STOPPED, None) /
+        (_TIMEOUT, None). 큐에 남은 프레임은 실패보다 먼저 준다. remove=False면 프레임을 큐에 둔 채 알리기만 함 (생성자의 첫 프레임 —
+        첫 read가 씀). 꺼낸 보관본은 받은 쪽(캡처)이 링에 넣는다 — 링이 밀어낼 때 pool로 돌아감."""
         with self._cond:
             if not self._cond.wait_for(lambda: self._frames or self._finished or self._stopped, timeout):
                 return _TIMEOUT, None
@@ -400,10 +440,12 @@ class _PipeSession:
         return None if returncode in (None, 0) else f"ffmpeg가 이미 끝나 있었습니다 (종료 코드 {returncode})"
 
     def stop(self):
-        """일부러 끝냄 (release·GC·실패 정리, 여러 번 불러도 됨): 정지 플래그 → put 대기를 깨우고 큐 비움 → 막힌 recv 깨우기
-        (transport.wake: shutdown+close) → kill. 기다리지 않는다 — 거두기·남은 소켓·파이프 닫기는 두 스레드가."""
+        """일부러 끝냄 (release·GC·실패 정리, 여러 번 불러도 됨): 정지 플래그 → put 대기를 깨우고 큐 비움(보관본은 pool로) → 막힌
+        recv 깨우기 (transport.wake: shutdown+close) → kill. 기다리지 않는다 — 거두기·남은 소켓·파이프 닫기는 두 스레드가."""
         with self._cond:
             self._stopped = True
+            for _frame, kept in self._frames:
+                self._pool.put(kept)
             self._frames.clear()
             self._cond.notify_all()
         try:
@@ -424,19 +466,22 @@ class _PipeSession:
         try:
             conn = self.transport.connect(self.proc, lambda: self._stopped)
             while conn is not None:
-                frame = np.empty(self._shape, np.uint8)  # 프레임마다 새 배열 — read()가 그대로 호출자에게 줌 (재사용 금지)
+                frame = np.empty(self._pool.shape, np.uint8)  # 프레임마다 새 배열 — read()가 그대로 호출자에게 줌 (재사용 금지)
                 filled = self._recv_into(conn, memoryview(frame).cast("B"))
                 if filled < frame.nbytes:
                     if filled:
                         failure = f"프레임 중간에서 출력이 끊겼습니다 ({filled}/{frame.nbytes}바이트)"
                     break
                 self.frames_received += 1
+                kept = self._pool.get()
+                np.copyto(kept, frame)  # 링 보관본 — GUI 스레드가 아니라 여기서 (큰 배열의 numpy 복사는 GIL을 놓음)
                 with self._cond:
                     while len(self._frames) >= READAHEAD_FRAMES and not self._stopped:
                         self._cond.wait()
                     if self._stopped:
+                        self._pool.put(kept)
                         break
-                    self._frames.append(frame)
+                    self._frames.append((frame, kept))
                     self._cond.notify_all()
         except _TransportError as exc:  # 출력 소켓 접속 실패 (Windows TCP)
             failure = str(exc)
@@ -479,13 +524,15 @@ class _FrameRing:
     """링 버퍼: 세션에서 꺼낸 최근 프레임 capacity장 (스펙 §5.4 — 뒤로 가까운 탐색을 재시작 없이). 번호는 늘 연속 구간
     [start, end)이고 end는 스트림 위치(세션이 다음에 줄 프레임 번호)다 — 세션에서 꺼낸 프레임은 내주든 버리든 전부 여기를 지난다.
 
-    보관본은 내준 배열과 독립: 호출자에게 그대로 내주는 프레임은 복사본을 보관하고(가득 차면 가장 오래된 보관 배열에 덮어써 새
-    할당 없음), 버리기로 꺼낸 프레임(아무도 갖지 않음)은 그 배열을 그대로 둔다. 링에서 내줄 때는 늘 새 복사본 — 보관 배열은 밖으로
-    나가지 않으므로 호출자가 무엇을 고쳐도 보관본은 그대로이고, 보관 수는 capacity를 넘지 않는다. 캡처의 _lock 안에서만 쓴다.
+    보관본은 내준 배열과 독립: 보관하는 것은 읽기 스레드가 이미 만든 보관본(take가 준 쌍의 둘째 — 내줄 배열과 메모리를 나누지 않는
+    복사)이라 여기서는 복사하지 않는다(GUI 스레드의 read에 4K 24.9MB 복사가 없음). 버리기로 꺼낸 프레임도 보관본을 둔다. 밀어내거나
+    비운 보관본은 pool로 돌아가 다음 보관본이 된다(새 할당 없음). 링에서 내줄 때는 늘 새 복사본 — 보관 배열은 밖으로 나가지 않으므로
+    호출자가 무엇을 고쳐도 보관본은 그대로이고, 보관 수는 capacity를 넘지 않는다. 캡처의 _lock 안에서만 쓴다.
     """
 
-    def __init__(self, capacity):
+    def __init__(self, capacity, pool):
         self._capacity = capacity
+        self._pool = pool
         self._frames = collections.deque()
         self.end = 0
 
@@ -494,23 +541,21 @@ class _FrameRing:
         return self.end - len(self._frames)
 
     def reset(self, end):
-        """비우고 스트림 위치를 end로 (재시작·release)."""
+        """비우고(보관본은 pool로) 스트림 위치를 end로 (재시작·release)."""
+        for kept in self._frames:
+            self._pool.put(kept)
         self._frames.clear()
         self.end = end
 
-    def keep(self, frame, delivered):
-        """세션에서 꺼낸 프레임(번호 end)을 보관하고 end를 1 올림. delivered: 호출자에게 그대로 내주는 배열이면 복사본을 보관."""
+    def keep(self, kept):
+        """세션에서 꺼낸 프레임(번호 end)의 보관본을 그대로 두고 end를 1 올림. 가득 찼으면 가장 오래된 보관본을 pool로."""
         self.end += 1
         if self._capacity <= 0:
+            self._pool.put(kept)
             return
-        oldest = self._frames.popleft() if len(self._frames) >= self._capacity else None
-        if delivered:
-            if oldest is None:
-                frame = frame.copy()
-            else:
-                np.copyto(oldest, frame)
-                frame = oldest
-        self._frames.append(frame)
+        if len(self._frames) >= self._capacity:
+            self._pool.put(self._frames.popleft())
+        self._frames.append(kept)
 
     def copy_of(self, index):
         """index번(start ≤ index < end) 보관본의 새 복사본."""
@@ -571,7 +616,9 @@ class FFmpegPipeCapture:
         self._lock = threading.Lock()
         self._session = None  # 지금 세션. None = 닫힘(release)·죽음
         self._pos = 0  # 다음에 내줄 프레임 번호
-        self._ring = _FrameRing(KEEP_BEHIND)  # 최근 꺼낸 프레임 — 링의 end가 스트림 위치
+        # 링 보관본 버퍼 (읽기 스레드가 만들고 링이 돌려줌) — 동시에 쓰이는 수: 링 + 큐 + 읽기 스레드 손 1 + read 도중 1
+        self._pool = _BufferPool((probe.height, probe.width, 3), limit=KEEP_BEHIND + READAHEAD_FRAMES + 2)
+        self._ring = _FrameRing(KEEP_BEHIND, self._pool)  # 최근 꺼낸 프레임 — 링의 end가 스트림 위치
         self._target = None  # set()이 기록한 탐색 목표 (0~count 정수, 다음 read()가 실행 — get(POS_FRAMES)는 이것을 보임)
         try:
             transport = _Transport()  # ffmpeg 출력을 받을 소켓 — Popen 전에
@@ -580,7 +627,7 @@ class FFmpegPipeCapture:
         command = ()
         try:
             command = _pipe_command(path, transport.output)  # ffmpeg가 없으면 ToolNotFoundError — 아래에서 소켓만 닫고 그대로
-            session = _PipeSession(command, transport, probe.height, probe.width)
+            session = _PipeSession(command, transport, self._pool)
         except OSError as exc:
             transport.close()
             raise PipeCaptureError(f"ffmpeg를 실행하지 못했습니다 ({exc}): {path}", command, "") from exc
@@ -658,9 +705,11 @@ class FFmpegPipeCapture:
             self._ring.reset(0)
             finalizer = self._finalizer
         if session is None:
+            self._pool.close()
             return
         failure = session.unsurfaced_failure()
         finalizer()
+        self._pool.close()  # stop 뒤에 — stop이 큐에서 돌려준 보관본까지 버림 (닫힌 캡처가 4K 보관본을 붙들지 않게)
         if failure is not None:
             self._log_unsurfaced("닫기(release)", session, failure)
 
@@ -694,7 +743,7 @@ class FFmpegPipeCapture:
         try:
             transport = _Transport()
             command = _pipe_command(self._path, transport.output, self._seek_seconds(start))
-            new = _PipeSession(command, transport, self._height, self._width, start)
+            new = _PipeSession(command, transport, self._pool, start)
         except Exception:  # §5.5: read 밖으로 내보내지 않음 — 소켓·실행 파일 없음(OSError·ToolNotFoundError)·스레드 시작 실패
             reason = f"{target}번 프레임으로 탐색하려고 ffmpeg를 다시 띄우지 못했습니다:\n{traceback.format_exc()}"
             if transport is not None:
@@ -728,18 +777,19 @@ class FFmpegPipeCapture:
         return float(Fraction(index) / self._rate) + self._start_offset
 
     def _pull(self, session, deliver):
-        """(read 안) 세션에서 다음 프레임 하나를 꺼내(기다리는 동안 _lock 없음) 링에 보관 — deliver면 호출자에게 내주는 것(pos도
-        전진), 아니면 버리기. → (True, 배열) / (False, None): 정상 끝(스트림 위치 == count) · 그사이 release · 도중 실패(여기서 죽음
-        전이와 알림까지)."""
+        """(read 안) 세션에서 다음 프레임 하나를 꺼내(기다리는 동안 _lock 없음) 그 보관본을 링에 — deliver면 호출자에게 내주는
+        것(pos도 전진), 아니면 버리기. 보관본은 읽기 스레드가 이미 만들어 둬서 여기(GUI 스레드)서는 복사하지 않는다.
+        → (True, 배열) / (False, None): 정상 끝(스트림 위치 == count) · 그사이 release · 도중 실패(여기서 죽음 전이와 알림까지)."""
         outcome, value = session.take(READ_TIMEOUT_S)
         with self._lock:
             if self._session is not session:  # 기다리는 사이 다른 스레드가 release함 (일부러 끝냄 — 실패 아님)
                 return False, None
             if outcome == _FRAME and self._ring.end < self._count:
-                self._ring.keep(value, delivered=deliver)
+                frame, kept = value
+                self._ring.keep(kept)
                 if deliver:
                     self._pos += 1
-                return True, value
+                return True, frame
             clean_end = outcome == _END and self._ring.end == self._count  # 정상 끝: cv2처럼 pos 그대로, 열린 채
             if clean_end:
                 leftover = "" if session.eof_noted else session.stderr_text()  # 끝났으니 stderr는 전부 받음
@@ -802,6 +852,7 @@ class FFmpegPipeCapture:
             self._finalizer()  # 지금 세션의 stop: kill — 거두기는 세션의 읽기 스레드
         except Exception:
             _last_resort(f"ffmpeg를 끝내지 못했습니다: {self._path}")
+        self._pool.close()  # 죽은 캡처는 더 읽지 않음 — stop이 큐에서 돌려준 보관본을 붙들지 않게
         if session is not None:
             command, stderr = session.command, session.stderr_text()
         else:
