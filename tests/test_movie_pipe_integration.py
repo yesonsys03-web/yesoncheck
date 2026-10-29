@@ -7,6 +7,7 @@ FFmpegPipeCapture를 만들지 않고 기존 cv2.VideoCapture가 열린다 — F
 """
 
 import dataclasses
+import os
 import re
 
 import cv2
@@ -101,7 +102,7 @@ def test_cv2_path_unchanged_for_h264(h264_clip, mp4v_clip, vfr_h264_clip, no_pip
         cap.release()
         out = capsys.readouterr().out
         lines = [line for line in out.splitlines() if line.startswith("[재생]")]
-        assert len(lines) == 1 and path.rsplit("/", 1)[-1] in lines[0] and "cv2" in lines[0] and "코덱" in lines[0], out
+        assert len(lines) == 1 and os.path.basename(path) in lines[0] and "cv2" in lines[0] and "코덱" in lines[0], out
 
 
 def test_gate_negative_reason_names_the_condition(held_clip, rot_clip, capsys):
