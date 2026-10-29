@@ -25,9 +25,9 @@ import numpy as np
 import pytest
 
 from tests.prores_clips import (
-    HEIGHT, TIMEOUT_PIPE, TIMEOUT_PROBE, WIDTH, ToolTimeout, ffmpeg_exe, frame_number, make_audio_first,
-    make_chroma_clip, make_held, make_neg, make_numbered_clip, make_rot, make_truncated, make_vfr_h264, make_voff,
-    read_all_frames, run_tool,
+    HEIGHT, MAX_COUNT, TIMEOUT_PIPE, TIMEOUT_PROBE, WIDTH, ToolTimeout, ffmpeg_exe, frame_number, ideal_frame,
+    make_audio_first, make_chroma_clip, make_held, make_neg, make_numbered_clip, make_rot, make_truncated,
+    make_vfr_h264, make_voff, read_all_frames, run_tool,
 )
 
 FRAME_BYTES = WIDTH * HEIGHT * 3
@@ -219,7 +219,7 @@ def frame_alignment_problem(cv2_frames, pipe_frames, numbered):
     """프레임 i끼리 같은 그림인지. 같으면 None, 아니면 설명 글.
 
     번호 클립은 frame_number 수열이 같은지(이것이 프레임 정확도 계약의 본체). 유채색 클립은 번호가 없으므로 각 파이프 프레임에
-    가장 가까운(블록 평균 거리) cv2 프레임이 같은 위치인지 본다.
+    가장 가까운(블록 평균 거리) cv2 프레임이 같은 위치인지 본다. 설명 글은 print에도 쓰이므로 ASCII만.
     """
     if numbered:
         cv2_numbers = [frame_number(f) for f in cv2_frames]
@@ -227,8 +227,8 @@ def frame_alignment_problem(cv2_frames, pipe_frames, numbered):
         if pipe_numbers == cv2_numbers:
             return None
         first = next(i for i, (a, b) in enumerate(zip(cv2_numbers, pipe_numbers)) if a != b)
-        return (f"frame_number 수열 불일치: 처음 어긋난 위치 {first}, cv2 {cv2_numbers[first:first + 5]} "
-                f"파이프 {pipe_numbers[first:first + 5]}")
+        return (f"frame_number sequences differ: first mismatch at index {first}, cv2 {cv2_numbers[first:first + 5]} "
+                f"pipe {pipe_numbers[first:first + 5]}")
 
     def signature(frame):
         return frame.astype(np.float32).reshape(HEIGHT // 6, 6, WIDTH // 5, 5, 3).mean(axis=(1, 3)).ravel()
@@ -239,7 +239,7 @@ def frame_alignment_problem(cv2_frames, pipe_frames, numbered):
         nearest = int(np.argmin(((cv2_sigs - signature(frame)) ** 2).sum(axis=1)))
         if nearest != i:
             wrong.append((i, nearest))
-    return f"가장 가까운 cv2 프레임이 다른 위치 (파이프 위치, cv2 위치) {wrong[:5]}" if wrong else None
+    return f"nearest cv2 frame is at a different index (pipe index, cv2 index) {wrong[:5]}" if wrong else None
 
 
 def byte_diff_stats(cv2_frames, pipe_frames):
@@ -265,7 +265,16 @@ def byte_diff_stats(cv2_frames, pipe_frames):
 
 
 def report_pipe_vs_cv2(label, name, cv2_frames, pipe_frames, numbered):
-    """정렬 문제와 바이트 통계를 계산해 단언보다 먼저 print. (정렬 문제 글 또는 None, 통계) 반환."""
+    """정렬 문제와 바이트 통계를 계산해 단언보다 먼저 print. (문제 글 또는 None, 통계 또는 None) 반환.
+
+    장수·모양이 다르면 통계를 낼 수 없으므로 그 사실을 문제 글로 돌려주고 통계는 None — 호출자는 루프가 끝난 뒤에 단언하므로
+    다른 클립의 통계는 항상 출력된다. 문제 글은 print에도 쓰이므로 ASCII만.
+    """
+    if len(pipe_frames) != len(cv2_frames) or (len(cv2_frames) and pipe_frames[0].shape != cv2_frames[0].shape):
+        problem = (f"frame count/shape mismatch: cv2 {len(cv2_frames)} frames {cv2_frames[0].shape if len(cv2_frames) else None}, "
+                   f"pipe {len(pipe_frames)} frames {pipe_frames[0].shape if len(pipe_frames) else None}")
+        print(f"SPIKE {label} {name}: aligned False ({problem})")
+        return problem, None
     problem = frame_alignment_problem(cv2_frames, pipe_frames, numbered)
     stats = byte_diff_stats(cv2_frames, pipe_frames)
     print(f"SPIKE {label} {name}: aligned {problem is None}" + (f" ({problem})" if problem else ""))
@@ -273,6 +282,11 @@ def report_pipe_vs_cv2(label, name, cv2_frames, pipe_frames, numbered):
           f" differing_pixels {stats['pixel_pct']:.4f}% differing_samples {stats['sample_pct']:.4f}%"
           f" pipe_minus_cv2 {stats['histogram']} first_differing_frames {stats['differing'][:8]}")
     return problem, stats
+
+
+def stats_summary(stats):
+    return (f"differing frames {len(stats['differing'])}/{stats['frames']}, max |diff| {stats['max_abs']}, "
+            f"differing pixels {stats['pixel_pct']:.4f}%, diff histogram (pipe-cv2) {stats['histogram']}")
 
 
 def seek_targets(count, seed):
@@ -312,16 +326,26 @@ def test_numbered_clip_variants_roundtrip(prores_422_clip, prores_alpha_clip):
         assert all(frames[i].tobytes() != frames[i + 1].tobytes() for i in range(COUNT - 1))
 
 
-def test_frame_number_survives_level_drift(prores_clip, prores_422_clip):
-    """디코더가 밝기를 몇 레벨 틀어도(CI Mac cv2는 -1~-2) 번호는 그대로 — 단일 레벨 인코딩이면 깨지던 것."""
-    for path in (prores_clip, prores_422_clip):
-        frames = read_all_frames(path)
-        for delta in (-5, -2, 2, 5):
-            shifted = [np.clip(f.astype(np.int16) + delta, 0, 255).astype(np.uint8) for f in frames]
-            assert [frame_number(f) for f in shifted] == list(range(COUNT)), f"{os.path.basename(path)} 밝기 {delta:+d}"
-        for gain in (0.97, 1.03):
-            scaled = [np.clip(f.astype(np.float32) * gain, 0, 255).astype(np.uint8) for f in frames]
-            assert [frame_number(f) for f in scaled] == list(range(COUNT)), f"{os.path.basename(path)} 이득 {gain}"
+def test_frame_number_survives_level_drift():
+    """복호 견고성: 합성 프레임(인코딩 산술로 직접 만든 이상적 디코드)에 밝기 이동·이득을 얹어도 번호가 그대로.
+
+    플랫폼 디코더의 실제 드리프트(CI Mac cv2는 -1~-2)와 분리하려고 디코드한 프레임이 아니라 합성 프레임에 교란을 얹는다 —
+    이 시험은 인코딩 자체의 복호 반올림 경계를 고정한다. 번호 0~199 전부(hi 최대 14*18=252 구간, 번호 182 이상 포함).
+    """
+    ideal = [ideal_frame(i) for i in range(MAX_COUNT)]
+    assert [frame_number(f) for f in ideal] == list(range(MAX_COUNT))
+    assert int(ideal[MAX_COUNT - 1].max()) == 252  # 마지막 번호는 hi = 14 구간(바탕 밝기 252)
+
+    def perturb(frame, delta=0, gain=1.0):
+        return np.clip(np.rint(frame.astype(np.float32) * gain) + delta, 0, 255).astype(np.uint8)
+
+    for delta in (-8, -5, -2, 2, 5, 8):
+        assert [frame_number(perturb(f, delta=delta)) for f in ideal] == list(range(MAX_COUNT)), f"밝기 {delta:+d}"
+    for gain in (0.97, 1.03):
+        assert [frame_number(perturb(f, gain=gain)) for f in ideal] == list(range(MAX_COUNT)), f"이득 {gain}"
+    # 허용 폭(STEP 18 -> 8 레벨) 바로 밖에서는 실제로 깨짐 — 위 통과가 '교란이 없어서'가 아님을 보장
+    for delta in (-10, 10):
+        assert [frame_number(perturb(f, delta=delta)) for f in ideal] != list(range(MAX_COUNT)), f"밝기 {delta:+d}"
 
 
 def test_numbered_clip_max_count_decodes(tmp_path):
@@ -446,16 +470,11 @@ def test_spike_byte_identity(prores_clip, prores_422_clip, prores_alpha_clip, pr
              ("422_chroma", prores_422_chroma_clip, False), ("4444_chroma", prores_4444_chroma_clip, False))
     misaligned, not_identical = [], []
     for name, path, numbered in clips:
-        cv2_frames = read_all_frames(path)
-        pipe_frames = pipe_all(path)
-        assert len(pipe_frames) == len(cv2_frames), f"{name}: 파이프 {len(pipe_frames)}장 cv2 {len(cv2_frames)}장"
-        assert pipe_frames.shape[1:] == cv2_frames[0].shape, f"{name}: 파이프 {pipe_frames.shape} cv2 {cv2_frames[0].shape}"
-        problem, stats = report_pipe_vs_cv2("byte_identity", name, cv2_frames, pipe_frames, numbered)
+        problem, stats = report_pipe_vs_cv2("byte_identity", name, read_all_frames(path), pipe_all(path), numbered)
         if problem:
             misaligned.append((name, problem))
-        if stats["differing"]:
-            not_identical.append((name, f"다른 프레임 {len(stats['differing'])}/{stats['frames']}, 최대 |차이| {stats['max_abs']}, "
-                                        f"다른 화소 {stats['pixel_pct']:.4f}%, 차이 분포 {stats['histogram']}"))
+        if stats and stats["differing"]:
+            not_identical.append((name, stats_summary(stats)))
     assert not misaligned, f"(a) 프레임 정렬 어긋남: {misaligned}"
     assert not not_identical, f"(b) cv2와 파이프 바이트 불일치 (클립, 통계): {not_identical}"
 
@@ -471,15 +490,16 @@ def test_spike_passthrough_frame_count(voff_clip, held_clip):
         with_pass = pipe_all(path, passthrough=True)
         without = pipe_all(path, passthrough=False)
         print(f"SPIKE passthrough_count {name}: cv2 {len(cv2_frames)} passthrough {len(with_pass)} default {len(without)}")
-        assert len(cv2_frames) == COUNT
-        assert len(with_pass) == len(cv2_frames), f"{name}: passthrough 파이프 {len(with_pass)}장 ≠ cv2 {len(cv2_frames)}장"
-        assert len(without) > len(cv2_frames), f"{name}: passthrough 없이도 장수가 같음 — 명령 차이 재확인 필요 ({len(without)}장)"
+        if len(cv2_frames) != COUNT:
+            misaligned.append((name, f"cv2 read {len(cv2_frames)} frames, expected {COUNT}"))
+        if len(without) <= len(cv2_frames):
+            misaligned.append((name, f"without passthrough the frame count is not larger ({len(without)} vs cv2 "
+                                     f"{len(cv2_frames)}) - the command difference is gone"))
         problem, stats = report_pipe_vs_cv2("passthrough_bytes", name, cv2_frames, with_pass, numbered=True)
         if problem:
             misaligned.append((name, problem))
-        if stats["differing"]:
-            not_identical.append((name, f"다른 프레임 {len(stats['differing'])}/{stats['frames']}, 최대 |차이| {stats['max_abs']}, "
-                                        f"다른 화소 {stats['pixel_pct']:.4f}%, 차이 분포 {stats['histogram']}"))
+        if stats and stats["differing"]:
+            not_identical.append((name, stats_summary(stats)))
     assert not misaligned, f"(a) passthrough 파이프와 cv2의 프레임 정렬 어긋남: {misaligned}"
     assert not not_identical, f"(b) passthrough인데 cv2와 바이트가 다름 (클립, 통계): {not_identical}"
 

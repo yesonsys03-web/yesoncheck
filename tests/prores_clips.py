@@ -103,6 +103,22 @@ def _check_count(count):
         raise ValueError(f"count는 1~{MAX_COUNT}: {count}")
 
 
+def number_levels(i):
+    """번호 i의 두 블록 밝기(8비트 눈금): (바탕 hi * STEP, 가운데 상자 lo * STEP)."""
+    if not 0 <= i < MAX_COUNT:
+        raise ValueError(f"번호는 0~{MAX_COUNT - 1}: {i}")
+    hi, lo = divmod(i, RADIX)
+    return hi * STEP, lo * STEP
+
+
+def ideal_frame(i):
+    """번호 i를 레벨 오차 0으로 디코드했을 때의 BGR 프레임 — 복호 견고성 시험이 여기에 교란(이동·이득)을 얹는다."""
+    background, center = number_levels(i)
+    frame = np.full((HEIGHT, WIDTH, 3), background, np.uint8)
+    frame[HEIGHT // 4:HEIGHT * 3 // 4, WIDTH // 4:WIDTH * 3 // 4] = center
+    return frame
+
+
 def _luma_code(level, depth):
     """8비트 눈금 밝기 level(0~255) -> depth비트 제한 범위 Y 코드."""
     return round((16 + 219 * level / 255) * 2 ** (depth - 8))
@@ -119,9 +135,9 @@ def _numbered_raw(count, pix_fmt):
     neutral = 2 ** (depth - 1)
     chunks = []
     for i in range(count):
-        hi, lo = divmod(i, RADIX)
-        luma = np.full((HEIGHT, WIDTH), _luma_code(hi * STEP, depth), dtype)
-        luma[HEIGHT // 4:HEIGHT * 3 // 4, WIDTH // 4:WIDTH * 3 // 4] = _luma_code(lo * STEP, depth)
+        background, center = number_levels(i)
+        luma = np.full((HEIGHT, WIDTH), _luma_code(background, depth), dtype)
+        luma[HEIGHT // 4:HEIGHT * 3 // 4, WIDTH // 4:WIDTH * 3 // 4] = _luma_code(center, depth)
         planes = [luma, np.full((chroma_h, chroma_w), neutral, dtype), np.full((chroma_h, chroma_w), neutral, dtype)]
         if alpha:
             planes.append(np.tile(np.linspace(0, 2 ** depth - 1, WIDTH).astype(dtype), (HEIGHT, 1)))

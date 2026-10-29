@@ -37,7 +37,7 @@ PROPS = (cv2.CAP_PROP_FPS, cv2.CAP_PROP_FRAME_COUNT, POS, cv2.CAP_PROP_FRAME_WID
 
 @pytest.fixture(scope="session")
 def prores_clip(tmp_path_factory):
-    """4444 120장 24fps 번호 클립 (프레임 i = BGR (i, i, i))."""
+    """4444 120장 24fps 번호 클립 (프레임 i는 회색 블록 두 개로 인코딩, frame_number로 복호)."""
     path = str(tmp_path_factory.mktemp("capture_4444") / "numbered_4444.mov")
     make_numbered_clip(path, count=COUNT, fps="24", profile="4", pix_fmt="yuv444p10le")
     return path
