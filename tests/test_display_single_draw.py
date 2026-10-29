@@ -10,6 +10,10 @@ update_frame은 videoWidget.updateFrame으로 그린 직후 refresh_frame_annota
 - 프레임 번호 비교·목록·상태 라벨 갱신도 그대로 (redraw=False에서도).
 - 다른 호출처(update_frame 없이 부르는 곳)는 redraw 기본값(True)이라 여전히 그린다.
 - 드래그 + OCR 검토 창 분기: 앞 그림이 B를 뺀 그림이라(와이프가 켜져 있으면) 거기선 다시 그려야 마지막 그림이 변경 전과 같다.
+
+주석은 전부 사각형(도형)이다: 도형은 cv2.rectangle로 구워져 글꼴·플랫폼과 무관하게 결정적이다. 텍스트 주석은 render_text_patch가 Qt 글꼴로
+글자를 그리는데, Windows CI(offscreen)에서는 글자가 하나도 안 그려져 구운 그림이 원본과 같았다 (CI run 40851809839) — 이 시험의 관심사
+(틱당 그리기 횟수·편집 대상 갱신)와 무관한 글꼴 의존이라 쓰지 않는다.
 """
 
 from types import SimpleNamespace
@@ -19,10 +23,11 @@ import numpy as np
 import pytest
 
 from tests.conftest import write_test_video
-from tests.test_frame_annotations_merge import text_item
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
+from yesoncheck.annotation_burn import burn_annotations_on_frame
 
 POS = cv2.CAP_PROP_POS_FRAMES
+STROKE = 4
 
 
 @pytest.fixture
@@ -70,10 +75,15 @@ def ticking(player):
     player.timer.stop()
 
 
+def rect_item(x1=0.25, y1=0.25, x2=0.75, y2=0.75):
+    return {"type": "rect", "norm_x1": x1, "norm_y1": y1, "norm_x2": x2, "norm_y2": y2,
+            "color": "#ff3333", "stroke_width": STROKE}
+
+
 def add_selected_annotation(player, frame_idx):
-    """frame_idx에 텍스트 주석을 넣고, 목록에서 선택하고, 주석 모드를 켠 뒤 첫 프레임으로 되감는다 (목록에서 고르면 그 주석의
+    """frame_idx에 사각형 주석을 넣고, 목록에서 선택하고, 주석 모드를 켠 뒤 첫 프레임으로 되감는다 (목록에서 고르면 그 주석의
     프레임으로 가므로)."""
-    item = player.annotation_store.add(frame_idx, text_item("hello"))
+    item = player.annotation_store.add(frame_idx, rect_item())
     player.refresh_annotation_ui(redraw=False)
     player.annotationListWidget.setCurrentRow(0)
     player.annotationModeButton.setChecked(True)
@@ -82,6 +92,24 @@ def add_selected_annotation(player, frame_idx):
     player.seek_to_frame(1)
     assert player.get_current_frame_index() == 0
     return item
+
+
+def assert_rect_burned_only_on_its_outline(shown, raw, item):
+    """shown이 raw 위에 item(사각형)의 윤곽만 구운 것인지: 바뀐 픽셀이 있고, 전부 윤곽 띠(사각형 변 ± 선 굵기) 안이며, 네 변의 가운데 점은 바뀌었고,
+    사각형 안쪽·바깥쪽은 원본 그대로. cv2.rectangle의 정수 래스터라 글꼴·플랫폼과 무관하게 결정적."""
+    height, width = raw.shape[:2]
+    x1, y1 = int(item["norm_x1"] * width), int(item["norm_y1"] * height)
+    x2, y2 = int(item["norm_x2"] * width), int(item["norm_y2"] * height)
+    changed = np.any(shown != raw, axis=2)
+
+    assert changed.any(), "주석이 구워지지 않음 (그림이 원본과 같음)"
+    ys, xs = np.nonzero(changed)
+    assert x1 - STROKE <= xs.min() and xs.max() <= x2 + STROKE
+    assert y1 - STROKE <= ys.min() and ys.max() <= y2 + STROKE
+    mid_x, mid_y = (x1 + x2) // 2, (y1 + y2) // 2
+    for y, x in ((y1, mid_x), (y2, mid_x), (mid_y, x1), (mid_y, x2)):
+        assert changed[y, x], f"윤곽의 ({x}, {y})가 바뀌지 않음"
+    assert not changed[y1 + STROKE + 1:y2 - STROKE, x1 + STROKE + 1:x2 - STROKE].any(), "사각형 안쪽이 바뀜"
 
 
 # ---------------------------------------------------------------- 재생 틱: 한 번만 그림
@@ -109,17 +137,25 @@ def test_update_frame_alone_draws_once_when_frame_index_changed(player, draws):
 
 
 def test_tick_draws_annotation_in_the_single_draw(ticking, draws):
-    """주석이 있는 프레임으로 가는 틱: 한 번 그린 그림이 주석을 구운 그림이다."""
-    add_selected_annotation(ticking, 2)
-    ticking.next_frame_playback()  # 프레임 1 (주석 없음)
+    """주석이 있는 프레임으로 가는 틱: 한 번 그린 그림이 주석을 구운 그림이다 (사각형 윤곽만 바뀌고 나머지 픽셀은 원본 그대로)."""
+    item = add_selected_annotation(ticking, 2)
+    draws.clear()
+
+    ticking.next_frame_playback()  # 프레임 1 (주석 없음) — 한 번 그리고 원본 그대로
+    assert ticking.get_current_frame_index() == 1 and not ticking.current_frame_has_annotations()
+    assert len(draws) == 1 and np.array_equal(draws[0][0], ticking.frame_a)
     draws.clear()
 
     ticking.next_frame_playback()  # 프레임 2 (주석 있음)
 
     assert ticking.get_current_frame_index() == 2
+    assert ticking.current_frame_has_annotations()  # (인덱스·주석 저장소 쪽 원인과 굽기 쪽 원인을 가르는 단언)
     assert len(draws) == 1
     shown, _ = draws[0]
-    assert not np.array_equal(shown, ticking.frame_a)  # 구운 그림 (원본이 그대로 가지 않음)
+    raw = ticking.frame_a
+    assert shown is not raw and shown.shape == raw.shape
+    assert_rect_burned_only_on_its_outline(shown, raw, item)
+    assert np.array_equal(shown, burn_annotations_on_frame(raw.copy(), [item]))  # 곧 굽기 함수의 결과 그대로
 
 
 def test_tick_with_wipe_draws_once_with_frame_b(ticking, draws):
@@ -155,7 +191,7 @@ def test_tick_still_updates_edit_target_in_annotation_mode(ticking, draws, edit_
 
 def test_tick_prefers_the_annotation_being_edited_as_edit_target(ticking, edit_targets):
     item = add_selected_annotation(ticking, 3)
-    other = ticking.annotation_store.add(5, text_item("other", x=0.5))
+    other = ticking.annotation_store.add(5, rect_item(0.1, 0.1, 0.3, 0.3))
     ticking._editing_annotation = other
     edit_targets.clear()
 
