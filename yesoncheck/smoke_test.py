@@ -1,6 +1,6 @@
 """실행 시험: YesonCheck_Autocut --smoke-test <작업 폴더>
 
-화면 없이(QT_QPA_PLATFORM=offscreen) 실제 앱 코드로 공유 설정·작품 목록·영상 열기·OCR·내보내기·병합을
+화면 없이(QT_QPA_PLATFORM=offscreen) 실제 앱 코드로 공유 설정·작품 목록·영상 열기(ProRes는 ffmpeg 파이프 포함)·OCR·내보내기·병합을
 실행하고 결과를 <작업 폴더>/smoke_result.json에 쓴 뒤 종료 코드(0 성공, 1 실패)로 알린다.
 작업 폴더의 smoke_config.json(ci/make_test_data.py가 만듦)에 고를 작품·시즌·job과 기대 파일 수가 있다
 (빌드된 앱 시험이면 기대 버전 expect_version도 — 앱이 읽은 build_info.json의 버전과 창 제목을 확인).
@@ -14,6 +14,7 @@ import dataclasses
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -81,6 +82,81 @@ def write_three_shot_clip(path):
             writer.write(frame)
     writer.release()
     return path
+
+
+# ProRes 파이프 열기 시험: 소형 시험 영상(밝기가 프레임마다 다른 단색 12장)과 그 외부 프로세스 최대 시간
+PIPE_CLIP_WIDTH, PIPE_CLIP_HEIGHT, PIPE_CLIP_FRAMES, PIPE_CLIP_FPS = 320, 180, 12, 24
+PIPE_CLIP_TIMEOUT_S = 60
+PIPE_LEVEL_TOLERANCE = 8  # 읽은 프레임 평균 밝기와 기대 밝기의 최대 차 (프레임 사이 간격 20의 절반 아래)
+
+
+def pipe_clip_level(index):
+    """ProRes 시험 영상 index번 프레임의 밝기 (8비트 회색): 10, 30, ... — 프레임 사이 간격 20, 회색이라 색 변환 행렬과 무관."""
+    return 10 + 20 * index
+
+
+def write_prores_clip(path):
+    """번들 ffmpeg로 소형 ProRes mov(prores_ks HQ 4:2:2 10비트, 320x180 24fps 12장)를 path에 만듦 → path.
+
+    tests/ 없이 빌드된 앱 안에서 돌도록 자립형: 밝기가 프레임마다 다른 회색 프레임을 stdin으로 rawvideo로 넣음 (lavfi 같은 선택
+    기능에 기대지 않음). 실패(종료 코드 ≠ 0)·시간 초과는 명령과 stderr 전문을 담은 예외 — 삼키지 않음. Windows는 콘솔 창이 뜨지
+    않게 subprocess_kwargs를 거침."""
+    import numpy as np
+
+    from yesoncheck import external_tools
+
+    raw = b"".join(np.full((PIPE_CLIP_HEIGHT, PIPE_CLIP_WIDTH, 3), pipe_clip_level(i), np.uint8).tobytes()
+                   for i in range(PIPE_CLIP_FRAMES))
+    command = [external_tools.ffmpeg_path(), "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "bgr24",
+               "-s", f"{PIPE_CLIP_WIDTH}x{PIPE_CLIP_HEIGHT}", "-framerate", str(PIPE_CLIP_FPS), "-i", "pipe:0",
+               "-c:v", "prores_ks", "-profile:v", "3", "-pix_fmt", "yuv422p10le", path]
+    try:
+        result = subprocess.run(command, input=raw, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                timeout=PIPE_CLIP_TIMEOUT_S, **external_tools.subprocess_kwargs())
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"ProRes 시험 영상 만들기가 {PIPE_CLIP_TIMEOUT_S}초 안에 끝나지 않았습니다.\n명령: {command}\n"
+                           f"stderr:\n{external_tools.decode_output(exc.stderr)}") from exc
+    if result.returncode != 0:
+        raise RuntimeError(f"ProRes 시험 영상 만들기 실패 (종료 코드 {result.returncode}).\n명령: {command}\n"
+                           f"stderr:\n{external_tools.decode_output(result.stderr)}")
+    return path
+
+
+def prores_pipe_open(workdir):
+    """ProRes 영상을 open_any_capture로 열면 ffmpeg 파이프 캡처(FFmpegPipeCapture)가 오고 읽기·탐색·닫기가 되는지 → 기록할 내용.
+
+    빌드된 앱의 번들(_MEIPASS) ffmpeg와 Windows의 CREATE_NO_WINDOW 파이프가 실제로 실행되는 유일한 자리. 게이트가 cv2를 주거나
+    (파이프로 읽을 수 없는 영상으로 본 것) 프레임이 안 읽히거나 번호가 어긋나면 AssertionError, 열기·만들기 실패는 그 예외 그대로."""
+    import cv2
+
+    from yesoncheck import movie_pipe_source, sequence_source
+
+    mode = movie_pipe_source.movie_source_mode()
+    assert mode == "auto", (f"{movie_pipe_source.SOURCE_MODE_ENV}={mode}: 이 시험은 auto여야 합니다 "
+                            "(게이트가 파이프를 고르는지 보는 시험이라 환경 변수를 비우고 실행)")
+    path = write_prores_clip(os.path.join(workdir, "pipe_prores.mov"))
+    cap = sequence_source.open_any_capture(path)
+    try:
+        assert isinstance(cap, movie_pipe_source.FFmpegPipeCapture), \
+            f"open_any_capture가 {type(cap).__name__}을(를) 줬습니다 (FFmpegPipeCapture 기대 — 게이트가 cv2로 보냈다는 뜻): {path}"
+        assert cap.isOpened(), f"파이프 캡처가 열려 있지 않습니다: {path}"
+        assert cap.get(cv2.CAP_PROP_FRAME_COUNT) == PIPE_CLIP_FRAMES, cap.get(cv2.CAP_PROP_FRAME_COUNT)
+
+        def read_level(index):
+            ok, frame = cap.read()
+            assert ok and frame is not None, f"{index}번 프레임이 읽히지 않습니다: {path}"
+            assert frame.shape == (PIPE_CLIP_HEIGHT, PIPE_CLIP_WIDTH, 3), f"{index}번 프레임 모양 {frame.shape}"
+            level = float(frame.mean())
+            assert abs(level - pipe_clip_level(index)) <= PIPE_LEVEL_TOLERANCE, \
+                f"{index}번 프레임 밝기 {level:.1f} (기대 {pipe_clip_level(index)} ± {PIPE_LEVEL_TOLERANCE}) — 프레임 번호가 어긋남"
+            return round(level, 1)
+
+        levels = [read_level(index) for index in range(3)]
+        assert cap.set(cv2.CAP_PROP_POS_FRAMES, 1), "set(CAP_PROP_POS_FRAMES, 1)이 거부됐습니다"
+        after_set = read_level(1)
+        return {"clip": path, "capture": type(cap).__name__, "levels": levels, "level_after_set_1": after_set}
+    finally:
+        cap.release()
 
 
 def box_answer(config, title):
@@ -569,6 +645,7 @@ def run(workdir):
         check("균형 내보내기", lambda: export("balanced"))
         check("병합", merge)
         check("주석 내보내기", annotation_export)
+    check("ProRes 파이프 열기", lambda: prores_pipe_open(workdir))
     check("OCR", ocr)
     check("애니매틱2 (TransNetV2)", animatic2)
     check("OCR 모델 폴더", ocr_model_dir)

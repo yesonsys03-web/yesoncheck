@@ -25,6 +25,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from yesoncheck.movie_pipe_source import maybe_pipe_capture
 from yesoncheck.sequence_scan import (
     SEQ_EXTENSIONS,
     SEQ_SUFFIX,
@@ -589,7 +590,11 @@ def resolve_frame_path(path):
 
 
 def open_any_capture(path):
-    """시퀀스의 가상 경로(.seq)면 ImageSequenceCapture, 아니면 cv2.VideoCapture."""
+    """시퀀스의 가상 경로(.seq)면 ImageSequenceCapture, ffmpeg 파이프 게이트가 양성인 영상이면 FFmpegPipeCapture
+    (movie_pipe_source.maybe_pipe_capture — 음성이면 None), 아니면 cv2.VideoCapture."""
     if is_sequence_path(path):
         return ImageSequenceCapture(path)
+    cap = maybe_pipe_capture(path)
+    if cap is not None:
+        return cap
     return cv2.VideoCapture(path)
