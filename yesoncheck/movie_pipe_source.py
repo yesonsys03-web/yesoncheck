@@ -23,7 +23,7 @@ TCP 리스너(tcp://127.0.0.1:<포트>)에 ffmpeg가 접속한다 — 접속은 
 
 메모리 (4K bgr24 24.9MB/장): 캡처 하나가 선읽기 큐 6장 ~149MB + 링 8장 ~199MB + 읽기 스레드가 손에 든 1장 ~25MB ≈ ~373MB,
 A/B 와이프의 두 캡처면 ~750MB (호출자가 쥔 프레임 — 플레이어의 frame_a 등 — 은 따로). 링 보관본 복사는 read()가 GUI 스레드에서
-한다 — 읽기 스레드로 옮겨 본 판은 캡처당 +~200MB에 메모리 대역 경합 아래 공급이 무너져 되돌렸다 (Task 3b fix round 3).
+한다 — 읽기 스레드로 옮겨 본 판은 캡처당 약 174MB(쌍 7장분)가 늘고 메모리 대역 경합 아래 공급이 무너져 되돌렸다 (Task 3b fix round 3).
 실패는 캡처 안에서 끝난다 (스펙 §5.5): 생성자만 PipeCaptureError를 올리고, 그 뒤의 read·get·set은 예외를 내지 않는다 — 도중에
 끊기면 죽은 cv2 캡처와 같은 겉모습이 되고, 기록(stderr)에 한 번, 오류 창은 Qt 루프에서 한 번 알린다.
 Qt(PyQt5)와 error_window는 알릴 때만 불러온다 — 판정은 Qt 없이도 쓴다.
@@ -93,7 +93,7 @@ class MovieProbe:
     avg: Fraction | None  # avg_frame_rate (같은 규칙)
     nb_frames: int | None
     duration_ts: int | None  # time_base 단위
-    time_base: Fraction | None
+    time_base: Fraction | None  # (_time_base: 없음·분모 0은 None)
     video_start: float  # 영상 트랙 start_time (초, 음수도 있음)
     format_start: float  # 컨테이너 start_time (초)
     rotation: int  # 디스플레이 행렬의 회전 (도, 반올림)
@@ -103,6 +103,12 @@ class MovieProbe:
 def _optional_int(value):
     """ffprobe 정수 글(nb_frames "120"·duration_ts 61440). 없거나 "N/A"면 None."""
     return None if value in (None, "N/A") else int(value)
+
+
+def _time_base(text):
+    """ffprobe time_base 글("1/12288"). 없거나 비었거나 분모가 0("1/0"·"0/0")이면 None — Fraction이 ZeroDivisionError를 내지 않게
+    (external_tools._frame_rate와 같은 규칙). None이면 게이트 ④가 거짓이라 기존 cv2 경로로 간다."""
+    return None if not text or text.endswith("/0") else Fraction(text)
 
 
 def _rotation(video):
@@ -115,7 +121,6 @@ def probe_movie(path):
     info = _probe(ffprobe_path(), path)
     video = next((s for s in info.get("streams", []) if s.get("codec_type") == "video"
                   and s.get("disposition", {}).get("attached_pic") != 1), {})
-    time_base = video.get("time_base")
     return MovieProbe(
         codec=video.get("codec_name", ""),
         width=int(video.get("width") or 0),
@@ -124,7 +129,7 @@ def probe_movie(path):
         avg=_frame_rate(video.get("avg_frame_rate")),
         nb_frames=_optional_int(video.get("nb_frames")),
         duration_ts=_optional_int(video.get("duration_ts")),
-        time_base=Fraction(time_base) if time_base else None,
+        time_base=_time_base(video.get("time_base")),
         video_start=_start_seconds(video.get("start_time")),
         format_start=_start_seconds(info.get("format", {}).get("start_time")),
         rotation=_rotation(video),
@@ -801,18 +806,23 @@ class FFmpegPipeCapture:
 
     def _die(self, reason, session=None, command=()):
         """죽음 전이 뒤의 뒤처리 (read가 _lock 밖에서 한 번): 세션 정리 → 기록 한 번 → 오류 창은 Qt 루프에서 한 번. session: 실패한
-        세션(그 명령·stderr를 실음). 세션을 띄우지 못한 실패는 session 없이 시도한 command만."""
+        세션(그 명령·stderr를 실음). 세션을 띄우지 못한 실패는 session 없이 시도한 command만. 예외를 내지 않음 (read 안 — §5.5):
+        알릴 글(stderr·호출 스택)을 만들다 실패하면(메모리 부족 등) 원인 한 줄을 _last_resort로."""
         try:
             self._finalizer()  # 지금 세션의 stop: kill — 거두기는 세션의 읽기 스레드
         except Exception:
             _last_resort(f"ffmpeg를 끝내지 못했습니다: {self._path}")
-        if session is not None:
-            command, stderr = session.command, session.stderr_text()
-        else:
-            stderr = ""
-        error = PipeCaptureError(f"{reason}: {self._path}", command, stderr)
-        context = f"{FAILURE_HEADLINE}.\n파일: {self._path}\n원인: {reason}"
-        details = "읽던 곳 (가장 최근 호출이 마지막):\n" + "".join(traceback.format_stack()) + f"{type(error).__name__}: {error}"
+        try:
+            if session is not None:
+                command, stderr = session.command, session.stderr_text()
+            else:
+                stderr = ""
+            error = PipeCaptureError(f"{reason}: {self._path}", command, stderr)
+            context = f"{FAILURE_HEADLINE}.\n파일: {self._path}\n원인: {reason}"
+            details = "읽던 곳 (가장 최근 호출이 마지막):\n" + "".join(traceback.format_stack()) + f"{type(error).__name__}: {error}"
+        except Exception:
+            _last_resort(f"{FAILURE_HEADLINE} — 알릴 글을 만들지 못했습니다: {self._path}\n원인: {reason}")
+            return
         _report_failure(context, details)
 
 
@@ -877,11 +887,16 @@ def _make_relay():
 
 def _last_resort(message):
     """(except 블록 안에서) 알리다 또 실패함: 원래 stderr(sys.__stderr__ — 기록 파일로 바꾸기 전)에 message와 그 예외의 트레이스백.
-    원래 stderr도 없으면(Windows 창 앱) 더 남길 곳이 없다 — 이 실패를 올리면 read()에서 예외가 나가므로(PyQt abort) 올리지 않는다."""
+    원래 stderr가 없거나(Windows 창 앱) 거기 쓰는 것마저 실패하면(닫힌 콘솔·꽉 찬 디스크) 더 남길 곳이 없다 — 이 실패를 올리면
+    read()에서 예외가 나가므로(§5.5, PyQt abort) 올리지 않는다. 이 함수가 알림 사슬의 끝이다."""
     stream = sys.__stderr__
-    if stream is not None:
+    if stream is None:
+        return
+    try:
         stream.write(f"{LOG_PREFIX} 오류를 알리지 못했습니다 — {message}\n{traceback.format_exc()}\n")
         stream.flush()
+    except Exception:  # 남길 곳이 없음 (위 docstring)
+        pass
 
 
 # ---------------------------------------------------------------- 열기 경로 연결 (스펙 §5.2·§5.7)

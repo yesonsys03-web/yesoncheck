@@ -3,7 +3,8 @@
 재획득)였을 때 GUI 스레드가 파이썬을 실행하는 동안 읽기 스레드가 멈춰 4K 재생이 실시간을 밑돌던 원인(15fps)의 회귀 방지.
 
 - 프레임당 recv 1회 남짓 — 세션의 recv_calls 카운터로 구조 단언 (메모리 경합 아래 드문 조기 반환만 여유 — recv_calls_limit).
-- 메인 스레드가 GIL을 쥐고 있어도 읽기 스레드가 프레임을 받아 둠 — 같은 실행 안 GIL 쥔 창/놓은 창 공급 비율 (근거 수치는 그 시험).
+- 메인 스레드가 GIL을 쥐고 있어도 읽기 스레드가 프레임을 받아 둠 — GIL을 쥔 창의 평균 공급이 제품 하한(10fps) 위 (비율은 출력만;
+  근거 수치는 그 시험).
 - 막힌 recv를 다른 스레드의 release가 깨움 — hang 보호(take(READ_TIMEOUT_S) → stop()의 shutdown+close)의 증명.
 - Windows 경로(TCP 리스너: accept·peer 확인·EOF·정리·접속 실패)를 이 플랫폼에서 sys.platform 바꿔치기로 (Windows 실기는 CI).
   peer가 127.0.0.1이 아닌 경우는 한 대의 기계에서 만들 수 없어(리스너가 127.0.0.1에만 묶임) 시험하지 않는다.
@@ -33,7 +34,9 @@ WINDOW_MS = 50  # 한 창의 길이 — 메인 스레드가 GIL을 쥐거나(bus
 SUPPLY_WARMUP_PAIRS = 3  # 기동(ffmpeg 시작·첫 할당) 동안의 창 쌍 — 재지 않음
 SUPPLY_PAIRS = 20  # 재는 창 쌍 (busy 한 번 + idle 한 번)
 UHD_COUNT = 600  # 단색 4K 입력의 길이 — 창마다 큐를 비우며 읽어도 끝에 닿지 않게 (안 읽은 장은 ffmpeg가 만들지 않음)
-SUPPLY_RATIO_MIN = 0.5  # busy 창 공급 / idle 창 공급의 하한 — 근거: test_reader_keeps_up_while_main_thread_holds_gil
+# busy 창(메인이 GIL을 WINDOW_MS 쥠) 평균 공급의 하한(장/창): 0.5장/50ms = GIL을 쥔 동안 10fps — 근거:
+# test_reader_keeps_up_while_main_thread_holds_gil
+BUSY_SUPPLY_MIN = 0.5
 TCP_OUTPUT = re.compile(r"tcp://127\.0\.0\.1:\d+\?send_buffer_size=" + str(movie_pipe_source.SOCKET_BUFFER_BYTES // 2))
 
 
@@ -69,9 +72,9 @@ def in_recv(thread):
 
 def recv_calls_limit(frames):
     """프레임 frames장을 받는 데 허용하는 recv 호출 수: 한 장에 1번 + release가 받던 장을 끊은 1번 + 드물게 커널이 MSG_WAITALL을
-    일찍 돌려주는 몫(2%). 실측: 무부하에서는 늘 1번/장, 메모리 대역을 먹는 프로세스(64MB np.copyto 반복) 4~6개 아래에서는 ~300장에
-    한 번 더(6개 아래 10회 중 6회 +1 — release의 끊김, 4개 아래 pytest 1회 295장에 +2). 조각 읽기로 돌아가는 회귀는 한 장에 수십~
-    수백 번이라 이 여유로도 갈린다."""
+    일찍 돌려주는 몫(2%). 실측: 무부하에서는 늘 1번/장, 메모리 대역을 먹는 프로세스(64MB np.copyto 반복) 6개 아래 10회 중 6회 +1
+    (release가 받던 장을 끊은 몫 — 위의 1번), 일찍 돌려준 것은 관측 1회(4개 아래 pytest 1회, 295장에 +2). 조각 읽기로 돌아가는
+    회귀는 한 장에 수십~수백 번이라 이 여유로도 갈린다."""
     return frames + 1 + frames // 50
 
 
@@ -156,22 +159,24 @@ def supply_in_windows(cap):
 
 def test_reader_keeps_up_while_main_thread_holds_gil(monkeypatch, tmp_path):
     """이 전송 교체의 존재 이유: 메인 스레드가 GIL을 쥐고 있어도(4K 재생 틱의 GUI 파이썬 몫) 읽기 스레드는 프레임을 받는다. 같은
-    실행 안에서 메인이 GIL을 쥔 창(busy)과 놓은 창(idle)의 공급을 견준다(supply_in_windows): busy 공급 / idle 공급 ≥ 0.5, 그리고
-    안전망으로 idle 창에서 한 장이라도 옴. 4K bgr24(24.9MB/장)를 디코드 없는 단색 입력으로 (color_source_command).
+    실행 안에서 메인이 GIL을 쥔 창(busy)과 놓은 창(idle)을 번갈아 공급을 잰다(supply_in_windows). 4K bgr24(24.9MB/장)를 디코드 없는
+    단색 입력으로 (color_source_command). 단언: busy 창 평균 ≥ BUSY_SUPPLY_MIN(0.5장/창 = GIL을 쥔 동안 10fps — 제품 하한), 안전망으로
+    idle 창에서 한 장이라도 옴. busy/idle 비율은 출력만 한다 (단언하지 않음).
 
-    상대 기준인 까닭: 공유 CI 러너(코어 3~4, 이웃 부하 모름)나 메모리 대역 경합에서는 공급 자체가 느려져, "몇 회 안에 큐가 참" 같은
-    절대 기준은 전송과 무관하게 떨어졌다(Intel Mac CI 실측·재검토). 느린 환경은 busy·idle 공급을 같이 줄여 비율은 남는다.
-    겹침이 되면(소켓 + MSG_WAITALL: 한 장을 GIL을 놓은 채 syscall 한 번으로 받고 GIL은 한 번만 다시 잡음) busy 창에서도 idle에
-    가깝게 받는다. 파이프면 한 장이 read 수백 번이고 호출마다 GIL을 다시 잡아야 해서 busy 창에서는 거의 못 받는다.
-    측정 (2026-10-29 Mac x86_64, 이 지표 그대로, 창 50ms·20쌍; 지금 코드와 교체 전 파이프 모듈을 한 프로세스에서 번갈아) — busy/idle 비율:
-    - 지금 코드: 무부하 0.89~1.06 (20회, 중앙 1.00), 메모리 대역을 먹는 프로세스(64MB np.copyto 반복) 4개 0.74~0.90 (10회, 중앙
-      0.80), 6개 0.67~0.85 (20회, 중앙 0.79). idle 공급은 창마다 2.4~3.2장.
-    - 파이프: 무부하 0.05~0.13 (중앙 0.10), 4개 0.08~0.16, 6개 0.11~0.18 — 30회 모두 0.5 아래.
-    - pytest로 이 시험 그대로: 무부하·메모리 대역 프로세스 4개·6개 각 10회 모두 비율 단언 통과.
-    프레임당 여러 번 읽는 전송으로 돌아가는 회귀는 결정적인 test_one_recv_per_frame이 먼저 잡는다. 실제 ProRes 클립은 러너의 디코드
-    속도가 섞여 단색 입력을 쓴다. read()의 대기 시간은 단언하지 않는다 — 링 복사·GIL 주고받기가 섞여 전송을 바로 보지 못한다
-    (1080p ProRes 측정: 파이프 3.6~7.3ms, 소켓 4.4~16.1ms — 거꾸로이기도). 재시도·다수결 같은 완화는 쓰지 않는다 (실패하면 메시지의
-    창별 장 수로 가린다; Windows는 TCP 전송도 함께 본다)."""
+    측정 (2026-10-29, 이 지표 그대로, 창 50ms·20쌍; 지금 코드와 교체 전 파이프 모듈을 한 프로세스에서 번갈아) — busy 창 평균:
+    - 지금 코드: Mac x86_64 무부하 2.50~3.05장 (20회 — 절반은 pytest로 이 시험 그대로), 메모리 대역을 먹는 프로세스(64MB np.copyto
+      반복) 4개 2.35~2.65 (5회), 6개 1.95~2.00 (5회); Apple Silicon CI 2.45 (창별 2~3장 ≈ 50fps). 가장 낮은 값도 하한 0.5의 3.9배.
+    - 교체 전 파이프: 메인이 GIL을 쉬지 않고 쥐면 64KB read마다 switch interval(5ms)을 기다려 공급 0.4fps(= 50ms에 0.02장)지만,
+      이 지표에서는 창 사이(큐 비우기·2ms 쉼 — GIL이 풀린 동안)에 거의 다 받아 둔 장이 busy 창에서 끝나 0.05~0.60장/창 (20회,
+      중앙 0.40 — 5회는 0.5 이상). 그래서 이 하한만으로는 파이프로 돌아가는 회귀를 늘 가르지 못한다: 프레임당 여러 번 읽는
+      전송으로의 회귀는 결정적인 test_one_recv_per_frame(과 아래 recv 단언)이 잡고, 이 시험은 GIL을 쥔 동안의 공급이 제품 하한
+      위인지를 본다.
+    비율(busy/idle)을 기준으로 쓰지 않는 까닭: 러너 속도에 따라 움직인다 — Mac x86_64 0.74~1.06 (위 30회), Apple Silicon CI 0.44
+    (idle 창 4~6장, 대부분 선읽기 큐 한도 6장까지 참 — busy 공급은 충분한데 비율만 낮음). 그 전의 절대 기준 "몇 회 안에 큐가
+    참"은 공유 CI 러너(Intel Mac)에서 전송과 무관하게 떨어졌다.
+    실제 ProRes 클립은 러너의 디코드 속도가 섞여 단색 입력을 쓴다. read()의 대기 시간은 단언하지 않는다 — 링 복사·GIL 주고받기가
+    섞여 전송을 바로 보지 못한다 (1080p ProRes 측정: 파이프 3.6~7.3ms, 소켓 4.4~16.1ms — 거꾸로이기도). 재시도·다수결 같은 완화는
+    쓰지 않는다 (실패하면 메시지의 창별 장 수로 가린다; Windows는 TCP 전송도 함께 본다)."""
     monkeypatch.setattr(movie_pipe_source, "_pipe_command", color_source_command)
     cap = FFmpegPipeCapture(str(tmp_path / "color.mov"), stand_in_probe(UHD_COUNT, UHD_WIDTH, UHD_HEIGHT))
     try:
@@ -180,9 +185,13 @@ def test_reader_keeps_up_while_main_thread_holds_gil(monkeypatch, tmp_path):
     finally:
         cap.release()
     detail = f"busy 창별 {busy}, idle 창별 {idle} (창 {WINDOW_MS}ms)"
+    busy_mean, idle_mean = sum(busy) / len(busy), sum(idle) / len(idle)
+    ratio = f"{busy_mean / idle_mean:.2f}" if idle_mean else "-"
+    print(f"busy 창 평균 {busy_mean:.2f}장, idle 창 평균 {idle_mean:.2f}장, 비율 {ratio} (참고 — 단언하지 않음): {detail}")
     assert sum(idle) > 0, f"메인이 GIL을 놓은 창에서도 한 장도 오지 않았습니다 — 공급 자체가 없음: {detail}"
-    ratio = sum(busy) / sum(idle)
-    assert ratio >= SUPPLY_RATIO_MIN, f"GIL을 쥔 창의 공급이 놓은 창의 {ratio:.2f}배 < {SUPPLY_RATIO_MIN}: {detail}"
+    assert busy_mean >= BUSY_SUPPLY_MIN, (
+        f"메인이 GIL을 쥔 창의 공급이 평균 {busy_mean:.2f}장 < {BUSY_SUPPLY_MIN}장 (GIL을 쥔 동안 "
+        f"{busy_mean * 1000 / WINDOW_MS:.1f}fps < {BUSY_SUPPLY_MIN * 1000 / WINDOW_MS:g}fps): {detail}")
     # 4K 한 장(24.9MB)도 MSG_WAITALL로 recv 한 번 남짓 (여유는 recv_calls_limit)
     session.reader.join(WAIT_S)
     assert not session.reader.is_alive()

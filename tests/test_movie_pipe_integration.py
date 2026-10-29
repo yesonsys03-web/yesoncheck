@@ -24,6 +24,8 @@ from yesoncheck.sequence_source import open_any_capture
 
 ENV = "YESONCHECK_MOVIE_SOURCE"
 CREATE_MSG = "게이트가 음성인 파일에서 FFmpegPipeCapture가 만들어졌습니다"
+# 파이프 열기 실패 창의 끝 줄 — 킬 스위치 안내 (VideoPlayer._open_movie_capture의 삽입 분기)
+KILL_SWITCH_HINT = "예전 방식(OpenCV)으로 열려면 환경 변수 YESONCHECK_MOVIE_SOURCE=cv2 를 설정하고 앱을 다시 켜세요."
 
 
 # ---------------------------------------------------------------- 클립 (session: 인코딩 반복 방지)
@@ -254,7 +256,8 @@ def test_pipe_construction_error_propagates(prores_clip, monkeypatch):
 # ---------------------------------------------------------------- VideoPlayer._open_movie_capture
 
 def test_open_movie_capture_pipe_error_dialog(player, dialogs, mp4v_clip, vfr_h264_clip, monkeypatch, capsys):
-    """파이프를 열지 못하면(여기서는 pipe 모드의 비 CFR 파일) 오류 창 한 번(스택 트레이스째)·열기 실패 — 보던 영상은 그대로."""
+    """파이프를 열지 못하면(여기서는 pipe 모드의 비 CFR 파일) 오류 창 한 번(스택 트레이스째, 끝 줄은 킬 스위치 안내)·열기 실패 —
+    보던 영상은 그대로."""
     assert player.open_file("A", mp4v_clip) is True
     before = (player.cap_a, player.filename_a)
     assert isinstance(before[0], cv2.VideoCapture) and before[0].isOpened()
@@ -265,12 +268,14 @@ def test_open_movie_capture_pipe_error_dialog(player, dialogs, mp4v_clip, vfr_h2
     assert len(dialogs.criticals) == 1 and dialogs.messages[-1][1] == "영상을 열 수 없음"
     text = dialogs.criticals[0]
     assert vfr_h264_clip in text and "PipeCaptureError" in text and "Traceback" in text
+    assert text.endswith("\n" + KILL_SWITCH_HINT)
     assert "Traceback" in capsys.readouterr().err  # 로그에도 트레이스째
     assert (player.cap_a, player.filename_a) == before and before[0].isOpened()  # 보던 영상 그대로
 
 
 def test_open_movie_capture_construction_failure_dialog(player, dialogs, mp4v_clip, prores_clip, monkeypatch):
-    """게이트는 양성인데 ffmpeg가 못 열어 생성자가 PipeCaptureError를 올리면: 창에 ffmpeg stderr 전문이 있고, 보던 영상은 그대로."""
+    """게이트는 양성인데 ffmpeg가 못 열어 생성자가 PipeCaptureError를 올리면: 창에 ffmpeg stderr 전문이 있고 끝 줄은 킬 스위치 안내,
+    보던 영상은 그대로."""
     class Failing:
         def __init__(self, path, probe):
             raise PipeCaptureError(f"영상을 ffmpeg 파이프로 열지 못했습니다 (시험): {path}", ["ffmpeg", "-i", path], "Invalid data found")
@@ -283,6 +288,7 @@ def test_open_movie_capture_construction_failure_dialog(player, dialogs, mp4v_cl
 
     assert len(dialogs.criticals) == 1
     assert "Invalid data found" in dialogs.criticals[0] and prores_clip in dialogs.criticals[0]
+    assert dialogs.criticals[0].endswith("\n" + KILL_SWITCH_HINT)
     assert (player.cap_a, player.filename_a) == before and before[0].isOpened()
 
 

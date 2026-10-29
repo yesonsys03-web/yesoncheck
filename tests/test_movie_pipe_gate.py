@@ -1,4 +1,5 @@
-"""ProRes 파이프 게이트 (yesoncheck/movie_pipe_source.py 1부): 실제 ffprobe로 클립 공장 클립을 읽어 판정한다 (mock 없음).
+"""ProRes 파이프 게이트 (yesoncheck/movie_pipe_source.py 1부): 실제 ffprobe로 클립 공장 클립을 읽어 판정한다 (mock 없음 — 클립으로
+만들 수 없는 ffprobe 값 하나(time_base "1/0")만 probe JSON 대역).
 
 게이트 ①~⑥은 스펙 §5.2. 실제 클립은 여러 조건이 한꺼번에 걸리기도 해서(held는 avg≠r이기도 함) 사유는 probe 필드로 확인하고,
 조건 하나씩의 경계는 좋은 probe의 필드 하나만 바꾼 사본(dataclasses.replace)으로 본다.
@@ -14,7 +15,8 @@ import pytest
 from tests.prores_clips import (
     make_audio_first, make_held, make_neg, make_numbered_clip, make_rot, make_vfr_h264, make_voff, run_ffmpeg,
 )
-from yesoncheck.movie_pipe_source import movie_source_mode, pipe_eligible, probe_movie
+from yesoncheck import movie_pipe_source
+from yesoncheck.movie_pipe_source import ineligible_reason, movie_source_mode, pipe_eligible, probe_movie
 
 COUNT = 120
 
@@ -207,6 +209,20 @@ def test_probe_audio_only_file_is_ineligible_not_an_error(audio_only_file):
     assert (probe.codec, probe.width, probe.height) == ("", 0, 0)
     assert (probe.r, probe.avg, probe.nb_frames, probe.duration_ts, probe.time_base) == (None,) * 5
     assert not pipe_eligible(probe)
+
+
+def test_probe_zero_denominator_time_base_is_ineligible_not_an_error(monkeypatch):
+    """ffprobe가 time_base를 "1/0"으로 주는 영상(H.264 등 기존 파일): probe가 ZeroDivisionError로 열기를 막지 않고 time_base None —
+    게이트 ④가 거짓이라 기존 cv2 경로로 간다 (코덱을 면제해도 ④에서 거짓)."""
+    video = {"codec_type": "video", "codec_name": "h264", "width": 320, "height": 180, "r_frame_rate": "24/1",
+             "avg_frame_rate": "24/1", "nb_frames": "48", "duration_ts": 24576, "time_base": "1/0",
+             "start_time": "0.000000"}
+    info = {"streams": [video], "format": {"start_time": "0.000000"}}
+    monkeypatch.setattr(movie_pipe_source, "_probe", lambda ffprobe, path: info)
+    probe = probe_movie("zero_time_base.mp4")
+    assert (probe.codec, probe.nb_frames, probe.duration_ts, probe.time_base) == ("h264", 48, 24576, None)
+    assert not pipe_eligible(probe)
+    assert ineligible_reason(probe, check_codec=False).startswith("④")
 
 
 def test_probe_runtime_error_propagates(tmp_path):

@@ -394,7 +394,8 @@ class PlayerPlaybackMixin:
             print(f"ffmpeg 파이프로 영상을 열지 못함: {file_path}")
             traceback.print_exc()
             QMessageBox.critical(self, "영상을 열 수 없음",
-                                 f"영상을 ffmpeg 파이프로 열지 못했습니다: {file_path}\n이유: {type(e).__name__}: {e}\n\n{details}")
+                                 f"영상을 ffmpeg 파이프로 열지 못했습니다: {file_path}\n이유: {type(e).__name__}: {e}\n\n{details}\n"
+                                 "예전 방식(OpenCV)으로 열려면 환경 변수 YESONCHECK_MOVIE_SOURCE=cv2 를 설정하고 앱을 다시 켜세요.")
             return None
         if cap is not None:
             return cap

@@ -444,6 +444,54 @@ def test_release_logs_unsurfaced_failure(prores_clip, windows, qapp, capsys):
     assert windows == []
 
 
+class BrokenStream:
+    """쓰기·비우기가 늘 OSError인 stderr 대역 (닫힌 콘솔·꽉 찬 디스크의 기록 파일). writes: 쓰려고 한 횟수."""
+
+    def __init__(self):
+        self.writes = 0
+
+    def write(self, text):
+        self.writes += 1
+        raise OSError(28, "No space left on device")
+
+    def flush(self):
+        raise OSError(28, "No space left on device")
+
+
+@pytest.mark.parametrize("breakage", ["streams", "streams_and_text"])
+def test_failure_notice_that_fails_does_not_raise_from_read(tmp_path, monkeypatch, breakage, qapp, windows):
+    """§5.5의 마지막 구멍: 도중 실패를 알리는 길마저 실패해도 read()는 예외 없이 (False, None) — 죽은 cv2 캡처 겉모습.
+    streams: 기록(sys.stderr)도 원래 stderr(sys.__stderr__ — _last_resort가 쓰는 곳)도 쓰기에 실패. streams_and_text: 거기에 더해
+    알릴 글(읽던 곳의 호출 스택)을 만들다 실패 (_die → _last_resort). 대역 ffmpeg는 3장이라던 영상에서 1장만 주고 끝남."""
+    width, height, count = 4, 2, 3
+    script = f"out = open_output(sys.argv[1]); out.write(bytes({width * height * 3})); out.flush()"
+    monkeypatch.setattr(movie_pipe_source, "_pipe_command", stand_in_command(script))
+    probe = MovieProbe(codec="prores", width=width, height=height, r=Fraction(24), avg=Fraction(24), nb_frames=count,
+                       duration_ts=count * 512, time_base=Fraction(1, 12288), video_start=0.0, format_start=0.0,
+                       rotation=0, sar_ok=True)
+    cap = FFmpegPipeCapture(str(tmp_path / "stand_in.mov"), probe)
+    session = cap._session
+    try:
+        assert cap.read()[0]
+        log, original = BrokenStream(), BrokenStream()
+        with monkeypatch.context() as broken:
+            broken.setattr(sys, "stderr", log)
+            broken.setattr(sys, "__stderr__", original)
+            if breakage == "streams_and_text":
+                def no_memory():
+                    raise MemoryError("시험: 호출 스택 글을 만들 메모리 없음")
+
+                broken.setattr(movie_pipe_source.traceback, "format_stack", no_memory)
+            result = cap.read()
+        assert result == (False, None)
+        assert original.writes >= 1  # 알림 사슬의 끝(_last_resort)까지 갔다가 실패한 쓰기를 삼킴
+        assert log.writes == (1 if breakage == "streams" else 0)  # streams_and_text는 기록에 닿기 전에 막힘
+        assert_dead(cap)
+    finally:
+        cap.release()
+    assert_session_gone(session)
+
+
 # ---------------------------------------------------------------- 수명 (§5.6)
 
 def test_release_and_gc_kill_process(prores_clip):
