@@ -26,6 +26,7 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck.frame_utils import FrameCalculator
+from yesoncheck.movie_pipe_source import PipeCaptureError, maybe_pipe_capture
 from yesoncheck.sequence_scan import is_sequence_path
 from yesoncheck.sequence_source import ImageSequenceCapture, open_any_capture, resolve_frame_path
 from yesoncheck.workers import FFmpegWorker
@@ -385,6 +386,19 @@ class PlayerPlaybackMixin:
             QMessageBox.critical(self, "영상을 열 수 없음",
                                  f"영상을 확인하지 못했습니다 (NAS 연결 끊김·권한 등): {file_path}\n이유: {reason}")
             return None
+        # ffmpeg 파이프 게이트(ProRes류만 양성): 양성이면 파이프 캡처로 반환, 음성이면 None이라 아래 기존 줄이 그대로 돎
+        try:
+            cap = maybe_pipe_capture(file_path)
+        except PipeCaptureError as e:
+            details = traceback.format_exc()
+            print(f"ffmpeg 파이프로 영상을 열지 못함: {file_path}")
+            traceback.print_exc()
+            QMessageBox.critical(self, "영상을 열 수 없음",
+                                 f"영상을 ffmpeg 파이프로 열지 못했습니다: {file_path}\n이유: {type(e).__name__}: {e}\n\n{details}\n"
+                                 "예전 방식(OpenCV)으로 열려면 환경 변수 YESONCHECK_MOVIE_SOURCE=cv2 를 설정하고 앱을 다시 켜세요.")
+            return None
+        if cap is not None:
+            return cap
         cap = cv2.VideoCapture(file_path)
         if not cap.isOpened():
             print(f"Failed to open video file: {file_path}")
@@ -535,7 +549,9 @@ class PlayerPlaybackMixin:
             frame_b_to_show = None  # OCR 검토 창이 열려있을 때는 B 프레임도 스킵
             self.videoWidget.updateFrame(frame_a_to_show, frame_b_to_show)
             if hasattr(self, 'refresh_frame_annotations_display'):
-                self.refresh_frame_annotations_display()
+                # 위에서 같은 입력으로 이미 그림. 단 와이프가 켜져 있으면 위 그림은 B를 뺐고 다시 그리는 그림은 B를 실으므로 그때만 다시 그림
+                self.refresh_frame_annotations_display(
+                    redraw=bool(self.videoWidget.wipe_enabled_x or self.videoWidget.wipe_enabled_y))
             return  # OCR 검토 창 업데이트 스킵
         
         # OCR 검토 창이 열려있고 재생 중일 때도 업데이트 빈도를 줄임
@@ -586,7 +602,8 @@ class PlayerPlaybackMixin:
         
         self.videoWidget.updateFrame(frame_a_to_show, frame_b_to_show)
         if hasattr(self, 'refresh_frame_annotations_display'):
-            self.refresh_frame_annotations_display()
+            # 바로 위에서 같은 입력(frame_a·frame_b)으로 이미 그렸으므로 다시 그리지 않음 (목록·상태·편집 대상 갱신은 그대로)
+            self.refresh_frame_annotations_display(redraw=False)
         self.update_position_info()
 
     def overlay_text(self, frame):
