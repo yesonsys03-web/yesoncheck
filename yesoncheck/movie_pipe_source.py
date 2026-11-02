@@ -56,6 +56,8 @@ from yesoncheck.external_tools import (
 PIPE_CODECS = ("prores",)
 SOURCE_MODE_ENV = "YESONCHECK_MOVIE_SOURCE"
 SOURCE_MODES = ("auto", "pipe", "cv2")  # 환경 변수가 받는 값 (없거나 비어 있으면 "auto")
+FRAME_CACHE_ENV = "YESONCHECK_FRAME_CACHE"
+FRAME_CACHE_MODES = ("auto", "ring")  # 환경 변수가 받는 값 (없거나 비어 있으면 "auto") — ring은 전체 보관을 끄고 링만
 UNSPECIFIED_SAR = (None, "1:1", "0:1")  # ffprobe의 sample_aspect_ratio: 없음·정사각형·미지정(0:1)
 
 READAHEAD_FRAMES = 6  # 캡처마다 미리 받아 두는 프레임 수 (4K bgr24 24.9MB/장 → ~149MB; 캡처당 총량은 모듈 docstring) — 스펙 §5.3
@@ -169,6 +171,15 @@ def movie_source_mode():
     mode = given.lower() or "auto"
     if mode not in SOURCE_MODES:
         raise ValueError(f"{SOURCE_MODE_ENV}는 {', '.join(SOURCE_MODES)} 중 하나여야 합니다 (비우면 auto): {given!r}")
+    return mode
+
+
+def frame_cache_mode():
+    """환경 변수 YESONCHECK_FRAME_CACHE: 없거나 비면 "auto", "auto"·"ring"(대소문자 무시)은 소문자로, 그 밖은 ValueError."""
+    given = os.environ.get(FRAME_CACHE_ENV, "")
+    mode = given.lower() or "auto"
+    if mode not in FRAME_CACHE_MODES:
+        raise ValueError(f"{FRAME_CACHE_ENV}는 {', '.join(FRAME_CACHE_MODES)} 중 하나여야 합니다 (비우면 auto): {given!r}")
     return mode
 
 

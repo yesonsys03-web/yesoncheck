@@ -325,6 +325,7 @@ def launch(argv=None):
     load_mount_map()
     # 영상 소스 토글(YESONCHECK_MOVIE_SOURCE)의 나쁜 값은 시작 때 ValueError로 크게 — 첫 영상을 열 때 뒤늦게 알게 되지 않게 (스플래시 전에)
     movie_pipe_source.movie_source_mode()
+    movie_pipe_source.frame_cache_mode()  # 프레임 캐시 토글(YESONCHECK_FRAME_CACHE)도 같은 이유로 시작 때 검증
 
     # 스플래시 스크린 생성 (즉시 표시)
     pixmap = QPixmap(500, 300)

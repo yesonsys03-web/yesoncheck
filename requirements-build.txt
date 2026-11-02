@@ -47,3 +47,5 @@ tensorflow==2.15.1
 tensorflow-io-gcs-filesystem==0.34.0; sys_platform == "darwin"
 # 49 이상은 x86_64 macOS 휠이 없음
 cryptography==48.0.1
+# 프레임 캐시 예산 — 물리·사용 가능 메모리. lock에는 이미 간접 의존으로 같은 버전이 있어 lock 재생성 불필요
+psutil==7.2.2
