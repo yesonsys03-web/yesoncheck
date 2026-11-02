@@ -427,3 +427,78 @@ def test_paint_stream_prepares_once_per_context_and_drops_old_context_signal(qap
     second.aboutToBeDestroyed.emit()
     assert item._context is None and item._texture is None
     assert item.failure_count == 0 and shown == []
+
+
+# ---------------------------------------------------------------- CustomVideoWidget 연결
+
+from PyQt5.QtWidgets import QGraphicsPixmapItem, QOpenGLWidget
+from yesoncheck.video_widget import CustomVideoWidget
+
+
+def test_offscreen_default_keeps_plain_pixmap_item(qapp):
+    widget = CustomVideoWidget()
+    assert type(widget.video_item) is QGraphicsPixmapItem and widget.video_item_stream is False
+
+def test_forced_gl_viewport_installs_stream_item_below_wipe_lines(qapp, monkeypatch, capsys):
+    monkeypatch.setenv("YESONCHECK_VIEWPORT", "gl")
+    widget = CustomVideoWidget()
+    assert isinstance(widget.viewport(), QOpenGLWidget)
+    assert isinstance(widget.video_item, VideoFrameItem) and widget.video_item_stream is True
+    assert widget.scene.items()[-1] is widget.video_item  # 맨 아래(와이프 선·ROI보다 먼저 넣음)
+    assert "[표시] GL 텍스처 스트리밍(VideoFrameItem)" in capsys.readouterr().out
+
+def test_pixmap_toggle_keeps_pixmap_item_on_gl_viewport(qapp, monkeypatch, capsys):
+    monkeypatch.setenv("YESONCHECK_VIEWPORT", "gl")
+    monkeypatch.setenv(VIDEO_ITEM_ENV, "pixmap")
+    widget = CustomVideoWidget()
+    assert type(widget.video_item) is QGraphicsPixmapItem and widget.video_item_stream is False
+    assert "[표시] QPixmap 경로" in capsys.readouterr().out
+
+def test_gl_toggle_on_raster_viewport_is_an_error(qapp, monkeypatch):
+    monkeypatch.setenv(VIDEO_ITEM_ENV, "gl")
+    with pytest.raises(ValueError, match="GL 뷰포트"):
+        CustomVideoWidget()
+
+def test_launch_rejects_bad_video_item_mode(qapp, monkeypatch):
+    """test_movie_pipe_integration::test_launch_rejects_a_bad_mode_before_the_window과 같은 모양 — 창을 만들기 전에 ValueError."""
+    import re
+    from yesoncheck import app as app_module
+
+    def no_window(**kwargs):
+        raise AssertionError("나쁜 모드인데 창을 만들었습니다")
+
+    monkeypatch.setattr(app_module, "VideoPlayer", no_window)
+    monkeypatch.setenv(VIDEO_ITEM_ENV, "fast")
+    with pytest.raises(ValueError, match=re.escape(repr("fast"))):
+        app_module.launch(["yesoncheck"])
+
+def test_update_frame_streams_composed_wipe(qapp, monkeypatch):
+    monkeypatch.setenv("YESONCHECK_VIEWPORT", "gl")
+    widget = CustomVideoWidget()
+    a = np.full((4, 6, 3), 10, np.uint8)
+    b = np.full((4, 6, 3), 200, np.uint8)
+    widget.wipe_enabled_x, widget.wipe_position_x = True, 0.5
+    widget.updateFrame(a, b)
+    shown = widget.video_item.frame()
+    assert shown.shape == (4, 6, 3) and shown[0, 2, 0] == 10 and shown[0, 3, 0] == 200  # numpy 합성 그대로
+    widget.wipe_enabled_x = False  # 와이프를 끔 (켜 둔 채 B가 없으면 기존 코드가 B 쪽을 검정으로 합성 — raster와 같음)
+    widget.updateFrame(a, None)
+    assert widget.video_item.frame() is a  # 와이프 없으면 복사 없이 그대로
+
+def test_update_frame_follows_resolution_change(qapp, monkeypatch):
+    monkeypatch.setenv("YESONCHECK_VIEWPORT", "gl")
+    widget = CustomVideoWidget()
+    widget.updateFrame(np.zeros((9, 16, 3), np.uint8), None)
+    assert widget.scene.sceneRect() == QRectF(0, 0, 16, 9)
+    widget.updateFrame(np.zeros((18, 32, 3), np.uint8), None)
+    assert widget.scene.sceneRect() == QRectF(0, 0, 32, 18) and widget.video_item.boundingRect() == QRectF(0, 0, 32, 18)
+    widget.updateFrame(None, None)
+    assert widget.video_item.pixmap().isNull() and widget.video_item.frame() is None
+
+def test_raster_update_frame_still_sets_a_pixmap(qapp, monkeypatch):
+    widget = CustomVideoWidget()
+    calls = []
+    real = widget.video_item.setPixmap
+    monkeypatch.setattr(widget.video_item, "setPixmap", lambda pm: (calls.append(pm), real(pm)))
+    widget.updateFrame(np.full((4, 6, 3), 3, np.uint8), None)
+    assert len(calls) == 1 and calls[0].width() == 6

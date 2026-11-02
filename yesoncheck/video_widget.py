@@ -36,6 +36,7 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck import paths
+from yesoncheck.gl_video_item import LOG_PREFIX, VIDEO_ITEM_ENV, VideoFrameItem, use_stream_item, video_item_mode
 
 VIEWPORT_ENV = "YESONCHECK_VIEWPORT"
 VIEWPORT_MODES = ("gl", "raster")
@@ -88,7 +89,29 @@ class CustomVideoWidget(QGraphicsView):
         super().__init__(parent)
         self.scene = QGraphicsScene(self)
         self.setScene(self.scene)
-        self.video_item = self.scene.addPixmap(QPixmap())
+
+        # 뷰포트 종류(GL 여부)를 영상 아이템보다 먼저 정함: GL 뷰포트면 아이템이 VideoFrameItem(stream — 프레임을 GL 텍스처로
+        # 바로 올림)이라 만들기 전에 알아야 하고, 아이템은 와이프 선·ROI보다 먼저 장면에 넣어야 쌓임 맨 아래(Z 순서)에 남음.
+        # 아이템 선택(use_stream_item)이 토글을 검사하므로 YESONCHECK_VIDEO_ITEM=gl을 raster 뷰포트에 주면 여기서 ValueError.
+        # setViewport 등 GL 적용 자체는 자리 조건(아래 주석) 때문에 그 자리에 그대로 둠.
+        self.viewport_fallback_reason = None  # GL을 쓰려다 못 쓴 사유 — show_viewport_fallback(스플래시 뒤)이 창으로 알림
+        mode = viewport_mode(QApplication.platformName(), os.environ)
+        forced = viewport_forced(os.environ)
+        gl_ok = mode == "gl" and (forced or gl_context_available())
+        if mode == "gl" and not gl_ok:
+            # 조용한 폴백 금지: 기록에 바로 남기고, 창은 여기서 띄우지 않음 — 위젯 생성 중 모달은
+            # splash.finish의 processEvents 안에서 열려 시작 순서를 멈춤(업데이트 '잘 켜짐' 표시까지 늦어짐 — 검토 실측).
+            # 사유를 남겨 두면 app.launch가 스플래시를 닫은 뒤 show_viewport_fallback으로 알림.
+            print("[뷰포트] OpenGL 컨텍스트 생성 실패 — raster로 계속 (풀스크린 재생이 느릴 수 있음)")
+            self.viewport_fallback_reason = (
+                "OpenGL을 쓸 수 없어 기본 화면 그리기로 계속합니다 — 풀스크린 재생이 느릴 수 있습니다."
+            )
+        self.video_item_stream = use_stream_item(gl_ok, video_item_mode(os.environ))
+        if self.video_item_stream:
+            self.video_item = VideoFrameItem(stream=True)
+            self.scene.addItem(self.video_item)
+        else:
+            self.video_item = self.scene.addPixmap(QPixmap())
 
         self.wipe_position_x = 0.5
         self.wipe_position_y = 0.5
@@ -123,18 +146,8 @@ class CustomVideoWidget(QGraphicsView):
         # Mac(cocoa) 풀스크린 재생: 라스터 페인트의 CPU 확대 블릿이 병목이라 GL 뷰포트로 확대를 GPU에 맡김.
         # 자리 조건 둘: setAcceptDrops(True) 뒤(새 뷰포트가 드롭 수락을 물려받음), 아래 라벨들을 만들기 전 —
         # setViewport()는 새 뷰포트를 자식 맨 끝(쌓임 맨 위)에 두므로 라벨을 그 뒤에 만들어야 GL 위에 보임
-        # (아래로 깔린 형제는 hole punch로 지워짐 — 쌓임 순서는 test_gl_viewport가 지킴).
-        self.viewport_fallback_reason = None  # GL을 쓰려다 못 쓴 사유 — show_viewport_fallback(스플래시 뒤)이 창으로 알림
-        mode = viewport_mode(QApplication.platformName(), os.environ)
-        if mode == "gl" and not viewport_forced(os.environ) and not gl_context_available():
-            # 조용한 폴백 금지: 기록에 바로 남기고, 창은 여기서 띄우지 않음 — 위젯 생성 중 모달은
-            # splash.finish의 processEvents 안에서 열려 시작 순서를 멈춤(업데이트 '잘 켜짐' 표시까지 늦어짐 — 검토 실측).
-            # 사유를 남겨 두면 app.launch가 스플래시를 닫은 뒤 show_viewport_fallback으로 알림.
-            print("[뷰포트] OpenGL 컨텍스트 생성 실패 — raster로 계속 (풀스크린 재생이 느릴 수 있음)")
-            self.viewport_fallback_reason = (
-                "OpenGL을 쓸 수 없어 기본 화면 그리기로 계속합니다 — 풀스크린 재생이 느릴 수 있습니다."
-            )
-        elif mode == "gl":
+        # (아래로 깔린 형제는 hole punch로 지워짐 — 쌓임 순서는 test_gl_viewport가 지킴). GL을 쓸지(gl_ok)는 맨 위에서 정함.
+        if gl_ok:
             gl_viewport = QOpenGLWidget()
             msaa = QSurfaceFormat(gl_viewport.format())
             msaa.setSamples(4)  # GL2 페인트 엔진의 안티앨리어싱은 MSAA뿐 — 와이프 선·ROI·주석 미리보기 계단 방지
@@ -147,6 +160,10 @@ class CustomVideoWidget(QGraphicsView):
             self.viewport().setAttribute(Qt.WA_OpaquePaintEvent, True)
             self.apply_theme_background("dark")  # 안전 기본값 — 창을 만드는 쪽과 테마 전환이 다시 맞춰 줌
             print("[뷰포트] GL(QOpenGLWidget) 사용 — 풀스크린 재생 확대를 GPU로")
+            if self.video_item_stream:
+                print(f"{LOG_PREFIX} GL 텍스처 스트리밍(VideoFrameItem)")
+            else:
+                print(f"{LOG_PREFIX} QPixmap 경로(토글 {VIDEO_ITEM_ENV}=pixmap)")
 
         self.zoom_label = QLabel(self)
         self.zoom_label.setAlignment(Qt.AlignCenter)
@@ -493,8 +510,11 @@ class CustomVideoWidget(QGraphicsView):
         else:
             q_img = QImage(frame_a.data, width, height, bytes_per_line, QImage.Format_RGB888)
 
-        pixmap = QPixmap.fromImage(q_img)
-        self.video_item.setPixmap(pixmap)
+        if self.video_item_stream:  # GL 텍스처 스트리밍: QPixmap 변환 없이 배열 그대로 (와이프면 위에서 합성한 result)
+            self.video_item.set_frame(result if self.wipe_enabled_x or self.wipe_enabled_y else frame_a)
+        else:
+            pixmap = QPixmap.fromImage(q_img)
+            self.video_item.setPixmap(pixmap)
 
         scene_rect_changed = self.scene.sceneRect() != self.video_item.boundingRect()
         if self.initial_fit or scene_rect_changed:
