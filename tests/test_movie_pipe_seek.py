@@ -316,13 +316,13 @@ def test_release_frees_ring(prores_clip):
                 break
             delivered.append(frame)
         assert len(delivered) == COUNT
-        kept = list(cap._ring._frames)
-        assert len(kept) == KEEP_BEHIND
-        assert [frame_number(f) for f in kept] == list(range(COUNT - KEEP_BEHIND, COUNT))
-        assert not any(np.shares_memory(k, d) for k in kept for d in delivered)
+        kept = cap._store.indices()
+        assert kept == list(range(COUNT - KEEP_BEHIND, COUNT))
+        assert [frame_number(cap._store.copy_of(i)) for i in kept] == kept
+        assert not any(np.shares_memory(k, d) for k in cap._store._frames.values() for d in delivered)
     finally:
         cap.release()
-    assert len(cap._ring._frames) == 0
+    assert len(cap._store) == 0
 
 
 def test_lazy_set_coalesces(prores_clip, sessions):
