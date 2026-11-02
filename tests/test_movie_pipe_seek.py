@@ -373,16 +373,23 @@ def test_set_clamps_like_cv2(prores_clip):
         ref.release()
 
 
-@pytest.mark.parametrize("path_kind", ["ring", "restart"])
+@pytest.mark.parametrize("path_kind", ["ring", "restart", "full"])
 def test_two_frame_clip_boundaries(two_frame_clip, path_kind, monkeypatch, sessions, capsys):
     """2장 클립에서 0·1·EOF·뒤로: 한 걸음마다 cv2와 같은 set·get·read 결과. "restart"는 링·버리기를 끄고(KEEP_BEHIND 0·
-    SEEK_FORWARD_MAX 0) 모든 이동을 -ss 재시작으로 — 마지막 프레임(1)과 끝(2)으로의 재시작 착지까지 본다."""
+    SEEK_FORWARD_MAX 0) 모든 이동을 -ss 재시작으로 — 마지막 프레임(1)과 끝(2)으로의 재시작 착지까지 본다. "full"은 전체 프레임
+    캐시(YESONCHECK_FRAME_CACHE=auto + full_cache=True) — 2장이 모두 보관돼 "ring"과 같이 재시작 없음."""
     if path_kind == "restart":
         monkeypatch.setattr(movie_pipe_source, "KEEP_BEHIND", 0)
         monkeypatch.setattr(movie_pipe_source, "SEEK_FORWARD_MAX", 0)
+    if path_kind == "full":
+        monkeypatch.setenv(movie_pipe_source.FRAME_CACHE_ENV, "auto")
     steps = ["read", "read", "read", "read", 1, "read", "read", 0, "read", "read", "read", 2, "read", -1, "read",
              5, "read", 1, "read", 0, 1, "read", "read"]
-    cap, ref = open_capture(two_frame_clip), cv2.VideoCapture(two_frame_clip)
+    if path_kind == "full":
+        cap = FFmpegPipeCapture(two_frame_clip, probe_movie(two_frame_clip), full_cache=True)
+    else:
+        cap = open_capture(two_frame_clip)
+    ref = cv2.VideoCapture(two_frame_clip)
     try:
         assert cap.get(cv2.CAP_PROP_FRAME_COUNT) == ref.get(cv2.CAP_PROP_FRAME_COUNT) == 2.0
         for index, step in enumerate(steps):

@@ -1,3 +1,7 @@
+"""파이프 캡처의 프레임 보관본 _FrameStore (yesoncheck/movie_pipe_source.py — 스펙 §5.4·§6): 번호별 보관·FIFO 내보내기·같은 번호 교체,
+호출자에게는 늘 새 복사본, 링 모드(keep_across_restart 거짓)는 재시작에서 비우고 전체 모드는 남김. ffmpeg 없이 작은 배열로만 본다.
+"""
+
 import numpy as np
 from yesoncheck.movie_pipe_source import _FrameStore
 

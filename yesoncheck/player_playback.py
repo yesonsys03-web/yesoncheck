@@ -388,7 +388,7 @@ class PlayerPlaybackMixin:
             return None
         # ffmpeg 파이프 게이트(ProRes류만 양성): 양성이면 파이프 캡처로 반환, 음성이면 None이라 아래 기존 줄이 그대로 돎
         try:
-            cap = maybe_pipe_capture(file_path)
+            cap = maybe_pipe_capture(file_path, full_cache=True)
         except PipeCaptureError as e:
             details = traceback.format_exc()
             print(f"ffmpeg 파이프로 영상을 열지 못함: {file_path}")
