@@ -113,11 +113,15 @@ class VideoFrameItem(QGraphicsPixmapItem):
         self._gl = None  # 그 컨텍스트에서 묶은 gl_bindings.GLFunctions
         self._texture = None  # 텍스처 이름
         self._storage = None  # 텍스처 저장소 크기 (w, h) — 없으면 None
+        self._filter = None  # 텍스처에 세운 MIN/MAG 필터 (GL_LINEAR·GL_NEAREST) — transformationMode()가 바뀌면 다시 세움
 
     # ------------------------------------------------------------ 프레임
 
     def set_frame(self, rgb: np.ndarray) -> None:
         """(높이, 너비, 3) uint8 C 연속 RGB 배열을 다음 그림으로 — 복사하지 않고 그대로 든다(동기 업로드라 다음 set_frame까지만 쥠).
+
+        배열 소유: **set_frame 뒤에는 그 배열을 고치지 말 것** — 아이템은 paint 때 읽고, 그 뒤에도 다시 올려야 할 때(컨텍스트가 바뀜·
+        저장소를 다시 잡음) 같은 배열을 다시 읽는다. 다음 프레임은 새 배열로 set_frame.
 
         조건이 어긋나면 어느 조건인지 ValueError(조용한 복사·변환 없음). 크기가 바뀌면 자리표시자 픽스맵만 바꿈(모듈 설명)."""
         if not self.stream:
@@ -198,17 +202,24 @@ class VideoFrameItem(QGraphicsPixmapItem):
             painter.endNativePainting()
 
     def _draw_native(self, pw, ph, corners):
-        """(native painting 안에서) 저장소 확인 → 새 프레임이면 업로드 → 텍스처 사각형. corners: 물리 픽셀 (x, y) 네 개 —
-        아이템의 (0,0)(w,0)(w,h)(0,h)를 매핑한 값 그대로."""
+        """(native painting 안에서) 저장소 확인 → 필터가 바뀌었으면 다시 세움 → 새 프레임이면 업로드 → 텍스처 사각형.
+        corners: 물리 픽셀 (x, y) 네 개 — 아이템의 (0,0)(w,0)(w,h)(0,h)를 매핑한 값 그대로."""
         gl = self._gl
         h, w = self._frame.shape[:2]
         self._ensure_storage(w, h)
         gl.glBindTexture(GL_TEXTURE_2D, self._texture)
+        filt = self._wanted_filter()
+        if filt != self._filter:  # setTransformationMode가 준비 뒤에 바뀜
+            gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filt)
+            gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filt)
+            self._filter = filt
         if self._dirty:
             gl.glPixelStorei(GL_UNPACK_ALIGNMENT, 1)  # 한 줄 = w×3바이트, 줄 사이 채움 없음
-            gl.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0)
-            gl.glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, self._frame.ctypes.data)  # 동기
-            gl.glPixelStorei(GL_UNPACK_ALIGNMENT, GL_DEFAULT_UNPACK_ALIGNMENT)
+            try:
+                gl.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0)
+                gl.glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, self._frame.ctypes.data)  # 동기
+            finally:  # 실패해도 정렬 1을 Qt의 뒤이은 업로드(주석·글자)에 남기지 않음
+                gl.glPixelStorei(GL_UNPACK_ALIGNMENT, GL_DEFAULT_UNPACK_ALIGNMENT)
             gl.check_error("upload")
             self._dirty = False
         gl.glViewport(0, 0, pw, ph)
@@ -236,19 +247,24 @@ class VideoFrameItem(QGraphicsPixmapItem):
             self._context.aboutToBeDestroyed.disconnect(self._release_texture)
         self._gl = gl_bindings.bind(context)
         gl = self._gl
-        texture = ctypes.c_uint(0)
-        gl.glGenTextures(1, ctypes.byref(texture))
-        self._texture = texture.value
+        names = (ctypes.c_uint * 1)()
+        gl.glGenTextures(1, names)
+        self._texture = names[0]
         self._storage = None
-        filt = GL_LINEAR if self.transformationMode() == Qt.SmoothTransformation else GL_NEAREST
+        filt = self._wanted_filter()
         gl.glBindTexture(GL_TEXTURE_2D, self._texture)
         for name, value in ((GL_TEXTURE_MIN_FILTER, filt), (GL_TEXTURE_MAG_FILTER, filt),
                             (GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE), (GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)):
             gl.glTexParameteri(GL_TEXTURE_2D, name, value)
         gl.glBindTexture(GL_TEXTURE_2D, 0)
         gl.check_error("prepare")
+        self._filter = filt
         self._context = context
         context.aboutToBeDestroyed.connect(self._release_texture)
+
+    def _wanted_filter(self):
+        """transformationMode()에 맞는 텍스처 필터 — Smooth면 GL_LINEAR, 아니면 GL_NEAREST."""
+        return GL_LINEAR if self.transformationMode() == Qt.SmoothTransformation else GL_NEAREST
 
     def _ensure_storage(self, w, h):
         """텍스처 저장소를 (w, h)로 — 같으면 아무것도 안 함. GPU 한도를 넘으면 GLBindingError(축소하지 않음). 새 저장소는 내용이
@@ -274,23 +290,55 @@ class VideoFrameItem(QGraphicsPixmapItem):
         self._context = None
         self._gl = None
         self._storage = None
+        self._filter = None
 
     def _fail(self, exc):
         """첫 실패만: 기록(트레이스백 전문)과 오류 창(Qt 루프에서 — paint 안에서 모달 금지)으로 알리고 그 뒤 그리지 않게 표시한다.
-        두 번째부터는 아무것도 하지 않음."""
+        두 번째부터는 아무것도 하지 않음.
+
+        paint의 except 안에서 불리므로 예외를 내보내지 않는다(내보내면 qFatal): 기록과 창 예약을 따로 감싸(기록이 실패해도 창은 뜸),
+        알리다 또 실패하면 _last_resort."""
         if self._failed:
             return
         self._failed = True
         self.failure_count += 1
-        details = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-        print(
-            f"{LOG_PREFIX} GL 텍스처 스트리밍 실패 — 영상 영역을 비워 둡니다 (탈출구: {VIDEO_ITEM_ENV}=pixmap)\n{details}",
-            file=sys.stderr,
-            flush=True,
-        )
-        text = (
-            "영상 화면(GL 텍스처 스트리밍)을 그리지 못했습니다 — 영상 영역을 비워 둡니다 (재생·다른 기능은 그대로).\n\n"
-            f"{type(exc).__name__}: {exc}\n\n"
-            f"{VIDEO_ITEM_ENV}=pixmap 으로 켜면 예전 방식으로 그립니다"
-        )
-        QTimer.singleShot(0, lambda: error_window.show_window(text))
+        try:
+            details = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+            print(
+                f"{LOG_PREFIX} GL 텍스처 스트리밍 실패 — 영상 영역을 비워 둡니다 (탈출구: {VIDEO_ITEM_ENV}=pixmap)\n{details}",
+                file=sys.stderr,
+                flush=True,
+            )
+        except BaseException:  # 기록 파일이 닫힘·꽉 참 등
+            _last_resort("GL 텍스처 스트리밍 실패를 기록하지 못했습니다")
+        try:
+            text = (
+                "영상 화면(GL 텍스처 스트리밍)을 그리지 못했습니다 — 영상 영역을 비워 둡니다 (재생·다른 기능은 그대로).\n\n"
+                f"{type(exc).__name__}: {exc}\n\n"
+                f"{VIDEO_ITEM_ENV}=pixmap 으로 켜면 예전 방식으로 그립니다"
+            )
+            QTimer.singleShot(0, lambda: _show_failure_window(text))
+        except BaseException:  # str(exc)가 실패하는 예외 등
+            _last_resort("GL 텍스처 스트리밍 실패 창을 띄우지 못했습니다")
+
+
+def _show_failure_window(text):
+    """(Qt 루프에서) 오류 창 — 실패해도 Qt 루프로 내보내지 않음(_last_resort)."""
+    try:
+        error_window.show_window(text)
+    except BaseException:
+        _last_resort(f"오류 창을 띄우지 못했습니다: {text}")
+
+
+def _last_resort(message):
+    """(except 블록 안에서) 알리다 또 실패함: 원래 stderr(sys.__stderr__ — 빌드 앱이 기록 파일로 바꾸기 전)에 message와 지금 처리 중인
+    예외(알리던 예외가 앞에 이어진 트레이스백). 원래 stderr가 없거나(Windows 창 앱) 거기 쓰는 것마저 실패하면 더 남길 곳이 없다 —
+    올리면 paint·Qt 루프 밖으로 나가 qFatal이므로 올리지 않는다(movie_pipe_source._last_resort와 같은 모양). 이 함수가 알림 사슬의 끝."""
+    stream = sys.__stderr__
+    if stream is None:
+        return
+    try:
+        stream.write(f"{LOG_PREFIX} 오류를 알리지 못했습니다 — {message}\n{traceback.format_exc()}\n")
+        stream.flush()
+    except BaseException:  # 남길 곳이 없음 (위 docstring) — 사슬의 끝이라 삼킴
+        pass

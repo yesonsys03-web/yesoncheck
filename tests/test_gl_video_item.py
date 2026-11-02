@@ -1,13 +1,17 @@
+import io
+import sys
+
 import numpy as np
 import pytest
 from PyQt5.QtCore import Qt, QRectF
-from PyQt5.QtGui import QImage, QOpenGLContext, QPainter, QPixmap
-from PyQt5.QtWidgets import QGraphicsPixmapItem, QGraphicsScene, QStyleOptionGraphicsItem
+from PyQt5.QtGui import QImage, QOpenGLContext, QPainter, QPaintEngine, QPixmap, QTransform
+from PyQt5.QtWidgets import QGraphicsPixmapItem, QStyleOptionGraphicsItem
 
-from yesoncheck import error_window, gl_bindings
+from yesoncheck import error_window, gl_bindings, gl_video_item
 from yesoncheck.gl_bindings import (
-    GL_CLAMP_TO_EDGE, GL_RGB, GL_RGB8, GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_TEXTURE_MIN_FILTER, GL_TEXTURE_WRAP_S,
-    GL_TEXTURE_WRAP_T, GL_UNPACK_ALIGNMENT, GL_UNSIGNED_BYTE,
+    GL_BLEND, GL_CLAMP_TO_EDGE, GL_MODELVIEW, GL_NEAREST, GL_PROJECTION, GL_QUADS, GL_RGB, GL_RGB8, GL_TEXTURE_2D,
+    GL_TEXTURE_MAG_FILTER, GL_TEXTURE_MIN_FILTER, GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T, GL_UNPACK_ALIGNMENT,
+    GL_UNPACK_ROW_LENGTH, GL_UNSIGNED_BYTE,
 )
 from yesoncheck.gl_video_item import VIDEO_ITEM_ENV, VideoFrameItem, use_stream_item, video_item_mode
 
@@ -143,20 +147,72 @@ def test_raster_item_refuses_set_frame(qapp):
         VideoFrameItem(stream=False).set_frame(rgb())
 
 
+# ---------------------------------------------------------------- _fail의 2차 가드 (알리다 또 실패해도 paint·Qt 루프 밖으로 내보내지 않음)
+
+class BrokenStream:
+    """쓰기마다 OSError — 디스크가 꽉 찬 기록 파일 대역."""
+    def write(self, text):
+        raise OSError(28, "No space left on device")
+    def flush(self):
+        raise OSError(28, "No space left on device")
+
+def test_fail_itself_never_raises(qapp, shown, monkeypatch):
+    original = io.StringIO()  # sys.__stderr__ 대역 (last resort가 쓰는 곳)
+    monkeypatch.setattr(sys, "stderr", BrokenStream())
+    monkeypatch.setattr(sys, "__stderr__", original)
+    item = VideoFrameItem(stream=True)
+    item.set_frame(rgb())
+    paint_with_raster(item)
+    paint_with_raster(item)
+    qapp.processEvents()
+    assert item.failure_count == 1
+    assert original.getvalue().count("[표시] 오류를 알리지 못했습니다") == 1 and "OSError" in original.getvalue()
+    assert len(shown) == 1  # 기록이 실패해도 창은 뜸
+
+def test_fail_survives_exception_whose_str_fails(qapp, shown, monkeypatch, capsys):
+    original = io.StringIO()
+    monkeypatch.setattr(sys, "__stderr__", original)
+    class Unprintable(Exception):
+        def __str__(self):
+            raise RuntimeError("str 실패")
+    item = VideoFrameItem(stream=True)
+    item._fail(Unprintable())
+    qapp.processEvents()
+    assert item.failure_count == 1 and shown == []
+    assert "창을 띄우지 못했습니다" in original.getvalue() and "str 실패" in original.getvalue()
+
+def test_failure_window_error_goes_to_last_resort(qapp, monkeypatch, capsys):
+    original = io.StringIO()
+    monkeypatch.setattr(sys, "__stderr__", original)
+    def broken_window(text):
+        raise RuntimeError("창 실패")
+    monkeypatch.setattr(error_window, "show_window", broken_window)
+    item = VideoFrameItem(stream=True)
+    item._fail(gl_bindings.GLBindingError("x"))
+    qapp.processEvents()  # 지연된 창 띄우기가 Qt 루프에서 돎 — 예외가 루프로 나가면 PyQt5가 프로세스를 끝냄
+    assert "오류 창을 띄우지 못했습니다" in original.getvalue() and "창 실패" in original.getvalue()
+
+
 # ---------------------------------------------------------------- GL 호출 순서 (가짜 GL에 기록 — 실제 GL 그리기는 Task 4의 cocoa 몫)
 
 class RecordingGL:
-    """glXxx 호출을 (이름, 인자)로 기록하는 가짜 GL. glGenTextures는 텍스처 이름 5를 채운다."""
+    """glXxx 호출을 (이름, 인자)로 기록하는 가짜 GL. glGenTextures는 텍스처 이름을 5부터 차례로 채우고, fail_on 이름의 호출은
+    기록한 뒤 RuntimeError."""
     max_texture_size = 4096
     def __init__(self):
         self.calls = []
+        self.next_name = 5
+        self.fail_on = None
     def __getattr__(self, name):
         if not name.startswith("gl"):
             raise AttributeError(name)
         def call(*args):
             self.calls.append((name, args))
+            if name == self.fail_on:
+                raise RuntimeError(f"가짜 GL 실패 @ {name}")
             if name == "glGenTextures":
-                args[1]._obj.value = 5  # ctypes.byref(c_uint)의 대상
+                args[1][0] = self.next_name
+                self.next_name += 1
         return call
     def check_error(self, where):
         self.calls.append(("check_error", (where,)))
@@ -169,6 +225,17 @@ def recording_gl(monkeypatch):
     monkeypatch.setattr(gl_bindings, "bind", lambda ctx: gl)
     return gl
 
+def expected_draw(pw, ph, corners):
+    """텍스처를 바인드한 뒤의 그리기 호출 — 순서까지 고정."""
+    quad = []
+    for (u, v), (x, y) in zip(((0, 0), (1, 0), (1, 1), (0, 1)), corners):
+        quad += [("glTexCoord2f", (u, v)), ("glVertex2f", (x, y))]
+    return [("glViewport", (0, 0, pw, ph)), ("glMatrixMode", (GL_PROJECTION,)), ("glLoadIdentity", ()),
+            ("glOrtho", (0, pw, ph, 0, -1, 1)), ("glMatrixMode", (GL_MODELVIEW,)), ("glLoadIdentity", ()),
+            ("glDisable", (GL_BLEND,)), ("glEnable", (GL_TEXTURE_2D,)), ("glColor4f", (1, 1, 1, 1)),
+            ("glBegin", (GL_QUADS,)), *quad, ("glEnd", ()),
+            ("glDisable", (GL_TEXTURE_2D,)), ("glBindTexture", (GL_TEXTURE_2D, 0)), ("check_error", ("draw",))]
+
 @pytest.mark.parametrize("mode, expected", [(Qt.SmoothTransformation, gl_bindings.GL_LINEAR), (Qt.FastTransformation, gl_bindings.GL_NEAREST)])
 def test_prepare_filter_follows_transformation_mode(qapp, recording_gl, mode, expected):
     item = VideoFrameItem(stream=True)
@@ -180,7 +247,7 @@ def test_prepare_filter_follows_transformation_mode(qapp, recording_gl, mode, ex
                       GL_TEXTURE_WRAP_S: GL_CLAMP_TO_EDGE, GL_TEXTURE_WRAP_T: GL_CLAMP_TO_EDGE}
     assert item._texture == 5 and item._context is context
 
-def test_draw_uploads_only_new_frames_and_maps_corners_as_given(qapp, recording_gl):
+def test_draw_call_sequence_is_fixed(qapp, recording_gl):
     item = VideoFrameItem(stream=True)
     frame = rgb(6, 8)
     item.set_frame(frame)
@@ -188,25 +255,52 @@ def test_draw_uploads_only_new_frames_and_maps_corners_as_given(qapp, recording_
     corners = [(10, 20), (90, 20), (90, 80), (10, 80)]
     recording_gl.calls.clear()
     item._draw_native(200, 100, corners)
-    calls = recording_gl.calls
-    assert ("glTexImage2D", (GL_TEXTURE_2D, 0, GL_RGB8, 8, 6, 0, GL_RGB, GL_UNSIGNED_BYTE, None)) in calls
-    upload = ("glTexSubImage2D", (GL_TEXTURE_2D, 0, 0, 0, 8, 6, GL_RGB, GL_UNSIGNED_BYTE, frame.ctypes.data))
-    assert calls.index(("glPixelStorei", (GL_UNPACK_ALIGNMENT, 1))) < calls.index(upload) \
-        < calls.index(("glPixelStorei", (GL_UNPACK_ALIGNMENT, 4)))  # 정렬은 GL 기본값으로 되돌림
-    assert ("glViewport", (0, 0, 200, 100)) in calls and ("glOrtho", (0, 200, 100, 0, -1, 1)) in calls
-    quad = [args for name, args in calls if name in ("glTexCoord2f", "glVertex2f")]
-    assert quad == [(0, 0), (10, 20), (1, 0), (90, 20), (1, 1), (90, 80), (0, 1), (10, 80)]
-    assert calls[-3:] == [("glDisable", (GL_TEXTURE_2D,)), ("glBindTexture", (GL_TEXTURE_2D, 0)), ("check_error", ("draw",))]
+    assert recording_gl.calls == [
+        ("glBindTexture", (GL_TEXTURE_2D, 5)),  # 저장소 — 업로드보다 먼저
+        ("glTexImage2D", (GL_TEXTURE_2D, 0, GL_RGB8, 8, 6, 0, GL_RGB, GL_UNSIGNED_BYTE, None)),
+        ("check_error", ("storage",)),
+        ("glBindTexture", (GL_TEXTURE_2D, 5)),
+        ("glPixelStorei", (GL_UNPACK_ALIGNMENT, 1)),
+        ("glPixelStorei", (GL_UNPACK_ROW_LENGTH, 0)),
+        ("glTexSubImage2D", (GL_TEXTURE_2D, 0, 0, 0, 8, 6, GL_RGB, GL_UNSIGNED_BYTE, frame.ctypes.data)),
+        ("glPixelStorei", (GL_UNPACK_ALIGNMENT, 4)),  # GL 기본값으로 되돌림
+        ("check_error", ("upload",)),
+        *expected_draw(200, 100, corners),
+    ]
 
     recording_gl.calls.clear()
-    item._draw_native(200, 100, corners)  # 같은 프레임 다시 그리기 — 저장소·업로드 없이 사각형만
-    assert "glTexImage2D" not in recording_gl.names() and "glTexSubImage2D" not in recording_gl.names()
-    assert "glEnd" in recording_gl.names()
+    item._draw_native(200, 100, corners)  # 같은 프레임 다시 그리기 — 저장소·업로드 없이 바인드 + 사각형만
+    assert recording_gl.calls == [("glBindTexture", (GL_TEXTURE_2D, 5)), *expected_draw(200, 100, corners)]
 
     item.set_frame(rgb(3, 4))  # 크기가 바뀜 → 저장소 다시 잡고 올림
     recording_gl.calls.clear()
     item._draw_native(200, 100, corners)
     assert recording_gl.names().count("glTexImage2D") == 1 and recording_gl.names().count("glTexSubImage2D") == 1
+
+def test_failed_upload_still_restores_unpack_alignment(qapp, recording_gl):
+    item = VideoFrameItem(stream=True)
+    item.set_frame(rgb())
+    item._prepare(QOpenGLContext())
+    recording_gl.fail_on = "glTexSubImage2D"
+    with pytest.raises(RuntimeError, match="glTexSubImage2D"):
+        item._draw_native(16, 16, [(0, 0)] * 4)
+    assert recording_gl.calls[-2:] == [("glTexSubImage2D", recording_gl.calls[-2][1]), ("glPixelStorei", (GL_UNPACK_ALIGNMENT, 4))]
+
+def test_filter_follows_later_transformation_mode_change(qapp, recording_gl):
+    item = VideoFrameItem(stream=True)
+    item.setTransformationMode(Qt.SmoothTransformation)
+    item.set_frame(rgb())
+    item._prepare(QOpenGLContext())
+    item._draw_native(16, 16, [(0, 0)] * 4)
+    recording_gl.calls.clear()
+    item.setTransformationMode(Qt.FastTransformation)  # 준비 뒤에 바뀜
+    item._draw_native(16, 16, [(0, 0)] * 4)
+    assert recording_gl.calls[:3] == [("glBindTexture", (GL_TEXTURE_2D, 5)),  # 바인드한 텍스처에 다시 세움
+                                      ("glTexParameteri", (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)),
+                                      ("glTexParameteri", (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST))]
+    recording_gl.calls.clear()
+    item._draw_native(16, 16, [(0, 0)] * 4)
+    assert "glTexParameteri" not in recording_gl.names()  # 그대로면 다시 세우지 않음
 
 def test_destroyed_context_drops_texture_and_next_context_uploads_again(qapp, recording_gl):
     item = VideoFrameItem(stream=True)
@@ -220,3 +314,96 @@ def test_destroyed_context_drops_texture_and_next_context_uploads_again(qapp, re
     item._prepare(QOpenGLContext())
     item._draw_native(16, 16, [(0, 0)] * 4)
     assert "glTexImage2D" in recording_gl.names() and "glTexSubImage2D" in recording_gl.names()  # 새 텍스처에 저장소·내용 다시
+
+
+# ---------------------------------------------------------------- _paint_stream (GL2 엔진의 페인터 대역 — 좌표 규칙·native 블록·컨텍스트)
+
+class FakeEngine:
+    def type(self):
+        return QPaintEngine.OpenGL2
+
+class FakeDevice:
+    """QOpenGLWidget 페인트 장치 대역: width/height는 논리 픽셀."""
+    def __init__(self, width, height, dpr):
+        self._size, self._dpr = (width, height), dpr
+    def width(self):
+        return self._size[0]
+    def height(self):
+        return self._size[1]
+    def devicePixelRatioF(self):
+        return self._dpr
+
+class FakeGLPainter:
+    """GL2 엔진의 QPainter 대역: combinedTransform은 아이템 → 물리 픽셀, begin/endNativePainting은 GL 기록에 함께 남김(순서 확인)."""
+    def __init__(self, gl, transform, width=100, height=50, dpr=2.0):
+        self.gl, self.transform, self.dev = gl, transform, FakeDevice(width, height, dpr)
+    def paintEngine(self):
+        return FakeEngine()
+    def device(self):
+        return self.dev
+    def combinedTransform(self):
+        return self.transform
+    def beginNativePainting(self):
+        self.gl.calls.append(("beginNativePainting", ()))
+    def endNativePainting(self):
+        self.gl.calls.append(("endNativePainting", ()))
+
+@pytest.fixture
+def gl_contexts(monkeypatch, recording_gl):
+    """gl_video_item.QOpenGLContext 대역 — currentContext()가 current(만들지 않은 진짜 QOpenGLContext — 신호만 씀)를 돌려줌."""
+    class Contexts:
+        current = QOpenGLContext()
+        @classmethod
+        def currentContext(cls):
+            return cls.current
+    monkeypatch.setattr(gl_video_item, "QOpenGLContext", Contexts)
+    return Contexts
+
+def paint_gl(item, painter):
+    item.paint(painter, QStyleOptionGraphicsItem(), None)
+
+def test_paint_stream_uses_physical_viewport_and_mapped_corners(qapp, recording_gl, gl_contexts, shown):
+    item = VideoFrameItem(stream=True)
+    item.set_frame(rgb(6, 8))
+    painter = FakeGLPainter(recording_gl, QTransform(2.5, 0, 0, 2.5, 10, 20), width=100, height=50, dpr=2.0)
+    paint_gl(item, painter)
+    assert item.failure_count == 0 and shown == []
+    names, calls = recording_gl.names(), recording_gl.calls
+    assert names[0] == "beginNativePainting" and names[-1] == "endNativePainting"  # GL 호출은 전부 native 블록 안
+    assert names.index("glGenTextures") > names.index("beginNativePainting")  # 준비(_prepare)도 begin 뒤
+    assert ("glViewport", (0, 0, 200, 100)) in calls and ("glOrtho", (0, 200, 100, 0, -1, 1)) in calls  # 논리 100×50 × dpr 2
+    assert [args for name, args in calls if name == "glVertex2f"] == [(10, 20), (30, 20), (30, 35), (10, 35)]  # 매핑값 그대로 — dpr을 또 곱하지 않음
+
+def test_paint_stream_failure_ends_native_painting_and_fails_once(qapp, recording_gl, gl_contexts, shown, capsys):
+    recording_gl.fail_on = "glTexSubImage2D"
+    item = VideoFrameItem(stream=True)
+    item.set_frame(rgb())
+    painter = FakeGLPainter(recording_gl, QTransform())
+    paint_gl(item, painter)
+    paint_gl(item, painter)
+    qapp.processEvents()
+    names = recording_gl.names()
+    assert names.count("beginNativePainting") == 1 and names[-1] == "endNativePainting"
+    assert recording_gl.calls[-2] == ("glPixelStorei", (GL_UNPACK_ALIGNMENT, 4))  # 정렬은 finally로 되돌린 뒤 end
+    assert item.failure_count == 1 and len(shown) == 1
+    assert "[표시] GL 텍스처 스트리밍 실패" in capsys.readouterr().err
+
+def test_paint_stream_prepares_once_per_context_and_drops_old_context_signal(qapp, recording_gl, gl_contexts, shown):
+    item = VideoFrameItem(stream=True)
+    item.set_frame(rgb())
+    painter = FakeGLPainter(recording_gl, QTransform())
+    first = gl_contexts.current
+    paint_gl(item, painter)
+    paint_gl(item, painter)
+    assert recording_gl.names().count("glGenTextures") == 1  # 같은 컨텍스트 — 준비 한 번
+    second = QOpenGLContext()
+    gl_contexts.current = second
+    paint_gl(item, painter)
+    names = recording_gl.names()
+    assert names.count("glGenTextures") == 2 and names.count("glTexSubImage2D") == 2  # 새 컨텍스트 — 새 텍스처에 다시 올림
+    assert item._context is second and item._texture == 6
+    first.aboutToBeDestroyed.emit()  # 옛 컨텍스트가 이제 죽어도 새 텍스처는 그대로 (연결을 끊었음)
+    assert item._context is second and item._texture == 6
+    second.aboutToBeDestroyed.emit()
+    assert item._context is None and item._texture is None
+    assert item.failure_count == 0 and shown == []
