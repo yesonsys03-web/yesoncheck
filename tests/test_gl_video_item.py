@@ -278,6 +278,7 @@ def test_draw_call_sequence_is_fixed(qapp, recording_gl):
     recording_gl.calls.clear()
     item._draw_native(200, 100, corners)
     assert recording_gl.calls == [
+        ("check_error", ("native 진입 — 이전 GL 호출이 남긴 오류",)),  # 우리 GL 호출 전에 — Qt 엔진이 남긴 오류를 우리 탓으로 돌리지 않음
         ("glBindTexture", (GL_TEXTURE_2D, 5)),  # 저장소 — 업로드보다 먼저
         ("glTexImage2D", (GL_TEXTURE_2D, 0, GL_RGB8, 8, 6, 0, GL_RGB, GL_UNSIGNED_BYTE, None)),
         ("check_error", ("storage",)),
@@ -292,7 +293,8 @@ def test_draw_call_sequence_is_fixed(qapp, recording_gl):
 
     recording_gl.calls.clear()
     item._draw_native(200, 100, corners)  # 같은 프레임 다시 그리기 — 저장소·업로드 없이 바인드 + 사각형만
-    assert recording_gl.calls == [("glBindTexture", (GL_TEXTURE_2D, 5)), *expected_draw(200, 100, corners)]
+    assert recording_gl.calls == [("check_error", ("native 진입 — 이전 GL 호출이 남긴 오류",)),
+                                  ("glBindTexture", (GL_TEXTURE_2D, 5)), *expected_draw(200, 100, corners)]
 
     item.set_frame(rgb(3, 4))  # 크기가 바뀜 → 저장소 다시 잡고 올림
     recording_gl.calls.clear()
@@ -317,7 +319,8 @@ def test_filter_follows_later_transformation_mode_change(qapp, recording_gl):
     recording_gl.calls.clear()
     item.setTransformationMode(Qt.FastTransformation)  # 준비 뒤에 바뀜
     item._draw_native(16, 16, [(0, 0)] * 4)
-    assert recording_gl.calls[:3] == [("glBindTexture", (GL_TEXTURE_2D, 5)),  # 바인드한 텍스처에 다시 세움
+    assert recording_gl.calls[:4] == [("check_error", ("native 진입 — 이전 GL 호출이 남긴 오류",)),
+                                      ("glBindTexture", (GL_TEXTURE_2D, 5)),  # 바인드한 텍스처에 다시 세움
                                       ("glTexParameteri", (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)),
                                       ("glTexParameteri", (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST))]
     recording_gl.calls.clear()
@@ -395,6 +398,21 @@ def test_paint_stream_uses_physical_viewport_and_mapped_corners(qapp, recording_
     assert names.index("glGenTextures") > names.index("beginNativePainting")  # 준비(_prepare)도 begin 뒤
     assert ("glViewport", (0, 0, 200, 100)) in calls and ("glOrtho", (0, 200, 100, 0, -1, 1)) in calls  # 논리 100×50 × dpr 2
     assert [args for name, args in calls if name == "glVertex2f"] == [(10, 20), (30, 20), (30, 35), (10, 35)]  # 매핑값 그대로 — dpr을 또 곱하지 않음
+
+@pytest.mark.parametrize("logical, dpr, physical", [
+    ((1487, 935), 1.5, (2231, 1403)),  # 2230.5 / 1402.5 — qRound는 .5를 올림 (파이썬 round는 짝수 쪽 2230 / 1402)
+    ((1490, 800), 1.25, (1863, 1000)),  # 1862.5 — 가로만 .5
+])
+def test_paint_stream_rounds_like_qround(qapp, recording_gl, gl_contexts, shown, logical, dpr, physical):
+    """Qt는 FBO·GL2 뷰포트 크기를 qRound(.5 올림)로 잡는다 — 파이썬 round(은행가 반올림)를 쓰면 .5에서 1px 어긋나 아래·오른쪽 가장자리에 이음매가 생김."""
+    item = VideoFrameItem(stream=True)
+    item.set_frame(rgb(6, 8))
+    painter = FakeGLPainter(recording_gl, QTransform(), width=logical[0], height=logical[1], dpr=dpr)
+    paint_gl(item, painter)
+    pw, ph = physical
+    assert item.failure_count == 0 and shown == []
+    calls = recording_gl.calls
+    assert ("glViewport", (0, 0, pw, ph)) in calls and ("glOrtho", (0, pw, ph, 0, -1, 1)) in calls
 
 def test_paint_stream_failure_ends_native_painting_and_fails_once(qapp, recording_gl, gl_contexts, shown, capsys):
     recording_gl.fail_on = "glTexSubImage2D"

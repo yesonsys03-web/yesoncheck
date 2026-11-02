@@ -13,7 +13,7 @@ pixmap().width()/height()·fitInView(self.video_item, …)·boundingRect()·shap
 boundingRect·isNull 검사가 맞게 할 뿐이다. 내용이 필요하면 frame()(마지막 RGB 배열)을 쓴다.
 
 좌표 규칙(스파이크 실측, findings 해석 5): painter.combinedTransform()은 아이템 좌표를 **물리** 픽셀로 매핑하고
-painter.device().width()/height()는 **논리** 픽셀이다 → pw, ph = round(논리 × devicePixelRatioF()), glViewport(0, 0, pw, ph)와
+painter.device().width()/height()는 **논리** 픽셀이다 → pw, ph = qRound(논리 × devicePixelRatioF()) (.5 올림 — 파이썬 round 아님, Qt의 FBO·뷰포트 크기와 같아야 1px 이음매가 없음), glViewport(0, 0, pw, ph)와
 glOrtho(0, pw, ph, 0, -1, 1)(y 아래 방향 — Qt와 같음), 정점은 매핑값 그대로. 정점에 dpr을 또 곱하거나 뷰포트를 논리 크기로 잡으면
 레티나에서 왼쪽 아래 1/4에 2배로 그려진다(스파이크 첫 실행).
 
@@ -199,7 +199,9 @@ class VideoFrameItem(QGraphicsPixmapItem):
         h, w = self._frame.shape[:2]
         device = painter.device()
         dpr = device.devicePixelRatioF()
-        pw, ph = round(device.width() * dpr), round(device.height() * dpr)  # 물리 픽셀 (모듈 설명의 좌표 규칙)
+        # 물리 픽셀 (모듈 설명의 좌표 규칙). Qt는 FBO·GL2 뷰포트 크기를 qRound(.5 올림)로 잡는다 — 파이썬 round는 은행가 반올림이라
+        # dpr 1.5·논리 1487처럼 .5에서 1px 어긋나(2230 대 2231) 아래·오른쪽 가장자리에 이음매가 생기므로 int(x + 0.5)로 맞춘다(양수에서 qRound와 같음).
+        pw, ph = int(device.width() * dpr + 0.5), int(device.height() * dpr + 0.5)
         transform = painter.combinedTransform()  # 아이템 좌표 → 물리 픽셀
         corners = [transform.map(QPointF(x, y)) for x, y in ((0, 0), (w, 0), (w, h), (0, h))]
         painter.beginNativePainting()
@@ -211,10 +213,11 @@ class VideoFrameItem(QGraphicsPixmapItem):
             painter.endNativePainting()
 
     def _draw_native(self, pw, ph, corners):
-        """(native painting 안에서) 저장소 확인 → 필터가 바뀌었으면 다시 세움 → 새 프레임이면 업로드 → 텍스처 사각형.
+        """(native painting 안에서) 들어온 GL 오류 확인 → 저장소 확인 → 필터가 바뀌었으면 다시 세움 → 새 프레임이면 업로드 → 텍스처 사각형.
         corners: 물리 픽셀 (x, y) 네 개 — 아이템의 (0,0)(w,0)(w,h)(0,h)를 매핑한 값 그대로."""
         gl = self._gl
         h, w = self._frame.shape[:2]
+        gl.check_error("native 진입 — 이전 GL 호출이 남긴 오류")  # 우리 GL 호출 전에 — Qt 엔진이 남긴 오류를 우리 업로드·그리기 탓으로 돌리지 않음(삼키지 않고 같은 실패 경로)
         self._ensure_storage(w, h)
         gl.glBindTexture(GL_TEXTURE_2D, self._texture)
         filt = self._wanted_filter()
