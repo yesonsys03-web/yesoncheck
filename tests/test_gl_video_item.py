@@ -119,6 +119,26 @@ def test_paint_without_frame_draws_nothing_and_does_not_fail(qapp, shown):
     paint_with_raster(item)
     assert item.failure_count == 0 and shown == []
 
+class NoEnginePainter:
+    """초기화되지 않은 QOpenGLWidget(offscreen·컨텍스트가 안 생긴 강제 GL)에 그릴 때의 painter — QPainter::begin이 실패해 paintEngine()이 None (offscreen 실측)."""
+    def paintEngine(self):
+        return None
+
+def test_paint_without_engine_logs_once_and_does_not_fail(qapp, shown, capsys):
+    """엔진 없는 paint는 기록 한 줄(아이템마다 한 번)만 — 창 없음·실패 아님 (모달 창을 띄우면 offscreen 시험이 멈춤 — test_gl_viewport의 gl_widget).
+    엔진이 있는데 GL이 아니면 예전대로 _fail 길 — 두 경우가 섞이지 않음."""
+    item = VideoFrameItem(stream=True)
+    item.set_frame(rgb())
+    item.paint(NoEnginePainter(), QStyleOptionGraphicsItem(), None)
+    item.paint(NoEnginePainter(), QStyleOptionGraphicsItem(), None)
+    qapp.processEvents()
+    assert capsys.readouterr().err.count("[표시] 페인트 엔진이 없어 영상 프레임을 그리지 못함") == 1
+    assert item.failure_count == 0 and shown == []
+    paint_with_raster(item)
+    qapp.processEvents()
+    assert "[표시] GL 텍스처 스트리밍 실패" in capsys.readouterr().err
+    assert item.failure_count == 1 and len(shown) == 1
+
 def test_oversized_frame_fails_loudly_once(qapp, shown, monkeypatch):
     """텍스처 한도 초과는 축소가 아니라 큰 실패 — 준비(bind)는 성공한 것처럼 꾸미고 저장소 확보에서 걸리게 한다."""
     class FakeGL:

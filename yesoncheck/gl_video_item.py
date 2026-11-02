@@ -25,9 +25,13 @@ paint 본문 전체를 except BaseException으로 받아 첫 실패만 기록(�
 알리고, 그 뒤 paint는 아무것도 그리지 않는다(빈 영상 영역). 재생·UI는 계속되고 탈출구는 YESONCHECK_VIDEO_ITEM=pixmap(예전 QPixmap 경로).
 
 GL 준비(함수 묶기·텍스처)는 생성 때가 아니라 첫 paint()에서 그때 current인 위젯 컨텍스트로 한다: getProcAddress는 current 컨텍스트가
-있어야 하고, 위젯의 진짜 컨텍스트(MSAA 포맷)는 첫 show 때 생긴다. offscreen에서 강제한 GL 뷰포트(시험)는 컨텍스트를 못 만들어 paint가
-불리지 않으므로 준비도 없다. GL 호출은 전부 beginNativePainting/endNativePainting 안에서만(Qt GL2 엔진이 캐시한 상태와 엇갈리지 않게 —
-스파이크와 같음). GL 함수 묶기는 gl_bindings, 이 모듈은 아이템과 선택 규칙만.
+있어야 하고, 위젯의 진짜 컨텍스트(MSAA 포맷)는 첫 show 때 생긴다. GL 호출은 전부 beginNativePainting/endNativePainting 안에서만(Qt GL2
+엔진이 캐시한 상태와 엇갈리지 않게 — 스파이크와 같음). GL 함수 묶기는 gl_bindings, 이 모듈은 아이템과 선택 규칙만.
+
+엔진 없는 paint: 컨텍스트가 생기지 않은 QOpenGLWidget(offscreen에서 강제한 GL 뷰포트 — 시험, 또는 컨텍스트가 끝내 안 생긴 강제 GL)에서도
+QGraphicsView는 paint를 부르지만 painter에 엔진이 없다(QPainter::begin 실패 — paintEngine()이 None, Qt가 경고를 남김; offscreen 실측). Qt 자신도
+그 장치에는 아무것도 못 그리므로 준비도 그리기도 없이 기록 한 줄만 남기고 돌아간다 — 아이템마다 한 번, 오류 창 없음, 실패로 치지 않음(뒤에 진짜
+엔진이 오면 그대로 그림). 실패 창(모달)을 띄우면 offscreen 시험이 멈춘다(test_gl_viewport의 gl_widget).
 """
 
 import ctypes
@@ -114,6 +118,7 @@ class VideoFrameItem(QGraphicsPixmapItem):
         self._texture = None  # 텍스처 이름
         self._storage = None  # 텍스처 저장소 크기 (w, h) — 없으면 None
         self._filter = None  # 텍스처에 세운 MIN/MAG 필터 (GL_LINEAR·GL_NEAREST) — transformationMode()가 바뀌면 다시 세움
+        self._warned_no_engine = False  # 엔진 없는 paint를 기록했음 — 한 번만 (실패 표시 _failed와 따로)
 
     # ------------------------------------------------------------ 프레임
 
@@ -180,6 +185,9 @@ class VideoFrameItem(QGraphicsPixmapItem):
 
     def _paint_stream(self, painter):
         engine = painter.paintEngine()
+        if engine is None:  # 초기화되지 않은 GL 뷰포트 — Qt도 못 그림 (모듈 설명의 '엔진 없는 paint')
+            self._warn_no_engine()
+            return
         if engine.type() != QPaintEngine.OpenGL2:
             raise GLBindingError(
                 f"GL 페인트 엔진이 아닙니다 (엔진 종류 {int(engine.type())}) — GL 텍스처 스트리밍은 GL 뷰포트(QOpenGLWidget)에서만 됩니다"
@@ -291,6 +299,21 @@ class VideoFrameItem(QGraphicsPixmapItem):
         self._gl = None
         self._storage = None
         self._filter = None
+
+    def _warn_no_engine(self):
+        """(paint 안에서) 엔진 없는 paint를 처음 한 번만 기록 — 오류 창 없음, 실패로 치지 않음. _fail처럼 예외를 내보내지 않는다
+        (기록이 실패하면 _last_resort)."""
+        if self._warned_no_engine:
+            return
+        self._warned_no_engine = True
+        try:
+            print(
+                f"{LOG_PREFIX} 페인트 엔진이 없어 영상 프레임을 그리지 못함(초기화되지 않은 GL 뷰포트 — offscreen/강제 GL) — 한 번만 기록",
+                file=sys.stderr,
+                flush=True,
+            )
+        except BaseException:  # 기록 파일이 닫힘·꽉 참 등
+            _last_resort("페인트 엔진 없음을 기록하지 못했습니다")
 
     def _fail(self, exc):
         """첫 실패만: 기록(트레이스백 전문)과 오류 창(Qt 루프에서 — paint 안에서 모달 금지)으로 알리고 그 뒤 그리지 않게 표시한다.
