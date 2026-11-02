@@ -189,6 +189,27 @@ def test_restart_in_full_mode_keeps_store(auto_mode, prores_clip, sessions):
     assert read_number(cap) == 5 and len(sessions) == 2
     cap.release()
 
+def test_backward_restart_prefill_is_kept_in_full_mode(auto_mode, prores_clip, sessions):
+    """전체 모드의 뒤로 재시작도 목표 8장 앞에서 띄우고, 미리 채운 8장이 링처럼 밀려나지 않고 모두 남는다: 0..9를 본 뒤 100으로(앞으로 —
+    미리 채우지 않음) 갔다가 본 적 없는 80으로 ← 방향 재시작 → 시작 72, 72..80이 모두 보관 → ← 8번(79..72)은 재시작 없이, 71은 재시작."""
+    cap = open_full(prores_clip)
+    try:
+        assert [read_number(cap) for _ in range(10)] == list(range(10)) and cap.cache_mode == "full"
+        cap.set(1, 100)
+        assert read_number(cap) == 100 and len(sessions) == 2 and cap._session.start == 100
+        cap.set(1, 80)
+        assert read_number(cap) == 80 and len(sessions) == 3
+        assert cap._session.start == 80 - KEEP_BEHIND
+        assert set(range(80 - KEEP_BEHIND, 81)) <= set(cap._store.indices())  # 72..80 모두 (밀려나지 않음)
+        for n in range(79, 79 - KEEP_BEHIND, -1):  # ← 8번: 79..72
+            cap.set(1, n)
+            assert read_number(cap) == n and len(sessions) == 3, f"← {n}"
+        cap.set(1, 80 - KEEP_BEHIND - 1)  # 71: 본 적 없음 → 재시작
+        assert read_number(cap) == 71 and len(sessions) == 4 and cap._session.start == 71 - KEEP_BEHIND
+    finally:
+        cap.release()
+
+
 def test_budget_failure_dies_loudly_instead_of_raising(monkeypatch, prores_clip, qapp, windows, capsys):
     """첫 read의 캐시 판정이 실패(psutil 오류)해도 read는 예외를 내지 않는다 (§5.5 — 재생 타이머 슬롯에는 try가 없어 PyQt5가 프로세스를
     끝냄): 도중 실패(B)와 같이 그 read가 (False, None), 죽은 cv2 캡처 겉모습, 기록 한 번(트레이스백째), 오류 창 한 번, 세션 정리, 장부 그대로.

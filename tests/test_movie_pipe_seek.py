@@ -305,6 +305,64 @@ def test_forward_skip_within_limit(prores_clip, sessions):
         cap.release()
 
 
+
+def test_backward_restart_prefills_ring(prores_clip, sessions):
+    """뒤로 재시작은 목표 KEEP_BEHIND(8)장 앞에서 띄워 그 장들을 꺼내 버리며 보관한다 — 그래서 그 뒤의 ←는 재시작 없이 링에서, 재시작은
+    8칸에 한 번 (4K에서 ← 매번 ~0.5초였던 것). 순차 40장(링 32..39, 스트림 40) 뒤 set(20): 새 세션 하나가 12에서 시작해 12..19를 미리
+    채우고 20을 내줌 — 링은 8장 FIFO라 20을 넣을 때 12가 밀려나 13..20. 이어 ← 7번(19..13)은 세션 그대로, set(12)는 링 밖이라 한 번 더
+    재시작(4에서 시작, 4..11 미리 채움). 어느 경로인지는 세션 수·pid·세션 시작 번호로 실증 (시간 단언 없음)."""
+    cap = open_capture(prores_clip)
+    try:
+        assert [read_number(cap) for _ in range(40)] == list(range(40))
+        assert cap._store.indices() == list(range(40 - KEEP_BEHIND, 40))  # 링 32..39, 스트림 40
+        first_pid = pid(cap)
+        assert cap.set(POS, 20) and read_number(cap) == 20
+        assert len(sessions) == 2 and pid(cap) != first_pid  # 재시작 한 번
+        assert cap._session.start == 20 - KEEP_BEHIND  # 목표 8장 앞(12)에서 띄움
+        assert cap._store.indices() == list(range(21 - KEEP_BEHIND, 21))  # 12..19 미리 채움 + 20 → 링 8장: 13..20
+        second_pid = pid(cap)
+        for n in range(19, 20 - KEEP_BEHIND, -1):  # ← 7번: 19..13 — 링에서
+            assert cap.set(POS, n) and read_number(cap) == n, f"← {n}"
+            assert pid(cap) == second_pid and len(sessions) == 2, f"← {n}이 ffmpeg를 다시 띄움"
+        assert cap.set(POS, 12) and read_number(cap) == 12  # 링 밖 → 8칸 만에 재시작 한 번 더
+        assert len(sessions) == 3 and pid(cap) != second_pid
+        assert cap._session.start == 12 - KEEP_BEHIND  # 4에서 띄움 (4..11 미리 채움)
+        assert cap._store.indices() == list(range(13 - KEEP_BEHIND, 13))  # 5..12
+        assert [read_number(cap) for _ in range(3)] == [13, 14, 15] and len(sessions) == 3  # 이어 읽기는 새 스트림에서
+    finally:
+        cap.release()
+
+
+def test_forward_restart_has_no_prefill(prores_clip, sessions):
+    """앞으로 먼 점프(재시작)는 미리 채우지 않는다 — 목표 시각을 직접(SEEK_BACK_K = 0) 겨눠 그 전처럼 빠름: 스트림 10에서 set(100) →
+    새 세션의 시작 번호 100, 보관본은 100 하나뿐 (꺼내 버린 프레임 없음)."""
+    cap = open_capture(prores_clip)
+    try:
+        assert [read_number(cap) for _ in range(10)] == list(range(10))
+        assert cap.set(POS, 100) and read_number(cap) == 100
+        assert len(sessions) == 2 and cap._session.start == 100
+        assert cap._store.indices() == [100]
+    finally:
+        cap.release()
+
+
+def test_backward_restart_prefill_clamps_at_zero(prores_clip, sessions):
+    """0 근처로의 뒤로 재시작은 0에서 띄운다 (목표 − 8이 음수가 되지 않게): 60에서 set(3) → 시작 0, 0..2를 버리며 보관하고 3을 내줌.
+    그 뒤 ←로 0까지는 링에서 (재시작 없음)."""
+    cap = open_capture(prores_clip)
+    try:
+        assert cap.set(POS, 60) and read_number(cap) == 60  # 앞으로 먼 점프 — 재시작 (시작 60)
+        assert len(sessions) == 2
+        assert cap.set(POS, 3) and read_number(cap) == 3
+        assert len(sessions) == 3 and cap._session.start == 0
+        assert cap._store.indices() == [0, 1, 2, 3]  # 3장(0..2) 버림 + 3
+        for n in (2, 1, 0):
+            assert cap.set(POS, n) and read_number(cap) == n
+        assert len(sessions) == 3
+    finally:
+        cap.release()
+
+
 def test_release_frees_ring(prores_clip):
     """링 메모리 상한: 끝까지 읽어도 보관본은 KEEP_BEHIND장뿐이고 그 어느 것도 내준 배열과 메모리를 나누지 않음 (내부 들여다봄).
     release하면 링도 비움 (닫은 캡처가 4K 8장을 붙들지 않게)."""

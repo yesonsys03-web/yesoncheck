@@ -6,7 +6,9 @@
 (KeyError·ValueError·TypeError…) 그대로 올라간다 — cv2로 돌릴지는 부른 쪽이 정한다.
 
 캡처: ffmpeg 프로세스 하나(세션)가 bgr24 원시 프레임을 소켓으로 내보내고, 읽기 스레드가 그것을 유한 큐에 미리 받아 둔다.
-탐색은 지연 실행 (스펙 §5.4): set은 목표만 적고 다음 read가 링 버퍼·앞으로 버리기·-ss 재시작 중 하나로 옮긴다.
+탐색은 지연 실행 (스펙 §5.4): set은 목표만 적고 다음 read가 링 버퍼·앞으로 버리기·-ss 재시작 중 하나로 옮긴다. 뒤로 가는 재시작은
+목표 KEEP_BEHIND(8)장 앞에서 띄워 그 8장을 보관한다 — 4K에서 링 밖의 ←가 매번 재시작(~0.5초)이던 것이 8번에 한 번(약 0.6초 — 디코드
+8장 ≈0.16초가 더해짐)이 되고, 앞으로 먼 점프는 그대로 목표에서 띄운다.
 
 전송 (Task 3b — 왜 파이프가 아니라 소켓이고 왜 플랫폼별로 다른가): stdout 파이프였을 때는 4K 한 장(24.9MB)이 64KB씩 ~467번의
 read로 들어왔고, 호출마다 읽기 스레드가 GIL을 다시 잡아야 해서 GUI 스레드가 파이썬을 실행하는 동안(재생 틱의 process_frame·
@@ -86,7 +88,11 @@ LOOPBACK = "127.0.0.1"
 # 탐색 (스펙 §5.4 — 값은 Task 1 스파이크가 CI 세 플랫폼에서 단언으로 확정)
 KEEP_BEHIND = 8  # 링 버퍼: 최근 스트림에서 꺼낸 프레임 보관 수 (뒤로 한 칸이 재시작 없이 — 4K ≈ 199MB/캡처)
 SEEK_FORWARD_MAX = 24  # 앞으로 이만큼까지는 큐·스트림에서 꺼내 버림 (그보다 멀면 재시작 — 4K 재시작 ≈ 24장 디코드)
-SEEK_BACK_K = 0  # 재시작 -ss를 목표보다 몇 장 앞에 겨눌지 (0: 목표 시각을 직접 — K=0·K=2 모두 40/40 정확 착지)
+SEEK_BACK_K = 0  # 재시작 -ss를 목표보다 몇 장 앞에 겨눌지 (0: 목표 시각을 직접 — K=0·K=2 모두 40/40 정확 착지) — 앞으로 가는 재시작
+# 뒤로 가는 재시작(목표 < 스트림 위치)은 따로 상수를 두지 않고 KEEP_BEHIND장 앞에서 띄운다 (_restart — 링 깊이만큼 미리 채움): 그 장들을
+# 꺼내 버리며 보관하므로 이어지는 ←가 링에서 나온다. 사용자 보고(2026-11-02, 4K ProRes): 링 밖으로 뒤로 가면 새 세션이 목표에서
+# 시작해 그 앞이 하나도 없어 ←마다 재시작(~0.5초)이었음 → 8번에 한 번(디코드 8장 ≈ 0.16초가 더해져 약 0.6초). 링을 끄면(KEEP_BEHIND 0)
+# 미리 채우기도 꺼진다.
 LOG_PREFIX = "[파이프]"
 FAILURE_HEADLINE = "영상을 읽던 ffmpeg 파이프가 도중에 끊겨 이 영상을 더 읽을 수 없습니다"  # 도중 실패의 기록·오류 창 첫 줄
 
@@ -509,7 +515,8 @@ class _FrameStore:
     """번호 → 보관 프레임 (스펙 §5.4 — 가까운 탐색을 재시작 없이): 세션에서 꺼낸 프레임은 내주든 버리든 그 번호로 여기를 지난다.
     보관 수는 max_frames를 넘지 않는다 — 가득 차면 가장 오래 전에 넣은 번호부터 내보내고(FIFO), 같은 번호를 다시 넣으면 교체하며
     순서는 새로. keep_across_restart가 거짓(링 모드)이면 세션 재시작에서 비운다 — 그러면 보관 번호는 늘 최근 꺼낸 것들의 연속 구간
-    [스트림 위치 − 보관 수, 스트림 위치)라 1.5.1의 링과 같다. 참이면 재시작을 건너 남는다.
+    [스트림 위치 − 보관 수, 스트림 위치)라 1.5.1의 링과 같다 (단 뒤로 재시작은 목표 KEEP_BEHIND장 앞에서 띄워 그 장들을 꺼내 버리므로
+    착지 뒤 링에 목표 앞 장들이 들어 있음 — 1.5.1은 목표 하나). 참이면 재시작을 건너 남는다.
 
     보관은 세션이 준 배열 그대로다 (읽기 스레드가 프레임마다 새 배열을 할당하고 아무도 고치지 않음). 밖으로는 늘 새 복사본(copy_of)만
     나가므로 호출자가 받은 배열을 무엇으로 고쳐도 보관본은 그대로다. 캡처의 _lock 안에서만 쓴다.
@@ -600,7 +607,10 @@ class FFmpegPipeCapture:
     이동은 다음 read()가 목표 n(기록된 목표, 없으면 pos)으로: ① n == 스트림 위치 → 스트림에서 꺼내 내줌 ② 보관본(_FrameStore —
     링 모드는 최근 꺼낸 KEEP_BEHIND장, 전체 모드는 꺼낸 모든 번호)에 있음 → 그 복사본(재시작 없음) ③ 스트림 위치 < n ≤ 스트림 위치 + SEEK_FORWARD_MAX →
     큐·스트림에서 꺼내 버린 뒤 ①(버린 프레임도 보관) ④ 그 밖 → 세션 재시작: -ss (n − K)/r + (영상 트랙 start − 컨테이너 start),
-    K = min(SEEK_BACK_K, n), 그 뒤 K장 버리고 ①. 재시작은 새 세션을 띄워 캡처의 세션·GC 안전망을 넘긴 뒤 옛 세션을 멈춘다(정지
+    그 뒤 K장 버리고(보관됨) ①. K는 방향에 따라: 앞으로(n > 스트림 위치) K = min(SEEK_BACK_K, n) = 0 — 목표에서 바로; 뒤로(n < 스트림
+    위치) K = min(max(SEEK_BACK_K, KEEP_BEHIND), n) = min(8, n) — 목표 8장 앞에서 띄워 그 8장을 보관하므로 이어지는 ←가 링·보관본에서 나온다 (링 밖의 ←가 매번
+    재시작이던 것이 8번에 한 번 — 4K에서 재시작 ~0.5초에 디코드 8장 ≈0.16초가 더해짐; 링 모드는 8장 FIFO라 n을 넣을 때 n − 8이 밀려나
+    착지 뒤 링은 n − 7..n, 전체 모드는 8장 모두 남음). 재시작은 새 세션을 띄워 캡처의 세션·GC 안전망을 넘긴 뒤 옛 세션을 멈춘다(정지
     플래그 — 옛 프로세스의 끊김은 실패가 아님).
 
     위치 장부 — pos: 다음에 내줄 번호. 스트림 위치(_stream_pos): 세션이 다음에 줄 번호 = 세션 시작 번호 + 그 세션에서 꺼낸 수.
@@ -708,8 +718,8 @@ class FFmpegPipeCapture:
             elif self._store.has(n):  # ② 보관본의 복사본 (세션 그대로)
                 self._arrive(n + 1, target)
                 return True, self._store.copy_of(n)
-        if ahead:  # ③ 앞으로 버리기 / ④ 재시작 — 끝나면 스트림 위치 == n (①)
-            session = self._seek(session, n, target, restart=not 0 < ahead <= SEEK_FORWARD_MAX)
+        if ahead:  # ③ 앞으로 버리기 / ④ 재시작(ahead < 0이면 뒤로 — 미리 채움) — 끝나면 스트림 위치 == n (①)
+            session = self._seek(session, n, target, restart=not 0 < ahead <= SEEK_FORWARD_MAX, backward=ahead < 0)
             if session is None:
                 return False, None
         return self._pull(session, deliver=True)
@@ -821,12 +831,13 @@ class FFmpegPipeCapture:
         if target is not None and self._target == target:
             self._target = None
 
-    def _seek(self, session, n, target, restart):
-        """(read 안, _lock 밖) 스트림을 n번으로 옮김 (스펙 §5.4): restart면 ④ 세션 재시작(시작 번호 n − K) 뒤, 스트림 위치가 n이 될
-        때까지 꺼내 버림 (③ 앞으로 버리기·재시작 뒤 K장 — 버린 프레임도 보관됨). 닿으면 pos = n = 스트림 위치이고 목표를 지움.
+    def _seek(self, session, n, target, restart, backward):
+        """(read 안, _lock 밖) 스트림을 n번으로 옮김 (스펙 §5.4): restart면 ④ 세션 재시작(시작 번호 n − K, backward — n < 스트림 위치 —
+        면 K가 KEEP_BEHIND: _restart) 뒤, 스트림 위치가 n이 될 때까지 꺼내 버림 (③ 앞으로 버리기·재시작 뒤 K장 — 버린 프레임도
+        보관됨: 뒤로 재시작의 미리 채우기가 이것). 닿으면 pos = n = 스트림 위치이고 목표를 지움.
         → 이동을 마친 세션, 또는 None (그사이 release됨 / 죽음 — 알림까지 끝냄)."""
         if restart:
-            session = self._restart(session, n)
+            session = self._restart(session, n, backward)
             if session is None:
                 return None
         while True:
@@ -839,12 +850,16 @@ class FFmpegPipeCapture:
             if not self._pull(session, deliver=False)[0]:  # 버리기 — 목표 앞(< count)의 끝은 도중 실패
                 return None
 
-    def _restart(self, old, target):
+    def _restart(self, old, target, backward):
         """(read 안, _lock 밖) 세션 재시작: 목표 K장 앞(start)을 -ss로 겨눈 새 ffmpeg → 캡처의 세션·GC 안전망을 새 세션으로 바꾸고
-        스트림 위치·pos를 start로(보관본은 on_restart — 링 모드면 비움) → 옛 세션 정지. → 새 세션, 또는 None (띄우지 못해 죽음 —
-        알림까지 끝냄 / 띄우는 사이 release됨). 띄우지 못한 사유 글(트레이스백)을 만들다 실패해도 고정 사유(+ 원래 예외 한 줄)로 죽음 —
-        read 밖으로 예외를 내지 않음 (§5.5)."""
-        start = target - min(SEEK_BACK_K, target)
+        스트림 위치를 start로(보관본은 on_restart — 링 모드면 비움; pos는 목표로) → 옛 세션 정지. → 새 세션, 또는 None (띄우지 못해
+        죽음 — 알림까지 끝냄 / 띄우는 사이 release됨). 띄우지 못한 사유 글(트레이스백)을 만들다 실패해도 고정 사유(+ 원래 예외 한 줄)로
+        죽음 — read 밖으로 예외를 내지 않음 (§5.5).
+        K: 앞으로(backward 거짓) SEEK_BACK_K(0 — 목표에서 바로, 슬라이더를 앞으로 끄는 점프가 느려지지 않게), 뒤로(backward — 목표 <
+        스트림 위치) KEEP_BEHIND — 0에서 자름. 뒤로는 start..목표−1을 _seek가 꺼내 버리며 보관해(on_restart로 비운 뒤라 남음) 이어지는 ←가
+        재시작 없이 나온다: 4K에서 링 밖의 ←가 매번 재시작(~0.5초)이던 것이 8번에 한 번(디코드 8장 ≈0.16초가 더해져 약 0.6초)."""
+        back = max(SEEK_BACK_K, KEEP_BEHIND) if backward else SEEK_BACK_K
+        start = target - min(back, target)
         command, transport = (), None
         try:
             transport = _Transport()
@@ -872,7 +887,8 @@ class FFmpegPipeCapture:
                 self._session = new
                 old_finalizer, self._finalizer = self._finalizer, weakref.finalize(self, new.stop)
                 self._store.on_restart()
-                self._stream_pos = self._pos = start
+                # pos는 목표 그대로 — 미리 채우는 동안(start..목표−1을 버리는 중) 다른 스레드의 get(POS_FRAMES)가 목표 앞 번호를 보지 않게
+                self._stream_pos, self._pos = start, target
         if not swapped:  # 띄우는 사이 다른 스레드가 release함
             new.stop()
             return None
