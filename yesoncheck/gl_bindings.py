@@ -85,9 +85,17 @@ class GLFunctions:
 
 
 def _read_max_texture_size(fns):
-    """GL_MAX_TEXTURE_SIZE를 읽는다 — bind()가 거는 유일한 GL 호출이라 컨텍스트가 current여야 한다 (시험에서 바꿔치기)."""
+    """GL_MAX_TEXTURE_SIZE를 읽는다 — bind()가 거는 유일한 GL 호출이라 컨텍스트가 current여야 한다 (시험에서 바꿔치기).
+
+    컨텍스트가 current가 아니면 GL은 값을 채우지 않아 0이 남는다 — 그대로 돌려주면 뒤에서 "프레임이 너무 크다"로 잘못 읽히므로 여기서 올린다.
+    """
     value = ctypes.c_int(0)
     fns.glGetIntegerv(GL_MAX_TEXTURE_SIZE, ctypes.byref(value))
+    if value.value <= 0:
+        raise GLBindingError(
+            f"GL 텍스처 크기 한도를 읽지 못했습니다 (GL_MAX_TEXTURE_SIZE={value.value}) — "
+            "컨텍스트가 current가 아니거나 GL이 값을 돌려주지 않았습니다"
+        )
     return value.value
 
 
