@@ -10,6 +10,7 @@ conftest가 YESONCHECK_FRAME_CACHE=ring을 두므로 전체 보관을 보는 시
 다른 시험이 남긴 캡처가 잠깐 살아 있어도 흔들리지 않게.
 """
 
+import contextlib
 import gc
 import os
 import threading
@@ -76,6 +77,34 @@ def fill_gate(monkeypatch):
 def join_filler(filler):
     filler.thread.join(WAIT_S)
     assert not filler.thread.is_alive(), "채움 스레드가 끝나지 않았습니다"
+
+@contextlib.contextmanager
+def read_in_progress(cap):
+    """cap.read() 하나가 진행 중인 상태를 시간에 기대지 않고 만듦: 그 캡처의 _read(read 본체)를 문에서 멈추는 것으로 바꿔 다른 스레드에서
+    read()를 부름 — read()가 들어올 때 하는 기록(이 캡처의 시계·프로세스 시계 busy)은 진짜. 나갈 때 문을 열어 read가 끝나기를 기다리고
+    _read를 되돌림 (그 read는 (False, None) — 시험이 쓰지 않음)."""
+    entered, opened = threading.Event(), threading.Event()
+
+    def blocked_read():
+        entered.set()
+        opened.wait(WAIT_S)
+        return False, None
+
+    cap._read = blocked_read
+    reader = threading.Thread(target=cap.read, name="test-read-in-progress", daemon=True)
+    reader.start()
+    try:
+        assert entered.wait(WAIT_S), "read가 들어오지 않았습니다"
+        yield
+    finally:
+        opened.set()
+        reader.join(WAIT_S)
+        del cap._read
+    assert not reader.is_alive()
+
+def frame_bytes(path):
+    probe = probe_movie(path)
+    return probe.width * probe.height * 3
 
 def open_full(path):
     return FFmpegPipeCapture(path, probe_movie(path), full_cache=True)
@@ -159,7 +188,9 @@ def test_after_fill_every_seek_is_a_store_hit(auto_mode, prores_clip, sessions):
 
 def test_filler_only_runs_when_idle(auto_mode, prores_clip, sessions):
     """채움기는 read()가 IDLE_FILL_DELAY_S(0.3초) 동안 없을 때만 꺼낸다: 그보다 촘촘히(~20ms 간격) 1초쯤 읽는 동안은 채움 세션도 띄우지 않고
-    한 장도 넣지 않음 → 읽기를 멈추면 채우기 시작해 끝까지 (한도는 ML 배치 부하를 견디게 넉넉히 — 시간 단언 없이 채운 수·세션으로)."""
+    한 장도 넣지 않음 → 읽기를 멈추면 채우기 시작해 끝까지 (한도는 ML 배치 부하를 견디게 넉넉히 — 시간 단언 없이 채운 수·세션으로).
+    **이 파일에서 일부러 남긴, 진짜 시간에 기대는 쉬는 때 시험**(read 사이 간격으로 판정하는 길 그대로 — 시험 스레드가 0.3초 넘게 멈추지 않는다는
+    전제; 부하 ~18에서도 통과). 나머지는 hold_fill·fill_gate·read_in_progress로 시간에 기대지 않음 (A/B 시험의 고른 간격 읽기 단계만 같은 전제)."""
     cap = open_full(prores_clip)
     try:
         assert read_number(cap) == 0 and cap.cache_mode == "full"
@@ -178,32 +209,58 @@ def test_filler_only_runs_when_idle(auto_mode, prores_clip, sessions):
 
 def test_read_pauses_filler_mid_fill(auto_mode, prores_clip, fill_gate):
     """채우는 도중에 read가 오면 채움기는 다음 장부터 멈춘다(꺼내지 않음 — ffmpeg는 소켓에서 저절로 멈춤): 40번 앞에 문을 세워 두고
-    읽기를 시작한 뒤 문을 열면, 촘촘히 읽는 1초 동안 채운 수가 41에서 늘지 않음 → 읽기를 멈추면 다시 채워 끝까지."""
+    read 하나를 진행 중으로 만든 뒤(read_in_progress — 시간에 기대지 않음) 문을 열면, 40을 넣고(41) 그 read가 끝날 때까지 더 꺼내지 않음
+    (쉬는 때 기준의 두 배를 기다려도 41) → read가 끝나면 다시 채워 끝까지."""
     gate = fill_gate(40)
     cap = open_full(prores_clip)
     try:
         assert read_number(cap) == 0
         assert gate.reached.wait(WAIT_S), "쉬는 동안 채움기가 40번에 닿지 않았습니다"
         assert cap.fill_index == 40 and cap._full.indices() == list(range(40))
-        assert read_number(cap) == 1  # 읽기 시작 — 이제 쉬는 때가 아님
-        gate.opened.set()  # 40을 넣고 다음 장 앞에서 쉬는 때를 봄 → 멈춤
-        deadline = time.monotonic() + 1.0
-        while time.monotonic() < deadline:
-            assert cap.read()[0]
-            time.sleep(0.02)
-        assert cap.fill_index == 41 and not cap.fill_done, "읽는 중에 채움기가 더 꺼냈습니다"
+        with read_in_progress(cap):  # 이제 쉬는 때가 아님
+            gate.opened.set()  # 40을 넣고 다음 장 앞에서 쉬는 때를 봄 → 멈춤
+            assert wait_for(lambda: cap.fill_index == 41)
+            time.sleep(2 * IDLE_FILL_DELAY_S)
+            assert cap.fill_index == 41 and not cap.fill_done, "read 중에 채움기가 더 꺼냈습니다"
         assert cap.wait_fill(FILL_WAIT_S) and cap._full.indices() == list(range(COUNT))
     finally:
         cap.release()
 
-def test_filler_does_not_write_ring_and_ring_keeps_1_5_1_shape(auto_mode, prores_clip, sessions):
-    """읽는 동안은 링만(1.5.1 모양 — 최근 꺼낸 8장, 전체 저장소는 비어 있음). 채움기는 전체 저장소만 쓰고 링은 건드리지 않으며(자기
-    세션의 배열 — 링 보관본과 메모리를 나누지 않음), 보관본에서 내준 프레임도 링에 넣지 않음."""
+def test_idle_is_judged_across_captures(auto_mode, prores_clip, sessions):
+    """쉬는 때는 프로세스 전체의 read로 본다 (Ruling 11 — A/B에서 와이프를 끄면 플레이어는 A만 read): 둘 다 전체 모드로 연 뒤 B는 놔두고
+    ① A의 read 하나를 진행 중으로(read_in_progress — 시간에 기대지 않음, 그동안 이 캡처·프로세스 시계 둘 다 busy) 쉬는 때 기준의 두 배 →
+    B는 채움 세션도 안 띄움 ② A를 ~20ms 간격으로 1초 읽음(이 단계만 시험 스레드가 0.3초 넘게 멈추지 않는다는 시간 전제) → B 그대로
+    ③ A를 멈추면 B·A 모두 채워 끝까지."""
+    a, b = open_full(prores_clip), open_full(prores_clip)
+    try:
+        assert read_number(b) == 0 and read_number(a) == 0
+        assert a.cache_mode == b.cache_mode == "full"
+        with read_in_progress(a):
+            assert a._reads.busy == 1 and movie_pipe_source._PROCESS_READS.busy >= 1  # read()가 두 시계를 다 올림
+            time.sleep(2 * IDLE_FILL_DELAY_S)  # B 자기 시계로는 쉬는 때가 지났음
+            assert b.fill_index == 0 and b.fill_session is None, "A가 read 중인데 B가 채웠습니다"
+        assert a._reads.busy == 0  # 나갈 때 내림
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            assert a.read()[0]
+            time.sleep(0.02)
+            assert b.fill_index == 0 and b.fill_session is None, "A를 재생하는 중에 B가 채웠습니다"
+        assert b.wait_fill(FILL_WAIT_S) and a.wait_fill(FILL_WAIT_S)
+        assert b._full.indices() == list(range(COUNT)) and a._full.indices() == list(range(COUNT))
+        assert [session.is_filler for session in sessions].count(True) == 2
+    finally:
+        a.release()
+        b.release()
+
+def test_filler_does_not_write_ring_and_ring_keeps_1_5_1_shape(auto_mode, hold_fill, prores_clip, sessions):
+    """읽는 동안은 링만(1.5.1 모양 — 최근 꺼낸 8장, 전체 저장소는 비어 있음 — 채움기는 붙잡아 둠). 채움기를 놓으면 전체 저장소만 쓰고 링은
+    건드리지 않으며(자기 세션의 배열 — 링 보관본과 메모리를 나누지 않음), 보관본에서 내준 프레임도 링에 넣지 않음."""
     cap = open_full(prores_clip)
     try:
         assert [read_number(cap) for _ in range(40)] == list(range(40))
         ring = list(range(40 - KEEP_BEHIND, 40))
         assert cap._ring.indices() == ring and len(cap._full) == 0
+        hold_fill.release()
         assert cap.wait_fill(FILL_WAIT_S)
         assert cap._full.indices() == list(range(COUNT)) and cap._ring.indices() == ring
         assert not any(np.shares_memory(r, f) for r in cap._ring._frames.values() for f in cap._full._frames.values())
@@ -287,15 +344,19 @@ def test_death_stops_filler(auto_mode, prores_clip, fill_gate, windows, capsys):
 
 def test_filler_failure_logs_once_and_capture_keeps_working(auto_mode, prores_clip, sessions, fill_gate, qapp, windows, capsys):
     """채우는 도중 채움 ffmpeg가 죽으면(10번을 넣기 직전에 kill): fill_failed에 사유, 기록 한 번(사유·파일·명령·stderr), 채움 세션 정리,
-    죽기 전에 받은 장은 그대로(처음부터 차례라 번호가 정확) — 캡처는 그대로 읽힘(채운 구간은 보관본, 밖은 재시작, 순차도 정상)이고
-    오류 창은 없음 (보조 기능 — 스펙 §7-19)."""
+    죽기 전에 받은 장은 그대로(처음부터 차례라 번호가 정확), 예산 장부의 몫은 곧바로 채운 만큼으로 줄어듦(release에서 나머지도 반환) —
+    캡처는 그대로 읽힘(채운 구간은 보관본, 밖은 재시작, 순차도 정상)이고 오류 창은 없음 (보조 기능 — 스펙 §7-19)."""
+    ledger = movie_pipe_source._LEDGER
+    base = ledger.committed()
     fill_gate(10, block=False, on_reach=lambda filler: filler.session.proc.kill())
     cap = open_full(prores_clip)
     try:
         assert read_number(cap) == 0
+        assert ledger.committed() == base + frame_bytes(prores_clip) * COUNT  # 판정 때 파일 전체 몫
         assert wait_for(lambda: cap.fill_failed is not None, FILL_WAIT_S), "채움 ffmpeg를 죽였는데 채움 실패가 적히지 않았습니다"
         filled = cap.fill_index
         assert 10 < filled < COUNT and not cap.fill_done and cap.wait_fill(0) is False
+        assert ledger.committed() == base + frame_bytes(prores_clip) * filled  # 채우지 못한 몫은 돌려줌
         assert "종료 코드" in cap.fill_failed
         assert_session_gone(cap.fill_session)
         assert cap._full.indices() == list(range(filled))
@@ -311,6 +372,16 @@ def test_filler_failure_logs_once_and_capture_keeps_working(auto_mode, prores_cl
         assert [session.is_filler for session in sessions].count(True) == 1  # 채움기는 다시 띄우지 않음
     finally:
         cap.release()
+    assert ledger.committed() == base
+
+def test_spawn_after_stop_launches_no_ffmpeg(prores_clip, sessions):
+    """쉬는 때를 본 직후 release·죽음이 채움기를 세웠으면(stop) 채움 세션을 띄우지 않는다 — Popen 바로 앞에서 정지 플래그를 봄 (예전에는
+    띄운 뒤에야 보고 곧바로 멈췄음 — 쓸모없는 ffmpeg 하나). 그 틈을 시간에 기대지 않고 만들려고 채움기를 직접 만들어 stop 뒤 _spawn을 부름."""
+    filler = movie_pipe_source._Filler(threading.Lock(), movie_pipe_source._FrameStore(COUNT, keep_across_restart=True),
+                                       movie_pipe_source._ReadClock(), prores_clip, COUNT, 180, 320, frame_bytes(prores_clip))
+    filler.stop()
+    assert filler._spawn() is None
+    assert sessions == [] and filler.session is None and filler.failed is None
 
 def test_ring_mode_when_not_opted_in(auto_mode, prores_clip, sessions, capsys):
     cap = FFmpegPipeCapture(prores_clip, probe_movie(prores_clip))  # full_cache 기본 False

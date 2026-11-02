@@ -31,10 +31,11 @@ TCP 리스너(tcp://127.0.0.1:<포트>)에 ffmpeg가 접속한다 — 접속은 
 무너져 되돌렸다 (Task 3b fix round 3).
 전체 프레임 캐시 (스펙 §6·§6.5): 플레이어 A/B만 opt-in(maybe_pipe_capture(path, full_cache=True))하고 첫 read가 예산으로 판정한다 — 전체면
 읽는 동안은 링만 두고(재생 중 내준 프레임을 다 붙잡으면 4K 첫 재생이 장당 GUI ~8ms 느려져 실시간을 잃음 — 16.0 vs 13.7초 실측),
-read가 IDLE_FILL_DELAY_S(0.3초) 동안 없을 때만 채움기(_Filler — 따로 띄운 ffmpeg, 처음부터)가 전체 저장소를 파일 장수까지 채운다
-(이 Mac 4K 334장 약 7초 — 배치 부하 없을 때, 그동안 read가 오면 다음 장부터 멈춤). 다 차면 파일 어디로의 되감기·탐색에도 재시작이 없다.
-채움기 실패는 캡처의 죽음이 아니라 기록 한 번(캡처는 링으로 그대로). 이 프로세스의 모든 캡처의 전체 보관 합은 물리 RAM의
-20%(frame_cache_budget — 장부 _LEDGER)를 넘지 않고, 넘으면 링으로 열고 그 사유를 기록에 한 줄 남긴다.
+이 프로세스의 어느 파이프 캡처도 IDLE_FILL_DELAY_S(0.3초) 동안 read하지 않을 때만 채움기(_Filler — 따로 띄운 ffmpeg, 처음부터)가 전체
+저장소를 파일 장수까지 채운다 (이 Mac 4K 334장 약 7초 — 배치 부하 없을 때; 그동안 read가 오면 다음 장부터 멈추고, A/B에서 한쪽만
+재생해도 다른 쪽은 채우지 않음). 다 차면 파일 어디로의 되감기·탐색에도 재시작이 없다. 채움기 실패는 캡처의 죽음이 아니라 기록 한 번
+(캡처는 링으로 그대로, 예산 몫은 채운 만큼으로 줄임). 이 프로세스의 모든 캡처의 전체 보관 합은 물리 RAM의 20%(frame_cache_budget —
+장부 _LEDGER)를 넘지 않고, 넘으면 링으로 열고 그 사유를 기록에 한 줄 남긴다.
 장부는 프로세스마다 하나이고 창 하나 = 프로세스 하나라(Finder로 여러 파일을 열면 창이 여럿) 20%는 창마다다 — 여러 창은 서로의 몫을
 보지 못한다: 판정 때의 사용 가능 메모리 검사에 다른 창이 이미 채운 만큼은 잡히지만 아직 채우지 않은 몫은 잡히지 않는다.
 실패는 캡처 안에서 끝난다 (스펙 §5.5): 생성자만 PipeCaptureError를 올리고, 그 뒤의 read·get·set은 예외를 내지 않는다 — 도중에
@@ -602,6 +603,15 @@ class _Ledger:
         with self._lock:
             self._total -= self._bytes.pop(key, 0)
 
+    def shrink(self, key, total):
+        """있는 키의 몫을 total로 줄임 (채움기 실패 — 남은 몫은 다른 캡처가 씀). 없는 키(이미 반환됨)거나 이미 그보다 작으면 아무것도 안 함 —
+        release와 엇갈려도 반환된 키를 되살리지 않음."""
+        with self._lock:
+            held = self._bytes.get(key)
+            if held is not None and total < held:
+                self._total -= held - total
+                self._bytes[key] = total
+
     def committed(self):
         """살아 있는 전체 보관 캡처들이 잡은 바이트의 합."""
         with self._lock:
@@ -612,29 +622,49 @@ _LEDGER = _Ledger()
 
 
 class _ReadClock:
-    """캡처의 read() 활동 — 채움기가 '쉬는 때'를 보는 곳 (스펙 §6.5). 캡처 대신 이것만 채움기에 넘겨 채움기가 캡처를 붙잡지 않게 한다
-    (release 없이 버려진 캡처의 GC — 채움기 정지가 든 weakref.finalize — 가 늘 돌게). read()가 들어올 때와 나갈 때 last_read_at
-    (time.monotonic)을 적고 그 사이는 busy — read 안의 재시작(4K ~0.5초)이 길어도 쉬는 때로 보지 않게. read는 한 스레드만 부르므로(계약)
-    잠금 없이 쓰고 채움기는 읽기만 한다 (값 하나씩이라 찢어지지 않음)."""
+    """read() 활동 시계 — 채움기가 '쉬는 때'를 보는 곳 (스펙 §6.5). 둘을 쓴다: 캡처마다 하나(_reads — 그 캡처의 read)와 프로세스에 하나
+    (_PROCESS_READS — 이 프로세스의 모든 파이프 캡처의 read). 채움기는 **둘 다** IDLE_FILL_DELAY_S 동안 쉬어야 꺼낸다 — A/B를 열고 와이프를
+    끈 채 A만 재생할 때(플레이어는 와이프가 켜져 있을 때만 B를 read) B의 채움기가 쉬는 줄 알고 8스레드로 디코드해 A의 재생과 다투지 않게
+    (최종 검토 Ruling 11). 주석 내보내기 워커처럼 링 모드 캡처의 read도 프로세스 시계를 움직인다(그동안 채움은 쉼 — 디코드를 다투지 않음).
+    캡처 대신 이것만 채움기에 넘겨 채움기가 캡처를 붙잡지 않게 한다(release 없이 버려진 캡처의 GC — 채움기 정지가 든 weakref.finalize — 가
+    늘 돌게). enter()·leave(): read가 들어올 때·나갈 때 — last_read_at(time.monotonic)을 적고 busy(지금 read 중인 수 — 프로세스 시계는 여러
+    스레드의 캡처가 함께 셈)를 올리고 내림. read 안의 재시작(4K ~0.5초)이 길어도 쉬는 때로 보지 않게. 잠금은 값 몇 개를 바꾸는 동안만
+    (GC가 추적하는 객체를 만들지 않음)."""
 
-    __slots__ = ("busy", "last_read_at")
+    __slots__ = ("_lock", "busy", "last_read_at")
 
     def __init__(self):
-        self.busy = False
+        self._lock = threading.Lock()
+        self.busy = 0
         self.last_read_at = time.monotonic()
 
+    def enter(self):
+        with self._lock:
+            self.busy += 1
+            self.last_read_at = time.monotonic()
+
+    def leave(self):
+        with self._lock:
+            self.busy -= 1
+            self.last_read_at = time.monotonic()
+
     def idle_for(self):
-        """마지막 read가 끝난 뒤 지난 초 — read 중이면 0."""
-        return 0.0 if self.busy else time.monotonic() - self.last_read_at
+        """마지막 read가 끝난 뒤 지난 초 — 누가 read 중이면 0."""
+        with self._lock:
+            return 0.0 if self.busy else time.monotonic() - self.last_read_at
+
+
+_PROCESS_READS = _ReadClock()  # 이 프로세스의 모든 파이프 캡처의 read — 채움기의 쉬는 때는 자기 캡처와 이것 둘 다로 봄
 
 
 class _Filler:
-    """전체 모드의 쉬는 시간 채움기 (스펙 §6.5 — 방식 B): 캡처의 read()가 IDLE_FILL_DELAY_S 동안 없을 때만, 자기 ffmpeg 세션(채움 세션 —
+    """전체 모드의 쉬는 시간 채움기 (스펙 §6.5 — 방식 B): 캡처의 read()도, 이 프로세스의 다른 파이프 캡처의 read()도 IDLE_FILL_DELAY_S 동안 없을 때만, 자기 ffmpeg 세션(채움 세션 —
     주 세션과 같은 명령·전송 코드, -ss 없이 처음부터)에서 프레임을 차례로 꺼내 캡처의 전체 저장소(_full)에 그 번호로 넣는다. 캡처당
     하나(전체 모드 판정 때 만듦 — FFmpegPipeCapture._settle_cache), 데몬 스레드 하나. 전체 저장소는 이 채움기만 쓴다 — read가 내준
     프레임은 링에만 (재생 중 보관 비용을 없애려는 것 — IDLE_FILL_DELAY_S 주석).
 
-    - 쉬는 때가 아니면 꺼내지 않고 FILL_POLL_S마다 다시 볼 뿐이다: 소켓을 읽지 않으면 ffmpeg는 저절로 멈춘다(CPU 0 — 읽기 스레드가 선읽기
+    - 쉬는 때 = 자기 캡처의 시계(clock)와 프로세스 시계(_PROCESS_READS)가 둘 다 IDLE_FILL_DELAY_S 동안 read 없음 — A/B에서 와이프를 끄고
+      A만 재생해도 B는 채우지 않음(_ReadClock). 쉬는 때가 아니면 꺼내지 않고 FILL_POLL_S마다 다시 볼 뿐이다: 소켓을 읽지 않으면 ffmpeg는 저절로 멈춘다(CPU 0 — 읽기 스레드가 선읽기
       큐 READAHEAD_FRAMES장까지는 받아 둠, 4K ~150MB). 채움 세션은 처음 쉬는 때 띄운다(판정 직후 띄우면 첫 재생과 디코드를 다툼). 꺼내는
       도중에 read가 오면 그 장을 넣고 다음 장 앞에서 멈춘다.
     - 캡처를 붙잡지 않는다(약한 참조도 없음): 캡처의 잠금(lock)·전체 저장소(store)·read 시계(clock — _ReadClock)만 받는다. 넣기는 그
@@ -644,7 +674,8 @@ class _Filler:
     - 실패(세션 실패·이른 끝·넘침·READ_TIMEOUT_S 동안 프레임 없음·세션이나 스레드를 띄우지 못함·뜻밖의 예외)는 캡처의 죽음이 아니다(보조
       기능): 기록에 한 번(FILL_FAILURE_HEADLINE — 채운 장수·사유(트레이스백이 있으면 함께)·파일·명령·stderr) + failed에 사유, 세션 정리,
       채움 끝 — 캡처는 링·스트림·재시작으로 그대로 읽고 오류 창은 없다(스펙 §7-19). 넘침이면 번호를 믿을 수 없어 채운 것을 비우고, 그 밖의
-      실패는 이미 넣은 장을 둔다(처음부터 차례로 받은 것이라 번호가 정확). 다시 채우지 않는다. 어떤 실패도 이 스레드 밖으로 내지 않는다.
+      실패는 이미 넣은 장을 둔다(처음부터 차례로 받은 것이라 번호가 정확). 다시 채우지 않는다. 실패하면 예산 장부의 몫을 이미 넣은 만큼으로
+      곧바로 줄인다(_LEDGER.shrink — 채우지 못한 몫은 다른 캡처가 쓸 수 있음; 넣은 장과 그 몫은 release까지 남음). 어떤 실패도 이 스레드 밖으로 내지 않는다.
     - 멈춤: halt()는 캡처의 잠금 안에서(release·죽음이 저장소를 비우는 바로 그 자리) 플래그만 — 그 뒤로는 넣지 않으므로 닫은 캡처에 한
       장이 새어 들어가지 않는다. stop()은 release·죽음·GC(캡처 단위 weakref.finalize)에서 플래그 + 채움 세션 정지(kill — 거두기는 세션의
       데몬 스레드), 기다리지 않음. 멈춘 뒤의 끊김은 실패가 아니다. release는 그 전에 드러나지 않은 채움 실패(쉬는 사이 죽은 ffmpeg)를
@@ -654,7 +685,7 @@ class _Filler:
     돌려도 스스로 막히지 않게 (_Transport의 잠금과 같은 까닭). index(다음에 넣을 번호 = 넣은 장수)는 캡처의 잠금 안에서 채움 스레드만 바꾼다.
     """
 
-    def __init__(self, lock, store, clock, path, count, height, width, frame_bytes):
+    def __init__(self, lock, store, clock, path, count, height, width, frame_bytes, ledger_key=None):
         self._capture_lock = lock
         self._store = store
         self._clock = clock
@@ -663,6 +694,7 @@ class _Filler:
         self._height = height
         self._width = width
         self._frame_bytes = frame_bytes
+        self._ledger_key = ledger_key  # 캡처의 장부 키 — 실패하면 몫을 넣은 만큼으로 줄임 (_LEDGER.shrink)
         self._lock = threading.RLock()
         self._wake = threading.Event()  # stop()이 쉬는 때 기다림을 깨움
         self._stopped = False  # 정지 플래그: halt·stop
@@ -738,10 +770,10 @@ class _Filler:
             self._fail(self._session_failure(outcome, value), session, clear=outcome == _FRAME)
 
     def _wait_idle(self):
-        """쉬는 때(read가 IDLE_FILL_DELAY_S 동안 없음)까지 FILL_POLL_S씩 기다림 → 참, 그사이 멈춤(stop·halt)이면 거짓.
-        IDLE_FILL_DELAY_S는 볼 때마다 모듈에서 읽는다 (시험이 바꿔 채움기를 붙잡아 둠)."""
+        """쉬는 때(자기 캡처와 프로세스 전체 모두 read가 IDLE_FILL_DELAY_S 동안 없음)까지 FILL_POLL_S씩 기다림 → 참, 그사이
+        멈춤(stop·halt)이면 거짓. IDLE_FILL_DELAY_S는 볼 때마다 모듈에서 읽는다 (시험이 바꿔 채움기를 붙잡아 둠)."""
         while not self._stopped:
-            if self._clock.idle_for() >= IDLE_FILL_DELAY_S:
+            if min(self._clock.idle_for(), _PROCESS_READS.idle_for()) >= IDLE_FILL_DELAY_S:
                 return True
             self._wake.wait(FILL_POLL_S)
         return False
@@ -752,6 +784,9 @@ class _Filler:
         try:
             transport = _Transport()
             command = _pipe_command(self._path, transport.output)
+            if self._stopped:  # Popen 바로 앞: 쉬는 때를 본 뒤 release·죽음이 세웠으면 쓸모없는 ffmpeg를 띄우지 않음 (남는 좁은 틈은 아래에서 곧바로 멈춤)
+                transport.close()
+                return None
             session = _PipeSession(command, transport, self._height, self._width, is_filler=True)
         except Exception:  # 소켓·실행 파일 없음(OSError·ToolNotFoundError)·스레드 시작 실패 — 캡처는 그대로
             if transport is not None:
@@ -802,8 +837,8 @@ class _Filler:
             _last_resort(f"프레임 캐시 채움 끝을 기록하지 못했습니다: {self._path}")
 
     def _fail(self, reason, session=None, command=(), clear=False):
-        """채움 실패 (처음 한 번만): failed에 사유 → (clear — 넘침 — 면 채운 것을 비움) → 세션 정리 → 기록 한 번. 멈춘 뒤면(release·
-        죽음·GC — 실패가 아님) 아무것도 안 함. 예외를 내지 않음."""
+        """채움 실패 (처음 한 번만): failed에 사유 → (clear — 넘침 — 면 채운 것을 비움) → 세션 정리 → 장부 몫을 넣은 만큼으로 줄임
+        (_LEDGER.shrink — 이미 반환됐으면 아무것도 안 함) → 기록 한 번. 멈춘 뒤면(release·죽음·GC — 실패가 아님) 아무것도 안 함. 예외를 내지 않음."""
         with self._lock:
             if self._stopped or self.failed is not None:
                 return
@@ -814,6 +849,7 @@ class _Filler:
                     self._store.clear()
                     self.index = 0
         self._end_session()
+        _LEDGER.shrink(self._ledger_key, self.index * self._frame_bytes)
         self._log_failure(reason, session, command)
 
     def _log_failure(self, reason, session, command=()):
@@ -825,7 +861,8 @@ class _Filler:
                 stderr = ""
             error = PipeCaptureError(f"{reason}: {self._path}", command, stderr)
             print(f"{LOG_PREFIX} {FILL_FAILURE_HEADLINE} — 재생·탐색은 그대로입니다 (채운 {self.index}/{self._count}장, 나머지는 "
-                  f"링·재시작으로 읽음): {error}", file=sys.stderr, flush=True)
+                  f"링·재시작으로 읽음; 예산 몫은 채운 만큼 {frame_cache_budget.gb(self.index * self._frame_bytes)}으로 줄임): {error}",
+                  file=sys.stderr, flush=True)
         except Exception:
             _last_resort(f"{FILL_FAILURE_HEADLINE} — 기록하지 못했습니다 ({reason}): {self._path}")
 
@@ -877,10 +914,11 @@ class FFmpegPipeCapture:
     프레임 캐시 (스펙 §6·§6.5): full_cache=True(플레이어 A/B만)인 캡처는 첫 read 머리에서 한 번(_decide_cache) 예산을 보고 전체 모드면
     파일 장수 크기·재시작을 건너 남는 전체 저장소(_full)와 쉬는 시간 채움기(_Filler)를 만든다 — "전체"는 '읽는 동안은 링 + 쉬는 때
     채움'이라는 뜻: read가 내준 프레임은 전체 모드도 링에만 두고(재생 중 보관 비용 — IDLE_FILL_DELAY_S 주석), read가 IDLE_FILL_DELAY_S
-    동안 없을 때 채움기가 따로 띄운 ffmpeg로 처음부터 채운다. 채움기가 채운 번호로의 탐색은 재시작이 없고, 규칙 ①이 먼저라 보관 구간을
+    동안 없을 때(이 캡처도, 이 프로세스의 다른 파이프 캡처도 — A/B에서 한쪽만 재생해도 다른 쪽은 채우지 않음) 채움기가 따로 띄운 ffmpeg로
+    처음부터 채운다. 채움기가 채운 번호로의 탐색은 재시작이 없고, 규칙 ①이 먼저라 보관 구간을
     지나는 순차 재생은 스트림을 그대로 따라간다(스트림 우선 — 보관 구간을 벗어날 때 재시작은 많아야 한 번). 채움 진행은
     fill_done·fill_index·fill_failed·fill_session과 wait_fill(timeout)으로 본다(시험용). 채움기 실패는 기록 한 번이고 캡처는 그대로(죽지
-    않음, 오류 창 없음 — 스펙 §7-19). opt-in하지 않았거나, 킬 스위치(YESONCHECK_FRAME_CACHE=ring)거나, 예산이 모자라면 링 모드
+    않음, 오류 창 없음 — 스펙 §7-19), 예산 장부의 몫은 채운 만큼으로 곧바로 줄어듦. opt-in하지 않았거나, 킬 스위치(YESONCHECK_FRAME_CACHE=ring)거나, 예산이 모자라면 링 모드
     (cache_mode: None·"ring"·"full") — 채움기 없음.
 
     생성자가 ffmpeg를 띄우고 첫 프레임이 올 때까지 기다린다(eager) — 못 열면 PipeCaptureError(원인·명령·stderr 전문). 첫 프레임은
@@ -898,7 +936,7 @@ class FFmpegPipeCapture:
     스레드: read()는 한 번에 한 스레드만 부른다 — 같은 캡처를 여러 스레드가 동시에 read하는 것은 지원하지 않는다 (위치 장부·탐색이
     read 한 호출 안에서 이어지는 일이라; 지금 앱의 소비자는 모두 한 스레드에서 read). get·set·release는 다른 스레드에서 불러도
     된다: 캡처의 상태(_session·_finalizer·_ledger_finalizer·_fill_finalizer·_filler·_pos·_stream_pos·_ring·_full·_target)는 _lock이 지키고
-    (채움기도 전체 저장소에 넣을 때 이 잠금을 짧게 잡음 — 소켓을 기다리는 동안은 아님; read 활동 _reads만 잠금 없이 read가 씀), read()는 프레임을 기다리는 동안과
+    (채움기도 전체 저장소에 넣을 때 이 잠금을 짧게 잡음 — 소켓을 기다리는 동안은 아님; read 활동 시계 _reads·_PROCESS_READS는 제 잠금), read()는 프레임을 기다리는 동안과
     ffmpeg를 띄우는 동안 _lock을 잡지 않는다 — 다른 스레드의 release가 기다림을 깨워 끝낼 수 있다(그 read는 (False, None), 실패
     아님). 죽음 전이는 '_session이 아직 그 세션일 때 None으로 바꾼 쪽'만 하므로 한 번뿐. release 없이 버려진 캡처의 ffmpeg는
     weakref.finalize가 끝낸다 (인터프리터가 끝날 때도) — 재시작하면 새 세션으로 다시 등록하고 옛 것은 불러서 끝낸다. 전체 보관의
@@ -923,7 +961,7 @@ class FFmpegPipeCapture:
         self._ring = _FrameStore(KEEP_BEHIND, keep_across_restart=False)  # 주 세션에서 꺼낸 프레임의 보관 — 최근 KEEP_BEHIND장 (두 모드 모두)
         # 전체 저장소: 링 모드는 0장(아무것도 넣지 않음), 전체 모드면 판정이 파일 장수로 바꾸고 채움기(_Filler)만 씀 (스펙 §6.5)
         self._full = _FrameStore(0, keep_across_restart=True)
-        self._reads = _ReadClock()  # read() 활동 — 채움기가 쉬는 때를 봄 (캡처 대신 이것만 넘김)
+        self._reads = _ReadClock()  # 이 캡처의 read() 활동 — 채움기가 쉬는 때를 봄 (프로세스 시계 _PROCESS_READS와 함께; 캡처 대신 이것만 넘김)
         self._filler = None  # 전체 모드의 쉬는 시간 채움기 (판정이 만듦)
         self._fill_finalizer = None  # 전체 모드면 채움기 정지 (캡처의 weakref.finalize — release·죽음·GC가 같이 쓰고 한 번만 돎)
         self._target = None  # set()이 기록한 탐색 목표 (0~count 정수, 다음 read()가 실행 — get(POS_FRAMES)는 이것을 보임)
@@ -1002,14 +1040,14 @@ class FFmpegPipeCapture:
         return True
 
     def read(self):
-        reads = self._reads  # 채움기가 보는 read 활동: 들어올 때·나갈 때 시각, 그 사이 busy (_ReadClock)
-        reads.busy = True
-        reads.last_read_at = time.monotonic()
+        reads = self._reads  # 채움기가 보는 read 활동: 이 캡처의 시계와 프로세스 시계 둘 다 (_ReadClock — 들어올 때·나갈 때 시각, 그 사이 busy)
+        reads.enter()
+        _PROCESS_READS.enter()
         try:
             return self._read()
         finally:
-            reads.last_read_at = time.monotonic()
-            reads.busy = False
+            _PROCESS_READS.leave()
+            reads.leave()
 
     def _read(self):
         if self._cache_mode is None:  # 첫 read: 프레임 캐시 판정을 한 번 (_lock 밖 — 메모리를 읽음)
@@ -1155,7 +1193,7 @@ class FFmpegPipeCapture:
                 self._ledger_finalizer = weakref.finalize(self, _LEDGER.release, self._ledger_key)
                 _LEDGER.add(self._ledger_key, decision.total_bytes)
                 filler = _Filler(self._lock, self._full, self._reads, self._path, self._count, self._height, self._width,
-                                 self._frame_bytes)
+                                 self._frame_bytes, self._ledger_key)
                 self._filler = filler
                 # release 없이 버려진 캡처도 채움 ffmpeg를 남기지 않게 — 채움기는 캡처를 붙잡지 않으므로 GC가 늘 돎
                 self._fill_finalizer = weakref.finalize(self, filler.stop)
