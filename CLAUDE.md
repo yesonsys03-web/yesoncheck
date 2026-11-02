@@ -118,7 +118,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   시작 순서는 아래 '여러 창과 업데이트'의 '새 창·동영상 열기·기본 앱'. 스플래시 전에 `movie_pipe_source.movie_source_mode()`·`frame_cache_mode()`를 한 번씩 불러
   `YESONCHECK_MOVIE_SOURCE`·`YESONCHECK_FRAME_CACHE`의 나쁜 값을 시작 때 ValueError로 멈춤 (같은 자리에서 `gl_video_item.video_item_mode`가 `YESONCHECK_VIDEO_ITEM`도)
 - `yesoncheck/main_window.py` (12줄): 믹스인 구성 (`VideoPlayer`)
-- `yesoncheck/player_base.py` (1,873줄): 핵심 UI 및 윈도우 관리 — `VideoPlayerBase`(UI 만들기·메뉴·테마 전환·창 닫기·작업 정지·창 사이 연결).
+- `yesoncheck/player_base.py` (1,878줄): 핵심 UI 및 윈도우 관리 — `VideoPlayerBase`(UI 만들기·메뉴·테마 전환·창 닫기·작업 정지·창 사이 연결).
   OCR 묶음은 `player_ocr`, 오버레이 묶음은 `player_overlay`로 나눠 부모로 붙였고, 스타일시트 문자열은 `main_window_styles`, 붙잡아 둔 워커 정리는
   `worker_lifecycle`로 옮김 (`worker_lifecycle`의 이름은 여기서 다시 내보냄)
 - `yesoncheck/player_ocr.py` (1,845줄): `PlayerOcrMixin` — ROI·분석 방식 UI 상태, 분석 시작(OCR·애니매틱·애니매틱2)과 진행·완료 콜백, 검토 창 수명,
@@ -128,11 +128,11 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
 - `yesoncheck/main_window_styles.py` (940줄): 어두운·밝은 테마 시트(`DARK_STYLESHEET`·`LIGHT_STYLESHEET`)와 큰 인라인 시트 상수 — 데이터만 있는 잎 모듈
   (한 글자도 바뀌지 않게 `tests/test_stylesheet_freeze.py`가 해시로 지킴)
 - `yesoncheck/worker_lifecycle.py` (76줄): 놓아 준 `QThread` 워커를 끝날 때까지 붙잡아 두기 — `release_worker`·`wait_for_released_workers`·`EXIT_WAIT_S`(30초)
-- `yesoncheck/player_playback.py` (2,651줄): 비디오 재생, 프레임 탐색 및 FFmpeg 작업 — `_open_movie_capture`는 `os.stat` 확인 뒤·`cv2.VideoCapture` 앞에 ffmpeg 파이프 게이트(`maybe_pipe_capture(…, full_cache=True)` — 전체 프레임 캐시를 원하는 곳은 여기뿐)를 끼움(아래 `movie_pipe_source`; 음성이면 기존 cv2 줄이 그대로 돎). `update_frame`은 그린 직후 `refresh_frame_annotations_display(redraw=False)`를 불러 같은 프레임을 두 번 그리지 않음 (틱당 `updateFrame` 2→1, 픽셀 동일 — 이 브랜치에서 기존 표시 코드를 바꾼 유일한 곳, 사용자 승인 예외; 드래그 + OCR 검토 창 분기는 앞 그림이 B를 뺀 그림이라 와이프가 켜져 있을 때만 다시 그림; 같은 패턴인 `_overlay_slider_ui_update`는 무변경; tests/test_display_single_draw.py) — 화살표·휠 프레임 이동 모두 오버레이(V 모드) 슬라이더를 함께 갱신(`_update_ui_fast`도 `update_overlay_controls`를 부름 — tests/test_overlay_slider_sync.py) — 전역 단축키(`keyPressEvent`): V(컨트롤 전체 숨김·오버레이), N/ㅜ(가운데 컨트롤 열 숨김 — `toggle_middle_panel`, V·전체화면 복원 뒤에도 유지)
+- `yesoncheck/player_playback.py` (2,658줄): 비디오 재생, 프레임 탐색 및 FFmpeg 작업 — `_open_movie_capture`는 `os.stat` 확인 뒤·`cv2.VideoCapture` 앞에 ffmpeg 파이프 게이트(`maybe_pipe_capture(…, full_cache=True)` — 전체 프레임 캐시를 원하는 곳은 여기뿐)를 끼움(아래 `movie_pipe_source`; 음성이면 기존 cv2 줄이 그대로 돎). `update_frame`은 그린 직후 `refresh_frame_annotations_display(redraw=False)`를 불러 같은 프레임을 두 번 그리지 않음 (틱당 `updateFrame` 2→1, 픽셀 동일 — 이 브랜치에서 기존 표시 코드를 바꾼 유일한 곳, 사용자 승인 예외; 드래그 + OCR 검토 창 분기는 앞 그림이 B를 뺀 그림이라 와이프가 켜져 있을 때만 다시 그림; 같은 패턴인 `_overlay_slider_ui_update`는 무변경; tests/test_display_single_draw.py) — 화살표·휠 프레임 이동 모두 오버레이(V 모드) 슬라이더를 함께 갱신(`_update_ui_fast`도 `update_overlay_controls`를 부름 — tests/test_overlay_slider_sync.py) — 전역 단축키(`keyPressEvent`): V(컨트롤 전체 숨김·오버레이), N/ㅜ(가운데 컨트롤 열 숨김 — `toggle_middle_panel`, V·전체화면 복원 뒤에도 유지), P/ㅔ(북마크 관리 창 — `show_bookmarks`). 사이드바 목록이 포커스를 가질 때는 `player_base.eventFilter`가 같은 키(V·N·P)를 받음
 - `yesoncheck/player_annotations.py` (1,073줄): 수정 사항 주석(프레임별 텍스트·도형) UI와 재생 연동 (`PlayerAnnotationsMixin`) — 주석 모드 버튼은 켜짐을 빨강으로 표시(`ANNOTATION_MODE_BUTTON_STYLE`). `refresh_frame_annotations_display(redraw=True)`·`_redraw_frame_with_annotations(draw=True)`: `False`면 다시 그리기만 빼고 목록·상태 라벨·편집 대상 갱신은 그대로
 - `yesoncheck/player_sidebar.py` (555줄): `PlayerSidebarMixin` — 드롭·파일 넣기·폴더 불러오기, 우클릭 메뉴·파일 복사, 작품 → 시즌 → job 콤보,
   선택한 영상을 A에 열기. 나머지는 아래 부모 믹스인 모듈에 있고 이 모듈은 옛 import 경로를 위해 일부 이름을 다시 내보냄
-  - `yesoncheck/sidebar_bookmarks.py` (216줄): `SidebarBookmarksMixin` — 북마크 읽기·더하기·지우기, 북마크 관리 창, 북마크 폴더 열기
+  - `yesoncheck/sidebar_bookmarks.py` (433줄): `SidebarBookmarksMixin` — 북마크 읽기·더하기·지우기, 북마크 관리 창(경로를 그 자리에서 고치기·우클릭 메뉴 — 아래 컴포넌트 역할), 북마크 폴더 열기
   - `yesoncheck/sidebar_playlist.py` (202줄): `SidebarPlaylistMixin` — 선택 재생(Play Selected) 재생목록 시작·차례대로 열기·없는 영상 건너뛰기 (`_playlist_selection`: Mov 탭은 Mov 목록 선택, All 탭은 mov만)
   - `yesoncheck/sidebar_config_paths.py` (883줄): `SidebarConfigPathsMixin` — 공유 설정 읽기 시작·창에 넣기·문제 알림, (Windows) 변환표 자동 설정,
     작품 경로 관리 창·`get_work_path`·관리 비밀번호
@@ -326,7 +326,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   임시 파일 + `os.replace`, Windows는 다른 프로세스가 연 동안 다시 시도), `read_json`(깨진 파일은 `UserFileError` — 빈 값으로
   치고 덮어쓰지 않음), `FileLock`(같은 PC의 프로세스 사이 잠금 — NAS 위 파일에는 쓰지 않음), `update_json`(`<파일>.lock`을
   잡고 다시 읽기 → 고치기 → 원자적 쓰기) — Qt 없음
-- `yesoncheck/bookmarks.py` (47줄): 북마크 `~/.yeson_bookmarks.json` — 더하기·지우기마다 파일을 다시 읽어 고침
+- `yesoncheck/bookmarks.py` (72줄): 북마크 `~/.yeson_bookmarks.json` — 더하기·지우기·고치기(`replace` — old 자리에 new, 그사이 다른 창이 old를 지웠으면 끝에, new가 이미 있으면 old만 지움)마다 파일을 다시 읽어 고침
   (`user_files.update_json`, 잠금 파일 `~/.yeson_bookmarks.json.lock`), 읽지 못하면 `UserFileError`(빈 목록으로 덮지 않음) — Qt 없음
 - `yesoncheck/instances.py` (383줄): 창 기록 — 창(프로세스)마다 사용자별 기록 폴더(Mac `~/Library/Caches/YesonCheck/instances`,
   Windows `%LOCALAPPDATA%\YesonCheck\instances`)에 `<pid>.json`(pid·앱 자리·프로세스 시작 시각·연결 서버 이름). 창을 보인
@@ -362,7 +362,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   `ensure_registered`(읽어서 없거나 다른 것만 쓰고, 쓴 것이 있으면 `SHChangeNotify`), `register_at_start`(빌드 Windows 앱이 켤 때 이 계정에
   등록), `open_default_apps_settings`(Help → "동영상 기본 앱 설정 열기…" — `ms-settings:defaultapps?registeredAppUser=YesonCheck`).
   `winreg`·`shell32`는 쓸 때 불러와 Mac에서도 모듈이 불림 — 설치 파일 `installer/yesoncheck.iss [Registry]`와 같은 내용(BUILD.md 8-2)
-- `yesoncheck/error_window.py` (43줄): `default_app`·`file_associations`·`mac_app_events`·`player_base`(GL 뷰포트 폴백)·`gl_video_item`(GL 텍스처 스트리밍 실패)이 함께 쓰는 오류 알림 — `show_error(prefix, text)`는 기록(stderr)에
+- `yesoncheck/error_window.py` (75줄): `default_app`·`file_associations`·`mac_app_events`·`player_base`(GL 뷰포트 폴백)·`gl_video_item`(GL 텍스처 스트리밍 실패)·`sidebar_bookmarks`(관리 창의 가상 함수)가 함께 쓰는 오류 알림 — `report_from_handler(prefix, context)`: PyQt5 가상 함수(eventFilter·done 등)의 except 블록용 — 트레이스백은 바로 기록, 오류 창은 Qt 루프에서, 알리다 또 실패하면 원래 stderr(`_last_resort`) — 예외를 내보내지 않음(`mac_app_events._report_error`와 같은 모양). `show_error(prefix, text)`는 기록(stderr)에
   남기고 `show_window`: 앱의 예외 창(`sys.excepthook.dialog` = `app._ErrorDialog.show_text` — 기록 파일 경로를 붙이고 한 번에 하나만), 없으면(소스 실행)
   `QMessageBox.critical`; `show_unexpected`는 예외 처리 중에 트레이스백째(기록에는 전부, 창에는 `with_details` — 무엇이 실패했는지는 그대로, 트레이스백은 끝
   `DETAILS_LIMIT`(3000) 글자). 잡히지 않은 예외(`_ErrorDialog.show_error`)는 트레이스백만이라 끝 3000자
@@ -558,6 +558,26 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
 
 **SidebarBookmarksMixin** (`sidebar_bookmarks.py`):
 - 북마크 생성 및 탐색 — 북마크 파일 읽기·더하기·지우기, 북마크 관리 창, 북마크 폴더 열기(영상 불러오기 + 그 폴더의 썸네일 폴더 설정)
+- 관리 창(`BookmarkDialog` — Bookmarks 단추·P 키/ㅔ)의 경로는 DJV처럼 그 자리에서 고침: 항목은 `ItemIsEditable`(고치기 전 경로는 `Qt.UserRole`), 편집 트리거는
+  **`SelectedClicked`뿐**(고른 항목 다시 클릭; 우클릭 → 경로 수정도 `editItem`). `EditKeyPressed`는 켜지 않음(Mac에서 Enter가 편집기를 열어 '목록에서 Enter = 폴더 열기'
+  습관이 깨짐 — Enter는 예전처럼 창의 기본 단추 '폴더 열기'), `DoubleClicked`도 끔(더블클릭 = 폴더 열기). Qt는 SelectedClicked 편집을 더블클릭 간격만큼 미뤘다가 더블클릭이
+  오면 취소하는데 그 취소가 `doubleClicked` 신호 **뒤**라, 더블클릭 열기는 `QTimer.singleShot(0)`로 미룸(열기의 0.5초 대기 중 편집 타이머가 터져 닫히는 창에 편집기가 열리지 않게).
+  편집기 commit → `itemChanged` → `_bookmark_item_edited`: 친 글을 `typed_path`(공백·`~`·끝 구분자 정리)로 → 파일을 다시 읽고(`_refresh_bookmarks`) `bookmarks.replace`로
+  **바로 저장**(자리 유지·다른 창의 것 보존) → '폴더 열기'·다음에 열 때 고친 경로. 빈 글은 되돌림, 이미 있는 경로(`_same_folder` — 끝 구분자만 다른 것도)는 알림 + 되돌림,
+  읽기·쓰기 실패는 기록 + 창 + 되돌림(파일은 덮지 않음), 지금 없는 폴더는 저장하고 경고. 되돌리기·정리는 `_set_bookmark_item`(blockSignals — itemChanged 재진입 없음).
+  **편집기 포커스 규칙 `_BookmarkPathDelegate`**: `FocusOut`의 사유가 `ActiveWindowFocusReason`·`PopupFocusReason`이면 commit하지 않음 — Qt 기본 델리게이트는 앱이
+  비활성(Cmd+Tab → Finder에서 경로 복사)되기만 해도 반쯤 친 글을 commit해 파일에 써 버림(검토에서 재현). 창 안의 다른 곳 클릭·Enter는 저장, Esc는 취소(Qt 기본).
+  **편집기가 열린 채 단추·메뉴·창 닫기**: `commit_bookmark_edit`가 먼저 commit하고 받아들여졌는지 돌려줌(`indexWidget`으로 열린 편집기를 찾아 보호 메서드
+  `commitData`·`closeEditor` — Python에서 만든 QListWidget이라 부를 수 있음; Mac은 QPushButton이 클릭으로 포커스를 가져가지 않아 편집기가 저절로 닫히지 않음).
+  거부된 편집(이미 있는 경로·경로 형식·파일 실패)이면 '폴더 열기'·'삭제'·우클릭 메뉴는 옛 경로로 가지 않고 멈춤; 글을 고치지 않은 편집기(느린 더블클릭)는 끝에 구분자가 붙어
+  저장된 경로(끌어다 놓은 폴더)처럼 정리한 글이 저장된 글과 달라도 거부가 아님(편집기 글 == 항목 글이면 받아들임 — 2차 검토에서 잡은 '첫 클릭 무시'). 읽기 전에
+  `QApplication.inputMethod().commit()`(한글 조합 중인 글자 — Mac 실기 확인 몫). **단추 셋은 `Qt.TabFocus`**(Mac 기본과 같게): 포커스를 가져가는 스타일(Windows·Fusion)에서는
+  누르는 순간 FocusOut commit이 먼저 돌아(거부 → 편집기 없음) clicked가 옛 경로를 열었음. 창 닫기(닫기 단추 → `reject`, X, Esc)는 `BookmarkDialog.done`이 commit 뒤 닫고,
+  다른 창의 업데이트가 닫을 때(`close_for_update` → 창의 `_closing_for_update`)는 반쪽 글을 저장하거나 모달을 띄우지 않고 편집을 버림(`revert_bookmark_edit` —
+  모달에 막힌 창은 닫히지 않아 업데이트가 90초 뒤 멈춤). `typed_path`는 감싼 따옴표(Windows '경로로 복사')도 벗기고, 처음부터 적지 않은 경로(`os.path.isabs` 아님)는 알림 + 되돌림.
+  가상 함수(`eventFilter`·`done`) **본문**의 예외는 `_report_unexpected` → `error_window.report_from_handler`(기록 + Qt 루프에서 오류 창, 알리다 실패해도 내보내지 않음 — qFatal 회피);
+  `itemChanged` 슬롯(`_bookmark_item_edited`)의 예외는 다른 슬롯처럼 `sys.excepthook`(빌드 앱은 예외 창, 소스 실행은 abort)이지 이 가드가 아님.
+  우클릭 메뉴 `bookmark_context_menu`(경로 복사·경로 수정·폴더 열기·삭제)는 QMenu를 돌려주고 `_show_bookmark_context_menu`가 띄운 뒤 `deleteLater`(시험은 항목을 바로 trigger).
 
 **SidebarPlaylistMixin** (`sidebar_playlist.py`):
 - 선택 재생(Play Selected): 사이드바에서 고른 영상들을 차례로 열어 재생, 디스크에 없는 영상 건너뛰기, 현재 항목 강조 색 되돌리기
@@ -764,7 +784,7 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 
 **시험은 반드시 `~/coding/p310_tf/bin/python -m pytest`로 돌릴 것** — TensorFlow가 없는 `~/coding/p310`으로 돌리면 11개가 실패함.
 
-`tests/`에 시험 파일 86개 (수집 2,065개). `python -m pytest tests -q`로 돌리며(약 12분), 이 Mac의 소스 실행에서 2,020개가 통과하고 45개는 건너뜀 —
+`tests/`에 시험 파일 86개 (수집 2,104개). `python -m pytest tests -q`로 돌리며(약 12분), 이 Mac의 소스 실행에서 2,058개가 통과하고 45개는 건너뜀 —
 다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-11-02 기준; `test_fast_startup`의 종료 플레이크 1건(`test_app_exits_cleanly_while_shared_config_load_runs`, 자식 종료 코드 −11)은 러너 상태에 따라 간헐 실패 — main에서도 같은 빈도, 따로 돌리면 통과). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
 정적 빌드(`vendor/ffmpeg/`)를 씀 (`tests/conftest.py`). 시험을 건너뛰거나 지워서 통과시키지 말 것.
 
@@ -826,7 +846,7 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 7. 단일 및 배치 세그먼트 내보내기
 8. 웹 보고서 생성 및 내보내기
 9. 썸네일 생성 및 캐싱
-10. 북마크 생성 및 탐색
+10. 북마크 생성 및 탐색 — 관리 창에서 경로를 클릭해 고친 뒤 '폴더 열기'가 고친 폴더를 여는지, 우클릭 경로 복사, P 키
 11. 프레임 탐색 및 재생
 12. OCR 리뷰 대화상자와 메인 윈도우 간 실시간 동기화
 13. 4K ProRes 재생(ffmpeg 파이프) — 캐시 없는 파일의 첫 재생 fps·소리·탐색·와이프·주석·h264 무회귀·킬 스위치: 내부(비공개) 저장소의 `docs/superpowers/records/2026-10-29-prores-pipe-design/eye-check.md`;
@@ -974,6 +994,13 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 5. 다양한 비디오 콘텐츠 유형으로 테스트
 
 ## 최근 변경 사항
+
+### 2026-11-02 (북마크 관리 창 — 경로를 그 자리에서 고치기·우클릭 메뉴·P 키)
+- 관리 창의 경로를 DJV처럼 클릭해 고침(고른 항목 다시 클릭·우클릭 → 경로 수정; 더블클릭·Enter는 폴더 열기 그대로). 고친 경로는 commit 즉시 `bookmarks.replace`로 파일에(자리 유지, 다른 창의 것 보존)
+  → '폴더 열기'·다음에 열 때 모두 고친 경로. 편집기가 열린 채 단추·메뉴·창 닫기는 먼저 commit(Mac은 단추가 포커스를 안 가져감), 거부된 편집이면 옛 경로로 열거나 지우지 않음.
+  다른 앱으로 갔다 와도 편집기는 그대로(Qt 기본은 앱 비활성에 반쯤 친 글을 commit — 검토에서 잡음). 우클릭 메뉴: 경로 복사·경로 수정·폴더 열기·삭제. P/ㅔ 키 = Bookmarks 단추
+- 실패는 조용히 넘기지 않음: 빈 글·이미 있는 경로(끝 구분자만 달라도)·읽기/쓰기 실패는 되돌림(+알림·기록), 지금 없는 폴더는 저장하고 경고. 친 글은 공백·`~`·끝 구분자를 정리.
+  시험 36개 추가(`tests/test_bookmarks.py` — 실제 QLineEdit 편집기·QFocusEvent·setActiveWindow·QTest 키/마우스(더블클릭은 누름·뗌·더블클릭·뗌 + createEditor 감시)·업데이트 닫기) + `test_error_window` 2개
 
 ### 2026-11-02 ② (ProRes 파이프 재생 — 전체 프레임 캐시)
 - 4K ProRes 파이프 재생에서 링(8장) 밖으로의 되감기·←·슬라이더·반복 재생은 매번 ffmpeg 재시작(0.45~0.63초)이었음. 플레이어가 연 A/B는 이제 **파일의 모든 프레임을 메모리에 둠**(쉬는 동안 채움 — 아래 '설계 변경') — 채운 뒤의 탐색은 보관본 복사(4K ~3ms)라 재시작 0.

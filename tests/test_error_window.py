@@ -66,3 +66,36 @@ def test_uncaught_exception_window_keeps_traceback_end(qapp, dialogs, monkeypatc
     assert (kind, title) == ("critical", error_window.TITLE)
     body, log_line = text.rsplit("\n\n", 1)
     assert log_line == f"로그: {log_path}" and len(body) == error_window.DETAILS_LIMIT and body.endswith("끝\n")
+
+
+def test_report_from_handler_logs_now_and_shows_window_from_qt_loop(qapp, monkeypatch, capsys):
+    """가상 함수(eventFilter·done 등)의 except 블록용: 트레이스백은 바로 기록, 오류 창은 Qt 루프에서(이벤트 처리 안의 모달 금지)."""
+    shown = []
+    monkeypatch.setattr(error_window, "show_window", shown.append)
+    try:
+        raise ValueError("폭발")
+    except ValueError:
+        error_window.report_from_handler("[시험]", "무엇을 하다 실패함")
+    err = capsys.readouterr().err
+    assert "[시험] 무엇을 하다 실패함" in err and "ValueError: 폭발" in err
+    assert shown == []
+    qapp.processEvents()
+    assert len(shown) == 1 and shown[0].startswith("무엇을 하다 실패함\n\n") and "ValueError: 폭발" in shown[0]
+
+
+def test_report_from_handler_failure_goes_to_original_stderr(qapp, monkeypatch):
+    """알리다 또 실패하면(오류 창이 터짐) 원래 stderr에 남기고 Qt 루프 밖으로 내보내지 않음."""
+    import io
+
+    def broken(text):
+        raise RuntimeError("창 실패")
+
+    monkeypatch.setattr(error_window, "show_window", broken)
+    stream = io.StringIO()
+    monkeypatch.setattr(sys, "__stderr__", stream)
+    try:
+        raise ValueError("폭발")
+    except ValueError:
+        error_window.report_from_handler("[시험]", "무엇을 하다 실패함")
+    qapp.processEvents()
+    assert "오류를 알리지 못했습니다" in stream.getvalue() and "RuntimeError: 창 실패" in stream.getvalue()

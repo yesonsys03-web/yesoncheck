@@ -1115,6 +1115,11 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
                 QTimer.singleShot(100, self.force_focus)
                 return True
 
+            # P 키 처리 (북마크 관리 창) - 한글 ㅔ와 영문 P 모두 지원
+            if key == Qt.Key_P or (hasattr(event, 'text') and event.text() == 'ㅔ'):
+                self.show_bookmarks()
+                return True
+
             # R 키 처리 (썸네일 재생성)
             if key == Qt.Key_R:
                 self.regenerate_selected_thumbnails()
