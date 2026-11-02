@@ -356,7 +356,8 @@ def test_filler_failure_logs_once_and_capture_keeps_working(auto_mode, prores_cl
         assert wait_for(lambda: cap.fill_failed is not None, FILL_WAIT_S), "채움 ffmpeg를 죽였는데 채움 실패가 적히지 않았습니다"
         filled = cap.fill_index
         assert 10 < filled < COUNT and not cap.fill_done and cap.wait_fill(0) is False
-        assert ledger.committed() == base + frame_bytes(prores_clip) * filled  # 채우지 못한 몫은 돌려줌
+        # 채우지 못한 몫은 돌려줌 — 줄이기(shrink)는 failed를 적고 세션을 정리한 뒤라 기다려서 봄 (failed 직후에 바로 보면 엇갈림)
+        assert wait_for(lambda: ledger.committed() == base + frame_bytes(prores_clip) * filled), ledger.committed()
         assert "종료 코드" in cap.fill_failed
         assert_session_gone(cap.fill_session)
         assert cap._full.indices() == list(range(filled))

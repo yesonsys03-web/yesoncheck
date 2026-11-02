@@ -861,7 +861,8 @@ class _Filler:
                 stderr = ""
             error = PipeCaptureError(f"{reason}: {self._path}", command, stderr)
             print(f"{LOG_PREFIX} {FILL_FAILURE_HEADLINE} — 재생·탐색은 그대로입니다 (채운 {self.index}/{self._count}장, 나머지는 "
-                  f"링·재시작으로 읽음; 예산 몫은 채운 만큼 {frame_cache_budget.gb(self.index * self._frame_bytes)}으로 줄임): {error}",
+                  f"링·재시작으로 읽음; 예산 몫은 채움 실패면 채운 만큼 {frame_cache_budget.gb(self.index * self._frame_bytes)}으로 줄이고 "
+                  f"닫기(release)면 모두 돌려줌): {error}",
                   file=sys.stderr, flush=True)
         except Exception:
             _last_resort(f"{FILL_FAILURE_HEADLINE} — 기록하지 못했습니다 ({reason}): {self._path}")
