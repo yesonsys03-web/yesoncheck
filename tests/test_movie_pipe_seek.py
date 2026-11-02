@@ -19,12 +19,13 @@ import numpy as np
 import pytest
 
 from tests.prores_clips import frame_number, make_numbered_clip, make_truncated, make_voff
-from yesoncheck import error_window, external_tools, movie_pipe_source
+from yesoncheck import error_window, external_tools, frame_cache_budget, movie_pipe_source
 from yesoncheck.movie_pipe_source import (
     FAILURE_HEADLINE, KEEP_BEHIND, SEEK_BACK_K, SEEK_FORWARD_MAX, FFmpegPipeCapture, probe_movie,
 )
 
 COUNT = 120
+GB = 1024**3
 SEED = 20261030
 WAIT_S = 10  # 프로세스·스레드가 끝나기를 기다리는 한도 (보통 수십 ms)
 POS = cv2.CAP_PROP_POS_FRAMES
@@ -134,6 +135,11 @@ def read_until_false_or(cap, limit):
 
 def pid(cap):
     return cap._session.proc.pid
+
+
+def main_sessions(sessions):
+    """주 세션만 — 전체 모드 캡처의 채움기 세션(is_filler, 쉬는 시간에 따로 띄움)은 뺌 (재시작 횟수의 실증은 주 세션으로)."""
+    return [session for session in sessions if not session.is_filler]
 
 
 def wait_for(condition, timeout=WAIT_S):
@@ -304,6 +310,64 @@ def test_forward_skip_within_limit(prores_clip, sessions):
         cap.release()
 
 
+
+def test_backward_restart_prefills_ring(prores_clip, sessions):
+    """뒤로 재시작은 목표 KEEP_BEHIND(8)장 앞에서 띄워 그 장들을 꺼내 버리며 보관한다 — 그래서 그 뒤의 ←는 재시작 없이 링에서, 재시작은
+    8칸에 한 번 (4K에서 ← 매번 ~0.5초였던 것). 순차 40장(링 32..39, 스트림 40) 뒤 set(20): 새 세션 하나가 12에서 시작해 12..19를 미리
+    채우고 20을 내줌 — 링은 8장 FIFO라 20을 넣을 때 12가 밀려나 13..20. 이어 ← 7번(19..13)은 세션 그대로, set(12)는 링 밖이라 한 번 더
+    재시작(4에서 시작, 4..11 미리 채움). 어느 경로인지는 세션 수·pid·세션 시작 번호로 실증 (시간 단언 없음)."""
+    cap = open_capture(prores_clip)
+    try:
+        assert [read_number(cap) for _ in range(40)] == list(range(40))
+        assert cap._ring.indices() == list(range(40 - KEEP_BEHIND, 40))  # 링 32..39, 스트림 40
+        first_pid = pid(cap)
+        assert cap.set(POS, 20) and read_number(cap) == 20
+        assert len(sessions) == 2 and pid(cap) != first_pid  # 재시작 한 번
+        assert cap._session.start == 20 - KEEP_BEHIND  # 목표 8장 앞(12)에서 띄움
+        assert cap._ring.indices() == list(range(21 - KEEP_BEHIND, 21))  # 12..19 미리 채움 + 20 → 링 8장: 13..20
+        second_pid = pid(cap)
+        for n in range(19, 20 - KEEP_BEHIND, -1):  # ← 7번: 19..13 — 링에서
+            assert cap.set(POS, n) and read_number(cap) == n, f"← {n}"
+            assert pid(cap) == second_pid and len(sessions) == 2, f"← {n}이 ffmpeg를 다시 띄움"
+        assert cap.set(POS, 12) and read_number(cap) == 12  # 링 밖 → 8칸 만에 재시작 한 번 더
+        assert len(sessions) == 3 and pid(cap) != second_pid
+        assert cap._session.start == 12 - KEEP_BEHIND  # 4에서 띄움 (4..11 미리 채움)
+        assert cap._ring.indices() == list(range(13 - KEEP_BEHIND, 13))  # 5..12
+        assert [read_number(cap) for _ in range(3)] == [13, 14, 15] and len(sessions) == 3  # 이어 읽기는 새 스트림에서
+    finally:
+        cap.release()
+
+
+def test_forward_restart_has_no_prefill(prores_clip, sessions):
+    """앞으로 먼 점프(재시작)는 미리 채우지 않는다 — 목표 시각을 직접(SEEK_BACK_K = 0) 겨눠 그 전처럼 빠름: 스트림 10에서 set(100) →
+    새 세션의 시작 번호 100, 보관본은 100 하나뿐 (꺼내 버린 프레임 없음)."""
+    cap = open_capture(prores_clip)
+    try:
+        assert [read_number(cap) for _ in range(10)] == list(range(10))
+        assert cap.set(POS, 100) and read_number(cap) == 100
+        assert len(sessions) == 2 and cap._session.start == 100
+        assert cap._ring.indices() == [100]
+    finally:
+        cap.release()
+
+
+def test_backward_restart_prefill_clamps_at_zero(prores_clip, sessions):
+    """0 근처로의 뒤로 재시작은 0에서 띄운다 (목표 − 8이 음수가 되지 않게): 60에서 set(3) → 시작 0, 0..2를 버리며 보관하고 3을 내줌.
+    그 뒤 ←로 0까지는 링에서 (재시작 없음)."""
+    cap = open_capture(prores_clip)
+    try:
+        assert cap.set(POS, 60) and read_number(cap) == 60  # 앞으로 먼 점프 — 재시작 (시작 60)
+        assert len(sessions) == 2
+        assert cap.set(POS, 3) and read_number(cap) == 3
+        assert len(sessions) == 3 and cap._session.start == 0
+        assert cap._ring.indices() == [0, 1, 2, 3]  # 3장(0..2) 버림 + 3
+        for n in (2, 1, 0):
+            assert cap.set(POS, n) and read_number(cap) == n
+        assert len(sessions) == 3
+    finally:
+        cap.release()
+
+
 def test_release_frees_ring(prores_clip):
     """링 메모리 상한: 끝까지 읽어도 보관본은 KEEP_BEHIND장뿐이고 그 어느 것도 내준 배열과 메모리를 나누지 않음 (내부 들여다봄).
     release하면 링도 비움 (닫은 캡처가 4K 8장을 붙들지 않게)."""
@@ -316,13 +380,13 @@ def test_release_frees_ring(prores_clip):
                 break
             delivered.append(frame)
         assert len(delivered) == COUNT
-        kept = list(cap._ring._frames)
-        assert len(kept) == KEEP_BEHIND
-        assert [frame_number(f) for f in kept] == list(range(COUNT - KEEP_BEHIND, COUNT))
-        assert not any(np.shares_memory(k, d) for k in kept for d in delivered)
+        kept = cap._ring.indices()
+        assert kept == list(range(COUNT - KEEP_BEHIND, COUNT))
+        assert [frame_number(cap._ring.copy_of(i)) for i in kept] == kept
+        assert not any(np.shares_memory(k, d) for k in cap._ring._frames.values() for d in delivered)
     finally:
         cap.release()
-    assert len(cap._ring._frames) == 0
+    assert len(cap._ring) == 0
 
 
 def test_lazy_set_coalesces(prores_clip, sessions):
@@ -373,16 +437,24 @@ def test_set_clamps_like_cv2(prores_clip):
         ref.release()
 
 
-@pytest.mark.parametrize("path_kind", ["ring", "restart"])
+@pytest.mark.parametrize("path_kind", ["ring", "restart", "full"])
 def test_two_frame_clip_boundaries(two_frame_clip, path_kind, monkeypatch, sessions, capsys):
     """2장 클립에서 0·1·EOF·뒤로: 한 걸음마다 cv2와 같은 set·get·read 결과. "restart"는 링·버리기를 끄고(KEEP_BEHIND 0·
-    SEEK_FORWARD_MAX 0) 모든 이동을 -ss 재시작으로 — 마지막 프레임(1)과 끝(2)으로의 재시작 착지까지 본다."""
+    SEEK_FORWARD_MAX 0) 모든 이동을 -ss 재시작으로 — 마지막 프레임(1)과 끝(2)으로의 재시작 착지까지 본다. "full"은 전체 프레임
+    캐시(YESONCHECK_FRAME_CACHE=auto + full_cache=True) — 2장이 모두 보관돼 "ring"과 같이 재시작 없음."""
     if path_kind == "restart":
         monkeypatch.setattr(movie_pipe_source, "KEEP_BEHIND", 0)
         monkeypatch.setattr(movie_pipe_source, "SEEK_FORWARD_MAX", 0)
+    if path_kind == "full":
+        monkeypatch.setenv(movie_pipe_source.FRAME_CACHE_ENV, "auto")
+        monkeypatch.setattr(frame_cache_budget, "memory_snapshot", lambda: (128 * GB, 100 * GB))  # 예산을 고정 — 이 기계의 메모리에 안 흔들림
     steps = ["read", "read", "read", "read", 1, "read", "read", 0, "read", "read", "read", 2, "read", -1, "read",
              5, "read", 1, "read", 0, 1, "read", "read"]
-    cap, ref = open_capture(two_frame_clip), cv2.VideoCapture(two_frame_clip)
+    if path_kind == "full":
+        cap = FFmpegPipeCapture(two_frame_clip, probe_movie(two_frame_clip), full_cache=True)
+    else:
+        cap = open_capture(two_frame_clip)
+    ref = cv2.VideoCapture(two_frame_clip)
     try:
         assert cap.get(cv2.CAP_PROP_FRAME_COUNT) == ref.get(cv2.CAP_PROP_FRAME_COUNT) == 2.0
         for index, step in enumerate(steps):
@@ -398,13 +470,15 @@ def test_two_frame_clip_boundaries(two_frame_clip, path_kind, monkeypatch, sessi
                 assert cap.set(POS, step) is ref.set(POS, step) is True
             assert cap.get(POS) == ref.get(POS), (index, step)
             assert cap.isOpened() and ref.isOpened()
+        if path_kind == "full":
+            assert cap.cache_mode == "full"  # 첫 read의 판정이 실제로 전체 보관이었음 (아니면 이 갈래가 링 시험과 구별되지 않음)
     finally:
         cap.release()
         ref.release()
     if path_kind == "restart":
         assert len(sessions) > 3  # 실제로 재시작 경로를 탔음
-    else:
-        assert len(sessions) == 1  # 링·버리기만으로 — 처음 세션 하나 (프로세스는 끝까지 읽고 끝나 있어도 됨)
+    else:  # 링·버리기만으로 — 처음 세션 하나 (프로세스는 끝까지 읽고 끝나 있어도 됨; "full"의 채움기 세션은 따로)
+        assert len(main_sessions(sessions)) == 1
     assert FAILURE_HEADLINE not in capsys.readouterr().err
 
 

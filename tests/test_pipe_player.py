@@ -25,11 +25,12 @@ from PyQt5.QtTest import QTest
 
 from tests.prores_clips import frame_number, make_numbered_clip, read_all_frames, run_ffmpeg
 from tests.test_movie_pipe_capture import KILL_SLACK, assert_session_gone, wait_for
+from tests.test_movie_pipe_seek import main_sessions
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
-from yesoncheck import error_window, external_tools, movie_pipe_source
+from yesoncheck import error_window, external_tools, frame_cache_budget, movie_pipe_source
 from yesoncheck.annotation_export import AnnotationExportWorker
 from yesoncheck.movie_pipe_source import (
-    FAILURE_HEADLINE, KEEP_BEHIND, READAHEAD_FRAMES, FFmpegPipeCapture, pipe_eligible, probe_movie,
+    FAILURE_HEADLINE, FRAME_CACHE_ENV, KEEP_BEHIND, READAHEAD_FRAMES, FFmpegPipeCapture, pipe_eligible, probe_movie,
 )
 
 A_COUNT = 120
@@ -37,6 +38,7 @@ B_COUNT = 90  # A보다 짧음 — 와이프에서 B가 먼저 끝나도 A는 �
 POS = cv2.CAP_PROP_POS_FRAMES
 SEED = 20261029  # 무작위 탐색 지점의 시드 (실패하면 메시지에 지점이 찍힘)
 EXPORT_TIMEOUT_S = 60
+GB = 1024**3
 
 
 # ---------------------------------------------------------------- 클립 (session: 인코딩 반복 방지)
@@ -433,3 +435,112 @@ def test_player_survives_mid_death(player, pipe_log, prores_clip, windows, dialo
     key(player, qapp, Qt.Key_Right)
     assert_showing(player, 1)
     assert len(windows) == 1
+
+
+# ---------------------------------------------------------------- 전체 프레임 캐시 (스펙 §6) — 플레이어만 opt-in
+
+@pytest.fixture
+def full_cache_budget(monkeypatch):
+    """conftest가 두는 YESONCHECK_FRAME_CACHE=ring 대신 auto + 넉넉한 예산(128GB 중 100GB 남음)으로 고정 — 판정이 이 기계의 메모리에
+    흔들리지 않게."""
+    monkeypatch.setenv(FRAME_CACHE_ENV, "auto")
+    monkeypatch.setattr(frame_cache_budget, "memory_snapshot", lambda: (128 * GB, 100 * GB))
+
+
+def test_player_opens_with_full_cache_and_scrubs_without_restart(player, pipe_log, prores_clip, qapp, full_cache_budget):
+    """플레이어 A는 전체 캐시로 열린다 (display_first_frame의 첫 read가 판정). 한 바퀴 재생하는 동안은 링만 두고(재생 중 보관 없음 — 스펙
+    §6.5), 멈춘 뒤 쉬는 동안 채움기(자기 ffmpeg 세션 하나)가 전체 저장소를 채운다 — 그 뒤에는 처음으로·건너뛰기 탐색·링(8장) 밖까지
+    ←·반복 재생이 끝을 넘어 처음으로 돌아가는 것까지 전부 보관본에서 나와 주 ffmpeg가 다시 뜨지 않는다 (주 세션 수 불변, 채움 세션은
+    따로 셈) — 링 모드였다면 이 탐색마다 재시작."""
+    cap = open_pipe(player, "A", prores_clip, pipe_log)
+    assert cap.cache_mode == "full"
+    count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    assert count == A_COUNT
+    player.play_video()
+    assert player.timer.isActive()  # 꺼져 있으면 next_frame_playback이 아무것도 하지 않아 '끝까지 재생'이 빈 껍데기가 됨
+    tick(player, count - 1)  # 끝까지 재생
+    assert frame_number(player.frame_a) == count - 1 and player.timer.isActive()
+    player.pause_video()
+    assert cap.cache_mode == "full" and cap.isOpened()
+    sessions = len(main_sessions(pipe_log.sessions))
+    assert sessions == 1  # 앞으로만 읽었으니 처음 세션 하나
+    assert cap.wait_fill(15), "멈춘 뒤 쉬는 동안 채움기가 전체 저장소를 채우지 않았습니다"
+    assert [session.is_filler for session in pipe_log.sessions].count(True) == 1  # 채움 세션 하나 (다 채우면 스스로 정리)
+
+    player.seek_to_frame(1)  # 처음으로
+    # 프레임 라벨은 보지 않음: 끝에서 처음으로 돌아올 때 "Current: 120"이 한 번 남는 기존 동작 (test_playback_to_the_end_is_not_a_failure 주석 —
+    # cv2 캡처에서도 같고 파이프와 무관). 화면·들고 있는 프레임이 0번이면 충분하고, 다음 탐색부터는 assert_showing이 라벨까지 봄.
+    assert frame_number(player.frame_a) == 0 and frame_number(screen_image(player)) == 0, "처음으로"
+    assert player.positionScroll.value() == 0, "처음으로 — 슬라이더는 라벨 뒤에 갱신돼 0"
+    for n in (count // 2, 3, count - 2, 10):
+        player.seek_to_frame(n + 1)
+        assert_showing(player, n, f"탐색 {n}")
+    for step in range(1, KEEP_BEHIND + 4):
+        key(player, qapp, Qt.Key_Left)  # 링 밖까지 ← (10에서 0까지, 링은 8장)
+        assert_showing(player, max(10 - step, 0), f"← {step}번째")
+    assert len(main_sessions(pipe_log.sessions)) == sessions  # 재시작 0
+    assert cap.cache_mode == "full" and cap.isOpened()
+
+    # 반복 재생: 끝을 넘으면 handle_video_end(loopEnabled) → seek_to_frame(1) → play_video — 끝의 EOF는 스트림에서(정상 끝),
+    # 처음으로는 보관본에서라 재시작 없음
+    player.loopEnabled = True
+    player.seek_to_frame(count - 1)  # 인덱스 count - 2 (뒤에 1장 남음 — play_video는 끝에 있으면 처음으로 되돌리므로)
+    player.play_video()
+    tick(player)
+    assert frame_number(player.frame_a) == count - 1 and player.timer.isActive()
+    tick(player)  # 마지막 장을 넘음 → 반복
+    assert len(main_sessions(pipe_log.sessions)) == 1, "반복 재생이 ffmpeg를 다시 띄움"
+    assert player.timer.isActive() and player.playPauseButton.text() == "Pause", "반복 재생이 멈춤"
+    assert frame_number(player.frame_a) == 0 and frame_number(screen_image(player)) == 0, "반복 — 처음으로"
+    assert player.positionScroll.value() == 0
+    tick(player)  # 두 번째 바퀴도 보관본에서
+    assert_showing(player, 1, "반복 두 번째 바퀴")
+    assert len(main_sessions(pipe_log.sessions)) == 1 and len(pipe_log.sessions) == 2  # 주 세션 + 채움 세션 (채움기는 한 번만)
+    player.pause_video()
+    assert cap.cache_mode == "full" and cap.isOpened()
+
+
+def test_player_export_worker_stays_ring(prores_clip, pipe_log, tmp_path, qapp, full_cache_budget, capsys):
+    """주석 내보내기 일꾼(open_any_capture)은 전체 캐시를 원하지 않는다 — 환경이 auto이고 예산이 넉넉해도 링이고 기록 한 줄도 없음
+    (test_annotation_export_pipe와 같은 준비로 워커를 돌림)."""
+    out = str(tmp_path / "out" / "annotated.mov")
+    worker = AnnotationExportWorker(prores_clip, {}, out, external_tools.ffmpeg_path(), include_audio=True,
+                                    export_mode="balanced")
+
+    result = run_export(qapp, worker)
+
+    assert "error" not in result, result.get("error")
+    assert result["done"] == out
+    assert len(pipe_log.captures) == 1 and isinstance(pipe_log.captures[0], FFmpegPipeCapture)
+    assert pipe_log.captures[0].cache_mode == "ring"
+    assert "프레임 캐시" not in capsys.readouterr().out
+
+
+def test_player_reopen_releases_old_capture_before_new_one_decides(player, pipe_log, prores_clip, reversed_clip, monkeypatch,
+                                                                   capsys):
+    """열기 순서 고정 (판정이 생성자가 아니라 첫 read인 까닭): open_file은 새 캡처를 연 뒤(생성자 — 판정 없음) 옛 캡처를 놓고(장부 반환)
+    첫 프레임(display_first_frame)을 읽어 판정한다. 예산을 파일 1.5개분으로 묶어 두면 A를 다른 파일로 바꿔도 새 A가 전체 — 순서가
+    바뀌어 옛 캡처가 장부에 남은 채 판정하면 두 파일 합이 예산을 넘어 링이 됨."""
+    monkeypatch.setenv(FRAME_CACHE_ENV, "auto")
+    sizes = {}
+    for path in (prores_clip, reversed_clip):
+        probe = probe_movie(path)
+        sizes[path] = probe.width * probe.height * 3 * probe.nb_frames
+    one_x, one_y = sizes[prores_clip], sizes[reversed_clip]
+    assert one_x >= one_y > one_x * 0.5  # 둘 다 1.5개분 예산에 혼자는 들고, 둘이 함께는 넘침
+    ledger = movie_pipe_source._LEDGER
+    base = ledger.committed()  # 다른 시험이 잠깐 남긴 전체 보관만큼 예산을 얹음 (test_second_capture_falls_back_to_ring_when_budget_is_used와 같음)
+    budget_ram = int((base + one_x * 1.5) / frame_cache_budget.FULL_CACHE_RAM_FRACTION)
+    monkeypatch.setattr(frame_cache_budget, "memory_snapshot", lambda: (budget_ram, 10**12))
+
+    old = open_pipe(player, "A", prores_clip, pipe_log)  # 첫 read는 open_file의 display_first_frame
+    assert old.cache_mode == "full" and ledger.committed() == base + one_x
+
+    new = open_pipe(player, "A", reversed_clip, pipe_log)
+    assert new is not old and player.cap_a is new
+    assert new.cache_mode == "full", "옛 캡처를 놓기 전에 새 캡처가 판정함 (열기 순서)"
+    assert old.isOpened() is False
+    assert ledger.committed() == base + one_y  # 옛 몫은 돌려주고 새 몫만
+    assert frame_number(player.frame_a) == B_COUNT - 1  # 새 파일의 0번 프레임 (거꾸로 번호)
+    out = capsys.readouterr().out
+    assert out.count("[파이프] 프레임 캐시: 전체") == 2 and "프레임 캐시: 링" not in out

@@ -13,6 +13,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # 개발자 셸에 GL 토글이 남아 있으면 모든 플레이어 시험이 offscreen+GL로 돌아 버림 — 시험은 늘 기본 규칙에서 시작
 os.environ.pop("YESONCHECK_VIEWPORT", None)
 os.environ.pop("YESONCHECK_MOVIE_SOURCE", None)
+# 프레임 캐시 토글은 pop이 아니라 ring으로 고정: 기존 탐색 시험이 8장 링의 재시작 지점을 단언하므로 전체 보관(auto 기본)이면 깨진다.
+# 전체 보관을 시험하는 쪽이 YESONCHECK_FRAME_CACHE=auto를 명시해 켠다
+os.environ["YESONCHECK_FRAME_CACHE"] = "ring"
 os.environ.pop("YESONCHECK_VIDEO_ITEM", None)
 
 # fetch_ffmpeg.sh / fetch_ffmpeg_windows.ps1로 받은 정적 ffmpeg를 PATH 맨 앞에 둠
