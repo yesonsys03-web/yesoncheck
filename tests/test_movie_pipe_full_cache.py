@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 from tests.test_movie_pipe_seek import prores_clip, sessions, windows, pid, read_number, random_targets, assert_dead  # noqa: F401
 from tests.test_movie_pipe_seek import assert_session_gone
-from yesoncheck import frame_cache_budget, movie_pipe_source, sequence_source
+from yesoncheck import external_tools, frame_cache_budget, movie_pipe_source, sequence_source
 from yesoncheck.movie_pipe_source import (
     FAILURE_HEADLINE, FRAME_CACHE_ENV, KEEP_BEHIND, FFmpegPipeCapture, probe_movie,
 )
@@ -194,7 +194,7 @@ def test_budget_failure_dies_loudly_instead_of_raising(monkeypatch, prores_clip,
 
 def test_reason_assembly_failure_still_dies_without_raising(monkeypatch, prores_clip, qapp, windows, capsys):
     """판정 실패의 사유 글을 만들다(traceback.format_exc) 또 실패해도 — _die가 알릴 글을 지키는 것과 같이 — read는 예외를 내지 않고
-    고정 사유로 죽는다 (도중 실패 B와 같음: (False, None)·죽은 겉모습·기록 한 번·오류 창 한 번·세션 정리·장부 그대로)."""
+    고정 사유 + 원래 예외 한 줄로 죽는다 (도중 실패 B와 같음: (False, None)·죽은 겉모습·기록 한 번·오류 창 한 번·세션 정리·장부 그대로)."""
     monkeypatch.setenv(FRAME_CACHE_ENV, "auto")
 
     def broken_snapshot():
@@ -215,8 +215,52 @@ def test_reason_assembly_failure_still_dies_without_raising(monkeypatch, prores_
     log = capsys.readouterr().err
     assert log.count(FAILURE_HEADLINE) == 1, log
     assert "프레임 캐시 예산을 정하지 못했습니다 (원인 글을 만들지 못했습니다)" in log and prores_clip in log
+    assert "OSError: psutil 시험용 실패" in log  # 고정 사유에 원래 예외 한 줄
     qapp.processEvents()
     assert len(windows) == 1 and FAILURE_HEADLINE in windows[0].text
     assert_session_gone(session)
     assert movie_pipe_source._LEDGER.committed() == base
     cap.release()
+
+
+def test_restart_reason_assembly_failure_still_dies_without_raising(monkeypatch, prores_clip, qapp, windows, capsys):
+    """탐색 재시작에서 새 ffmpeg를 못 띄운 사유 글을 만들다(traceback.format_exc) 또 실패해도 — 위 판정 실패의 지킴과 같이 — read는
+    예외를 내지 않고 고정 사유 + 원래 예외 한 줄로 죽는다 (도중 실패 B: (False, None)·죽은 겉모습·옛 세션 정리·기록 한 번·오류 창 한 번).
+    캐시 판정과 무관한 길이라 링(opt-in 안 함)으로 본다."""
+    cap = FFmpegPipeCapture(prores_clip, probe_movie(prores_clip))
+    try:
+        assert read_number(cap) == 0  # 첫 read(판정)는 바꿔치기 전에
+        old = cap._session
+
+        def broken_command(path, output, seek_seconds=None):
+            raise external_tools.ToolNotFoundError("ffmpeg를 찾지 못했습니다 (시험)")
+
+        def broken_format_exc():
+            raise RuntimeError("사유 글 만들기 시험용 실패")
+
+        monkeypatch.setattr(movie_pipe_source, "_pipe_command", broken_command)
+        monkeypatch.setattr(movie_pipe_source, "traceback",
+                            SimpleNamespace(format_exc=broken_format_exc, format_stack=traceback.format_stack))
+        assert cap.set(1, 100) is True  # 링·앞 24장 밖 — 재시작
+        assert cap.read() == (False, None)  # 예외가 read 밖으로 나가지 않음
+        assert_dead(cap)
+        assert_session_gone(old)
+        log = capsys.readouterr().err
+        assert log.count(FAILURE_HEADLINE) == 1, log
+        assert "100번 프레임으로 탐색하려고 ffmpeg를 다시 띄우지 못했습니다 (원인 글을 만들지 못했습니다)" in log
+        assert "ToolNotFoundError: ffmpeg를 찾지 못했습니다 (시험)" in log and prores_clip in log
+        qapp.processEvents()
+        assert len(windows) == 1 and FAILURE_HEADLINE in windows[0].text
+    finally:
+        cap.release()
+
+
+def test_fallback_reason_appends_original_error_or_keeps_fixed_text():
+    """고정 사유 + 원래 예외 한 줄; 그 한 줄마저 만들지 못하면(__str__ 실패) 고정 사유만 — 예외 없음."""
+    assert movie_pipe_source._fallback_reason("고정 사유", OSError("원인")) == "고정 사유\nOSError: 원인"
+
+    class Unprintable(Exception):
+        def __str__(self):
+            raise RuntimeError("글 만들기 실패")
+
+    assert movie_pipe_source._fallback_reason("고정 사유", Unprintable()) == "고정 사유"

@@ -448,7 +448,8 @@ def full_cache_budget(monkeypatch):
 
 def test_player_opens_with_full_cache_and_scrubs_without_restart(player, pipe_log, prores_clip, qapp, full_cache_budget):
     """플레이어 A는 전체 캐시로 열린다 (display_first_frame의 첫 read가 판정). 한 바퀴 재생한 뒤에는 처음으로·건너뛰기 탐색·링(8장) 밖까지
-    ← 가 전부 보관본에서 나와 ffmpeg가 다시 뜨지 않는다 (세션 수 불변) — 링 모드였다면 이 탐색마다 재시작."""
+    ←·반복 재생이 끝을 넘어 처음으로 돌아가는 것까지 전부 보관본에서 나와 ffmpeg가 다시 뜨지 않는다 (세션 수 불변) — 링 모드였다면
+    이 탐색마다 재시작."""
     cap = open_pipe(player, "A", prores_clip, pipe_log)
     assert cap.cache_mode == "full"
     count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -466,6 +467,7 @@ def test_player_opens_with_full_cache_and_scrubs_without_restart(player, pipe_lo
     # 프레임 라벨은 보지 않음: 끝에서 처음으로 돌아올 때 "Current: 120"이 한 번 남는 기존 동작 (test_playback_to_the_end_is_not_a_failure 주석 —
     # cv2 캡처에서도 같고 파이프와 무관). 화면·들고 있는 프레임이 0번이면 충분하고, 다음 탐색부터는 assert_showing이 라벨까지 봄.
     assert frame_number(player.frame_a) == 0 and frame_number(screen_image(player)) == 0, "처음으로"
+    assert player.positionScroll.value() == 0, "처음으로 — 슬라이더는 라벨 뒤에 갱신돼 0"
     for n in (count // 2, 3, count - 2, 10):
         player.seek_to_frame(n + 1)
         assert_showing(player, n, f"탐색 {n}")
@@ -473,6 +475,24 @@ def test_player_opens_with_full_cache_and_scrubs_without_restart(player, pipe_lo
         key(player, qapp, Qt.Key_Left)  # 링 밖까지 ← (10에서 0까지, 링은 8장)
         assert_showing(player, max(10 - step, 0), f"← {step}번째")
     assert len(pipe_log.sessions) == sessions  # 재시작 0
+    assert cap.cache_mode == "full" and cap.isOpened()
+
+    # 반복 재생: 끝을 넘으면 handle_video_end(loopEnabled) → seek_to_frame(1) → play_video — 끝의 EOF는 스트림에서(정상 끝),
+    # 처음으로는 보관본에서라 재시작 없음
+    player.loopEnabled = True
+    player.seek_to_frame(count - 1)  # 인덱스 count - 2 (뒤에 1장 남음 — play_video는 끝에 있으면 처음으로 되돌리므로)
+    player.play_video()
+    tick(player)
+    assert frame_number(player.frame_a) == count - 1 and player.timer.isActive()
+    tick(player)  # 마지막 장을 넘음 → 반복
+    assert len(pipe_log.sessions) == 1, "반복 재생이 ffmpeg를 다시 띄움"
+    assert player.timer.isActive() and player.playPauseButton.text() == "Pause", "반복 재생이 멈춤"
+    assert frame_number(player.frame_a) == 0 and frame_number(screen_image(player)) == 0, "반복 — 처음으로"
+    assert player.positionScroll.value() == 0
+    tick(player)  # 두 번째 바퀴도 보관본에서
+    assert_showing(player, 1, "반복 두 번째 바퀴")
+    assert len(pipe_log.sessions) == 1
+    player.pause_video()
     assert cap.cache_mode == "full" and cap.isOpened()
 
 
