@@ -8,13 +8,15 @@ conftest가 YESONCHECK_FRAME_CACHE=ring을 두므로 전체 보관을 보는 시
 """
 
 import os
+import traceback
+from types import SimpleNamespace
+
 import pytest
-from tests.prores_clips import frame_number
-from tests.test_movie_pipe_seek import prores_clip, two_frame_clip, sessions, windows, pid, read_number, random_targets, assert_dead  # noqa: F401
+from tests.test_movie_pipe_seek import prores_clip, sessions, windows, pid, read_number, random_targets, assert_dead  # noqa: F401
 from tests.test_movie_pipe_seek import assert_session_gone
 from yesoncheck import frame_cache_budget, movie_pipe_source, sequence_source
 from yesoncheck.movie_pipe_source import (
-    FAILURE_HEADLINE, FRAME_CACHE_ENV, KEEP_BEHIND, FFmpegPipeCapture, maybe_pipe_capture, probe_movie,
+    FAILURE_HEADLINE, FRAME_CACHE_ENV, KEEP_BEHIND, FFmpegPipeCapture, probe_movie,
 )
 
 GB = 1024**3
@@ -82,11 +84,12 @@ def test_leaving_a_cached_segment_restarts_exactly_once(auto_mode, prores_clip, 
     assert read_number(cap) == 61 and len(sessions) == restarts + 1
     cap.release()
 
-def test_ring_mode_when_not_opted_in(auto_mode, prores_clip, sessions):
+def test_ring_mode_when_not_opted_in(auto_mode, prores_clip, sessions, capsys):
     cap = FFmpegPipeCapture(prores_clip, probe_movie(prores_clip))  # full_cache 기본 False
     for _ in range(KEEP_BEHIND + 5):
         cap.read()
     assert cap.cache_mode == "ring"
+    assert "프레임 캐시" not in capsys.readouterr().out  # opt-in하지 않은 캡처는 기록 없음 (스펙 §6 — 1.5.1과 같은 경로)
     cap.set(1, 0)
     cap.read()
     assert len(sessions) == 2  # 링 밖 → 재시작 (지금과 같음)
@@ -98,11 +101,12 @@ def test_open_any_capture_is_ring(auto_mode, prores_clip):
     assert isinstance(cap, FFmpegPipeCapture) and cap.cache_mode == "ring"
     cap.release()
 
-def test_kill_switch_forces_ring(monkeypatch, prores_clip):
+def test_kill_switch_forces_ring(monkeypatch, prores_clip, capsys):
     monkeypatch.setenv(FRAME_CACHE_ENV, "ring")
     cap = open_full(prores_clip)
     cap.read()
     assert cap.cache_mode == "ring"
+    assert "프레임 캐시" not in capsys.readouterr().out  # 킬 스위치도 기록 없음
     cap.release()
 
 def test_full_mode_logs_one_line(auto_mode, prores_clip, capsys):
@@ -184,6 +188,35 @@ def test_budget_failure_dies_loudly_instead_of_raising(monkeypatch, prores_clip,
     assert cap.read() == (False, None)  # 죽은 뒤의 read는 다시 알리지 않음
     qapp.processEvents()
     assert len(windows) == 1 and FAILURE_HEADLINE not in capsys.readouterr().err
+    assert_session_gone(session)
+    assert movie_pipe_source._LEDGER.committed() == base
+    cap.release()
+
+def test_reason_assembly_failure_still_dies_without_raising(monkeypatch, prores_clip, qapp, windows, capsys):
+    """판정 실패의 사유 글을 만들다(traceback.format_exc) 또 실패해도 — _die가 알릴 글을 지키는 것과 같이 — read는 예외를 내지 않고
+    고정 사유로 죽는다 (도중 실패 B와 같음: (False, None)·죽은 겉모습·기록 한 번·오류 창 한 번·세션 정리·장부 그대로)."""
+    monkeypatch.setenv(FRAME_CACHE_ENV, "auto")
+
+    def broken_snapshot():
+        raise OSError("psutil 시험용 실패")
+
+    def broken_format_exc():
+        raise RuntimeError("사유 글 만들기 시험용 실패")
+
+    monkeypatch.setattr(frame_cache_budget, "memory_snapshot", broken_snapshot)
+    # traceback 모듈 전체가 아니라 movie_pipe_source가 읽는 이름만 바꿈 (format_stack은 _die가 씀)
+    monkeypatch.setattr(movie_pipe_source, "traceback",
+                        SimpleNamespace(format_exc=broken_format_exc, format_stack=traceback.format_stack))
+    base = movie_pipe_source._LEDGER.committed()
+    cap = open_full(prores_clip)
+    session = cap._session
+    assert cap.read() == (False, None)  # 예외가 read 밖으로 나가지 않음
+    assert_dead(cap)
+    log = capsys.readouterr().err
+    assert log.count(FAILURE_HEADLINE) == 1, log
+    assert "프레임 캐시 예산을 정하지 못했습니다 (원인 글을 만들지 못했습니다)" in log and prores_clip in log
+    qapp.processEvents()
+    assert len(windows) == 1 and FAILURE_HEADLINE in windows[0].text
     assert_session_gone(session)
     assert movie_pipe_source._LEDGER.committed() == base
     cap.release()

@@ -764,11 +764,15 @@ class FFmpegPipeCapture:
         캡처를 연 뒤 옛 캡처를 놓고 첫 프레임을 읽는다 — 옛 캡처가 놓은 예산을 새 캡처가 쓰게.
         판정하다 난 예외(psutil 오류, 토글의 나쁜 값 — 앱은 시작 때 검증 — 등)는 read 밖으로 내지 않는다 (§5.5 — 재생 타이머 슬롯에는
         try가 없어 PyQt5가 프로세스를 끝냄): 도중 실패(B)와 같이 죽음 전이 → _die(기록 한 번·트레이스백째, 오류 창 한 번)이고 그 read는
-        (False, None). 판정 기록을 남기다 난 실패는 다른 기록 실패처럼 _last_resort로 (캡처는 그대로)."""
+        (False, None) — 그 사유 글(트레이스백)을 만들다 실패해도 고정 사유로 같은 길. 판정 기록을 남기다 난 실패는 다른 기록 실패처럼 _last_resort로
+        (캡처는 그대로)."""
         try:
             decision = self._settle_cache()
         except Exception:
-            reason = f"프레임 캐시 예산을 정하지 못했습니다:\n{traceback.format_exc()}"
+            try:
+                reason = f"프레임 캐시 예산을 정하지 못했습니다:\n{traceback.format_exc()}"
+            except Exception:  # 사유 글을 만들다 실패(메모리 부족 등)해도 read 밖으로 내지 않음 — _die가 알릴 글을 지키는 것과 같이
+                reason = "프레임 캐시 예산을 정하지 못했습니다 (원인 글을 만들지 못했습니다)"
             self._cache_mode = "ring"  # 다시 판정하지 않음 (죽은 캡처 — 보관본은 _die가 비움)
             with self._lock:
                 session, self._session = self._session, None  # 죽음 전이 — 세션이 아직 있을 때만 (이미 닫혔으면 알릴 것 없음)
