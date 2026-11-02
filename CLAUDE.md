@@ -116,7 +116,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   켜진 뒤의 것은 새 창(`new_window`)으로 보내고, 창을 보인 뒤 Mac 빌드 앱은 처음 한 번 동영상 기본 앱을 묻고(`default_app`) Windows 빌드
   앱은 이 계정에 연결 프로그램을 등록(`file_associations`) —
   시작 순서는 아래 '여러 창과 업데이트'의 '새 창·동영상 열기·기본 앱'. 스플래시 전에 `movie_pipe_source.movie_source_mode()`·`frame_cache_mode()`를 한 번씩 불러
-  `YESONCHECK_MOVIE_SOURCE`·`YESONCHECK_FRAME_CACHE`의 나쁜 값을 시작 때 ValueError로 멈춤
+  `YESONCHECK_MOVIE_SOURCE`·`YESONCHECK_FRAME_CACHE`의 나쁜 값을 시작 때 ValueError로 멈춤 (같은 자리에서 `gl_video_item.video_item_mode`가 `YESONCHECK_VIDEO_ITEM`도)
 - `yesoncheck/main_window.py` (12줄): 믹스인 구성 (`VideoPlayer`)
 - `yesoncheck/player_base.py` (1,873줄): 핵심 UI 및 윈도우 관리 — `VideoPlayerBase`(UI 만들기·메뉴·테마 전환·창 닫기·작업 정지·창 사이 연결).
   OCR 묶음은 `player_ocr`, 오버레이 묶음은 `player_overlay`로 나눠 부모로 붙였고, 스타일시트 문자열은 `main_window_styles`, 붙잡아 둔 워커 정리는
@@ -152,9 +152,12 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
 - `yesoncheck/player_update.py` (1,408줄): 자동 업데이트 믹스인(`PlayerUpdateMixin`) — 확인 일정(켤 때 + 3시간마다
   + Help → 업데이트 확인…), 알림 띠 처리, '업데이트'를 누른 뒤 받기·다른 창 닫기·도우미에 넘기기, 다시 켜진 앱의 성공/실패
   판정 (여러 창일 때의 순서는 아래 '여러 창과 업데이트')
-- `yesoncheck/video_widget.py` (982줄): 줌, 팬, ROI 선택 기능이 있는 커스텀 비디오 뷰포트 — 주석 모드 동안 오른쪽 위에 '주석 모드' 배지(마우스 투과), 텍스트 입력 요청은 '텍스트' 도구에서만(도형 도구의 드래그 없는 클릭은 무시).
+- `yesoncheck/video_widget.py` (1,002줄): 줌, 팬, ROI 선택 기능이 있는 커스텀 비디오 뷰포트 — 주석 모드 동안 오른쪽 위에 '주석 모드' 배지(마우스 투과), 텍스트 입력 요청은 '텍스트' 도구에서만(도형 도구의 드래그 없는 클릭은 무시).
   **GL 뷰포트(Mac 전용)**: cocoa에서만 `QOpenGLWidget` 뷰포트가 기본 — 풀스크린 재생이 레티나 CPU 확대 블릿 때문에 13.5fps로 떨어지던 것을 GPU 확대로 24.8fps로 되돌림(창 모드는 동일 — 2026-10-28 실측). Windows는 풀스크린 저하가 없고(사용자 실측) offscreen(시험·CI)은 QOpenGLWidget 미지원이라 raster 그대로 — CI의 실행 시험·`ci/screenshot_check.py`도 전부 offscreen/windows라 GL 경로는 CI를 타지 않음(cocoa 실기 확인 몫).
-  `YESONCHECK_VIEWPORT=gl|raster`로 명시 전환(그 밖의 값은 ValueError — 조용한 폴백 금지, `viewport_mode`; 시험은 `tests/conftest.py`가 이 변수를 지우고 시작). cocoa 기본 GL은 먼저 `gl_context_available`로 컨텍스트 생성을 확인하고, 실패하면 기록에 바로 남기고 raster로 계속하며 사유를 `viewport_fallback_reason`에 남김 — 오류 창은 `app.launch`가 스플래시를 닫은 뒤 `show_viewport_fallback`으로(위젯 생성 중 모달은 `splash.finish`의 processEvents 안에서 열려 시작 순서를 멈추고 업데이트 '잘 켜짐' 표시까지 늦춤). 조용한 빈 화면 금지; 토글로 강제한 GL은 확인 없이 그대로(`viewport_forced`). GL일 때 지키는 것(전부 실측 근거): ① 블록 위치 — `setAcceptDrops(True)` 뒤·줌/배지 라벨 생성 앞(`setViewport`가 새 뷰포트를 쌓임 맨 위에 둬서, 라벨이 뒤에 만들어져야 가려지지 않음 — hole punch) ② `setViewport`가 끄는 뷰포트 마우스 추적 다시 켬 ③ `FullViewportUpdate` ④ MSAA 4(GL2 엔진의 AA는 MSAA뿐 — 없으면 와이프 선·ROI·주석 미리보기가 계단짐; FPS 영향 없음 실측) ⑤ `WA_OpaquePaintEvent`(없으면 창 스타일시트 폴리시 뒤 풀스크린이 다시 16fps — 스타일시트 배경을 매 프레임 CPU로 칠하게 됨) ⑥ 영상 주변 여백은 스타일시트 대신 `backgroundBrush`로 테마 색을 GPU가 칠함(`apply_theme_background` — 창 생성과 `set_dark_theme`/`set_light_theme`가 부름, 색 `VIDEO_BG`는 시트의 테마 배경과 짝). 알고 둔 한계: GL 선 AA는 MSAA라 raster의 해석적 AA보다 거칢(눈 확인 통과 기준), `GL_MAX_TEXTURE_SIZE`(보통 16384) 초과 프레임은 미확인, raster를 골랐을 때는 로그가 없음(기록에 `[뷰포트] GL` 줄이 있으면 GL 경로), 컨텍스트 확인은 통과했는데 위젯 초기화(컨텍스트 공유·MSAA FBO)가 실패하는 드문 경우는 qWarning만 남음, GL이 안 되는 Mac은 창(프로세스)마다 폴백 알림이 뜸(조용히 넘기지 않는 쪽을 택함). 시험 `tests/test_gl_viewport.py`
+  `YESONCHECK_VIEWPORT=gl|raster`로 명시 전환(그 밖의 값은 ValueError — 조용한 폴백 금지, `viewport_mode`; 시험은 `tests/conftest.py`가 이 변수를 지우고 시작). cocoa 기본 GL은 먼저 `gl_context_available`로 컨텍스트 생성을 확인하고, 실패하면 기록에 바로 남기고 raster로 계속하며 사유를 `viewport_fallback_reason`에 남김 — 오류 창은 `app.launch`가 스플래시를 닫은 뒤 `show_viewport_fallback`으로(위젯 생성 중 모달은 `splash.finish`의 processEvents 안에서 열려 시작 순서를 멈추고 업데이트 '잘 켜짐' 표시까지 늦춤). 조용한 빈 화면 금지; 토글로 강제한 GL은 확인 없이 그대로(`viewport_forced`). GL일 때 지키는 것(전부 실측 근거): ① 블록 위치 — `setAcceptDrops(True)` 뒤·줌/배지 라벨 생성 앞(`setViewport`가 새 뷰포트를 쌓임 맨 위에 둬서, 라벨이 뒤에 만들어져야 가려지지 않음 — hole punch) ② `setViewport`가 끄는 뷰포트 마우스 추적 다시 켬 ③ `FullViewportUpdate` ④ MSAA 4(GL2 엔진의 AA는 MSAA뿐 — 없으면 와이프 선·ROI·주석 미리보기가 계단짐; FPS 영향 없음 실측) ⑤ `WA_OpaquePaintEvent`(없으면 창 스타일시트 폴리시 뒤 풀스크린이 다시 16fps — 스타일시트 배경을 매 프레임 CPU로 칠하게 됨) ⑥ 영상 주변 여백은 스타일시트 대신 `backgroundBrush`로 테마 색을 GPU가 칠함(`apply_theme_background` — 창 생성과 `set_dark_theme`/`set_light_theme`가 부름, 색 `VIDEO_BG`는 시트의 테마 배경과 짝). 알고 둔 한계: GL 선 AA는 MSAA라 raster의 해석적 AA보다 거칢(눈 확인 통과 기준), `GL_MAX_TEXTURE_SIZE`(보통 16384) 초과 프레임은 QPixmap 경로에서 미확인(GL 텍스처 스트리밍은 축소 없이 큰 실패 — 아래), raster를 골랐을 때는 로그가 없음(기록에 `[뷰포트] GL` 줄이 있으면 GL 경로), 컨텍스트 확인은 통과했는데 위젯 초기화(컨텍스트 공유·MSAA FBO)가 실패하는 드문 경우는 qWarning만 남음, GL이 안 되는 Mac은 창(프로세스)마다 폴백 알림이 뜸(조용히 넘기지 않는 쪽을 택함). 시험 `tests/test_gl_viewport.py`
+  **GL 텍스처 스트리밍(2026-11-02 — GL 뷰포트일 때 기본)**: GL 뷰포트에서는 영상 아이템이 `VideoFrameItem(stream=True)`(`yesoncheck/gl_video_item.py`, 371줄)라 `updateFrame`이 `QImage`·`QPixmap`을 만들지 않고 RGB 배열을 `set_frame`으로 넘기고(와이프면 위에서 합성한 `result`, 아니면 `frame_a` 그 자체 — 복사 없음), 아이템이 `paint()` 안에서 `beginNativePainting` → 동기 `glTexSubImage2D(GL_RGB)` 한 번 → 고정 기능 텍스처 사각형(`GL_QUADS`; 필터는 `transformationMode()`가 Smooth면 `GL_LINEAR`, 가장자리 `GL_CLAMP_TO_EDGE`) → `endNativePainting`으로 그림. **왜**: 4K에서 `QPixmap.fromImage`와 Qt 내부 텍스처 변환·업로드가 프레임당 ~48ms(31차 실측 — `movie_pipe_source.py` 항목 '알고 둔 한계' ⑦의 병목)였고, 스파이크에서 이 경로가 그 약 1/3(네 실행 모두 0.27~0.39배), 동기 업로드가 PBO·client storage보다 느리지 않았음(그래서 PBO 없음). GL 함수 20개는 `yesoncheck/gl_bindings.py`(130줄)가 `QOpenGLContext.getProcAddress` + ctypes로 묶음 — 새 의존성 없음(PyOpenGL 안 씀), 앱 컨텍스트의 주소가 OpenGL.framework의 dlsym과 전부 같음을 실측해 macOS용 CDLL 분기는 두지 않음. 화면은 예전 QPixmap 경로와 같음(실제 화면 `screencapture -R` 대조 — 4K·1080p·1002×562 × 8장면 24쌍 최대 차 2·평균 ≤ 0.011), raster 경로는 아이템 클래스·`updateFrame` 줄이 글자 그대로(`ci/screenshot_check.py` 9장면 PNG 바이트 동일).
+  선택 규칙(`use_stream_item(viewport_is_gl, mode)` — 플랫폼 조건 없이 뷰포트 종류를 따름): 뷰포트 결정(`mode`·`forced`·`gl_ok` — 폴백 기록 줄·`viewport_fallback_reason` 글은 그대로)을 `__init__` 맨 위, 영상 아이템 생성 앞으로 옮겼고 GL이면 `VideoFrameItem(stream=True)`를 와이프 선·ROI보다 먼저 `addItem`(쌓임 맨 아래 — 뒤에 끼우면 선이 가려짐), 아니면 기존 `scene.addPixmap(QPixmap())`. 어느 쪽인지는 `video_item_stream`. GL 적용 블록(setViewport 등)은 자리 조건 때문에 제자리(조건만 `if gl_ok:`). 토글 `YESONCHECK_VIDEO_ITEM=auto|gl|pixmap`(`video_item_mode` — 없거나 비면 auto, 대소문자 무시, 그 밖의 값 ValueError; `app.launch`가 스플래시 전에 검증, `tests/conftest.py`가 지우고 시작): `pixmap`은 킬 스위치(GL 뷰포트에서도 예전 QPixmap 경로), `gl`은 GL 뷰포트가 아니면 ValueError(raster 엔진에는 native painting이 없음 — 강제로 틀지 않음). 기록: GL 블록의 `[뷰포트] GL(QOpenGLWidget) 사용 …` 다음 줄에 `[표시] GL 텍스처 스트리밍(VideoFrameItem)` 또는 `[표시] QPixmap 경로(토글 YESONCHECK_VIDEO_ITEM=pixmap)` — **기록에 `[표시] GL 텍스처 스트리밍` 줄이 있으면 새 경로**, raster면 `[표시]` 줄 없음.
+  지킬 것·함정(전부 실측 근거): ⓐ **스트림 모드의 `pixmap()`은 크기 자리표시자**(`set_frame`이 크기가 바뀔 때만 내용 없는 `QPixmap(w, h)`를 둠 — `isNull`·`width/height`·`boundingRect`·`fitInView` 계약용)이지 그림 내용이 아님 — 내용은 `frame()`(마지막 배열; 앱 안에서 픽스맵 내용을 읽는 곳은 없음). `set_frame` 뒤에는 그 배열을 고치지 말 것(컨텍스트가 바뀌면 같은 배열을 다시 올림), 비연속·dtype·채널이 어긋나면 ValueError(조용한 복사 없음) ⓑ **뷰포트로 쓰인 `QOpenGLWidget`은 `grab()`도 `grabFramebuffer()`도 내용을 못 찍음**(흰 그림 — 흰 그림 둘을 견주면 "차이 0"이 나옴) — GL 화면 검증은 `screencapture -R`(뷰포트의 전역 좌표 영역)로만 ⓒ 좌표: `painter.combinedTransform()`은 아이템 좌표 → **물리** 픽셀, `painter.device().width()/height()`는 **논리** 픽셀 → `glViewport`·`glOrtho(0, pw, ph, 0, -1, 1)`(y 아래 — Qt와 같음)은 논리 × `devicePixelRatioF()`를 **qRound처럼 `int(x + 0.5)`로** 반올림(파이썬 `round`는 은행가 반올림이라 dpr 1.5·논리 1487에서 2230 대 Qt의 FBO 2231 — 1px 작아져 아래·오른쪽 가장자리, 와이프·ROI 정렬에 이음매), 정점은 매핑값 그대로(정점에 dpr을 또 곱하거나 뷰포트를 논리로 잡으면 레티나에서 왼쪽 아래 1/4에 2배로 그려짐 — 스파이크 첫 실행) ⓓ **paint 가드**: PyQt5 가상 함수에서 빠져나간 예외는 qFatal(프로세스 종료, 오류 창 없음 — 아래 '새 창 · 동영상 열기 · 기본 앱'의 함정)이라 스트림 paint 본문 전체를 `except BaseException`으로 받아 첫 실패만 기록(`[표시] GL 텍스처 스트리밍 실패 …` + 트레이스백 전문) + 오류 창 1회(Qt 루프에서 `error_window` — paint 안에서 모달 금지; 끝 줄에 킬 스위치 안내)로 알리고 그 뒤로는 그리지 않음(빈 영상 영역 — 재생·UI는 계속; 알리다 또 실패하면 `_last_resort`) ⓔ **엔진 없는 paint**: 컨텍스트가 생기지 않은 GL 뷰포트(offscreen에서 강제한 GL — 시험, 또는 위젯 컨텍스트 생성 실패)에서도 QGraphicsView는 paint를 부르는데 painter에 엔진이 없음 → 아이템마다 기록 한 줄(`[표시] 페인트 엔진이 없어 영상 프레임을 그리지 못함 …`)만, 창 없음·실패로 치지 않음(여기서 창을 띄우면 offscreen 시험의 모달이 끝없이 기다림 — `test_gl_viewport`가 멈췄던 원인) ⓕ GL 준비(함수 묶기·텍스처)는 생성 때가 아니라 첫 paint에서 그때 current인 위젯 컨텍스트로(위젯의 진짜 MSAA 컨텍스트는 첫 show 때 생김), GL 호출은 전부 native painting 안에서(들어가자마자 `check_error("native 진입 …")` — Qt 엔진이 남긴 GL 오류를 우리 업로드 탓으로 적지 않되 삼키지도 않고 ⓓ로), 업로드 뒤 `GL_UNPACK_ALIGNMENT`를 4로 되돌림(`finally` — Qt의 뒤이은 업로드에 1을 남기지 않음); 컨텍스트가 죽으면(`aboutToBeDestroyed`) 텍스처를 놓고 다음 paint가 새 컨텍스트에서 다시 준비·업로드 ⓖ **ES(ANGLE)·core profile 컨텍스트는 거부**(`GLBindingError` — 고정 기능 GL이 없음; 다른 경로로 몰래 돌지 않고 ⓓ의 실패 창 → `YESONCHECK_VIDEO_ITEM=pixmap` 또는 `YESONCHECK_VIEWPORT=raster`), `GL_MAX_TEXTURE_SIZE`(이 Mac 16384)를 넘는 프레임도 축소하지 않고 ⓓ로 크게 실패, 한도를 0으로 읽으면(컨텍스트가 current가 아님) 그것도 `GLBindingError`. 알고 둔 한계: 고정 기능 GL(2.1 호환 — Qt가 이 앱에 만드는 기본 컨텍스트) 전용이라 Windows 기본 GL 전환은 ES2/데스크톱 공용 셰이더 경로가 선행 조건, 텍스처는 `GL_RGB` 3바이트(BGRA가 업로드 ~8ms 빠르지만 `frame_a` RGB 계약을 바꿔야 함), 와이프는 numpy 합성 한 장을 올림(GPU 와이프는 후속), 첫 실패 뒤에는 그 창(프로세스)을 다시 켤 때까지 영상 영역이 빔, 4K 성능은 배치 부하 아래 실측뿐이고 하니스 틱은 설계 게이트(≤ 35ms)를 넘음(`movie_pipe_source.py` 항목 '알고 둔 한계' ⑦ — idle 재측정은 머지 전 내부 눈 확인 ①). **Windows**: 기본이 raster라 아무것도 바뀌지 않음; `YESONCHECK_VIEWPORT=gl`로 켜면 이 아이템도 켜짐 — Windows 실기는 미확인(ANGLE이면 ⓖ로 실패 창, 고DPI 1.25·1.5의 좌표는 스튜디오 PC 눈 확인 몫). CI는 GL 경로를 못 봄(offscreen = raster): 선택 규칙·토글·`updateFrame` 분기·`set_frame` 검증·paint 가드·GL 호출 순서와 좌표(가짜 GL 함수로 기록)는 `tests/test_gl_video_item.py`·`tests/test_gl_bindings.py`, 실제 그리기·성능은 cocoa 눈 확인(내부 저장소 `docs/superpowers/records/2026-11-02-gl-stream-design/eye-check.md` ①, 실측 `task4-gate.md`)
 - 이미지 시퀀스 (`<베이스>-NNNN.<확장자>` 프레임들을 영상처럼 열어 재생·비교, Seq 탭, 시퀀스 → MOV 일괄 만들기 — 사용자 설명은 README '이미지 시퀀스 재생'):
   - `yesoncheck/sequence_scan.py` (137줄): 파일 이름에서 시퀀스를 묶는 규칙 `group_sequences`·`SeqInfo`·프레임 이름 해석 `parse_frame_name`·한 프레임의 시퀀스 찾기 `sequence_of_frame`·여러 프레임용 색인 `FolderFrames` — Qt·디스크 없음. **시퀀스의 정체성은 가상 경로
     `<폴더>/<베이스>.seq`(`SeqInfo.identity`, `is_sequence_path`로 판별)**: 진짜 파일이 아니며 목록·`filename_a`·주석 파일 이름(`<베이스>_seq_annotations.json`)·
@@ -179,8 +182,8 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   **왜**: 4K ProRes 4444(3840×2160 24fps)가 cv2로는 디코드만으로 22fps라 실시간에 못 미침. 원인은 cv2 내장 FFmpeg의 단일 스레드 픽셀 변환(12bit 4:4:4 → BGR)으로 **보임**(간접 실측 2026-10-29:
   번들 ffmpeg도 단일 스레드로 돌리면 8.5fps, cv2에 `OPENCV_FFMPEG_CAPTURE_OPTIONS="threads;0"`은 효과 없음 23.0fps) — 번들 ffmpeg의 디코드+bgr24 변환은 8코어를 써서 50.7fps(이 Mac Intel 8코어 실측;
   코덱·기계 탓이 아님 — 다른 재생기는 같은 파일을 실시간으로 틀었음). 새 의존성 없음(ffmpeg·ffprobe는 이미 번들, `external_tools` 경로).
-  **앱 안에서의 실측(같은 Mac, 4K 4444 334장 처음부터 끝까지 재생)**: 처음 구현(stdout 파이프 전송) 22.0초(15.2fps) → 소켓 전송 18.54초(18.0fps) → 중복 그리기 제거 등을 거친 **16.57초(20.2fps)** — 링 보관본 복사를 읽기 스레드로 옮긴 판(그 이동은 되돌림)에서 잰 값이고, 최종 판 재측정은 내부 눈 확인 항목.
-  1080p ProRes는 실시간, **4K는 이전보다 빨라졌지만 완전한 실시간이 아님** — 남은 병목은 표시 경로(아래 '알고 둔 한계' ⑦).
+  **앱 안에서의 실측(같은 Mac, 4K 4444 334장 처음부터 끝까지 재생)**: 처음 구현(stdout 파이프 전송) 22.0초(15.2fps) → 소켓 전송 18.54초(18.0fps) → 중복 그리기 제거 등을 거친 **16.57초(20.2fps)** — 링 보관본 복사를 읽기 스레드로 옮긴 판(그 이동은 되돌림)에서 잰 값. 그 뒤 표시 경로를 GL 텍스처 스트리밍으로 바꿔(2026-11-02, `video_widget.py` 항목) **13.60~14.54초**(배치 부하 아래 5회 — 같은 때 예전 경로 17.57~18.13초; idle 재측정은 머지 전 내부 눈 확인 항목).
+  1080p ProRes는 실시간, **4K는 이 Mac에서 24fps 경계**(아래 '알고 둔 한계' ⑦), Windows(raster) 4K는 표시 경로가 그대로라 느림.
   - **게이트 `pipe_eligible(probe)`** (`probe_movie`가 ffprobe 1회로 `MovieProbe`를 읽음; **양성 증거로만 켜지는 opt-in** — 한 조건이라도 확인 못 하면 거짓): ① 코덱 `prores`(`PIPE_CODECS`)
     ② `r_frame_rate` 유효(0 < r ≤ 240)이고 `avg_frame_rate == r`(Fraction 등식) ③ nb_frames ≥ 1·크기 ≥ 1 ④ **정확 등식** `Fraction(nb_frames,1)/r == duration_ts × time_base`(프레임 수·길이·속도 삼자 일치)
     ⑤ 회전 0이고 화소 비율(SAR) 없음/1:1 ⑥ 영상 트랙·컨테이너 시작 시각이 유한한 값(0이 아니어도 됨 — 탐색이 오프셋을 보정). 어긋난 첫 조건을 `ineligible_reason`이 조건 번호와 함께 한 줄로 알려 줌.
@@ -277,8 +280,13 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   - **알고 둔 한계**: ① 모든 영상 열기에 ffprobe 1회(~45ms, GUI 스레드·timeout 없음 — NAS가 멈추면 기존 `os.stat`과 같은 성질) ② 소스 실행에서 PATH에 ffmpeg·ffprobe가 없으면 h264 열기도 `ToolNotFoundError`(빌드 앱은 번들이라 해당 없음; `YESONCHECK_MOVIE_SOURCE=cv2`면 probe를 안 하므로 피함)
     ③ 파이프가 죽은 뒤 Play를 누르면 `get(FPS)`가 0이라 영상 타이머는 안 켜지지만 단추는 Pause로 바뀌고 소리 재생기는 시작함(오류 창은 이미 떴음 — 다시 열면 정상) ④ (2026-11-02 해소) 죽은 캡처도 죽음 전이에서 보관본을 비우고 예산 장부를 돌려줌 — 예전에는 `release` 전까지 링 버퍼(4K ≈199MB)를 쥐었음
     ⑤ 1GbE 링크 PC는 4K ProRes 첫 재생이 네트워크 대역 한계(131MB/s 필요 — 이 Mac은 10GbE 실측이라 해당 없음, 2회째부터는 캐시) ⑥ 같은 캡처를 두 스레드가 동시에 read하는 건 미지원(계약)
-    ⑦ **4K는 이 Mac에서 약 20fps(334장 16.57초 — 측정한 판은 위 '앱 안에서의 실측')로 완전 실시간이 아님, Windows 4K는 표시 경로가 병목일 것으로 추정**: 남은 병목은 디코드가 아니라 4K `QPixmap`의 GL paint 48ms/프레임(`QImage`를 직접 그리면 24ms이고 그중 ~20ms는 33MB 텍스처 업로드 하한).
-    이 Mac에서 raster 뷰포트로 재면 paint가 107ms(≈9.3fps), 틱 전체는 131ms(≈7.6fps) 실측 — Windows(raster)의 4K도 그 수준일 것이라는 추정이고 Windows 실기는 미측정. 1080p ProRes는 실시간.
+    ⑦ **4K 재생 속도 — 이 Mac(GL 뷰포트 + GL 텍스처 스트리밍, 2026-11-02)에서 334장 13.60·13.67·13.80·14.00·14.54초(마지막 프레임을 넘긴 때 `last` 기준 — 끝난 때 `end` 기준으로 14.0초 이내는 5회 중 3회; 같은 때 번갈아 잰 예전 QPixmap 경로 17.57~18.13초 → 0.78배) — 24fps(13.9초, 타이머 바닥 333틱 × 41ms = 13.65초) 경계. 전부 ML 배치 부하 아래(load1 4.9~18.9 — idle 창이 없었음)라 idle 재측정이 머지 전 필수(내부 눈 확인 ①)**. 사용자 기준(4K 실시간 재생)으로는 이 334장 시간이 직접 지표.
+    재생 중 프레임 간격 중앙값 39.6~40.1ms(= 타이머 41ms), GUI 스레드 장당 38~42ms(QPixmap 경로는 53~55ms로 포화). 하니스 틱(`profile_4k_playback.py` YC_PAINT=1)은 53.3·61.1·56.2ms(QPixmap 71.9·88.0·79.0ms, 0.69~0.74배)로 **설계 게이트 ≤ 35ms를 부하 아래 3회 모두 넘음 — idle은 미측정이고 idle에서도 넘을 수 있음**:
+    가장 낮은 부하(load 5.1)의 QPixmap 71.9ms가 31차 조건(load 5.7, 72.2ms)과 같은데 그때 GL이 53.3ms였음.
+    분해(부하 아래): 업로드(`glTexSubImage2D`) 자체는 5~7ms(스파이크와 같음)이고, 스파이크 투영(29~37ms)보다 ~20ms 무거운 몫은 함께 도는 4K 디코드(ffmpeg 8스레드 + 읽기 스레드 recv 25MB/장 — CPU·메모리 대역 경쟁, +7~12ms)와 틱마다 라벨·슬라이더·오버레이 갱신이 부르는 창 합성(+~7ms) — **둘 다 idle에서도 남음**.
+    `paint+events`에는 FBO 합성·swap(vsync) 대기가 섞여 있어 CPU 여유로 읽으면 안 됨. 틱 단축 후속 후보: BGRA 4바이트 업로드(스파이크 −8ms)·ffmpeg 디코드 스레드 수 제한 실험·틱마다의 라벨·슬라이더 갱신 비용 측정.
+    (31차 QPixmap 경로의 병목이던 4K `QPixmap` GL paint 48ms/프레임이 이번에 없앤 것 — 그때 334장 16.57초, load 5.7.) **Windows 4K는 그대로**: 기본 raster라 이 Mac에서 raster로 잰 paint 107ms(≈9.3fps)·틱 131ms(≈7.6fps) 수준일 것이라는 추정이고 Windows 실기는 미측정(`YESONCHECK_VIEWPORT=gl`이면 GL 스트리밍도 켜지나 미확인).
+    1080p ProRes는 실시간. 근거: 내부 저장소 `docs/superpowers/records/2026-11-02-gl-stream-design/task4-gate.md`.
     ⑧ 새 파일을 열면 옛 캡처를 놓기 직전 `stop_video` → `seek_to_frame(1)`이 옛 캡처에서 돎 — 링 모드면 ffmpeg를 한 번 더 띄움(~0.5초, cv2는 ~0.33초 — 뒤로 재시작이지만 목표가 0이라 미리 채울 장이 없어 그대로), 전체 모드면 채움이 끝난 뒤엔 0번이 전체 저장소에 있어 재시작 없음(채우기 전이면 링 모드와 같음)
     ⑨ 4K 슬라이더 드래그는 보관본·앞 24장 밖으로 뛰는 미리보기 장마다 재시작(449~634ms)이라 cv2(329~372ms)보다 무거움 — 전체 모드에서 채움이 끝난 뒤에는 파일 어디든 보관본 복사(~3ms)라 즉시, 채우기 전(멈춘 뒤 0.3초부터 4K 약 7초)·링 모드는 그대로(드래그 중에는 read가 촘촘해 채움기도 쉼).
     뒤로 끄는 미리보기 장이 보관본 밖이면 그 재시작에 미리 채우기 8장(≈0.16초)이 더해짐 — 대신 그 뒤 8장 안의 작은 뒤로 이동은 보관본에서 즉시. 앞으로 끄는 쪽은 미리 채우지 않아 그대로
@@ -290,8 +298,8 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
     예산 확인(`_LEDGER.committed()`)과 장부 올리기(`add`)가 한 원자 동작이 아님 — 지금은 판정하는 캡처가 플레이어 A/B뿐이고 둘 다 GUI 스레드에서 첫 read를 하므로 겹치지 않지만, 다른 스레드에서 opt-in하는 캡처가 생기면 둘이 함께 통과할 수 있음.
     같은 파일을 A·B로 열면 보관을 따로 둬 둘 다 셈(4K 16.6GB — 채움기도 둘). 플레이어 `frame_cache`(기존 드래그 미리보기 캐시)는 전체 모드에서 중복 메모리(후속 후보). fps는 그대로(4K 병목은 ⑦ — 읽는 동안은 링만이라 첫 재생 속도는 링 모드와 같음)이고 채우기 전의 처음 보는 구간은 예전과 같음(재시작).
   - **다음 후보 — Windows offscreen의 텍스트 주석 굽기**: `render_text_patch`가 글자를 Qt 글꼴로 그리는데 Windows offscreen(CI)에서 글리프가 하나도 안 그려져 구운 그림이 원본과 같았음(글꼴 부재로 추정, 기존 동작 — 이 브랜치와 무관) — 글꼴 가드와 시험이 필요함. 이 브랜치의 `test_display_single_draw`는 도형(사각형) 주석으로 우회.
-  - **다음 후보 — 4K 표시 경로**: 직접 GL 텍스처 스트리밍(PBO 등)·Windows GL 뷰포트. `QPixmap` → `QImage` 직접 그리기는 틱이 약 41ms로 예산(41.7ms)에 걸쳐 확실한 실시간이 안 돼 사용자 결정으로 하지 않음. 근거 스크립트
-    (`yc_paint_fmt_exp.py`·`yc_sock_exp.py`·`yc_pipe_read_exp.py`·`yc_microbench.py`)와 하니스(`profile_4k_playback.py`)는 내부(비공개) 저장소의 `docs/superpowers/records/2026-10-29-prores-pipe-design/`.
+  - **다음 후보 — 4K 표시 경로의 나머지**: Mac의 직접 GL 텍스처 스트리밍은 2026-11-02에 들어감(`video_widget.py` 항목 — PBO는 스파이크에서 이득이 없어 안 씀). idle 재측정(2026-11-02 12:21, 외부 ML 배치 없음 — 내부 records `task4-gate.md`): 하니스 틱 GL 55.6ms(QPixmap 74.5)·334장 GL 14.02~14.04초(QPixmap 18.4~19.0, GUI 바쁜 시간 40.3ms/장 = 타이머 41ms 포화) — **설계 게이트 ≤ 35ms 미달 확정, 24fps는 경계(여유 없음)**; 머지·후속은 사용자 결정. 남은 것: 틱 단축 — BGRA 4바이트 업로드(스파이크 −8ms, `frame_a` 계약 변경 필요)·ffmpeg 디코드 스레드 수 제한 실험·틱마다의 라벨·슬라이더 갱신 비용 측정, Windows 기본 GL(ES2/데스크톱 공용 셰이더 경로가 선행 조건)·GPU 와이프. `QPixmap` → `QImage` 직접 그리기는 틱이 약 41ms로 예산(41.7ms)에 걸쳐 확실한 실시간이 안 돼 사용자 결정으로 하지 않음. 근거 스크립트
+    (`yc_paint_fmt_exp.py`·`yc_sock_exp.py`·`yc_pipe_read_exp.py`·`yc_microbench.py`)와 하니스(`profile_4k_playback.py`)는 내부(비공개) 저장소의 `docs/superpowers/records/2026-10-29-prores-pipe-design/`, GL 스트리밍 스파이크·게이트 스크립트(`yc_gl_stream_spike.py`·`yc_app_playback_time.py`·`yc_app_pixel_check.py`·`diag_tick_split.py`)는 `records/2026-11-02-gl-stream-design/`.
   - 빌드 앱 `yesoncheck/smoke_test.py`의 'ProRes 파이프 열기' 단계(`prores_pipe_open` — 번들 ffmpeg로 소형 ProRes mov를 만들어 `open_any_capture`로 열고 읽기·탐색, `YESONCHECK_MOVIE_SOURCE`가 auto가 아니면 실패): 빌드 앱의
     `_MEIPASS` ffmpeg와 Windows CREATE_NO_WINDOW 파이프가 실제로 실행되는 유일한 자리. 4K 실물 재생·탐색·와이프·주석은 CI가 못 보므로 눈 확인 몫 — 내부(비공개) 저장소의
     `docs/superpowers/records/2026-10-29-prores-pipe-design/eye-check.md`(전체 프레임 캐시는 `docs/superpowers/records/2026-11-02-gl-stream-design/eye-check.md`의 ②). 시험은 아래 '테스트 전략'.
@@ -354,7 +362,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   `ensure_registered`(읽어서 없거나 다른 것만 쓰고, 쓴 것이 있으면 `SHChangeNotify`), `register_at_start`(빌드 Windows 앱이 켤 때 이 계정에
   등록), `open_default_apps_settings`(Help → "동영상 기본 앱 설정 열기…" — `ms-settings:defaultapps?registeredAppUser=YesonCheck`).
   `winreg`·`shell32`는 쓸 때 불러와 Mac에서도 모듈이 불림 — 설치 파일 `installer/yesoncheck.iss [Registry]`와 같은 내용(BUILD.md 8-2)
-- `yesoncheck/error_window.py` (43줄): `default_app`·`file_associations`·`mac_app_events`·`player_base`(GL 뷰포트 폴백)가 함께 쓰는 오류 알림 — `show_error(prefix, text)`는 기록(stderr)에
+- `yesoncheck/error_window.py` (43줄): `default_app`·`file_associations`·`mac_app_events`·`player_base`(GL 뷰포트 폴백)·`gl_video_item`(GL 텍스처 스트리밍 실패)이 함께 쓰는 오류 알림 — `show_error(prefix, text)`는 기록(stderr)에
   남기고 `show_window`: 앱의 예외 창(`sys.excepthook.dialog` = `app._ErrorDialog.show_text` — 기록 파일 경로를 붙이고 한 번에 하나만), 없으면(소스 실행)
   `QMessageBox.critical`; `show_unexpected`는 예외 처리 중에 트레이스백째(기록에는 전부, 창에는 `with_details` — 무엇이 실패했는지는 그대로, 트레이스백은 끝
   `DETAILS_LIMIT`(3000) 글자). 잡히지 않은 예외(`_ErrorDialog.show_error`)는 트레이스백만이라 끝 3000자
@@ -594,7 +602,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
 - ROI 종횡비 보존
 
 **CustomVideoWidget** (`video_widget.py`):
-- QGraphicsView를 사용한 비디오 프레임 렌더링 — Mac(cocoa)은 GL 뷰포트 기본(풀스크린 FPS, 위 '주요 파일' 참고)
+- QGraphicsView를 사용한 비디오 프레임 렌더링 — Mac(cocoa)은 GL 뷰포트 기본(풀스크린 FPS)이고 그때 영상 아이템은 프레임을 GL 텍스처로 직접 올리는 `VideoFrameItem`(4K 재생 — 위 '주요 파일' 참고)
 - 줌, 팬 및 윈도우에 맞추기 컨트롤
 - A/B 비교를 위한 와이프 효과 (X/Y축)
 - OCR을 위한 ROI(관심 영역) 선택
@@ -700,10 +708,11 @@ OCR 리뷰 윈도우가 열려있을 때:
 - 4K 자동 감지 (비디오 너비 ≥1920px)
 - 차이 임계값 기반 스마트 프레임 건너뛰기
 - 하드웨어 가속 지원 (CUDA/OpenCL)
-- ProRes류 CFR mov는 ffmpeg 파이프 프레임 소스(`movie_pipe_source`)로 재생 — 4K ProRes 4444의 디코드는 cv2 22fps → 파이프 50.7fps이고, 앱 안의 4K 재생은 이 Mac에서 약 20fps(표시 경로가 병목, 1080p는 실시간)
+- ProRes류 CFR mov는 ffmpeg 파이프 프레임 소스(`movie_pipe_source`)로 재생 — 4K ProRes 4444의 디코드는 cv2 22fps → 파이프 50.7fps이고, 앱 안의 4K 재생은 이 Mac에서 아래 GL 텍스처 스트리밍과 함께 334장 13.60~14.54초 — 24fps(13.9초) 경계(배치 부하 아래 실측; idle 재측정 14.02~14.04초로 경계 확정, 하니스 틱 55.6ms는 설계 게이트 35ms 미달; 예전 QPixmap 경로 17.6~19.0초), 1080p는 실시간, Windows(raster) 4K는 그대로
   (위 '주요 파일'의 해당 항목: 게이트·토글·전송·실패 처리·알고 둔 한계)
 - 플레이어가 연 ProRes A/B는 파일의 모든 프레임을 메모리에 둠(전체 프레임 캐시 — 4K 13.9초 334장 ≈8.3GB, 예산은 창(프로세스)마다 물리 RAM의 20%를 A/B가 나눔 + 다른 캡처 몫을 뺀 사용 가능 메모리에 여유 2GiB):
   읽는 동안은 링 8장만 두고(첫 재생 속도 보존), 멈춘 뒤 0.3초부터 따로 띄운 ffmpeg가 쉬는 동안 채움(4K 약 7초) — 그 뒤 되감기·←·슬라이더·반복 재생이 ffmpeg 재시작(~0.5초) 없이 즉시, fps는 그대로. 예산이 모자라면 링 8장(기록 한 줄), 킬 스위치 `YESONCHECK_FRAME_CACHE=ring`
+- Mac GL 뷰포트는 프레임을 GL 텍스처로 직접 올림(`VideoFrameItem` — `QPixmap.fromImage`와 Qt 내부 텍스처 변환 ~48ms/4K 프레임을 건너뜀; 킬 스위치 `YESONCHECK_VIDEO_ITEM=pixmap`, 위 '주요 파일'의 `video_widget.py` 항목)
 
 ### OCR 분석
 - 픽셀 차이 임계값 기반 프레임 건너뛰기
@@ -755,8 +764,8 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 
 **시험은 반드시 `~/coding/p310_tf/bin/python -m pytest`로 돌릴 것** — TensorFlow가 없는 `~/coding/p310`으로 돌리면 11개가 실패함.
 
-`tests/`에 시험 파일 87개 (수집 2,069개). `python -m pytest tests -q`로 돌리며(약 11분 — 배치 부하가 있으면 13분대), 이 Mac의 소스 실행에서 2,013개가 통과하고 45개는 건너뜀(수집 2,058개 때의 전체 실행 — 그 뒤 쉬는 시간 채움 시험 11개를 더함) —
-다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-11-02 기준; `test_fast_startup`의 종료 플레이크 1건은 러너 상태에 따라 간헐 실패 — 기존 동작). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
+`tests/`에 시험 파일 86개 (수집 2,065개). `python -m pytest tests -q`로 돌리며(약 12분), 이 Mac의 소스 실행에서 2,020개가 통과하고 45개는 건너뜀 —
+다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-11-02 기준; `test_fast_startup`의 종료 플레이크 1건(`test_app_exits_cleanly_while_shared_config_load_runs`, 자식 종료 코드 −11)은 러너 상태에 따라 간헐 실패 — main에서도 같은 빈도, 따로 돌리면 통과). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
 정적 빌드(`vendor/ffmpeg/`)를 씀 (`tests/conftest.py`). 시험을 건너뛰거나 지워서 통과시키지 말 것.
 
 시험 구성 (파일 이름 기준):
@@ -786,6 +795,9 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
   - `test_pipe_player`: 실제 `VideoPlayer`(offscreen)에서 열기·화살표/휠·슬라이더·A/B 와이프·주석 내보내기·재생 도중 ffmpeg 사망(앱 생존·오류 창 1회·재오픈)과 끝난 뒤 프로세스·스레드 잔존 없음·전체 프레임 캐시(A가 `full`로 열려 한 바퀴 뒤 멈추면 쉬는 동안 채움기가 다 채우고 — 그 뒤 처음으로·건너뛰기 탐색·링 밖 ←·
     반복 재생이 끝을 넘어 처음으로 돌아가 이어지는 것까지 주 세션 1개 그대로(채움 세션 하나는 따로), 주석 내보내기 워커는 링, 열기 순서 — 새 캡처 열기 → 옛 캡처 놓기 → 첫 read 판정이라 예산 1.5개분에서 A를 바꿔도 새 A가 전체)
   - `test_smoke_pipe_step`: 실행 시험(`smoke_test.py`)의 'ProRes 파이프 열기' 단계 단위 시험 — 성공·게이트가 cv2를 주면 실패·모드가 auto가 아니면 실패 (번들 ffmpeg는 CI의 빌드 앱 smoke가 봄)
+- **GL 텍스처 스트리밍(Mac GL 뷰포트)**: CI는 GL을 못 그리므로(offscreen) 규칙·계약·가드를 봄
+  - `test_gl_bindings`: `getProcAddress` 묶기 — 함수 이름마다 주소·못 찾은 함수의 이름을 든 실패·ES/core profile 거부·텍스처 한도를 `glGetIntegerv`로 읽음(0이면 거부)·`check_error`·`glOrtho` double
+  - `test_gl_video_item`: 토글 값·선택 규칙, raster 아이템은 평범한 픽스맵 아이템(`set_frame` 거부), `set_frame` 검증·자리표시자 크기·비우기·픽스맵 → 배열, paint 가드(GL 엔진 아님·텍스처 한도 초과 → 기록·창 1회, 엔진 없음 → 기록 1줄·창 없음, `_fail` 자체가 예외를 안 냄·`str(exc)` 실패·창 실패는 `_last_resort`), 가짜 GL 함수로 호출 순서(native 진입 오류 확인 포함)·물리 픽셀 뷰포트와 매핑 모서리·소수 dpr(1.5·1.25)의 qRound 반올림·정렬 복원(실패해도)·필터가 `transformationMode`를 따름·컨텍스트가 죽으면 다시 준비·업로드, 위젯 연결(강제 GL·cocoa 기본(확인 통과/실패)·킬 스위치·raster에 `gl` 토글은 ValueError·`app.launch` 검증·`updateFrame` 분기와 해상도 변경·raster `updateFrame`은 여전히 `setPixmap`)
 - **그 밖**: `test_smoke`·`test_fast_startup`·`test_files`·`test_user_files`·`test_frame_annotations_merge`·`test_annotation_click`·`test_external_tools`·`test_build_info`·
   `test_check_frozen_imports`·`test_release_tool`·`test_print_crash_reports`·`test_screenshot_check`·`test_refactor_checks`
 
@@ -819,6 +831,7 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 12. OCR 리뷰 대화상자와 메인 윈도우 간 실시간 동기화
 13. 4K ProRes 재생(ffmpeg 파이프) — 캐시 없는 파일의 첫 재생 fps·소리·탐색·와이프·주석·h264 무회귀·킬 스위치: 내부(비공개) 저장소의 `docs/superpowers/records/2026-10-29-prores-pipe-design/eye-check.md`;
     전체 프레임 캐시(한 바퀴 뒤 스크럽·←·반복 재생 즉시·메모리·기록 줄·A/B 4K 둘·킬 스위치 `YESONCHECK_FRAME_CACHE=ring`): 같은 저장소의 `docs/superpowers/records/2026-11-02-gl-stream-design/eye-check.md` ②
+14. Mac GL 텍스처 스트리밍 — idle 재측정(334장·틱)·fps 체감·1080p·h264·풀스크린·줌/팬·와이프·ROI·주석·오버레이·테마·킬 스위치 둘·기록 줄: 내부(비공개) 저장소의 `docs/superpowers/records/2026-11-02-gl-stream-design/eye-check.md` ①
 
 씬 감지 테스트 시:
 - 하드 컷이 포함된 콘텐츠로 Animatic 모드 테스트 (전통적인 편집)
@@ -978,6 +991,16 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 - **설계 변경: 쉬는 시간 채우기**(스펙 §6.5 방식 B, 사용자 결정): 재생 중 내준 프레임을 모두 붙잡던 처음 판은 4K 첫 재생이 16.0~16.2초(링만 13.7~14.6초 — 보관 자체가 장당 GUI ~8ms, 미리 페이지 확보 버퍼 풀도 효과 없음).
   이제 읽는 동안은 전체 모드도 링만, read가 0.3초(`IDLE_FILL_DELAY_S`) 동안 없을 때만 채움기 `_Filler`가 따로 띄운 ffmpeg로 처음부터 전체 저장소 `_full`을 채움(4K 약 7초 — 배치 없을 때; read가 오면 다음 장부터 멈춤, ffmpeg는 소켓에서 저절로 멈춤).
   채움기 실패는 기록 한 번(오류 창 없음 — 스펙 §7-19)이고 캡처는 그대로, release·죽음·GC가 채움 세션을 끝냄. 기존 전체 모드 시험은 '읽은 것은 남는다'는 전제를 '채운 뒤에는 남는다'(`wait_fill`)로 고치고, 채움 전 동작(링과 같음)과 채움기 시험 11개를 더함. 최종 검토(Ruling 11) 뒤: 쉬는 때를 프로세스 전체 read로(A/B에서 한쪽만 재생해도 다른 쪽은 안 채움), 실패 시 장부 몫을 채운 만큼으로, Popen 앞 정지 확인
+### 2026-11-02 ① (4K 표시 — GL 텍스처 직접 스트리밍, Mac)
+- 31차 끝에 4K ProRes 4444가 이 Mac에서 약 20fps였고 병목은 디코드가 아니라 표시 경로(4K `QPixmap`의 GL paint 48ms/프레임)였음. Mac GL 뷰포트에서 영상 아이템을 `VideoFrameItem(stream=True)`(새 `gl_video_item.py`)로 바꿔 RGB 배열을
+  paint 안에서 동기 `glTexSubImage2D(GL_RGB)`로 텍스처에 올리고 고정 기능 사각형으로 그림. GL 함수는 새 `gl_bindings.py`(`getProcAddress` + ctypes — 새 의존성 없음)
+- `video_widget`은 뷰포트 결정을 영상 아이템 생성 앞으로 옮기고 `updateFrame`의 마지막 분기만 가름. raster(Windows·offscreen·cocoa 폴백)는 글자 그대로 — `ci/screenshot_check.py` 9장면 PNG 바이트 동일
+- 실측(이 Mac, 전부 ML 배치 부하 아래 load1 4.9~18.9): 4K 4444 334장 **13.60~14.54초**(5회; `end` 기준 14.0초 이내 3회) 대 예전 QPixmap 경로 17.57~18.13초(0.78배) — 24fps(13.9초) 경계. 하니스 틱 53~61ms 대 72~88ms —
+  **설계 게이트 ≤ 35ms는 부하 아래 미달, idle은 미측정**(함께 도는 4K 디코드와 틱마다의 라벨·슬라이더 갱신은 idle에서도 남아 idle에서도 넘을 수 있음) — **idle 재측정(틱·334장)이 머지 전 필수 눈 확인 항목**. 실제 화면 대조 24쌍 최대 차 2(평균 ≤ 0.011)
+- 토글 `YESONCHECK_VIDEO_ITEM=auto|gl|pixmap`(`pixmap`은 킬 스위치, 나쁜 값은 시작 때 ValueError). 기록 `[표시] GL 텍스처 스트리밍(VideoFrameItem)` 줄이 있으면 새 경로
+- 지켜야 할 것: paint 밖으로 예외를 내보내지 않음(PyQt5 qFatal — 첫 실패만 기록 + 창 1회 + 빈 그림), 스트림 모드의 `pixmap()`은 크기 자리표시자(내용은 `frame()`), GL 화면 검증에 `grab()`·`grabFramebuffer()` 금지(흰 그림 — `screencapture -R`),
+  좌표 규칙(`combinedTransform` = 물리, `device().width()` = 논리, 물리 뷰포트 크기는 Qt처럼 qRound — `int(x + 0.5)`, 파이썬 `round` 금지), 고정 기능 GL 전용(ES·core profile 거부), 텍스처 한도 초과는 축소 없이 큰 실패
+- Windows는 기본 raster 그대로(4K 느림 — 바뀐 것 없음), `YESONCHECK_VIEWPORT=gl`이면 이 아이템도 켜짐(미확인). 시험 파일 2개(`test_gl_bindings`·`test_gl_video_item`). 눈 확인(이 Mac — idle 재측정 포함)은 사용자 몫
 
 ### 2026-10-29 (4K ProRes 재생 — ffmpeg 파이프 프레임 소스)
 - 4K ProRes 4444 mov가 실시간 재생이 안 되던 원인은 cv2 내장 FFmpeg의 단일 스레드 픽셀 변환으로 보임(cv2 22fps, 번들 ffmpeg 50.7fps). ProRes류 CFR mov를 번들 ffmpeg(rawvideo bgr24)로 디코드하는
