@@ -3,11 +3,12 @@
 왜 ctypes + getProcAddress인가: 비디오 아이템이 paint() 안에서 프레임을 GL 텍스처로 직접 올리려면 glTexSubImage2D 같은 데스크톱
 GL 함수 20개가 필요하다. PyOpenGL을 들이면 의존성이 하나 늘고 PyInstaller 번들·플랫폼별 로더 문제가 따라오므로, Qt가 이미 열어 둔
 컨텍스트에게 이름으로 주소를 물어(getProcAddress) ctypes 함수 객체로 감싼다 — 의존성 0, 컨텍스트가 실제로 제공하는 함수만 쓴다.
-시그니처는 스파이크(docs/superpowers/records/2026-11-02-gl-stream-design/yc_gl_stream_spike.py)에서 Mac(GL 2.1)로 검증한 것 그대로다
-(glOrtho는 c_double 6개, 포인터 인자는 c_void_p, glGetError는 c_uint 반환, glGetIntegerv는 POINTER(c_int)).
+시그니처 20개 중 17개는 스파이크(docs/superpowers/records/2026-11-02-gl-stream-design/yc_gl_stream_spike.py)에서 Mac(GL 2.1)로 검증한
+것 그대로다(glOrtho는 c_double 6개, 포인터 인자는 c_void_p, glGetError는 c_uint 반환, glGetIntegerv는 POINTER(c_int)). 스파이크에 없는
+glDeleteTextures·glLoadIdentity·glEnd 3개는 표준 시그니처(glGenTextures와 같은 모양, 인자 없음)로 채웠다.
 
-ES 컨텍스트(Windows의 ANGLE 등)는 거부한다: 고정 기능 파이프라인(glBegin·glOrtho·glMatrixMode…)이 없어서 이 함수들이 아예 없거나
-동작하지 않는다. 몰래 다른 경로로 돌리지 않고 GLBindingError로 알려, 부른 쪽이 환경변수(YESONCHECK_VIDEO_ITEM=pixmap 등)로 기존 경로를
+ES 컨텍스트(Windows의 ANGLE 등)와 데스크톱 core profile 컨텍스트는 거부한다: 고정 기능 파이프라인(glBegin·glOrtho·glMatrixMode…)이
+없어서 이 함수들이 아예 없거나 동작하지 않는다. 몰래 다른 경로로 돌리지 않고 GLBindingError로 알려, 부른 쪽이 환경변수(YESONCHECK_VIDEO_ITEM=pixmap 등)로 기존 경로를
 고르게 한다. 함수를 못 찾을 때도 마찬가지로 이름을 넣어 올린다 — 삼키거나 기본값으로 대신하지 않는다.
 
 이 모듈은 함수와 상수를 풀고 오류를 확인하는 일만 한다. 그리기·좌표 규칙(원점·뒤집기·종횡비)은 아이템 쪽에 있다.
@@ -15,6 +16,8 @@ GL 호출은 max_texture_size를 읽는 glGetIntegerv 한 번뿐이며, 그때 �
 """
 
 import ctypes
+
+from PyQt5.QtGui import QSurfaceFormat
 
 # ---------------------------------------------------------------- 상수 (OpenGL 헤더 값 그대로)
 GL_TEXTURE_2D = 0x0DE1
@@ -109,9 +112,16 @@ def bind(context):
             "OpenGL ES(ANGLE) 컨텍스트 — 고정 기능 GL이 없어 GL 텍스처 스트리밍을 쓸 수 없습니다; "
             "YESONCHECK_VIDEO_ITEM=pixmap 또는 YESONCHECK_VIEWPORT=raster"
         )
+    if context.format().profile() == QSurfaceFormat.CoreProfile:
+        raise GLBindingError(
+            "OpenGL core profile 컨텍스트 — 고정 기능 GL이 없어 GL 텍스처 스트리밍을 쓸 수 없습니다; "
+            "YESONCHECK_VIDEO_ITEM=pixmap 또는 YESONCHECK_VIEWPORT=raster"
+        )
     functions = {}
     for name, (restype, argtypes) in FUNCTIONS.items():
-        address = int(context.getProcAddress(name.encode()))
+        # PyQt5의 getProcAddress는 없는 함수에 0이 아니라 None을 돌려준다 (둘 다 "없음")
+        proc = context.getProcAddress(name.encode())
+        address = int(proc) if proc is not None else 0
         if address == 0:
             raise GLBindingError(f"GL 함수 {name}을(를) 찾지 못했습니다")
         functions[name] = ctypes.CFUNCTYPE(restype, *argtypes)(address)
