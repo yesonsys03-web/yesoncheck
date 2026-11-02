@@ -1857,6 +1857,12 @@ class PlayerPlaybackMixin:
             event.accept()
             return
 
+        # P 키 처리 (한글 ㅔ와 영문 P 모두 지원) — 북마크 관리 창 (Bookmarks 단추와 같음)
+        if key == Qt.Key_P or text == 'ㅔ':
+            self.show_bookmarks()
+            event.accept()
+            return
+
         # 한글 자판 대응 단축키 매핑 (V 키 제외)
         # T-ㅅ, B-ㅠ, F-ㄹ, R-ㄱ
         # ㅅ: '\u3145', ㅠ: '\u315C', ㄹ: '\u3139', ㄱ: '\u3131'

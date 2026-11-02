@@ -45,3 +45,28 @@ def remove(path: str, folder: str) -> list[str]:
         return [item for item in _check(path, value) if paths.path_key(item) != key]
 
     return user_files.update_json(path, mutate, [])
+
+
+def replace(path: str, old: str, new: str) -> list[str]:
+    """북마크 파일에서 old를 new로 고침 (관리 창에서 경로를 그 자리에서 고친 것). 합친 새 목록을 돌려줌.
+
+    new는 old의 자리에 들어감. 그사이 다른 창이 old를 지웠으면 new를 끝에 더하고, new가 이미 (old 아닌 자리에) 있으면
+    old만 지워 new가 한 번만 남음 (판정은 paths.path_key). old와 new가 같은 경로면 글자만 new로.
+    """
+    old_key, new_key = paths.path_key(old), paths.path_key(new)
+
+    def mutate(value):
+        current = _check(path, value)
+        elsewhere = any(paths.path_key(item) == new_key for item in current if paths.path_key(item) != old_key)
+        result, placed = [], False
+        for item in current:
+            if paths.path_key(item) != old_key:
+                result.append(item)
+            elif not placed and not elsewhere:
+                result.append(new)
+                placed = True
+        if not placed and not elsewhere:
+            result.append(new)
+        return result
+
+    return user_files.update_json(path, mutate, [])
