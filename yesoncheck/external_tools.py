@@ -106,6 +106,11 @@ def _communicate(cmd, register_process, stdout=subprocess.PIPE):
     return process.returncode, out, err
 
 
+def probe_json(path, register_process=None):
+    """번들/PATH ffprobe로 path의 JSON(스트림·형식) — media_info(미디어 정보 창). 실패는 _probe의 RuntimeError, ffprobe가 없으면 ToolNotFoundError."""
+    return _probe(ffprobe_path(), path, register_process)
+
+
 def _probe(ffprobe, path, register_process=None):
     """ffprobe JSON (스트림·형식). 실패하면(끝냈을 때도) RuntimeError (파일·stderr 전부)."""
     code, out, err = _communicate(

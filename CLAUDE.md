@@ -128,7 +128,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
 - `yesoncheck/main_window_styles.py` (940줄): 어두운·밝은 테마 시트(`DARK_STYLESHEET`·`LIGHT_STYLESHEET`)와 큰 인라인 시트 상수 — 데이터만 있는 잎 모듈
   (한 글자도 바뀌지 않게 `tests/test_stylesheet_freeze.py`가 해시로 지킴)
 - `yesoncheck/worker_lifecycle.py` (76줄): 놓아 준 `QThread` 워커를 끝날 때까지 붙잡아 두기 — `release_worker`·`wait_for_released_workers`·`EXIT_WAIT_S`(30초)
-- `yesoncheck/player_playback.py` (2,658줄): 비디오 재생, 프레임 탐색 및 FFmpeg 작업 — `_open_movie_capture`는 `os.stat` 확인 뒤·`cv2.VideoCapture` 앞에 ffmpeg 파이프 게이트(`maybe_pipe_capture(…, full_cache=True)` — 전체 프레임 캐시를 원하는 곳은 여기뿐)를 끼움(아래 `movie_pipe_source`; 음성이면 기존 cv2 줄이 그대로 돎). `update_frame`은 그린 직후 `refresh_frame_annotations_display(redraw=False)`를 불러 같은 프레임을 두 번 그리지 않음 (틱당 `updateFrame` 2→1, 픽셀 동일 — 이 브랜치에서 기존 표시 코드를 바꾼 유일한 곳, 사용자 승인 예외; 드래그 + OCR 검토 창 분기는 앞 그림이 B를 뺀 그림이라 와이프가 켜져 있을 때만 다시 그림; 같은 패턴인 `_overlay_slider_ui_update`는 무변경; tests/test_display_single_draw.py) — 화살표·휠 프레임 이동 모두 오버레이(V 모드) 슬라이더를 함께 갱신(`_update_ui_fast`도 `update_overlay_controls`를 부름 — tests/test_overlay_slider_sync.py) — 전역 단축키(`keyPressEvent`): V(컨트롤 전체 숨김·오버레이), N/ㅜ(가운데 컨트롤 열 숨김 — `toggle_middle_panel`, V·전체화면 복원 뒤에도 유지), P/ㅔ(북마크 관리 창 — `show_bookmarks`). 사이드바 목록이 포커스를 가질 때는 `player_base.eventFilter`가 같은 키(V·N·P)를 받음
+- `yesoncheck/player_playback.py` (2,655줄): 비디오 재생, 프레임 탐색 및 FFmpeg 작업 — `_open_movie_capture`는 `os.stat` 확인 뒤·`cv2.VideoCapture` 앞에 ffmpeg 파이프 게이트(`maybe_pipe_capture(…, full_cache=True)` — 전체 프레임 캐시를 원하는 곳은 여기뿐)를 끼움(아래 `movie_pipe_source`; 음성이면 기존 cv2 줄이 그대로 돎). `update_frame`은 그린 직후 `refresh_frame_annotations_display(redraw=False)`를 불러 같은 프레임을 두 번 그리지 않음 (틱당 `updateFrame` 2→1, 픽셀 동일 — 이 브랜치에서 기존 표시 코드를 바꾼 유일한 곳, 사용자 승인 예외; 드래그 + OCR 검토 창 분기는 앞 그림이 B를 뺀 그림이라 와이프가 켜져 있을 때만 다시 그림; 같은 패턴인 `_overlay_slider_ui_update`는 무변경; tests/test_display_single_draw.py) — 화살표·휠 프레임 이동 모두 오버레이(V 모드) 슬라이더를 함께 갱신(`_update_ui_fast`도 `update_overlay_controls`를 부름 — tests/test_overlay_slider_sync.py) — 전역 단축키(`keyPressEvent`): V(컨트롤 전체 숨김·오버레이), N/ㅜ(가운데 컨트롤 열 숨김 — `toggle_middle_panel`, V·전체화면 복원 뒤에도 유지), P/ㅔ(북마크 관리 창 — `show_bookmarks`). 사이드바 목록이 포커스를 가질 때는 `player_base.eventFilter`가 같은 키(V·N·P)를 받음
 - `yesoncheck/player_annotations.py` (1,073줄): 수정 사항 주석(프레임별 텍스트·도형) UI와 재생 연동 (`PlayerAnnotationsMixin`) — 주석 모드 버튼은 켜짐을 빨강으로 표시(`ANNOTATION_MODE_BUTTON_STYLE`). `refresh_frame_annotations_display(redraw=True)`·`_redraw_frame_with_annotations(draw=True)`: `False`면 다시 그리기만 빼고 목록·상태 라벨·편집 대상 갱신은 그대로
 - `yesoncheck/player_sidebar.py` (555줄): `PlayerSidebarMixin` — 드롭·파일 넣기·폴더 불러오기, 우클릭 메뉴·파일 복사, 작품 → 시즌 → job 콤보,
   선택한 영상을 A에 열기. 나머지는 아래 부모 믹스인 모듈에 있고 이 모듈은 옛 import 경로를 위해 일부 이름을 다시 내보냄
@@ -192,7 +192,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   - **진입점**: `maybe_pipe_capture(path, full_cache=False)` 한 함수가 모드·판정·캡처 생성을 묶고(양성이면 캡처, 음성이면 `None`), `sequence_source.open_any_capture`(주석 내보내기 — 링)와 `VideoPlayer._open_movie_capture`(영상 열기 — `full_cache=True`, 아래 '전체 프레임 캐시') 둘이 같은 함수를 부름 —
     판정 중복 금지. `_open_movie_capture`의 `PipeCaptureError`는 트레이스째 오류 창(끝 줄은 킬 스위치 안내) + `None`(`_open_sequence_capture`처럼 보던 영상은 그대로), `open_any_capture`는 받지 않고 그대로 올리며 `AnnotationExportWorker.run`의 기존 `except Exception`이 받아 error 신호로 알림.
     **기존 재생·탐색 코드는 수정하지 않음**(사용자 최우선 제약: 기존 파일 재생 무회귀) — 바뀐 열기 경로는 `_open_movie_capture`의 삽입 분기와 `open_any_capture`의 한 호출뿐이고, 기존 표시 코드를 바꾼 유일한 곳은 사용자가 승인한
-    `update_frame`의 중복 그리기 제거(위 `player_playback.py` 항목). OCR·씬 감지·썸네일 워커, OCR 검토 창·타임라인의 미리보기 캡처, 미디어 정보 창은 `cv2.VideoCapture`를 직접 열어 cv2 그대로(4K ProRes에서는 여전히 느림 — 필요해지면 별도 작업).
+    `update_frame`의 중복 그리기 제거(위 `player_playback.py` 항목). OCR·씬 감지·썸네일 워커, OCR 검토 창·타임라인의 미리보기 캡처는 `cv2.VideoCapture`를 직접 열어 cv2 그대로(4K ProRes에서는 여전히 느림 — 필요해지면 별도 작업); 미디어 정보 창은 2026-11-03부터 cv2 없이 ffprobe만(`media_info`).
   - **토글 `YESONCHECK_MOVIE_SOURCE=auto|pipe|cv2`** (진단·킬 스위치, `YESONCHECK_VIEWPORT` 선례): 없거나 비면 `auto`, 대소문자 무시, 그 밖의 값은 ValueError(조용한 폴백 금지) — `app.launch`가 시작 때 한 번 `movie_source_mode()`로 검증(스플래시 전).
     `cv2`는 킬 스위치(probe도 하지 않고 1.5.0 동작 그대로). `pipe`는 ① 코덱만 면제하고 정확도 조건 ②~⑥은 유지 — 불통과면 열 때 `PipeCaptureError`로 크게 실패(어긋날 파일을 강제로 틀어 주지 않음),
     ffprobe가 파일을 못 읽어도 cv2로 조용히 가지 않고 같은 예외. 시험은 `tests/conftest.py`가 이 변수를 지우고 시작. 프레임 캐시 토글 `YESONCHECK_FRAME_CACHE`는 아래 '전체 프레임 캐시'.
@@ -369,6 +369,11 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
 - `yesoncheck/review_sync.py` (97줄): OCR 검토 창 ↔ 웹 보고서 실시간 동기화 서버(`ReviewSyncServer`) — 창마다 127.0.0.1의 빈 포트와
   무작위 토큰(`ws://127.0.0.1:포트/?token=…`), 토큰이 맞지 않는 연결은 닫고 기록. 보고서는 그 주소(`generate_web_report`의
   `ws_url`)로만 접속하고, 주소가 없으면(듣기 실패) 접속하지 않고 "실시간 동기화 꺼짐"
+- `yesoncheck/media_info.py` (227줄): 미디어 정보 창(사이드바 우클릭)의 글 — `external_tools.probe_json`(ffprobe `-show_streams -show_format` 한 번)의 JSON을 `describe`가 (라벨, 값) 줄로:
+  코덱은 부르는 이름 + 프로파일 + (codec_name · 태그) + 긴 이름(`Apple ProRes 4444 (prores · ap4h) — Apple ProRes (iCodec Pro)`, `FRIENDLY` 표), 픽셀 형식의 뜻(`pixel_format_text`: `yuv444p12le` → 4:4:4 · 12비트 · 알파 없음 —
+  묶음 rgb는 8·16비트 × 채널만 풀고 rgb0은 8비트, rgb555·실수 형식 등 채널 비트가 고르지 않은 것과 모르는 모양은 이름만 — 검토에서 185비트로 보이던 것), 색(공간/원색/전달, 범위 tv·pc), 해상도(화소 비율), 프레임 속도(분수면 `23.976 fps (24000/1001)`, 가변이면 평균), 프레임 수(없으면 '알 수 없음' — MKV·WebM·TS), **길이는 영상 트랙 길이, 없으면 컨테이너**(예전 창은 cv2의 `(n−1)/fps`라 한 프레임만큼 짧았음),
+  비트레이트(영상 트랙, 없으면 컨테이너 전체라고 적음), 주사·인코더·만든 때(있을 때만), 음성 트랙(없으면 "없음"), 컨테이너, 파일 크기(십진 GB/MB + 바이트), 경로. 없는 값은 "알 수 없음", 영상 트랙(attached_pic 제외)이 없으면 ValueError.
+  창(`player_playback.show_video_info`)은 `format_html`의 HTML(굵은 라벨 — 예전엔 `**`가 글자로 보였음)·'자세히'에 ffprobe JSON·마우스로 골라 복사 가능, 읽지 못하면 기록에 `[미디어 정보] 실패: <경로>` + 트레이스백, 창은 평문(종류·사유·파일, 자세히에 트레이스백, 경고 아이콘) — Qt 없음
 - `yesoncheck/frame_utils.py` (21줄): 영화 산업 표준 프레임 계산 (feet.frames 형식)
 - `yesoncheck/build_info.py` (89줄): 빌드가 앱에 넣은 `build_info.json`(버전·커밋·빌드 시각·플랫폼)을 읽어 창
   제목·Help → 정보에 보임 — 소스 실행이면 버전 "개발(소스)" — Qt 없음
@@ -784,7 +789,7 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 
 **시험은 반드시 `~/coding/p310_tf/bin/python -m pytest`로 돌릴 것** — TensorFlow가 없는 `~/coding/p310`으로 돌리면 11개가 실패함.
 
-`tests/`에 시험 파일 89개 (수집 2,162개). `python -m pytest tests -q`로 돌리며(약 12분), 이 Mac의 소스 실행에서 2,116개가 통과하고 45개는 건너뜀 —
+`tests/`에 시험 파일 90개 (수집 2,188개). `python -m pytest tests -q`로 돌리며(약 12분), 이 Mac의 소스 실행에서 2,142개가 통과하고 45개는 건너뜀 —
 다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-11-02 기준; `test_fast_startup`의 종료 플레이크 1건(`test_app_exits_cleanly_while_shared_config_load_runs`, 자식 종료 코드 −11)은 러너 상태에 따라 간헐 실패 — main에서도 같은 빈도, 따로 돌리면 통과). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
 정적 빌드(`vendor/ffmpeg/`)를 씀 (`tests/conftest.py`). 시험을 건너뛰거나 지워서 통과시키지 말 것.
 
@@ -818,7 +823,7 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 - **GL 텍스처 스트리밍(Mac GL 뷰포트)**: CI는 GL을 못 그리므로(offscreen) 규칙·계약·가드를 봄
   - `test_gl_bindings`: `getProcAddress` 묶기 — 함수 이름마다 주소·못 찾은 함수의 이름을 든 실패·ES/core profile 거부·텍스처 한도를 `glGetIntegerv`로 읽음(0이면 거부)·`check_error`·`glOrtho` double
   - `test_gl_video_item`: 토글 값·선택 규칙, raster 아이템은 평범한 픽스맵 아이템(`set_frame` 거부), `set_frame` 검증·자리표시자 크기·비우기·픽스맵 → 배열, paint 가드(GL 엔진 아님·텍스처 한도 초과 → 기록·창 1회, 엔진 없음 → 기록 1줄·창 없음, `_fail` 자체가 예외를 안 냄·`str(exc)` 실패·창 실패는 `_last_resort`), 가짜 GL 함수로 호출 순서(native 진입 오류 확인 포함)·물리 픽셀 뷰포트와 매핑 모서리·소수 dpr(1.5·1.25)의 qRound 반올림·정렬 복원(실패해도)·필터가 `transformationMode`를 따름·컨텍스트가 죽으면 다시 준비·업로드, 위젯 연결(강제 GL·cocoa 기본(확인 통과/실패)·킬 스위치·raster에 `gl` 토글은 ValueError·`app.launch` 검증·`updateFrame` 분기와 해상도 변경·raster `updateFrame`은 여전히 `setPixmap`)
-- **그 밖**: `test_smoke`·`test_fast_startup`·`test_files`·`test_user_files`·`test_frame_annotations_merge`·`test_annotation_click`·`test_external_tools`·`test_build_info`·
+- **그 밖**: `test_smoke`·`test_fast_startup`·`test_files`·`test_user_files`·`test_media_info`(ffprobe JSON → 줄, 픽셀 형식 뜻, 실제 ffprobe로 시험 영상, 창의 HTML·자세히·실패 평문)·`test_frame_annotations_merge`·`test_annotation_click`·`test_external_tools`·`test_build_info`·
   `test_check_frozen_imports`·`test_release_tool`·`test_print_crash_reports`·`test_screenshot_check`·`test_refactor_checks`
 
 CI(`.github/workflows/windows-build.yml`)는 세 플랫폼 — Windows(`windows-latest`), Mac Apple Silicon(`macos-15`), Mac Intel(`macos-15-intel`) — 에서
@@ -994,6 +999,12 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 5. 다양한 비디오 콘텐츠 유형으로 테스트
 
 ## 최근 변경 사항
+
+### 2026-11-03 (미디어 정보 창 — 코덱 세부 정보)
+- 사이드바 우클릭 → 미디어 정보가 `prores` 한 단어만 보여 주던 것을 ffprobe 한 번(`-show_streams -show_format`)으로 코덱 프로파일·태그(`Apple ProRes 4444 (prores · ap4h)`), 픽셀 형식의 뜻(4:4:4 · 12비트 · 알파), 색 공간·범위,
+  해상도(화소 비율), 프레임 속도(분수·가변은 평균), 프레임 수, 길이(영상 트랙 — 예전 cv2 값보다 한 프레임 김), 비트레이트, 주사·인코더·만든 때, 음성 트랙, 컨테이너, 파일 크기까지 — 새 모듈 `media_info.py`(순수), `external_tools.probe_json`.
+  창은 HTML(예전엔 `**`가 글자로 보였음) + '자세히'에 ffprobe JSON + 글 복사 가능. cv2는 이 창에서 더 쓰지 않음. 시험 `test_media_info` 22개
+- `get_video_codec`(codec_name만)은 smoke_test가 아직 씀 — 그대로
 
 ### 2026-11-02 (북마크 관리 창 — 경로를 그 자리에서 고치기·우클릭 메뉴·P 키)
 - 관리 창의 경로를 DJV처럼 클릭해 고침(고른 항목 다시 클릭·우클릭 → 경로 수정; 더블클릭·Enter는 폴더 열기 그대로). 고친 경로는 commit 즉시 `bookmarks.replace`로 파일에(자리 유지, 다른 창의 것 보존)
