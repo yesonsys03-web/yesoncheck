@@ -137,6 +137,11 @@ def pid(cap):
     return cap._session.proc.pid
 
 
+def main_sessions(sessions):
+    """주 세션만 — 전체 모드 캡처의 채움기 세션(is_filler, 쉬는 시간에 따로 띄움)은 뺌 (재시작 횟수의 실증은 주 세션으로)."""
+    return [session for session in sessions if not session.is_filler]
+
+
 def wait_for(condition, timeout=WAIT_S):
     deadline = time.monotonic() + timeout
     while not condition():
@@ -314,12 +319,12 @@ def test_backward_restart_prefills_ring(prores_clip, sessions):
     cap = open_capture(prores_clip)
     try:
         assert [read_number(cap) for _ in range(40)] == list(range(40))
-        assert cap._store.indices() == list(range(40 - KEEP_BEHIND, 40))  # 링 32..39, 스트림 40
+        assert cap._ring.indices() == list(range(40 - KEEP_BEHIND, 40))  # 링 32..39, 스트림 40
         first_pid = pid(cap)
         assert cap.set(POS, 20) and read_number(cap) == 20
         assert len(sessions) == 2 and pid(cap) != first_pid  # 재시작 한 번
         assert cap._session.start == 20 - KEEP_BEHIND  # 목표 8장 앞(12)에서 띄움
-        assert cap._store.indices() == list(range(21 - KEEP_BEHIND, 21))  # 12..19 미리 채움 + 20 → 링 8장: 13..20
+        assert cap._ring.indices() == list(range(21 - KEEP_BEHIND, 21))  # 12..19 미리 채움 + 20 → 링 8장: 13..20
         second_pid = pid(cap)
         for n in range(19, 20 - KEEP_BEHIND, -1):  # ← 7번: 19..13 — 링에서
             assert cap.set(POS, n) and read_number(cap) == n, f"← {n}"
@@ -327,7 +332,7 @@ def test_backward_restart_prefills_ring(prores_clip, sessions):
         assert cap.set(POS, 12) and read_number(cap) == 12  # 링 밖 → 8칸 만에 재시작 한 번 더
         assert len(sessions) == 3 and pid(cap) != second_pid
         assert cap._session.start == 12 - KEEP_BEHIND  # 4에서 띄움 (4..11 미리 채움)
-        assert cap._store.indices() == list(range(13 - KEEP_BEHIND, 13))  # 5..12
+        assert cap._ring.indices() == list(range(13 - KEEP_BEHIND, 13))  # 5..12
         assert [read_number(cap) for _ in range(3)] == [13, 14, 15] and len(sessions) == 3  # 이어 읽기는 새 스트림에서
     finally:
         cap.release()
@@ -341,7 +346,7 @@ def test_forward_restart_has_no_prefill(prores_clip, sessions):
         assert [read_number(cap) for _ in range(10)] == list(range(10))
         assert cap.set(POS, 100) and read_number(cap) == 100
         assert len(sessions) == 2 and cap._session.start == 100
-        assert cap._store.indices() == [100]
+        assert cap._ring.indices() == [100]
     finally:
         cap.release()
 
@@ -355,7 +360,7 @@ def test_backward_restart_prefill_clamps_at_zero(prores_clip, sessions):
         assert len(sessions) == 2
         assert cap.set(POS, 3) and read_number(cap) == 3
         assert len(sessions) == 3 and cap._session.start == 0
-        assert cap._store.indices() == [0, 1, 2, 3]  # 3장(0..2) 버림 + 3
+        assert cap._ring.indices() == [0, 1, 2, 3]  # 3장(0..2) 버림 + 3
         for n in (2, 1, 0):
             assert cap.set(POS, n) and read_number(cap) == n
         assert len(sessions) == 3
@@ -375,13 +380,13 @@ def test_release_frees_ring(prores_clip):
                 break
             delivered.append(frame)
         assert len(delivered) == COUNT
-        kept = cap._store.indices()
+        kept = cap._ring.indices()
         assert kept == list(range(COUNT - KEEP_BEHIND, COUNT))
-        assert [frame_number(cap._store.copy_of(i)) for i in kept] == kept
-        assert not any(np.shares_memory(k, d) for k in cap._store._frames.values() for d in delivered)
+        assert [frame_number(cap._ring.copy_of(i)) for i in kept] == kept
+        assert not any(np.shares_memory(k, d) for k in cap._ring._frames.values() for d in delivered)
     finally:
         cap.release()
-    assert len(cap._store) == 0
+    assert len(cap._ring) == 0
 
 
 def test_lazy_set_coalesces(prores_clip, sessions):
@@ -472,8 +477,8 @@ def test_two_frame_clip_boundaries(two_frame_clip, path_kind, monkeypatch, sessi
         ref.release()
     if path_kind == "restart":
         assert len(sessions) > 3  # 실제로 재시작 경로를 탔음
-    else:
-        assert len(sessions) == 1  # 링·버리기만으로 — 처음 세션 하나 (프로세스는 끝까지 읽고 끝나 있어도 됨)
+    else:  # 링·버리기만으로 — 처음 세션 하나 (프로세스는 끝까지 읽고 끝나 있어도 됨; "full"의 채움기 세션은 따로)
+        assert len(main_sessions(sessions)) == 1
     assert FAILURE_HEADLINE not in capsys.readouterr().err
 
 

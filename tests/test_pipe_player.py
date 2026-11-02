@@ -25,6 +25,7 @@ from PyQt5.QtTest import QTest
 
 from tests.prores_clips import frame_number, make_numbered_clip, read_all_frames, run_ffmpeg
 from tests.test_movie_pipe_capture import KILL_SLACK, assert_session_gone, wait_for
+from tests.test_movie_pipe_seek import main_sessions
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 from yesoncheck import error_window, external_tools, frame_cache_budget, movie_pipe_source
 from yesoncheck.annotation_export import AnnotationExportWorker
@@ -447,9 +448,10 @@ def full_cache_budget(monkeypatch):
 
 
 def test_player_opens_with_full_cache_and_scrubs_without_restart(player, pipe_log, prores_clip, qapp, full_cache_budget):
-    """플레이어 A는 전체 캐시로 열린다 (display_first_frame의 첫 read가 판정). 한 바퀴 재생한 뒤에는 처음으로·건너뛰기 탐색·링(8장) 밖까지
-    ←·반복 재생이 끝을 넘어 처음으로 돌아가는 것까지 전부 보관본에서 나와 ffmpeg가 다시 뜨지 않는다 (세션 수 불변) — 링 모드였다면
-    이 탐색마다 재시작."""
+    """플레이어 A는 전체 캐시로 열린다 (display_first_frame의 첫 read가 판정). 한 바퀴 재생하는 동안은 링만 두고(재생 중 보관 없음 — 스펙
+    §6.5), 멈춘 뒤 쉬는 동안 채움기(자기 ffmpeg 세션 하나)가 전체 저장소를 채운다 — 그 뒤에는 처음으로·건너뛰기 탐색·링(8장) 밖까지
+    ←·반복 재생이 끝을 넘어 처음으로 돌아가는 것까지 전부 보관본에서 나와 주 ffmpeg가 다시 뜨지 않는다 (주 세션 수 불변, 채움 세션은
+    따로 셈) — 링 모드였다면 이 탐색마다 재시작."""
     cap = open_pipe(player, "A", prores_clip, pipe_log)
     assert cap.cache_mode == "full"
     count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -460,8 +462,10 @@ def test_player_opens_with_full_cache_and_scrubs_without_restart(player, pipe_lo
     assert frame_number(player.frame_a) == count - 1 and player.timer.isActive()
     player.pause_video()
     assert cap.cache_mode == "full" and cap.isOpened()
-    sessions = len(pipe_log.sessions)
+    sessions = len(main_sessions(pipe_log.sessions))
     assert sessions == 1  # 앞으로만 읽었으니 처음 세션 하나
+    assert cap.wait_fill(15), "멈춘 뒤 쉬는 동안 채움기가 전체 저장소를 채우지 않았습니다"
+    assert [session.is_filler for session in pipe_log.sessions].count(True) == 1  # 채움 세션 하나 (다 채우면 스스로 정리)
 
     player.seek_to_frame(1)  # 처음으로
     # 프레임 라벨은 보지 않음: 끝에서 처음으로 돌아올 때 "Current: 120"이 한 번 남는 기존 동작 (test_playback_to_the_end_is_not_a_failure 주석 —
@@ -474,7 +478,7 @@ def test_player_opens_with_full_cache_and_scrubs_without_restart(player, pipe_lo
     for step in range(1, KEEP_BEHIND + 4):
         key(player, qapp, Qt.Key_Left)  # 링 밖까지 ← (10에서 0까지, 링은 8장)
         assert_showing(player, max(10 - step, 0), f"← {step}번째")
-    assert len(pipe_log.sessions) == sessions  # 재시작 0
+    assert len(main_sessions(pipe_log.sessions)) == sessions  # 재시작 0
     assert cap.cache_mode == "full" and cap.isOpened()
 
     # 반복 재생: 끝을 넘으면 handle_video_end(loopEnabled) → seek_to_frame(1) → play_video — 끝의 EOF는 스트림에서(정상 끝),
@@ -485,13 +489,13 @@ def test_player_opens_with_full_cache_and_scrubs_without_restart(player, pipe_lo
     tick(player)
     assert frame_number(player.frame_a) == count - 1 and player.timer.isActive()
     tick(player)  # 마지막 장을 넘음 → 반복
-    assert len(pipe_log.sessions) == 1, "반복 재생이 ffmpeg를 다시 띄움"
+    assert len(main_sessions(pipe_log.sessions)) == 1, "반복 재생이 ffmpeg를 다시 띄움"
     assert player.timer.isActive() and player.playPauseButton.text() == "Pause", "반복 재생이 멈춤"
     assert frame_number(player.frame_a) == 0 and frame_number(screen_image(player)) == 0, "반복 — 처음으로"
     assert player.positionScroll.value() == 0
     tick(player)  # 두 번째 바퀴도 보관본에서
     assert_showing(player, 1, "반복 두 번째 바퀴")
-    assert len(pipe_log.sessions) == 1
+    assert len(main_sessions(pipe_log.sessions)) == 1 and len(pipe_log.sessions) == 2  # 주 세션 + 채움 세션 (채움기는 한 번만)
     player.pause_video()
     assert cap.cache_mode == "full" and cap.isOpened()
 
