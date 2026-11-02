@@ -174,7 +174,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   - `yesoncheck/sequence_export_worker.py` (335줄): `SequenceExportWorker`(`QThread`) — 시퀀스 여러 개를 `<출력 폴더>/<베이스>.mov`로, `validate_out_dir`가 원본 폴더를 거부.
     읽지 못한 프레임을 직전 프레임으로 채운 수는 `ImageSequenceCapture.read_failure_count`로 세어 항목마다(`item_done`)·끝날 때(`substitutions`) 진행 창 로그와 콘솔에 알림 — 오류 아님(길이 보존, `finished` 나감)
   - `check_frozen_imports.py`가 TGA·EXR 한 장씩 `decode_frame`을 실행함 — PIL 플러그인은 지연 import라 동결 앱에서 빠져도 시험이 못 잡음 (cv2에 EXR이 꺼져 있으면 EXR만 건너뛰고 결과 줄에 적음)
-- `yesoncheck/movie_pipe_source.py` (1,105줄): **ffmpeg 파이프 프레임 소스** — ProRes류 CFR mov를 번들 ffmpeg(`-f rawvideo -pix_fmt bgr24`, 출력 대상 `pipe:1` — 바이트가 오는 길은 아래 '전송')로 디코드해
+- `yesoncheck/movie_pipe_source.py` (1,112줄): **ffmpeg 파이프 프레임 소스** — ProRes류 CFR mov를 번들 ffmpeg(`-f rawvideo -pix_fmt bgr24`, 출력 대상 `pipe:1` — 바이트가 오는 길은 아래 '전송')로 디코드해
   `cv2.VideoCapture` 자리에 꽂는 덕타이핑 캡처 `FFmpegPipeCapture`(`isOpened`·`read`·`get`·`set`·`release`, `ImageSequenceCapture`와 같은 계약)와 그것을 고르는 게이트.
   **왜**: 4K ProRes 4444(3840×2160 24fps)가 cv2로는 디코드만으로 22fps라 실시간에 못 미침. 원인은 cv2 내장 FFmpeg의 단일 스레드 픽셀 변환(12bit 4:4:4 → BGR)으로 **보임**(간접 실측 2026-10-29:
   번들 ffmpeg도 단일 스레드로 돌리면 8.5fps, cv2에 `OPENCV_FFMPEG_CAPTURE_OPTIONS="threads;0"`은 효과 없음 23.0fps) — 번들 ffmpeg의 디코드+bgr24 변환은 8코어를 써서 50.7fps(이 Mac Intel 8코어 실측;
@@ -233,14 +233,17 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
     주석 내보내기 워커(`open_any_capture`)·빌드 앱 smoke는 한 번 순차로 읽을 뿐이라 링(예산도 차지하지 않음). 백그라운드 미리 채우기는 없음(재생·탐색이 지나간 것만).
     **판정은 첫 `read()` 머리에서 한 번**(`_decide_cache` — 생성자가 아니라): `open_file`이 새 캡처를 연 뒤 옛 캡처를 놓고 첫 프레임을 읽으므로, 생성 때 재면 나가는 파일 몫이 장부·사용 가능 메모리에 잡혀 4K를 4K로 바꿀 때 늘 링이 됨.
     첫 read 전에는 아무것도 보관하지 않아(생성자가 받은 첫 프레임은 세션 큐에) 모드 전환이 공짜. 판정 결과는 `cache_mode`(`None` 첫 read 전·`"ring"`·`"full"`).
-    **예산**(`frame_cache_budget.full_cache_decision` — probe로 셈, 파일을 읽지 않음): `total = W×H×3 × nb_frames`가 ① `물리 RAM × FULL_CACHE_RAM_FRACTION(0.20) − 다른 살아 있는 전체 모드 캡처들의 합` 이하이고
-    ② `total + FULL_CACHE_HEADROOM_BYTES(2GiB) ≤ 지금 사용 가능 메모리`일 때만 전체 — ①을 먼저 봄, 메모리는 `psutil.virtual_memory()`. 장부 `_LEDGER`(모듈에 하나 — A/B 둘이 같은 예산을 나눔)는 전체로 들어갈 때 더하고 `release`·죽음·GC(캡처 단위
-    `weakref.finalize` — 재시작마다 바뀌는 세션 finalizer와 따로, 한 번만 돎)에서 뺌. 이 Mac(RAM 128GiB)은 예산 25.6GiB(기록에는 십진으로 27.5GB)라 4K A/B 둘 다 전체, 64GB PC는 4K A/B면 A만 전체·B는 링(4K 하나는 전체), 32GB PC는 4K 링·1080p 전체.
+    **예산**(`frame_cache_budget.full_cache_decision` — probe로 셈, 파일을 읽지 않음): `total = W×H×3 × nb_frames`가 ① `물리 RAM × FULL_CACHE_RAM_FRACTION(0.20) − committed` 이하이고
+    ② `total + FULL_CACHE_HEADROOM_BYTES(2GiB) ≤ 지금 사용 가능 메모리 − committed`일 때만 전체(committed = 다른 살아 있는 전체 모드 캡처들이 잡은 바이트의 합) — ①을 먼저 봄, 메모리는 `psutil.virtual_memory()`.
+    ②에서도 committed를 빼는 까닭(최종 검토에서 고친 식): 장부는 보관을 **잡은** 바이트이지 **채운** 바이트가 아님 — 보관은 재생이 지나가는 만큼 차므로 A/B 둘 다 자기 첫 프레임에서 판정할 때는 어느 쪽도 아직 차지 않아
+    사용 가능 메모리가 앞 캡처의 몫을 반영하지 않음(빼지 않으면 128GiB·사용 가능 15GiB에서 4K 둘이 함께 통과해 다 차면 여유가 바닥남 — `test_available_check_subtracts_other_captures_reservation`). 앞 캡처가 이미 다 찬 뒤면 그 몫이 두 번 빠져 링 쪽으로 기움(안전한 쪽).
+    장부 `_LEDGER`(모듈에 하나 — A/B 둘이 같은 예산을 나눔, 프로세스(창)마다 하나 — 아래 '알고 둔 한계' ⑪)는 전체로 들어갈 때 더하고 `release`·죽음·GC(캡처 단위
+    `weakref.finalize` — 재시작마다 바뀌는 세션 finalizer와 따로, 한 번만 돎)에서 뺌. 이 Mac(RAM 128GiB)은 예산 25.6GiB(기록에는 십진으로 27.5GB)라 4K A/B 둘 다 전체(B는 사용 가능 메모리가 18.8GB 이상일 때 — ②), 64GB PC는 4K A/B면 A만 전체·B는 링(4K 하나는 전체), 32GB PC는 4K 링·1080p 전체.
     **기록 한 줄**(판정했을 때만 — opt-in 안 함·킬 스위치는 기록 없음, 값은 `gb`의 십진 GB): `[파이프] 프레임 캐시: 전체 334장 8.3GB (예산 27.5GB, 사용 중 8.3GB) — <파일>` /
-    `… 링 8장 — 파일 8.3GB > 남은 예산 6.9GB (물리 RAM 34.4GB의 20% = 6.9GB, 다른 캡처 0.0GB) — <파일>` / `… 링 8장 — 사용 가능 메모리 3.1GB < 8.3GB + 2.1GB — <파일>`(여유 2GiB가 십진으로 2.1GB).
+    `… 링 8장 — 파일 8.3GB > 남은 예산 6.9GB (물리 RAM 34.4GB의 20% = 6.9GB, 다른 캡처 0.0GB) — <파일>` / `… 링 8장 — 사용 가능 메모리 16.1GB − 다른 캡처 8.3GB < 8.3GB + 2.1GB — <파일>`(여유 2GiB가 십진으로 2.1GB).
     **토글 `YESONCHECK_FRAME_CACHE=auto|ring`**: 없거나 비면 `auto`, 대소문자 무시, 그 밖은 ValueError — `app.launch`가 시작 때 `frame_cache_mode()`로 검증(스플래시 전). `ring`은 킬 스위치(늘 링 8장 — 1.5.1 동작).
     **시험의 기본은 `ring`**: `tests/conftest.py`가 다른 토글처럼 지우지 않고 `ring`으로 고정 — 기존 탐색·플레이어 시험이 링 8장의 재시작 지점을 단언하므로(그 무수정 통과가 '링 모드 = 1.5.1'의 증거) 전체 모드 시험은 `auto`를 명시.
-    판정이 실패하면(psutil 오류 등) read 예외가 아니라 도중 실패(B)와 같은 죽음 — 아래 '실패 처리'.
+    판정이 실패하면(psutil 오류 등) read 예외가 아니라 도중 실패(B)와 같은 죽음 — 아래 '실패 처리'. 그 사유 끝에는 탈출구 안내 `탈출구: YESONCHECK_FRAME_CACHE=ring (psutil을 부르지 않음)`(`FRAME_CACHE_ESCAPE_HINT`)가 붙어 기록과 오류 창에 함께 실림.
   - **프레임 정확도(데이터 계약)**: 주석 JSON의 프레임 번호는 NAS에서 cv2 기반 옛 버전 PC와 함께 쓰고 OCR·씬 워커도 cv2라 "파이프 번호 = cv2 번호"가 깨지면 다른 PC·기능의 주석·구간이 어긋남. 위치는 자체 카운터(순차 전달이라 구조상 정확),
     전체 수는 ffprobe `nb_frames`(cv2 `FRAME_COUNT`와 같은 출처 — 실파일 334 일치), `get(FPS)`는 `float(avg)`(cv2와 같은 출처), 탐색 시각은 정확한 분수 r(병합용 `pick_frame_rate`의 표준값 스냅을 쓰면 2분대부터 반 프레임 어긋남).
     EOF 불변식: 정상 끝은 스트림 위치 == nb_frames에서의 EOF뿐 — 모자라거나 넘치면 도중 실패. 단 끝까지 재생해야 걸리므로 중간 어긋남의 실질 방어는 게이트와 시험.
@@ -264,6 +267,9 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
     ⑨ 4K 슬라이더 드래그는 보관본·앞 24장 밖으로 뛰는 미리보기 장마다 재시작(449~634ms)이라 cv2(329~372ms)보다 무거움 — 전체 모드에서 재생이 이미 지나간 구간은 보관본 복사(~3ms)라 즉시, 처음 보는 구간과 링 모드는 그대로
     ⑩ Windows에서 보안 소프트웨어가 127.0.0.1 루프백 TCP를 막으면 ProRes 열기가 실패함(오류 창 끝 줄에 킬 스위치 안내) — 탈출구는 `YESONCHECK_MOVIE_SOURCE=cv2`(Windows 설정법은 README).
     ⑪ 전체 프레임 캐시: 예산은 첫 read에서 한 번만 봄 — 그 뒤 다른 프로세스(ML 배치 등)가 메모리를 먹어도 보관은 판정한 크기(파일 전체)까지 재생이 지나가는 만큼 계속 늘어남(되돌리는 길은 파일 닫기·킬 스위치).
+    **장부는 프로세스마다 하나이고 창 하나 = 프로세스 하나**(Finder에서 여러 파일을 열면 창이 여럿 — 위 '새 창 · 동영상 열기 · 기본 앱')라 20% 예산은 **창(프로세스)마다**임: 창 셋이 저마다 4K A/B를 열면 각자 20%까지 잡을 수 있고
+    서로의 몫을 보지 못함 — 창 사이를 막는 것은 판정 때의 ②(사용 가능 메모리)뿐인데 다른 창이 이미 채운 만큼만 잡히고 아직 채우지 않은 몫은 잡히지 않음(README는 창마다 20%라고 안내). 다음 후보: **채우는 도중의 가드** —
+    보관을 늘리기 전에 사용 가능 메모리가 `FULL_CACHE_HEADROOM_BYTES` 아래로 내려가면 그 캡처를 링으로 내려앉힘(위의 '첫 read에서 한 번만 봄'과 창 사이 문제를 함께 누그러뜨림).
     예산 확인(`_LEDGER.committed()`)과 장부 올리기(`add`)가 한 원자 동작이 아님 — 지금은 판정하는 캡처가 플레이어 A/B뿐이고 둘 다 GUI 스레드에서 첫 read를 하므로 겹치지 않지만, 다른 스레드에서 opt-in하는 캡처가 생기면 둘이 함께 통과할 수 있음.
     같은 파일을 A·B로 열면 보관을 따로 둬 둘 다 셈(4K 16.6GB). 플레이어 `frame_cache`(기존 드래그 미리보기 캐시)는 전체 모드에서 중복 메모리(후속 후보). fps는 그대로(4K 병목은 ⑦)이고 처음 보는 구간은 예전과 같음(재시작).
   - **다음 후보 — Windows offscreen의 텍스트 주석 굽기**: `render_text_patch`가 글자를 Qt 글꼴로 그리는데 Windows offscreen(CI)에서 글리프가 하나도 안 그려져 구운 그림이 원본과 같았음(글꼴 부재로 추정, 기존 동작 — 이 브랜치와 무관) — 글꼴 가드와 시험이 필요함. 이 브랜치의 `test_display_single_draw`는 도형(사각형) 주석으로 우회.
@@ -272,8 +278,8 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   - 빌드 앱 `yesoncheck/smoke_test.py`의 'ProRes 파이프 열기' 단계(`prores_pipe_open` — 번들 ffmpeg로 소형 ProRes mov를 만들어 `open_any_capture`로 열고 읽기·탐색, `YESONCHECK_MOVIE_SOURCE`가 auto가 아니면 실패): 빌드 앱의
     `_MEIPASS` ffmpeg와 Windows CREATE_NO_WINDOW 파이프가 실제로 실행되는 유일한 자리. 4K 실물 재생·탐색·와이프·주석은 CI가 못 보므로 눈 확인 몫 — 내부(비공개) 저장소의
     `docs/superpowers/records/2026-10-29-prores-pipe-design/eye-check.md`(전체 프레임 캐시는 `docs/superpowers/records/2026-11-02-gl-stream-design/eye-check.md`의 ②). 시험은 아래 '테스트 전략'.
-- `yesoncheck/frame_cache_budget.py` (49줄): 파이프 캡처의 전체 프레임 캐시 예산 — 순수 판단 `full_cache_decision(frame_bytes, count, ram_total, ram_available, committed)` → `CacheDecision(full, reason, total_bytes)`(예산 검사가 사용 가능 메모리
-  검사보다 먼저), 상수 `FULL_CACHE_RAM_FRACTION`(0.20)·`FULL_CACHE_HEADROOM_BYTES`(2GiB), 기록용 `gb`(십진 GB 소수 한 자리), `memory_snapshot`(psutil `virtual_memory()`의 total·available — 예외는 그대로). psutil은 `requirements-build.txt`에
+- `yesoncheck/frame_cache_budget.py` (57줄): 파이프 캡처의 전체 프레임 캐시 예산 — 순수 판단 `full_cache_decision(frame_bytes, count, ram_total, ram_available, committed)` → `CacheDecision(full, reason, total_bytes)`(예산 검사가 사용 가능 메모리
+  검사보다 먼저, 둘 다 다른 캡처가 잡은 committed를 뺌), 상수 `FULL_CACHE_RAM_FRACTION`(0.20)·`FULL_CACHE_HEADROOM_BYTES`(2GiB), 기록용 `gb`(십진 GB 소수 한 자리), `memory_snapshot`(psutil `virtual_memory()`의 total·available — 예외는 그대로). psutil은 `requirements-build.txt`에
   직접 고정(7.2.2 — lock에는 이미 간접 의존으로 있음). Qt·캡처 상태 없음 — 쓰는 곳은 위 `movie_pipe_source`의 '전체 프레임 캐시'
 - `yesoncheck/video_list.py` (427줄): 사이드바 영상 목록 규칙 (job·폴더 읽기, 정렬, 다시 읽기 계획, 없어진 영상 판정 `check_gone`) — Qt 없음
 - `yesoncheck/mac_mounts.py`: (Mac) 이 Mac에서 공유가 붙은 곳 — 자동 연결(autofs) 설정(`/etc/auto_master`와 간접 맵)과
@@ -679,7 +685,7 @@ OCR 리뷰 윈도우가 열려있을 때:
 - 하드웨어 가속 지원 (CUDA/OpenCL)
 - ProRes류 CFR mov는 ffmpeg 파이프 프레임 소스(`movie_pipe_source`)로 재생 — 4K ProRes 4444의 디코드는 cv2 22fps → 파이프 50.7fps이고, 앱 안의 4K 재생은 이 Mac에서 약 20fps(표시 경로가 병목, 1080p는 실시간)
   (위 '주요 파일'의 해당 항목: 게이트·토글·전송·실패 처리·알고 둔 한계)
-- 플레이어가 연 ProRes A/B는 한 번 재생이 지나간 프레임을 파일 끝까지 메모리에 둠(전체 프레임 캐시 — 4K 13.9초 334장 ≈8.3GB, 예산은 물리 RAM의 20%를 A/B가 나눔 + 사용 가능 메모리 여유 2GiB):
+- 플레이어가 연 ProRes A/B는 한 번 재생이 지나간 프레임을 파일 끝까지 메모리에 둠(전체 프레임 캐시 — 4K 13.9초 334장 ≈8.3GB, 예산은 창(프로세스)마다 물리 RAM의 20%를 A/B가 나눔 + 다른 캡처 몫을 뺀 사용 가능 메모리에 여유 2GiB):
   되감기·←·슬라이더·반복 재생이 ffmpeg 재시작(~0.5초) 없이 즉시, fps는 그대로. 예산이 모자라면 링 8장(기록 한 줄), 킬 스위치 `YESONCHECK_FRAME_CACHE=ring`
 
 ### OCR 분석
@@ -732,7 +738,7 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 
 **시험은 반드시 `~/coding/p310_tf/bin/python -m pytest`로 돌릴 것** — TensorFlow가 없는 `~/coding/p310`으로 돌리면 11개가 실패함.
 
-`tests/`에 시험 파일 87개 (수집 2,051개). `python -m pytest tests -q`로 돌리며(약 11분 — 배치 부하가 있으면 13분대), 이 Mac의 소스 실행에서 2,006개가 통과하고 45개는 건너뜀 —
+`tests/`에 시험 파일 87개 (수집 2,054개). `python -m pytest tests -q`로 돌리며(약 11분 — 배치 부하가 있으면 13분대), 이 Mac의 소스 실행에서 2,009개가 통과하고 45개는 건너뜀 —
 다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-11-02 기준; `test_fast_startup`의 종료 플레이크 1건은 러너 상태에 따라 간헐 실패 — 기존 동작). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
 정적 빌드(`vendor/ffmpeg/`)를 씀 (`tests/conftest.py`). 시험을 건너뛰거나 지워서 통과시키지 말 것.
 
@@ -753,13 +759,13 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
   - `test_movie_pipe_seek`: 지연 set과 이동 경로(그대로·링 버퍼·앞으로 버리기·`-ss` 재시작+트랙 오프셋) — 정답은 프레임에 그린 번호, 어느 경로를 탔는지는 시간이 아니라 세션(프로세스) 수·pid로 실증. 링 모드(conftest의 `ring`)로 돌고, 두 장 클립 경계만 전체 모드 갈래도
   - `test_movie_pipe_store`: 보관본 `_FrameStore` 단위 — 링 모드는 최근 N장 FIFO·복사본은 보관 배열과 독립·링은 재시작에서 비우고 전체는 남김·전체는 용량 안에서 내보내지 않음·같은 번호를 다시 넣으면 교체+순서 갱신·비우기 (ffmpeg 없이 작은 배열)
   - `test_movie_pipe_full_cache`: 전체 프레임 캐시 — 판정은 생성자가 아니라 첫 read·한 바퀴 뒤 모든 번호가 재시작 없이·EOF 뒤 되감기·스트림 우선(되감아 재생해도 보관 구간 끝에서 재시작 없음)·보관 구간을 벗어날 때 재시작 한 번·opt-in 안 함/`open_any_capture`/킬 스위치는 링이고 기록 없음·기록 한 줄·
-    두 번째 캡처가 남은 예산을 넘으면 링·장부 반환(release·죽음·GC)·죽음이 보관본을 비움·전체 모드 재시작이 보관본을 지킴·판정 실패와 사유 글 만들기 실패(판정·탐색 재시작 둘 다)도 read 예외 없이 죽음(B). 예산은 `memory_snapshot`을 바꿔 고정(이 기계 메모리에 안 흔들림)
-  - `test_frame_cache_budget`: 예산 순수 함수 — 예산 안/밖·다른 캡처 몫이 예산을 줄임·사용 가능 메모리 부족·예산 검사가 먼저·`gb` 십진 한 자리·`memory_snapshot`이 psutil 그대로·토글 값과 나쁜 값의 ValueError·`app.launch`의 시작 검증·conftest의 `ring` 고정
+    두 번째 캡처가 남은 예산을 넘으면 링·장부 반환(release·죽음·GC)·죽음이 보관본을 비움·전체 모드 재시작이 보관본을 지킴·트랙 시작 오프셋(voff) 파일의 전체 모드 탐색(본 구간은 보관본, 밖은 재시작 한 번)·판정 실패와 사유 글 만들기 실패(판정·탐색 재시작 둘 다)도 read 예외 없이 죽음(B — 판정 실패 사유 끝의 탈출구 안내가 기록·오류 창에). 예산은 `memory_snapshot`을 바꿔 고정(이 기계 메모리에 안 흔들림)
+  - `test_frame_cache_budget`: 예산 순수 함수 — 예산 안/밖·다른 캡처 몫이 예산을 줄임·사용 가능 메모리 부족·사용 가능 메모리 검사도 다른 캡처 몫을 뺌·예산 검사가 먼저·`gb` 십진 한 자리·`memory_snapshot`이 psutil 그대로·토글 값과 나쁜 값의 ValueError·`app.launch`의 시작 검증·conftest의 `ring` 고정
   - `test_movie_pipe_transport`: 전송 계층 — 프레임당 recv 1회 남짓(`recv_calls ≤ 프레임 수 + 1 + 2%`)·GIL 시험: 메인 스레드가 GIL을 쥐는 50ms 창과 놓는 50ms 창을 번갈아 읽기 스레드 공급을 재 **busy 창 평균 ≥ 0.5장(GIL을 쥔 동안 10fps — 제품 하한)** 단언과 idle 공급 > 0 안전망, busy/idle 비율은 출력만 (실측 busy 창 평균: 현재 코드 이 Mac 1.95~3.05·Apple Silicon CI 2.45, 옛 stdout 파이프 0.05~0.60 — 창 사이에 받아 둔 장이 섞여 이 하한만으로는 파이프 회귀를 늘 가르지 못하고, 그 회귀는 프레임당 recv 단언이 결정적으로 잡음; 비율은 러너 속도에 따라 0.44~1.06이라 기준으로 맞지 않음)·release가 막힌 recv를 깨움(shutdown+close)·Windows 경로(TCP 리스너의 accept·EOF·정리·접속 실패)를 `sys.platform` 바꿔치기로
   - `test_display_single_draw`: 재생 틱 한 번에 `updateFrame` 정확히 한 번(주석을 구운 마지막 그림)·`redraw=False`에서도 편집 대상·목록·상태 라벨 갱신은 그대로·다른 호출처는 여전히 그림·드래그 + OCR 검토 창 분기는 와이프가 켜져 있을 때만 다시 그림 — 사용자 승인 예외(중복 그리기 제거)의 보증. 주석은 전부 사각형(도형): 텍스트 주석의 굽기(`render_text_patch`)는 Windows offscreen에서 글리프가 비어 쓰지 않음
   - `test_movie_pipe_integration`: `maybe_pipe_capture`의 모드(auto·pipe·cv2)·예외 경계, `open_any_capture`와 `_open_movie_capture`의 삽입 분기, `app.launch`의 모드 검증 — **게이트 음성 파일은 어떤 모드에서도 `FFmpegPipeCapture`를 만들지 않고 `cv2.VideoCapture`가 열림**(만들면 실패하는 센티널로 바꿔 증명 = cv2 경로 무변경 단언)
   - `test_pipe_player`: 실제 `VideoPlayer`(offscreen)에서 열기·화살표/휠·슬라이더·A/B 와이프·주석 내보내기·재생 도중 ffmpeg 사망(앱 생존·오류 창 1회·재오픈)과 끝난 뒤 프로세스·스레드 잔존 없음·전체 프레임 캐시(A가 `full`로 열려 한 바퀴 뒤 처음으로·건너뛰기 탐색·링 밖 ←·
-    반복 재생이 끝을 넘어 처음으로 돌아가 이어지는 것까지 세션 1개 그대로, 주석 내보내기 워커는 링)
+    반복 재생이 끝을 넘어 처음으로 돌아가 이어지는 것까지 세션 1개 그대로, 주석 내보내기 워커는 링, 열기 순서 — 새 캡처 열기 → 옛 캡처 놓기 → 첫 read 판정이라 예산 1.5개분에서 A를 바꿔도 새 A가 전체)
   - `test_smoke_pipe_step`: 실행 시험(`smoke_test.py`)의 'ProRes 파이프 열기' 단계 단위 시험 — 성공·게이트가 cv2를 주면 실패·모드가 auto가 아니면 실패 (번들 ffmpeg는 CI의 빌드 앱 smoke가 봄)
 - **그 밖**: `test_smoke`·`test_fast_startup`·`test_files`·`test_user_files`·`test_frame_annotations_merge`·`test_annotation_click`·`test_external_tools`·`test_build_info`·
   `test_check_frozen_imports`·`test_release_tool`·`test_print_crash_reports`·`test_screenshot_check`·`test_refactor_checks`
@@ -942,7 +948,7 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
   **fps 목적이 아님**(공급은 이미 충분, 4K 병목은 표시 경로) — 스크럽 체감. 처음 보는 구간은 예전과 같음
 - 링을 번호 → 배열 보관본 `_FrameStore`로 일반화(링 모드 = 1.5.1 링과 같은 보관 집합·재시작 지점, 전체 모드 = 파일 장수·재시작을 건너 남음), 스트림 위치 `_stream_pos`를 따로 둠, 읽기 규칙은 **스트림 우선**(① 스트림 위치 ② 보관본 ③ 앞으로 버리기 ④ 재시작),
   보관은 세션 배열 그대로·호출자에게 복사본
-- 예산: 새 모듈 `frame_cache_budget.py` — 물리 RAM의 20%(A/B 장부 공유) + 사용 가능 메모리 여유 2GiB(psutil, `requirements-build.txt`에 고정). 판정은 첫 read에서(새 파일 열기 순서 때문), 모자라면 링 8장, 판정은 기록에 한 줄 `[파이프] 프레임 캐시: …`.
+- 예산: 새 모듈 `frame_cache_budget.py` — ① 파일 ≤ 물리 RAM의 20% − 다른 캡처 몫(A/B 장부 공유, 창(프로세스)마다) ② 파일 + 여유 2GiB ≤ 사용 가능 메모리 − 다른 캡처 몫(psutil, `requirements-build.txt`에 고정 — ②의 뺄셈은 최종 검토에서 고침: 둘 다 첫 프레임에서 판정해 앞 캡처가 아직 차지 않음). 판정은 첫 read에서(새 파일 열기 순서 때문), 모자라면 링 8장, 판정은 기록에 한 줄 `[파이프] 프레임 캐시: …`.
   메모리: 4K 13.9초 334장 ≈8.3GB, A/B ≈16.6GB, 1080p ≈2.1GB — 닫으면 바로 돌아옴
 - opt-in: `maybe_pipe_capture(path, full_cache=False)` — 플레이어의 `_open_movie_capture`만 `True`(기존 코드 변경은 이 한 줄과 `app.launch`의 토글 검증 한 줄), 주석 내보내기 워커·smoke는 링
 - 킬 스위치 `YESONCHECK_FRAME_CACHE=ring`(그 밖의 값은 시작 때 ValueError). 시험은 conftest가 `ring`으로 고정하고 전체 모드 시험이 `auto`를 명시 — 기존 탐색·플레이어 시험의 단언은 그대로 통과(보관본 이름만 `_ring` → `_store`)
