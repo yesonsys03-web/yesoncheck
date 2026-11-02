@@ -28,7 +28,8 @@ GL 준비(함수 묶기·텍스처)는 생성 때가 아니라 첫 paint()에서
 있어야 하고, 위젯의 진짜 컨텍스트(MSAA 포맷)는 첫 show 때 생긴다. GL 호출은 전부 beginNativePainting/endNativePainting 안에서만(Qt GL2
 엔진이 캐시한 상태와 엇갈리지 않게 — 스파이크와 같음). GL 함수 묶기는 gl_bindings, 이 모듈은 아이템과 선택 규칙만.
 
-엔진 없는 paint: 컨텍스트가 생기지 않은 QOpenGLWidget(offscreen에서 강제한 GL 뷰포트 — 시험, 또는 컨텍스트가 끝내 안 생긴 강제 GL)에서도
+엔진 없는 paint: 컨텍스트가 생기지 않은 QOpenGLWidget(offscreen에서 강제한 GL 뷰포트 — 시험, 또는 위젯 컨텍스트 생성이 실패한 GL 뷰포트 —
+강제 GL이든 확인을 통과한 cocoa 기본이든)에서도
 QGraphicsView는 paint를 부르지만 painter에 엔진이 없다(QPainter::begin 실패 — paintEngine()이 None, Qt가 경고를 남김; offscreen 실측). Qt 자신도
 그 장치에는 아무것도 못 그리므로 준비도 그리기도 없이 기록 한 줄만 남기고 돌아간다 — 아이템마다 한 번, 오류 창 없음, 실패로 치지 않음(뒤에 진짜
 엔진이 오면 그대로 그림). 실패 창(모달)을 띄우면 offscreen 시험이 멈춘다(test_gl_viewport의 gl_widget).
@@ -185,7 +186,7 @@ class VideoFrameItem(QGraphicsPixmapItem):
 
     def _paint_stream(self, painter):
         engine = painter.paintEngine()
-        if engine is None:  # 초기화되지 않은 GL 뷰포트 — Qt도 못 그림 (모듈 설명의 '엔진 없는 paint')
+        if engine is None:  # GL 뷰포트에 컨텍스트가 없음 — Qt도 못 그림 (모듈 설명의 '엔진 없는 paint')
             self._warn_no_engine()
             return
         if engine.type() != QPaintEngine.OpenGL2:
@@ -308,7 +309,7 @@ class VideoFrameItem(QGraphicsPixmapItem):
         self._warned_no_engine = True
         try:
             print(
-                f"{LOG_PREFIX} 페인트 엔진이 없어 영상 프레임을 그리지 못함(초기화되지 않은 GL 뷰포트 — offscreen/강제 GL) — 한 번만 기록",
+                f"{LOG_PREFIX} 페인트 엔진이 없어 영상 프레임을 그리지 못함(GL 뷰포트 컨텍스트 없음 — offscreen이거나 컨텍스트 생성 실패) — 한 번만 기록",
                 file=sys.stderr,
                 flush=True,
             )

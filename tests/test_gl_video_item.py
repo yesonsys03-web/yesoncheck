@@ -120,7 +120,7 @@ def test_paint_without_frame_draws_nothing_and_does_not_fail(qapp, shown):
     assert item.failure_count == 0 and shown == []
 
 class NoEnginePainter:
-    """초기화되지 않은 QOpenGLWidget(offscreen·컨텍스트가 안 생긴 강제 GL)에 그릴 때의 painter — QPainter::begin이 실패해 paintEngine()이 None (offscreen 실측)."""
+    """컨텍스트가 없는 QOpenGLWidget(offscreen, 또는 위젯 컨텍스트 생성 실패 — 강제 GL·cocoa 기본 모두)에 그릴 때의 painter — QPainter::begin이 실패해 paintEngine()이 None (offscreen 실측)."""
     def paintEngine(self):
         return None
 
@@ -132,7 +132,9 @@ def test_paint_without_engine_logs_once_and_does_not_fail(qapp, shown, capsys):
     item.paint(NoEnginePainter(), QStyleOptionGraphicsItem(), None)
     item.paint(NoEnginePainter(), QStyleOptionGraphicsItem(), None)
     qapp.processEvents()
-    assert capsys.readouterr().err.count("[표시] 페인트 엔진이 없어 영상 프레임을 그리지 못함") == 1
+    err = capsys.readouterr().err
+    assert err.count("[표시] 페인트 엔진이 없어 영상 프레임을 그리지 못함") == 1
+    assert "(GL 뷰포트 컨텍스트 없음 — offscreen이거나 컨텍스트 생성 실패)" in err  # 원인을 offscreen·강제 GL로 좁히지 않음
     assert item.failure_count == 0 and shown == []
     paint_with_raster(item)
     qapp.processEvents()
@@ -453,6 +455,39 @@ def test_pixmap_toggle_keeps_pixmap_item_on_gl_viewport(qapp, monkeypatch, capsy
     widget = CustomVideoWidget()
     assert type(widget.video_item) is QGraphicsPixmapItem and widget.video_item_stream is False
     assert "[표시] QPixmap 경로" in capsys.readouterr().out
+
+def _fake_cocoa(monkeypatch, context_ok):
+    """test_gl_viewport._fake_platform과 같은 모양 — 위젯이 보는 platformName만 cocoa로, 컨텍스트 확인 결과는 context_ok
+    (강제 토글 없이 cocoa 기본 경로의 연결부 platformName → viewport_mode → gl_context_available → use_stream_item을 그대로 태움)."""
+    from types import SimpleNamespace
+
+    from yesoncheck import video_widget as module
+
+    monkeypatch.delenv("YESONCHECK_VIEWPORT", raising=False)
+    monkeypatch.delenv(VIDEO_ITEM_ENV, raising=False)
+    monkeypatch.setattr(module, "QApplication", SimpleNamespace(platformName=lambda: "cocoa"))
+    monkeypatch.setattr(module, "gl_context_available", lambda: context_ok)
+
+def test_cocoa_default_installs_stream_item_when_context_ok(qapp, monkeypatch, capsys):
+    _fake_cocoa(monkeypatch, context_ok=True)
+    widget = CustomVideoWidget()
+    try:
+        assert isinstance(widget.viewport(), QOpenGLWidget)
+        assert isinstance(widget.video_item, VideoFrameItem) and widget.video_item_stream is True
+        assert "[표시] GL 텍스처 스트리밍(VideoFrameItem)" in capsys.readouterr().out
+    finally:
+        widget.close()
+
+def test_cocoa_default_keeps_pixmap_item_when_context_fails(qapp, monkeypatch, capsys):
+    """확인 실패 → raster 뷰포트로 폴백(test_gl_viewport가 지킴)하고 아이템도 예전 픽스맵 — GL 표시 기록([표시])은 남기지 않음."""
+    _fake_cocoa(monkeypatch, context_ok=False)
+    widget = CustomVideoWidget()
+    try:
+        assert not isinstance(widget.viewport(), QOpenGLWidget)
+        assert type(widget.video_item) is QGraphicsPixmapItem and widget.video_item_stream is False
+        assert "[표시]" not in capsys.readouterr().out
+    finally:
+        widget.close()
 
 def test_gl_toggle_on_raster_viewport_is_an_error(qapp, monkeypatch):
     monkeypatch.setenv(VIDEO_ITEM_ENV, "gl")
