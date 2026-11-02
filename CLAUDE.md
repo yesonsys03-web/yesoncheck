@@ -251,7 +251,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
     ⑨ 4K 슬라이더 드래그는 링·앞 24장 밖으로 뛰는 미리보기 장마다 재시작(449~634ms)이라 cv2(329~372ms)보다 무거움
     ⑩ Windows에서 보안 소프트웨어가 127.0.0.1 루프백 TCP를 막으면 ProRes 열기가 실패함(오류 창 끝 줄에 킬 스위치 안내) — 탈출구는 `YESONCHECK_MOVIE_SOURCE=cv2`(Windows 설정법은 README).
   - **다음 후보 — Windows offscreen의 텍스트 주석 굽기**: `render_text_patch`가 글자를 Qt 글꼴로 그리는데 Windows offscreen(CI)에서 글리프가 하나도 안 그려져 구운 그림이 원본과 같았음(글꼴 부재로 추정, 기존 동작 — 이 브랜치와 무관) — 글꼴 가드와 시험이 필요함. 이 브랜치의 `test_display_single_draw`는 도형(사각형) 주석으로 우회.
-  - **다음 후보 — 4K 표시 경로의 나머지**: Mac의 직접 GL 텍스처 스트리밍은 2026-11-02에 들어감(`video_widget.py` 항목 — PBO는 스파이크에서 이득이 없어 안 씀). 남은 것: idle에서 틱·334장 재측정(머지 전 눈 확인), 틱 단축 — BGRA 4바이트 업로드(스파이크 −8ms, `frame_a` 계약 변경 필요)·ffmpeg 디코드 스레드 수 제한 실험·틱마다의 라벨·슬라이더 갱신 비용 측정, Windows 기본 GL(ES2/데스크톱 공용 셰이더 경로가 선행 조건)·GPU 와이프. `QPixmap` → `QImage` 직접 그리기는 틱이 약 41ms로 예산(41.7ms)에 걸쳐 확실한 실시간이 안 돼 사용자 결정으로 하지 않음. 근거 스크립트
+  - **다음 후보 — 4K 표시 경로의 나머지**: Mac의 직접 GL 텍스처 스트리밍은 2026-11-02에 들어감(`video_widget.py` 항목 — PBO는 스파이크에서 이득이 없어 안 씀). idle 재측정(2026-11-02 12:21, 외부 ML 배치 없음 — 내부 records `task4-gate.md`): 하니스 틱 GL 55.6ms(QPixmap 74.5)·334장 GL 14.02~14.04초(QPixmap 18.4~19.0, GUI 바쁜 시간 40.3ms/장 = 타이머 41ms 포화) — **설계 게이트 ≤ 35ms 미달 확정, 24fps는 경계(여유 없음)**; 머지·후속은 사용자 결정. 남은 것: 틱 단축 — BGRA 4바이트 업로드(스파이크 −8ms, `frame_a` 계약 변경 필요)·ffmpeg 디코드 스레드 수 제한 실험·틱마다의 라벨·슬라이더 갱신 비용 측정, Windows 기본 GL(ES2/데스크톱 공용 셰이더 경로가 선행 조건)·GPU 와이프. `QPixmap` → `QImage` 직접 그리기는 틱이 약 41ms로 예산(41.7ms)에 걸쳐 확실한 실시간이 안 돼 사용자 결정으로 하지 않음. 근거 스크립트
     (`yc_paint_fmt_exp.py`·`yc_sock_exp.py`·`yc_pipe_read_exp.py`·`yc_microbench.py`)와 하니스(`profile_4k_playback.py`)는 내부(비공개) 저장소의 `docs/superpowers/records/2026-10-29-prores-pipe-design/`, GL 스트리밍 스파이크·게이트 스크립트(`yc_gl_stream_spike.py`·`yc_app_playback_time.py`·`yc_app_pixel_check.py`·`diag_tick_split.py`)는 `records/2026-11-02-gl-stream-design/`.
   - 빌드 앱 `yesoncheck/smoke_test.py`의 'ProRes 파이프 열기' 단계(`prores_pipe_open` — 번들 ffmpeg로 소형 ProRes mov를 만들어 `open_any_capture`로 열고 읽기·탐색, `YESONCHECK_MOVIE_SOURCE`가 auto가 아니면 실패): 빌드 앱의
     `_MEIPASS` ffmpeg와 Windows CREATE_NO_WINDOW 파이프가 실제로 실행되는 유일한 자리. 4K 실물 재생·탐색·와이프·주석은 CI가 못 보므로 눈 확인 몫 — 내부(비공개) 저장소의
@@ -658,7 +658,7 @@ OCR 리뷰 윈도우가 열려있을 때:
 - 4K 자동 감지 (비디오 너비 ≥1920px)
 - 차이 임계값 기반 스마트 프레임 건너뛰기
 - 하드웨어 가속 지원 (CUDA/OpenCL)
-- ProRes류 CFR mov는 ffmpeg 파이프 프레임 소스(`movie_pipe_source`)로 재생 — 4K ProRes 4444의 디코드는 cv2 22fps → 파이프 50.7fps이고, 앱 안의 4K 재생은 이 Mac에서 아래 GL 텍스처 스트리밍과 함께 334장 13.60~14.54초 — 24fps(13.9초) 경계(배치 부하 아래 실측, idle 재측정은 머지 전 필수; 예전 QPixmap 경로 17.57~18.13초), 1080p는 실시간, Windows(raster) 4K는 그대로
+- ProRes류 CFR mov는 ffmpeg 파이프 프레임 소스(`movie_pipe_source`)로 재생 — 4K ProRes 4444의 디코드는 cv2 22fps → 파이프 50.7fps이고, 앱 안의 4K 재생은 이 Mac에서 아래 GL 텍스처 스트리밍과 함께 334장 13.60~14.54초 — 24fps(13.9초) 경계(배치 부하 아래 실측; idle 재측정 14.02~14.04초로 경계 확정, 하니스 틱 55.6ms는 설계 게이트 35ms 미달; 예전 QPixmap 경로 17.6~19.0초), 1080p는 실시간, Windows(raster) 4K는 그대로
   (위 '주요 파일'의 해당 항목: 게이트·토글·전송·실패 처리·알고 둔 한계)
 - Mac GL 뷰포트는 프레임을 GL 텍스처로 직접 올림(`VideoFrameItem` — `QPixmap.fromImage`와 Qt 내부 텍스처 변환 ~48ms/4K 프레임을 건너뜀; 킬 스위치 `YESONCHECK_VIDEO_ITEM=pixmap`, 위 '주요 파일'의 `video_widget.py` 항목)
 
