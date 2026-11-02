@@ -21,7 +21,18 @@ def test_committed_bytes_shrink_the_budget():
 
 def test_ring_when_available_memory_is_short():
     d = b.full_cache_decision(FRAME_4K, 334, ram_total=128 * GB, ram_available=9 * GB, committed=0)
-    assert d.full is False and d.reason == "링 — 사용 가능 메모리 9.7GB < 8.3GB + 2.1GB"
+    assert d.full is False and d.reason == "링 — 사용 가능 메모리 9.7GB − 다른 캡처 0.0GB < 8.3GB + 2.1GB"
+
+def test_available_check_subtracts_other_captures_reservation():
+    """A/B 둘 다 자기 첫 프레임에서 판정하고 그때는 앞 캡처의 보관이 아직 차지 않아 사용 가능 메모리에 안 잡힌다 — 그래서 ②도
+    다른 캡처가 잡은 바이트를 뺀다 (최종 검토의 사례: 128GiB·사용 가능 15GiB·앞 캡처 4K 하나 → 둘째 파일은 링, 앞 캡처가 없으면 전체)."""
+    one_4k = FRAME_4K * 334
+    assert one_4k == 8_310_988_800
+    second = b.full_cache_decision(FRAME_4K, 334, ram_total=128 * GB, ram_available=15 * GB, committed=one_4k)
+    assert second.full is False  # ① 예산은 남음(27.5GB − 8.3GB) — ②가 가름
+    assert second.reason == "링 — 사용 가능 메모리 16.1GB − 다른 캡처 8.3GB < 8.3GB + 2.1GB"
+    alone = b.full_cache_decision(FRAME_4K, 334, ram_total=128 * GB, ram_available=15 * GB, committed=0)
+    assert alone.full is True
 
 def test_budget_check_comes_before_available_check():
     d = b.full_cache_decision(FRAME_4K, 334, ram_total=32 * GB, ram_available=1 * GB, committed=0)

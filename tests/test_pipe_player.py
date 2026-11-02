@@ -510,3 +510,33 @@ def test_player_export_worker_stays_ring(prores_clip, pipe_log, tmp_path, qapp, 
     assert len(pipe_log.captures) == 1 and isinstance(pipe_log.captures[0], FFmpegPipeCapture)
     assert pipe_log.captures[0].cache_mode == "ring"
     assert "프레임 캐시" not in capsys.readouterr().out
+
+
+def test_player_reopen_releases_old_capture_before_new_one_decides(player, pipe_log, prores_clip, reversed_clip, monkeypatch,
+                                                                   capsys):
+    """열기 순서 고정 (판정이 생성자가 아니라 첫 read인 까닭): open_file은 새 캡처를 연 뒤(생성자 — 판정 없음) 옛 캡처를 놓고(장부 반환)
+    첫 프레임(display_first_frame)을 읽어 판정한다. 예산을 파일 1.5개분으로 묶어 두면 A를 다른 파일로 바꿔도 새 A가 전체 — 순서가
+    바뀌어 옛 캡처가 장부에 남은 채 판정하면 두 파일 합이 예산을 넘어 링이 됨."""
+    monkeypatch.setenv(FRAME_CACHE_ENV, "auto")
+    sizes = {}
+    for path in (prores_clip, reversed_clip):
+        probe = probe_movie(path)
+        sizes[path] = probe.width * probe.height * 3 * probe.nb_frames
+    one_x, one_y = sizes[prores_clip], sizes[reversed_clip]
+    assert one_x >= one_y > one_x * 0.5  # 둘 다 1.5개분 예산에 혼자는 들고, 둘이 함께는 넘침
+    ledger = movie_pipe_source._LEDGER
+    base = ledger.committed()  # 다른 시험이 잠깐 남긴 전체 보관만큼 예산을 얹음 (test_second_capture_falls_back_to_ring_when_budget_is_used와 같음)
+    budget_ram = int((base + one_x * 1.5) / frame_cache_budget.FULL_CACHE_RAM_FRACTION)
+    monkeypatch.setattr(frame_cache_budget, "memory_snapshot", lambda: (budget_ram, 10**12))
+
+    old = open_pipe(player, "A", prores_clip, pipe_log)  # 첫 read는 open_file의 display_first_frame
+    assert old.cache_mode == "full" and ledger.committed() == base + one_x
+
+    new = open_pipe(player, "A", reversed_clip, pipe_log)
+    assert new is not old and player.cap_a is new
+    assert new.cache_mode == "full", "옛 캡처를 놓기 전에 새 캡처가 판정함 (열기 순서)"
+    assert old.isOpened() is False
+    assert ledger.committed() == base + one_y  # 옛 몫은 돌려주고 새 몫만
+    assert frame_number(player.frame_a) == B_COUNT - 1  # 새 파일의 0번 프레임 (거꾸로 번호)
+    out = capsys.readouterr().out
+    assert out.count("[파이프] 프레임 캐시: 전체") == 2 and "프레임 캐시: 링" not in out

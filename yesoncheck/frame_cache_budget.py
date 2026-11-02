@@ -1,15 +1,21 @@
 """프레임 캐시 예산 — 파일 하나의 모든 프레임을 RAM에 둬도 되는지 가르는 순수 판단 (Qt·캡처 상태 없음).
 
-캡처가 열릴 때 부른 쪽이 프레임 한 장 크기·장수·물리 RAM·사용 가능 메모리·이미 다른 캡처가 잡은 바이트를 넘기면,
-전체 보관(full) 또는 링(최근 몇 장만)을 돌려준다. 근거 글(reason)은 기록에 그대로 남기려는 것이라 링일 때도 "링 — "으로만
-시작하고 링 장수는 부른 쪽(캡처)이 붙인다. 메모리를 읽는 psutil의 예외는 삼키지 않는다.
+캡처의 첫 read()에서(생성자가 아니라 — FFmpegPipeCapture._decide_cache) 부른 쪽이 프레임 한 장 크기·장수·물리 RAM·사용 가능 메모리·
+이미 다른 캡처가 잡은 바이트를 넘기면, 전체 보관(full) 또는 링(최근 몇 장만)을 돌려준다. 근거 글(reason)은 기록에 그대로 남기려는
+것이라 링일 때도 "링 — "으로만 시작하고 링 장수는 부른 쪽(캡처)이 붙인다. 메모리를 읽는 psutil의 예외는 삼키지 않는다.
+
+두 조건 (둘 다 다른 캡처의 몫 committed를 뺀다): ① total ≤ 예산 − committed (예산 = 물리 RAM × FULL_CACHE_RAM_FRACTION, 먼저 봄)
+② total + FULL_CACHE_HEADROOM_BYTES ≤ 사용 가능 메모리 − committed. ②에서도 빼는 까닭: committed는 보관을 '잡은' 바이트이지 이미
+'채운' 바이트가 아니다 — 보관은 재생이 지나가는 만큼 차므로, A/B 와이프의 두 캡처는 둘 다 자기 첫 프레임에서 판정하고 그때는 어느
+쪽도 아직 차지 않아 사용 가능 메모리가 앞 캡처의 몫을 반영하지 않는다(빼지 않으면 사용 가능 15GiB에서 4K 8.3GB 둘이 함께 통과해 다
+차면 여유가 바닥남). 앞 캡처가 이미 다 찬 뒤라면 그 몫이 두 번 빠져 보수적으로(링 쪽으로) 기운다 — 안전한 쪽.
 """
 
 from dataclasses import dataclass
 
 import psutil
 
-FULL_CACHE_RAM_FRACTION = 0.20  # 모든 캡처의 전체 보관을 합쳐 물리 RAM의 이만큼까지만
+FULL_CACHE_RAM_FRACTION = 0.20  # 모든 캡처의 전체 보관을 합쳐 물리 RAM의 이만큼까지만 (프로세스 — 창 — 하나 안에서)
 FULL_CACHE_HEADROOM_BYTES = 2 * 1024**3  # 전체 보관 뒤에도 사용 가능 메모리에 이만큼은 남아야 함
 
 
@@ -33,9 +39,10 @@ def memory_snapshot():
 
 
 def full_cache_decision(frame_bytes, count, ram_total, ram_available, committed):
-    """파일 전체(count장)를 RAM에 둘지 정한다. 예산 검사가 사용 가능 메모리 검사보다 먼저다.
+    """파일 전체(count장)를 RAM에 둘지 정한다. 예산 검사(①)가 사용 가능 메모리 검사(②)보다 먼저다.
 
-    committed: 이미 다른 캡처가 전체 보관으로 잡은 바이트. 예산 = 물리 RAM의 FULL_CACHE_RAM_FRACTION에서 committed를 뺀 것."""
+    committed: 이미 다른 살아 있는 캡처가 전체 보관으로 잡은(아직 다 채우지 않았을 수 있는) 바이트 — ① 예산(물리 RAM의
+    FULL_CACHE_RAM_FRACTION)에서도, ② 사용 가능 메모리에서도 뺀다 (까닭은 모듈 docstring)."""
     total = frame_bytes * count
     budget = int(ram_total * FULL_CACHE_RAM_FRACTION)
     remaining = budget - committed
@@ -43,7 +50,8 @@ def full_cache_decision(frame_bytes, count, ram_total, ram_available, committed)
         return CacheDecision(False, (
             f"링 — 파일 {gb(total)} > 남은 예산 {gb(remaining)} "
             f"(물리 RAM {gb(ram_total)}의 {FULL_CACHE_RAM_FRACTION:.0%} = {gb(budget)}, 다른 캡처 {gb(committed)})"), total)
-    if ram_available < total + FULL_CACHE_HEADROOM_BYTES:
+    if total + FULL_CACHE_HEADROOM_BYTES > ram_available - committed:
         return CacheDecision(False, (
-            f"링 — 사용 가능 메모리 {gb(ram_available)} < {gb(total)} + {gb(FULL_CACHE_HEADROOM_BYTES)}"), total)
+            f"링 — 사용 가능 메모리 {gb(ram_available)} − 다른 캡처 {gb(committed)} "
+            f"< {gb(total)} + {gb(FULL_CACHE_HEADROOM_BYTES)}"), total)
     return CacheDecision(True, f"전체 {count}장 {gb(total)} (예산 {gb(budget)}, 사용 중 {gb(committed + total)})", total)

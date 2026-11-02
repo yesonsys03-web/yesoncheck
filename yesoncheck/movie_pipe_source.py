@@ -27,8 +27,10 @@ TCP 리스너(tcp://127.0.0.1:<포트>)에 ffmpeg가 접속한다 — 접속은 
 GUI 스레드에서 한다. 복사를 읽기 스레드로 옮겨 본 판은 캡처당 약 174MB(쌍 7장분)가 늘고 메모리 대역 경합 아래 공급이 무너져
 되돌렸다 (Task 3b fix round 3).
 전체 프레임 캐시 (스펙 §6): 플레이어 A/B만 opt-in(maybe_pipe_capture(path, full_cache=True))하고 첫 read가 예산으로 판정한다 — 전체면
-링 대신 꺼낸 모든 프레임을 파일 장수까지 보관해(4K 334장 ≈8.3GB) 본 프레임으로의 되감기·탐색에 재시작이 없다. 모든 캡처의 전체
-보관 합은 물리 RAM의 20%(frame_cache_budget — 장부 _LEDGER)를 넘지 않고, 넘으면 링으로 열고 그 사유를 기록에 한 줄 남긴다.
+링 대신 꺼낸 모든 프레임을 파일 장수까지 보관해(4K 334장 ≈8.3GB) 본 프레임으로의 되감기·탐색에 재시작이 없다. 이 프로세스의 모든
+캡처의 전체 보관 합은 물리 RAM의 20%(frame_cache_budget — 장부 _LEDGER)를 넘지 않고, 넘으면 링으로 열고 그 사유를 기록에 한 줄 남긴다.
+장부는 프로세스마다 하나이고 창 하나 = 프로세스 하나라(Finder로 여러 파일을 열면 창이 여럿) 20%는 창마다다 — 여러 창은 서로의 몫을
+보지 못한다: 판정 때의 사용 가능 메모리 검사에 다른 창이 이미 채운 만큼은 잡히지만 아직 채우지 않은 몫은 잡히지 않는다.
 실패는 캡처 안에서 끝난다 (스펙 §5.5): 생성자만 PipeCaptureError를 올리고, 그 뒤의 read·get·set은 예외를 내지 않는다 — 도중에
 끊기면 죽은 cv2 캡처와 같은 겉모습이 되고, 기록(stderr)에 한 번, 오류 창은 Qt 루프에서 한 번 알린다.
 Qt(PyQt5)와 error_window는 알릴 때만 불러온다 — 판정은 Qt 없이도 쓴다.
@@ -64,6 +66,8 @@ SOURCE_MODE_ENV = "YESONCHECK_MOVIE_SOURCE"
 SOURCE_MODES = ("auto", "pipe", "cv2")  # 환경 변수가 받는 값 (없거나 비어 있으면 "auto")
 FRAME_CACHE_ENV = "YESONCHECK_FRAME_CACHE"
 FRAME_CACHE_MODES = ("auto", "ring")  # 환경 변수가 받는 값 (없거나 비어 있으면 "auto") — ring은 전체 보관을 끄고 링만
+# 프레임 캐시 판정이 실패해 죽을 때 사유 끝에 붙이는 안내 (기록·오류 창) — ring이면 _settle_cache가 메모리(psutil)를 읽기 전에 끝남
+FRAME_CACHE_ESCAPE_HINT = f"탈출구: {FRAME_CACHE_ENV}=ring (psutil을 부르지 않음)"
 UNSPECIFIED_SAR = (None, "1:1", "0:1")  # ffprobe의 sample_aspect_ratio: 없음·정사각형·미지정(0:1)
 
 READAHEAD_FRAMES = 6  # 캡처마다 미리 받아 두는 프레임 수 (4K bgr24 24.9MB/장 → ~149MB; 캡처당 총량은 모듈 docstring) — 스펙 §5.3
@@ -554,7 +558,8 @@ class _FrameStore:
 
 
 class _Ledger:
-    """전체 보관(full)을 잡은 살아 있는 캡처들의 바이트 장부 — 모듈에 하나(_LEDGER), A/B 와이프의 두 캡처가 같은 예산을 나눈다.
+    """전체 보관(full)을 잡은 살아 있는 캡처들의 바이트 장부 — 모듈에 하나(_LEDGER), A/B 와이프의 두 캡처가 같은 예산을 나눈다
+    (프로세스 — 창 — 마다 하나라 다른 창의 캡처는 모름; 모듈 docstring).
     키는 캡처(id): 첫 read의 판정이 add, release·죽음·GC(캡처의 weakref.finalize)가 release — 없는 키는 무시라 여러 번 불러도 된다.
     잠금 안에서는 GC가 추적하는 객체를 만들지 않는다(합계를 따로 셈) — 잠금을 쥔 스레드에서 GC가 다른 캡처의 finalize(→ release)를
     돌려도 같은 잠금을 다시 잡으려다 막히지 않게."""
@@ -764,15 +769,17 @@ class FFmpegPipeCapture:
         캡처를 연 뒤 옛 캡처를 놓고 첫 프레임을 읽는다 — 옛 캡처가 놓은 예산을 새 캡처가 쓰게.
         판정하다 난 예외(psutil 오류, 토글의 나쁜 값 — 앱은 시작 때 검증 — 등)는 read 밖으로 내지 않는다 (§5.5 — 재생 타이머 슬롯에는
         try가 없어 PyQt5가 프로세스를 끝냄): 도중 실패(B)와 같이 죽음 전이 → _die(기록 한 번·트레이스백째, 오류 창 한 번)이고 그 read는
-        (False, None) — 그 사유 글(트레이스백)을 만들다 실패해도 고정 사유(+ 원래 예외 한 줄, _fallback_reason)로 같은 길. 판정 기록을
-        남기다 난 실패는 다른 기록 실패처럼 _last_resort로 (캡처는 그대로)."""
+        (False, None) — 그 사유 글(트레이스백)을 만들다 실패해도 고정 사유(+ 원래 예외 한 줄, _fallback_reason)로 같은 길. 사유 끝에는
+        늘 탈출구 안내(FRAME_CACHE_ESCAPE_HINT — 킬 스위치면 psutil을 부르지 않음)를 붙인다. 판정 기록을 남기다 난 실패는 다른 기록
+        실패처럼 _last_resort로 (캡처는 그대로)."""
         try:
             decision = self._settle_cache()
         except Exception as error:
-            try:
-                reason = f"프레임 캐시 예산을 정하지 못했습니다:\n{traceback.format_exc()}"
+            try:  # 트레이스백(끝에 줄바꿈) 다음 줄에 탈출구 안내 — 기록과 오류 창(사유는 창에 그대로 실림)에 함께
+                reason = f"프레임 캐시 예산을 정하지 못했습니다:\n{traceback.format_exc()}{FRAME_CACHE_ESCAPE_HINT}"
             except Exception:  # 사유 글을 만들다 실패(메모리 부족 등)해도 read 밖으로 내지 않음 — _die가 알릴 글을 지키는 것과 같이
-                reason = _fallback_reason("프레임 캐시 예산을 정하지 못했습니다 (원인 글을 만들지 못했습니다)", error)
+                reason = _fallback_reason("프레임 캐시 예산을 정하지 못했습니다 (원인 글을 만들지 못했습니다)",
+                                          error) + "\n" + FRAME_CACHE_ESCAPE_HINT
             self._cache_mode = "ring"  # 다시 판정하지 않음 (죽은 캡처 — 보관본은 _die가 비움)
             with self._lock:
                 session, self._session = self._session, None  # 죽음 전이 — 세션이 아직 있을 때만 (이미 닫혔으면 알릴 것 없음)
