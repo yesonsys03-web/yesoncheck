@@ -11,8 +11,11 @@ import os
 import pytest
 from tests.prores_clips import frame_number
 from tests.test_movie_pipe_seek import prores_clip, two_frame_clip, sessions, windows, pid, read_number, random_targets, assert_dead  # noqa: F401
+from tests.test_movie_pipe_seek import assert_session_gone
 from yesoncheck import frame_cache_budget, movie_pipe_source, sequence_source
-from yesoncheck.movie_pipe_source import FRAME_CACHE_ENV, KEEP_BEHIND, FFmpegPipeCapture, maybe_pipe_capture, probe_movie
+from yesoncheck.movie_pipe_source import (
+    FAILURE_HEADLINE, FRAME_CACHE_ENV, KEEP_BEHIND, FFmpegPipeCapture, maybe_pipe_capture, probe_movie,
+)
 
 GB = 1024**3
 
@@ -156,4 +159,31 @@ def test_restart_in_full_mode_keeps_store(auto_mode, prores_clip, sessions):
     assert len(sessions) == 2 and cap._store.has(5)
     cap.set(1, 5)
     assert read_number(cap) == 5 and len(sessions) == 2
+    cap.release()
+
+def test_budget_failure_dies_loudly_instead_of_raising(monkeypatch, prores_clip, qapp, windows, capsys):
+    """첫 read의 캐시 판정이 실패(psutil 오류)해도 read는 예외를 내지 않는다 (§5.5 — 재생 타이머 슬롯에는 try가 없어 PyQt5가 프로세스를
+    끝냄): 도중 실패(B)와 같이 그 read가 (False, None), 죽은 cv2 캡처 겉모습, 기록 한 번(트레이스백째), 오류 창 한 번, 세션 정리, 장부 그대로."""
+    monkeypatch.setenv(FRAME_CACHE_ENV, "auto")
+
+    def broken_snapshot():
+        raise OSError("psutil 시험용 실패")
+
+    monkeypatch.setattr(frame_cache_budget, "memory_snapshot", broken_snapshot)
+    base = movie_pipe_source._LEDGER.committed()
+    cap = open_full(prores_clip)
+    session = cap._session
+    assert cap.read() == (False, None)
+    assert_dead(cap)
+    log = capsys.readouterr().err
+    assert log.count(FAILURE_HEADLINE) == 1, log
+    assert "프레임 캐시 예산을 정하지 못했습니다" in log and "Traceback" in log and "OSError: psutil 시험용 실패" in log
+    assert prores_clip in log
+    qapp.processEvents()
+    assert len(windows) == 1 and FAILURE_HEADLINE in windows[0].text
+    assert cap.read() == (False, None)  # 죽은 뒤의 read는 다시 알리지 않음
+    qapp.processEvents()
+    assert len(windows) == 1 and FAILURE_HEADLINE not in capsys.readouterr().err
+    assert_session_gone(session)
+    assert movie_pipe_source._LEDGER.committed() == base
     cap.release()

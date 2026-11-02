@@ -615,10 +615,10 @@ class FFmpegPipeCapture:
     큐에 남아 첫 read()가 씀 (두 번 디코드하지 않음). ffmpeg를 찾지 못하면(ToolNotFoundError — 빌드 깨짐) 감싸지 않고 그대로 올라간다.
     탐색 재시작은 첫 프레임을 기다리지 않는다 (그 뒤의 꺼내기가 READ_TIMEOUT_S까지 기다림).
 
-    생성 뒤의 read·get·set은 예외를 내지 않는다 (스펙 §5.5 — 탐색 실행 중도). 단 하나의 예외는 opt-in한 캡처의 첫 read가 하는 캐시
-    판정 — 토글의 나쁜 값(ValueError)·psutil 오류는 삼키지 않고 올린다 (앱은 시작 때 토글을 검증). 도중 실패 — 프레임 중간에서 끊김, ffmpeg 비정상
-    종료, 끝났는데 받은 수가 nb_frames와 다름(모자람·넘침 — 재시작 착지가 어긋난 경우도 여기서 걸림), READ_TIMEOUT_S 동안 다음
-    프레임이 없음, 재시작할 ffmpeg를 띄우지 못함 — 는 큐에 남은 정상 프레임을 다 준 뒤에 드러나고, 그때 캡처가 스스로: 세션
+    생성 뒤의 read·get·set은 예외를 내지 않는다 (스펙 §5.5 — 탐색 실행 중도, 첫 read의 캐시 판정도). 도중 실패 — 프레임 중간에서
+    끊김, ffmpeg 비정상 종료, 끝났는데 받은 수가 nb_frames와 다름(모자람·넘침 — 재시작 착지가 어긋난 경우도 여기서 걸림),
+    READ_TIMEOUT_S 동안 다음 프레임이 없음, 재시작할 ffmpeg를 띄우지 못함, 첫 read에서 프레임 캐시 예산을 정하지 못함(psutil 오류
+    등 — 이것은 그 read에서 바로) — 은 큐에 남은 정상 프레임을 다 준 뒤에 드러나고, 그때 캡처가 스스로: 세션
     정리(kill — 거두기는 데몬 스레드) → 죽음 상태 → 기록에 한 번(원인·읽던 곳의 호출 스택·명령·stderr 전문) → 오류 창을 Qt 루프에서
     한 번 (_report_failure). 죽은 뒤의 read는 다시 알리지 않는다. 드러나기 전의 실패를 품은 세션을 버릴 때(release·탐색 재시작)는
     기록에만 한 번 남긴다.
@@ -762,25 +762,47 @@ class FFmpegPipeCapture:
         release·죽음·GC(캡처의 weakref.finalize — 세션의 finalize는 재시작마다 바뀌므로 따로). 판정했으면 전체든 링이든 기록 한 줄
         ("[파이프] 프레임 캐시: 전체 …" / "… 링 8장 — 파일 …"). 생성자가 아니라 첫 read에서 정하는 까닭: 플레이어의 open_file은 새
         캡처를 연 뒤 옛 캡처를 놓고 첫 프레임을 읽는다 — 옛 캡처가 놓은 예산을 새 캡처가 쓰게.
-        토글의 나쁜 값(ValueError)·psutil 오류는 삼키지 않고 그대로 올라간다 (앱은 시작 때 토글을 검증)."""
+        판정하다 난 예외(psutil 오류, 토글의 나쁜 값 — 앱은 시작 때 검증 — 등)는 read 밖으로 내지 않는다 (§5.5 — 재생 타이머 슬롯에는
+        try가 없어 PyQt5가 프로세스를 끝냄): 도중 실패(B)와 같이 죽음 전이 → _die(기록 한 번·트레이스백째, 오류 창 한 번)이고 그 read는
+        (False, None). 판정 기록을 남기다 난 실패는 다른 기록 실패처럼 _last_resort로 (캡처는 그대로)."""
+        try:
+            decision = self._settle_cache()
+        except Exception:
+            reason = f"프레임 캐시 예산을 정하지 못했습니다:\n{traceback.format_exc()}"
+            self._cache_mode = "ring"  # 다시 판정하지 않음 (죽은 캡처 — 보관본은 _die가 비움)
+            with self._lock:
+                session, self._session = self._session, None  # 죽음 전이 — 세션이 아직 있을 때만 (이미 닫혔으면 알릴 것 없음)
+            if session is not None:
+                self._die(reason, session=session)
+            return
+        if decision is None:  # 기록 없는 링 (opt-in 안 함·킬 스위치·그사이 닫힘)
+            return
+        reason = decision.reason if decision.full else decision.reason.replace("링", f"링 {KEEP_BEHIND}장", 1)
+        try:
+            print(f"{LOG_PREFIX} 프레임 캐시: {reason} — {os.path.basename(self._path)}")
+        except Exception:
+            _last_resort(f"프레임 캐시 판정을 기록하지 못했습니다 ({reason}): {self._path}")
+
+    def _settle_cache(self):
+        """(_decide_cache 안) 판정을 정해 캡처에 반영 → 기록할 CacheDecision, 기록 없는 링이면 None. 예외는 부른 쪽(_decide_cache)이 받는다."""
         if not self._full_cache_wanted or frame_cache_mode() == "ring":
             self._cache_mode = "ring"
-            return
+            return None
         ram_total, available = frame_cache_budget.memory_snapshot()
         decision = frame_cache_budget.full_cache_decision(
             self._frame_bytes, self._count, ram_total, available, _LEDGER.committed())
         with self._lock:
             if self._session is None:  # 판정 전·도중에 닫힘(다른 스레드의 release) — 보관도 장부도 잡지 않음
                 self._cache_mode = "ring"
-                return
+                return None
             if decision.full:
                 self._store = _FrameStore(self._count, keep_across_restart=True)  # 첫 read 전이라 링은 비어 있음 — 버림
                 self._ledger_key = id(self)
-                _LEDGER.add(self._ledger_key, decision.total_bytes)
+                # 반환 길을 먼저 걸고 장부에 올림 — 그 사이 무엇이 실패해도 장부가 새지 않게 (없는 키의 release는 무시)
                 self._ledger_finalizer = weakref.finalize(self, _LEDGER.release, self._ledger_key)
+                _LEDGER.add(self._ledger_key, decision.total_bytes)
             self._cache_mode = "full" if decision.full else "ring"
-        reason = decision.reason if decision.full else decision.reason.replace("링", f"링 {KEEP_BEHIND}장", 1)
-        print(f"{LOG_PREFIX} 프레임 캐시: {reason} — {os.path.basename(self._path)}")
+        return decision
 
     def _arrive(self, pos, target):
         """(_lock 안) 이동을 마침: pos를 정하고 이번 read가 실행한 목표를 지움 (그사이 다른 목표가 기록됐으면 그것은 다음 read의 몫)."""
