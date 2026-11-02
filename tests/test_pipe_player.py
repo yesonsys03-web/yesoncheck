@@ -26,10 +26,10 @@ from PyQt5.QtTest import QTest
 from tests.prores_clips import frame_number, make_numbered_clip, read_all_frames, run_ffmpeg
 from tests.test_movie_pipe_capture import KILL_SLACK, assert_session_gone, wait_for
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
-from yesoncheck import error_window, external_tools, movie_pipe_source
+from yesoncheck import error_window, external_tools, frame_cache_budget, movie_pipe_source
 from yesoncheck.annotation_export import AnnotationExportWorker
 from yesoncheck.movie_pipe_source import (
-    FAILURE_HEADLINE, KEEP_BEHIND, READAHEAD_FRAMES, FFmpegPipeCapture, pipe_eligible, probe_movie,
+    FAILURE_HEADLINE, FRAME_CACHE_ENV, KEEP_BEHIND, READAHEAD_FRAMES, FFmpegPipeCapture, pipe_eligible, probe_movie,
 )
 
 A_COUNT = 120
@@ -37,6 +37,7 @@ B_COUNT = 90  # A보다 짧음 — 와이프에서 B가 먼저 끝나도 A는 �
 POS = cv2.CAP_PROP_POS_FRAMES
 SEED = 20261029  # 무작위 탐색 지점의 시드 (실패하면 메시지에 지점이 찍힘)
 EXPORT_TIMEOUT_S = 60
+GB = 1024**3
 
 
 # ---------------------------------------------------------------- 클립 (session: 인코딩 반복 방지)
@@ -433,3 +434,59 @@ def test_player_survives_mid_death(player, pipe_log, prores_clip, windows, dialo
     key(player, qapp, Qt.Key_Right)
     assert_showing(player, 1)
     assert len(windows) == 1
+
+
+# ---------------------------------------------------------------- 전체 프레임 캐시 (스펙 §6) — 플레이어만 opt-in
+
+@pytest.fixture
+def full_cache_budget(monkeypatch):
+    """conftest가 두는 YESONCHECK_FRAME_CACHE=ring 대신 auto + 넉넉한 예산(128GB 중 100GB 남음)으로 고정 — 판정이 이 기계의 메모리에
+    흔들리지 않게."""
+    monkeypatch.setenv(FRAME_CACHE_ENV, "auto")
+    monkeypatch.setattr(frame_cache_budget, "memory_snapshot", lambda: (128 * GB, 100 * GB))
+
+
+def test_player_opens_with_full_cache_and_scrubs_without_restart(player, pipe_log, prores_clip, qapp, full_cache_budget):
+    """플레이어 A는 전체 캐시로 열린다 (display_first_frame의 첫 read가 판정). 한 바퀴 재생한 뒤에는 처음으로·건너뛰기 탐색·링(8장) 밖까지
+    ← 가 전부 보관본에서 나와 ffmpeg가 다시 뜨지 않는다 (세션 수 불변) — 링 모드였다면 이 탐색마다 재시작."""
+    cap = open_pipe(player, "A", prores_clip, pipe_log)
+    assert cap.cache_mode == "full"
+    count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    assert count == A_COUNT
+    player.play_video()
+    assert player.timer.isActive()  # 꺼져 있으면 next_frame_playback이 아무것도 하지 않아 '끝까지 재생'이 빈 껍데기가 됨
+    tick(player, count - 1)  # 끝까지 재생
+    assert frame_number(player.frame_a) == count - 1 and player.timer.isActive()
+    player.pause_video()
+    assert cap.cache_mode == "full" and cap.isOpened()
+    sessions = len(pipe_log.sessions)
+    assert sessions == 1  # 앞으로만 읽었으니 처음 세션 하나
+
+    player.seek_to_frame(1)  # 처음으로
+    # 프레임 라벨은 보지 않음: 끝에서 처음으로 돌아올 때 "Current: 120"이 한 번 남는 기존 동작 (test_playback_to_the_end_is_not_a_failure 주석 —
+    # cv2 캡처에서도 같고 파이프와 무관). 화면·들고 있는 프레임이 0번이면 충분하고, 다음 탐색부터는 assert_showing이 라벨까지 봄.
+    assert frame_number(player.frame_a) == 0 and frame_number(screen_image(player)) == 0, "처음으로"
+    for n in (count // 2, 3, count - 2, 10):
+        player.seek_to_frame(n + 1)
+        assert_showing(player, n, f"탐색 {n}")
+    for step in range(1, KEEP_BEHIND + 4):
+        key(player, qapp, Qt.Key_Left)  # 링 밖까지 ← (10에서 0까지, 링은 8장)
+        assert_showing(player, max(10 - step, 0), f"← {step}번째")
+    assert len(pipe_log.sessions) == sessions  # 재시작 0
+    assert cap.cache_mode == "full" and cap.isOpened()
+
+
+def test_player_export_worker_stays_ring(prores_clip, pipe_log, tmp_path, qapp, full_cache_budget, capsys):
+    """주석 내보내기 일꾼(open_any_capture)은 전체 캐시를 원하지 않는다 — 환경이 auto이고 예산이 넉넉해도 링이고 기록 한 줄도 없음
+    (test_annotation_export_pipe와 같은 준비로 워커를 돌림)."""
+    out = str(tmp_path / "out" / "annotated.mov")
+    worker = AnnotationExportWorker(prores_clip, {}, out, external_tools.ffmpeg_path(), include_audio=True,
+                                    export_mode="balanced")
+
+    result = run_export(qapp, worker)
+
+    assert "error" not in result, result.get("error")
+    assert result["done"] == out
+    assert len(pipe_log.captures) == 1 and isinstance(pipe_log.captures[0], FFmpegPipeCapture)
+    assert pipe_log.captures[0].cache_mode == "ring"
+    assert "프레임 캐시" not in capsys.readouterr().out

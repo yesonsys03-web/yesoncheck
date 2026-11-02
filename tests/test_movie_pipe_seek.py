@@ -19,12 +19,13 @@ import numpy as np
 import pytest
 
 from tests.prores_clips import frame_number, make_numbered_clip, make_truncated, make_voff
-from yesoncheck import error_window, external_tools, movie_pipe_source
+from yesoncheck import error_window, external_tools, frame_cache_budget, movie_pipe_source
 from yesoncheck.movie_pipe_source import (
     FAILURE_HEADLINE, KEEP_BEHIND, SEEK_BACK_K, SEEK_FORWARD_MAX, FFmpegPipeCapture, probe_movie,
 )
 
 COUNT = 120
+GB = 1024**3
 SEED = 20261030
 WAIT_S = 10  # 프로세스·스레드가 끝나기를 기다리는 한도 (보통 수십 ms)
 POS = cv2.CAP_PROP_POS_FRAMES
@@ -383,6 +384,7 @@ def test_two_frame_clip_boundaries(two_frame_clip, path_kind, monkeypatch, sessi
         monkeypatch.setattr(movie_pipe_source, "SEEK_FORWARD_MAX", 0)
     if path_kind == "full":
         monkeypatch.setenv(movie_pipe_source.FRAME_CACHE_ENV, "auto")
+        monkeypatch.setattr(frame_cache_budget, "memory_snapshot", lambda: (128 * GB, 100 * GB))  # 예산을 고정 — 이 기계의 메모리에 안 흔들림
     steps = ["read", "read", "read", "read", 1, "read", "read", 0, "read", "read", "read", 2, "read", -1, "read",
              5, "read", 1, "read", 0, 1, "read", "read"]
     if path_kind == "full":
@@ -405,6 +407,8 @@ def test_two_frame_clip_boundaries(two_frame_clip, path_kind, monkeypatch, sessi
                 assert cap.set(POS, step) is ref.set(POS, step) is True
             assert cap.get(POS) == ref.get(POS), (index, step)
             assert cap.isOpened() and ref.isOpened()
+        if path_kind == "full":
+            assert cap.cache_mode == "full"  # 첫 read의 판정이 실제로 전체 보관이었음 (아니면 이 갈래가 링 시험과 구별되지 않음)
     finally:
         cap.release()
         ref.release()
