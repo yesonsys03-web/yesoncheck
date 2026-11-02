@@ -184,9 +184,10 @@ def test_dialog_shows_rich_text_without_markdown_stars(new_player, dialogs, tmp_
 
 
 def test_dialog_reports_probe_failure_plainly(new_player, dialogs, tmp_path, capsys):
-    """깨진 파일: 창은 평문(경로에 <b>가 있어도 태그로 읽지 않음 — 본문에 종류·사유, 자세히에 트레이스백), 기록에 `[미디어 정보] 실패` 줄 + 트레이스백."""
+    """깨진 파일: 창은 평문(경로의 & 같은 글자를 이스케이프하지 않고 그대로 — 본문에 종류·사유, 자세히에 트레이스백), 기록에 `[미디어 정보] 실패` 줄 + 트레이스백.
+    (파일 이름에 <를 쓰면 Windows에서 파일을 만들 수 없음 — Windows CI에서 잡힘.)"""
     player = new_player(make_config(str(tmp_path), {}))
-    bad = tmp_path / "bad<b>.mov"
+    bad = tmp_path / "bad&b.mov"
     bad.write_bytes(b"not a movie")
     player.add_files_to_sidebar([str(bad)])
     assert player.sidebar.count() == 1
@@ -194,7 +195,7 @@ def test_dialog_reports_probe_failure_plainly(new_player, dialogs, tmp_path, cap
     player.show_video_info(player.sidebar.model().index(0, 0))
     [(kind, title, text)] = [m for m in dialogs.messages if m[1] == "미디어 정보"]
     assert kind == "warning"
-    assert text.startswith("미디어 정보를 가져오는 데 실패했습니다 (RuntimeError)") and "ffprobe" in text and "bad<b>.mov" in text
+    assert text.startswith("미디어 정보를 가져오는 데 실패했습니다 (RuntimeError)") and "ffprobe" in text and "bad&b.mov" in text
     assert "Traceback" in text  # 자세히
     err = capsys.readouterr().err
     assert "[미디어 정보] 실패:" in err and "Traceback" in err
