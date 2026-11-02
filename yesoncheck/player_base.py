@@ -253,7 +253,10 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         self.activateWindow()
         
         # 재생 FPS 측정을 위한 변수들 초기화
-        self.playback_fps_counter = 0
+        self.playback_fps_counter = 0  # 재생 틱(next_frame_playback)이 진행한 프레임 수 — update_playback_fps가 틱마다 읽고 0으로
+        self._playback_fps_tick = time.monotonic()  # 지난 틱 시각 (실제 fps = 진행한 수 ÷ 걸린 시간)
+        self._playback_fps_was_playing = False  # 지난 틱에 재생 중이었나 — 재생 시작 뒤 첫 틱은 부분 구간이라 실제 fps를 적지 않음
+        self.playback_fps_measured = None  # 지난 틱의 실제 fps (재생 중이 아니거나 첫 틱이면 None)
         self.playback_fps_timer = QTimer()
         self.playback_fps_timer.timeout.connect(self.update_playback_fps)
         self.playback_fps_timer.start(1000)  # 1초마다 FPS 업데이트
@@ -504,9 +507,9 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         self.labelTotalFrames = ElidedLabel(Qt.ElideRight, keep_text="Total: 00000 (000F 00f)",
                                             keep_prefix="Total: 00000", hint_width=200,
                                             fit_text="Total: 00000 (000F 00f)", shrink_order=4)
-        self.labelPlaybackFPS = ElidedLabel(Qt.ElideRight, keep_text="재생: 00.000 FPS", keep_prefix="",
-                                            hint_width=150, fit_text="재생: 00.000 FPS", shrink_order=2,
-                                            collapse_order=6)  # 재생 FPS 표시 위젯 추가
+        self.labelPlaybackFPS = ElidedLabel(Qt.ElideRight, keep_text="재생: 00.000 FPS · 실제 00.0", keep_prefix="",
+                                            hint_width=150, fit_text="재생: 00.000 FPS · 실제 00.0", shrink_order=2,
+                                            collapse_order=6)  # 재생 FPS 표시 위젯 — 재생 중엔 실제로 그린 fps도 (update_playback_fps)
         font = QFont(); font.setPointSize(16)
         self.filenameLabel.setFont(font)
         self.labelFrameCount.setFont(font)
