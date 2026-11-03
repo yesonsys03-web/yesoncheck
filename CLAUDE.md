@@ -789,7 +789,7 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 
 **시험은 반드시 `~/coding/p310_tf/bin/python -m pytest`로 돌릴 것** — TensorFlow가 없는 `~/coding/p310`으로 돌리면 11개가 실패함.
 
-`tests/`에 시험 파일 92개 (수집 2,217개). `python -m pytest tests -q`로 돌리며(약 12분), 이 Mac의 소스 실행에서 2,171개가 통과하고 45개는 건너뜀 —
+`tests/`에 시험 파일 93개 (수집 2,224개). `python -m pytest tests -q`로 돌리며(약 12분), 이 Mac의 소스 실행에서 2,178개가 통과하고 45개는 건너뜀 —
 다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-11-03 기준; `test_fast_startup`의 종료 플레이크 1건(`test_app_exits_cleanly_while_shared_config_load_runs`, 자식 종료 코드 −11)은 러너 상태에 따라 간헐 실패 — main에서도 같은 빈도, 따로 돌리면 통과). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
 정적 빌드(`vendor/ffmpeg/`)를 씀 (`tests/conftest.py`). 시험을 건너뛰거나 지워서 통과시키지 말 것.
 
@@ -1004,7 +1004,7 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 ### 2026-11-03 (도형 주석 색 — 빨강이 파랑으로 굽히던 버그)
 - `annotation_burn.burn_annotations_on_frame`은 RGB 프레임(표시 경로의 `frame_a`, 내보내기 워커는 BGR → RGB로 바꿔 넘김)에 그리는데 도형(사각형·타원·선·화살표) 색을 `hex_to_bgr`로 넘겨 R·B가 뒤바뀌었음 — 화면과 '주석 포함 영상보내기' 결과 둘 다 (글자 패치는 RGB라 정상, 편집 중 미리보기는 Qt가 그려 정상).
   BGRX 프레임 경로 설계(내부 저장소 `specs/2026-11-03-bgrx-frame-path-design.md`)의 builder check가 실행으로 찾음. 도형 색을 RGB 순서로 바꾸고 `hex_to_bgr`은 지움(다른 사용처 없음). 함수의 약속: **RGB 3채널 프레임, 색도 RGB**.
-  시험 `tests/test_annotation_burn_color.py` 7개(도형 4종·노랑·글자와 도형의 채널 순서 일치·입력 불변). `ci/screenshot_check.py`의 주석 장면 PNG는 이 수정으로 바뀜(기준 폴더를 다시 찍을 것).
+  시험 `tests/test_annotation_burn_color.py` 7개(도형 4종·노랑·글자와 도형의 채널 순서 일치·입력 불변). `ci/screenshot_check.py`의 '주석 모드' 장면은 주석을 하나도 굽지 않아(모드만 켬) PNG가 바뀌지 않음 — 굽힌 주석 장면은 BGRX 설계 §8-3에서 더함.
 
 ### 2026-11-03 (미디어 정보 창 — 코덱 세부 정보)
 - 사이드바 우클릭 → 미디어 정보가 `prores` 한 단어만 보여 주던 것을 ffprobe 한 번(`-show_streams -show_format`)으로 코덱 프로파일·태그(`Apple ProRes 4444 (prores · ap4h)`), 픽셀 형식의 뜻(4:4:4 · 12비트 · 알파), 색 공간·범위,
