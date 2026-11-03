@@ -12,6 +12,8 @@ from yesoncheck.movie_pipe_source import probe_movie
 
 # in-gamut 시험: 모서리(0·255)에 닿는 화소 비율 상한 — 색을 gamut 안에서 뽑으면 사실상 0, 무작위 YCbCr 코드를 그대로 쓰면 수십 %
 CLAMPED_FRACTION_LIMIT = 0.001
+# 8비트 YCbCr 코드 반올림(각 +-0.5)이 RGB에서 만드는 오차의 상한 (실측 1.4 안쪽)
+RGB_ROUNDING_SLACK = 2
 
 
 def test_factory_size_and_color_tag(tmp_path):
@@ -109,8 +111,10 @@ def split_planes(raw, count, pix_fmt, width, height):
 @pytest.mark.parametrize("color, kr, kb", [(None, 0.299, 0.114), ("bt709", 0.2126, 0.0722)], ids=["601", "709"])
 @pytest.mark.parametrize("pix_fmt", ["yuv444p10le", "yuv422p10le"])
 def test_chroma_raw_planes_decode_inside_rgb_gamut(pix_fmt, color, kr, kb):
-    """_chroma_raw의 평면을 태그에 맞는 행렬(태그 없음 601, bt709 709)로 클램프 없이 RGB로 되돌려도 0~255 안.
-    행렬을 잘못 고르거나(709 클립에 601) YCbCr 코드를 무작위로 뽑으면 영역 밖이 나온다."""
+    """_chroma_raw의 평면을 태그에 맞는 행렬(태그 없음 601, bt709 709)로 클램프 없이 RGB로 되돌리면 뽑았던 구간
+    (RGB_MARGIN ~ 255 - RGB_MARGIN, 8비트 코드 반올림 오차 RGB_ROUNDING_SLACK만 허용) 안에 든다.
+    구간을 0~255가 아니라 생성 구간으로 좁혀야 행렬 선택이 고정된다: 709 클립을 601 행렬로 만들어도 되돌린 값은 약 5.9~248.4라
+    0~255 안이라서 통과해 버리지만 생성 구간(약 22.6~232.4)은 벗어난다. YCbCr 코드를 무작위로 뽑은 경우도 마찬가지."""
     width, height, count = 640, 360, 2
     raw = prores_clips._chroma_raw(count, pix_fmt, 7, width, height, color)
     kg = 1 - kr - kb
@@ -121,4 +125,5 @@ def test_chroma_raw_planes_decode_inside_rgb_gamut(pix_fmt, color, kr, kb):
         red, blue = luma + 2 * (1 - kr) * pr, luma + 2 * (1 - kb) * pb
         green = (luma - kr * red - kb * blue) / kg
         rgb = np.stack([red, green, blue]) * 255
-        assert rgb.min() >= 0 and rgb.max() <= 255, (rgb.min(), rgb.max())
+        assert rgb.min() >= prores_clips.RGB_MARGIN - RGB_ROUNDING_SLACK, (rgb.min(), rgb.max())
+        assert rgb.max() <= 255 - prores_clips.RGB_MARGIN + RGB_ROUNDING_SLACK, (rgb.min(), rgb.max())
