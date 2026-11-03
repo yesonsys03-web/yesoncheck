@@ -24,6 +24,7 @@ import ast
 import glob
 import importlib
 import os
+import platform
 import plistlib
 import sys
 import sysconfig
@@ -127,6 +128,22 @@ def exercise_sequence_decode():
     return decoded
 
 
+NATIVE_SKIPPED = "네이티브 PyObjC 건너뜀 (Apple Silicon 아님)"
+
+
+def exercise_native_pyobjc():
+    """(스파이크 spike/mac-native) Apple Silicon이면 네이티브 재생의 PyObjC(AVFoundation·CoreMedia·Quartz)를 실제로 불러 봄 — 빌드 환경에
+    없으면 ImportError로 검사 실패, 있으면 쓰인 모듈에 올라 main()이 앱 안에 있는지 대조. 그 밖의 플랫폼은 건너뛴 사실을 돌려줌."""
+    if not (sys.platform == "darwin" and platform.machine() == "arm64"):
+        return NATIVE_SKIPPED
+    import objc
+    from yesoncheck import mac_native_source
+
+    _objc, AVFoundation, CoreMedia, _Foundation, Quartz = mac_native_source._pyobjc()
+    return f"네이티브 PyObjC {objc.__version__}: {AVFoundation.__name__}·{CoreMedia.__name__}·{Quartz.__name__} " \
+           f"(32BGRA {Quartz.kCVPixelFormatType_32BGRA:#x})"
+
+
 def exercise_app():
     """앱이 실행 중에 거치는 경로를 소스 환경에서 실행합니다."""
     sys.path.insert(0, PROJECT_ROOT)
@@ -141,6 +158,7 @@ def exercise_app():
             skipped.append(f"{name} ({exc})")
 
     frame_formats = exercise_sequence_decode()  # 가볍고 PIL 플러그인 누락을 바로 잡으므로 느린 OCR 앞에서
+    print(exercise_native_pyobjc(), flush=True)
 
     import cv2
     import numpy as np

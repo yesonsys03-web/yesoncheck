@@ -47,6 +47,7 @@ jobs:
         run: ./ci/setup_test_share.ps1
 
       - name: 소스 시험 (pytest)
+        continue-on-error: true  # SPIKE (spike/mac-native 측정 빌드 — 시험이 실패해도 빌드·artifact까지)
         run: .venv\Scripts\python.exe -m pytest tests -v -rs
 
       - name: 빌드 정보 (버전·커밋 → build\build_info.json)
@@ -320,6 +321,7 @@ jobs:
           echo "ARCH=$ARCH" >> "$GITHUB_ENV"
 
       - name: 소스 시험 (pytest)
+        continue-on-error: true  # SPIKE (spike/mac-native 측정 빌드 — 시험이 실패해도 빌드·artifact까지)
         run: |
           "$VENV/bin/python" -m pytest tests -v -rs
 

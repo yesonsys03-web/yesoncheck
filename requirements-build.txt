@@ -49,3 +49,7 @@ tensorflow-io-gcs-filesystem==0.34.0; sys_platform == "darwin"
 cryptography==48.0.1
 # 프레임 캐시 예산 — 물리·사용 가능 메모리. lock에는 이미 간접 의존으로 같은 버전이 있어 lock 재생성 불필요
 psutil==7.2.2
+# (스파이크 spike/mac-native) Apple Silicon 네이티브 재생(VideoToolbox → IOSurface → GL) — arm64 Mac에만. Intel·Windows에는 넣지 않음
+pyobjc-core==12.2.2; sys_platform == "darwin" and platform_machine == "arm64"
+pyobjc-framework-AVFoundation==12.2.2; sys_platform == "darwin" and platform_machine == "arm64"
+pyobjc-framework-Quartz==12.2.2; sys_platform == "darwin" and platform_machine == "arm64"
