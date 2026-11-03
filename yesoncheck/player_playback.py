@@ -32,7 +32,7 @@ from yesoncheck.movie_pipe_source import PipeCaptureError, maybe_pipe_capture
 from yesoncheck.sequence_scan import is_sequence_path
 from yesoncheck.sequence_source import ImageSequenceCapture, open_any_capture, resolve_frame_path
 from yesoncheck.workers import FFmpegWorker
-from yesoncheck import external_tools, file_names, paths, thumbnails, video_list
+from yesoncheck import external_tools, file_names, media_info, paths, thumbnails, video_list
 from yesoncheck.player_sidebar import ThumbnailContext
 
 OVERLAY_TEXT_SCALE = 1.5  # B 키 오버레이 글자 크기 — 1080p 기준 예전(scale 0.7)의 배수, 프레임 높이에 비례 (overlay_metrics·overlay_text)
@@ -2362,28 +2362,28 @@ class PlayerPlaybackMixin:
         self.videoWidget.wipe_enabled_y = checked; self.update_frame()
 
     def show_video_info(self, index):
+        """사이드바 우클릭 → 미디어 정보: ffprobe 한 번으로 코덱 프로파일·태그·픽셀 형식·색·비트레이트·음성·컨테이너까지 (media_info).
+        창 글은 HTML(굵은 라벨 — 예전의 `**`가 글자로 보이던 것 고침), '자세히'는 ffprobe JSON 원본, 글은 마우스로 골라 복사할 수 있음.
+        읽지 못하면(깨진 파일·ffprobe 없음) 기록에 트레이스백 + 창에 그 사유(평문)."""
         file_path = self.sidebar.item(index.row()).toolTip()
         if not file_path: return
         msg_box = QMessageBox(self); msg_box.setWindowTitle("미디어 정보")
+        msg_box.setProperty("ycTitle", "미디어 정보")  # macOS의 QMessageBox는 창 제목을 버림 — 시험·기록용
         try:
-            cap = cv2.VideoCapture(file_path)
-            if not cap.isOpened(): raise Exception("비디오 파일을 열 수 없습니다.")
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)); height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            fps = cap.get(cv2.CAP_PROP_FPS); total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            duration_sec = (total_frames - 1) / fps if fps > 0 and total_frames > 1 else 0
-            duration_str = self.format_time(duration_sec)
-            codec = self.get_video_codec(file_path)
-            msg = (f"**해상도:** {width} x {height}\n"
-                   f"**코덱:** {codec}\n"
-                   f"**길이:** {duration_str}\n"
-                   f"**프레임:** {total_frames}\n"
-                   f"**프레임 속도 (FPS):** {fps:.2f}\n"
-                   f"**파일 경로:** {file_path}")
-            cap.release()
+            msg, details = media_info.media_info_html(file_path)
+            msg_box.setTextFormat(Qt.RichText)
+            msg_box.setDetailedText(details)
         except Exception as e:
-            msg = f"미디어 정보를 가져오는 데 실패했습니다: {e}"
+            print(f"[미디어 정보] 실패: {file_path}", file=sys.stderr, flush=True)
+            traceback.print_exc()
+            msg = f"미디어 정보를 가져오는 데 실패했습니다 ({type(e).__name__}): {e}\n파일: {file_path}"
+            msg_box.setTextFormat(Qt.PlainText)  # 경로에 <b> 같은 글자가 있어도 태그로 읽지 않게 (기본 AutoText는 읽음)
+            msg_box.setIcon(QMessageBox.Warning)
+            msg_box.setDetailedText(traceback.format_exc())
+        msg_box.setTextInteractionFlags(Qt.TextSelectableByMouse)
         msg_box.setText(msg)
         msg_box.exec_()
+        msg_box.deleteLater()
 
     def show_help(self):
         """단축키 도움말을 표시합니다"""
