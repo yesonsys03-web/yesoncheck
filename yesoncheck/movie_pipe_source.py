@@ -113,7 +113,10 @@ class MovieProbe:
     """첫 영상 트랙(attached_pic 제외)의 ffprobe 값 중 게이트에 쓰는 것. 없는 값은 None·0·""(영상 트랙이 없으면 전부).
 
     width·height는 ffprobe가 준 그대로 — 화소 비율(SAR)을 곱하지도 회전으로 바꾸지도 않는다 (게이트가 둘 다 없는 파일만
-    통과시키므로 cv2가 주는 크기와 같다)."""
+    통과시키므로 cv2가 주는 크기와 같다).
+
+    pix_fmt부터 codec_tag까지는 게이트(pipe_eligible)가 보지 않는 값으로, 뒤 작업이 읽는다: ffprobe가 준 글 그대로(정규화 없음 —
+    "unknown"도 그대로), 없으면 "". 그래서 기본값이 있다 (dataclasses.replace로 일부만 바꿔 쓰는 곳이 그대로 동작)."""
 
     codec: str
     width: int
@@ -127,6 +130,12 @@ class MovieProbe:
     format_start: float  # 컨테이너 start_time (초)
     rotation: int  # 디스플레이 행렬의 회전 (도, 반올림)
     sar_ok: bool  # 화소 비율이 없거나 1:1
+    pix_fmt: str = ""  # 예: "yuv422p10le"·"yuva444p12le" (4444는 디코더 쪽 값이라 인코더 입력보다 비트가 큼)
+    color_space: str = ""  # 행렬 계수 ("bt709"·"bt470bg"·…), 태그가 없으면 ""
+    color_range: str = ""  # "tv"·"pc"
+    color_transfer: str = ""
+    color_primaries: str = ""
+    codec_tag: str = ""  # codec_tag_string — "apch"(HQ)·"apcn"(422)·"ap4h"(4444)·…
 
 
 def _optional_int(value):
@@ -163,6 +172,12 @@ def probe_movie(path):
         format_start=_start_seconds(info.get("format", {}).get("start_time")),
         rotation=_rotation(video),
         sar_ok=video.get("sample_aspect_ratio") in UNSPECIFIED_SAR,
+        pix_fmt=video.get("pix_fmt", ""),
+        color_space=video.get("color_space", ""),
+        color_range=video.get("color_range", ""),
+        color_transfer=video.get("color_transfer", ""),
+        color_primaries=video.get("color_primaries", ""),
+        codec_tag=video.get("codec_tag_string", ""),
     )
 
 

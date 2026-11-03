@@ -13,7 +13,8 @@ from fractions import Fraction
 import pytest
 
 from tests.prores_clips import (
-    make_audio_first, make_held, make_neg, make_numbered_clip, make_rot, make_vfr_h264, make_voff, run_ffmpeg,
+    make_audio_first, make_chroma_clip, make_held, make_neg, make_numbered_clip, make_rot, make_vfr_h264, make_voff,
+    run_ffmpeg,
 )
 from yesoncheck import movie_pipe_source
 from yesoncheck.movie_pipe_source import ineligible_reason, movie_source_mode, pipe_eligible, probe_movie
@@ -223,6 +224,51 @@ def test_probe_zero_denominator_time_base_is_ineligible_not_an_error(monkeypatch
     assert (probe.codec, probe.nb_frames, probe.duration_ts, probe.time_base) == ("h264", 48, 24576, None)
     assert not pipe_eligible(probe)
     assert ineligible_reason(probe, check_codec=False).startswith("④")
+
+
+@pytest.mark.parametrize("profile, pix_fmt, tag", [
+    pytest.param("3", "yuv444p10le", "apch", id="hq_444"),
+    # ProRes 4444(profile 4)는 인코더 입력이 10비트여도 ffprobe(디코더 쪽)는 12비트로 말한다 (test_pipe_spike의 알파 시험과 같은 사실)
+    pytest.param("4", "yuv444p12le", "ap4h", id="4444"),
+])
+def test_probe_reads_color_tags_and_pix_fmt(tmp_path, profile, pix_fmt, tag):
+    """ffprobe의 pix_fmt·color_space·color_range·codec_tag_string을 그대로 담는다 (color="bt709" 클립)."""
+    clip = str(tmp_path / "tagged.mov")
+    make_chroma_clip(clip, count=4, profile=profile, pix_fmt="yuv444p10le", color="bt709")
+    probe = probe_movie(clip)
+    assert (probe.pix_fmt, probe.color_space, probe.color_range, probe.codec_tag) == (pix_fmt, "bt709", "tv", tag)
+
+
+def test_probe_defaults_are_empty_strings(tmp_path):
+    """색 태그를 안 단 클립: ffprobe가 안 내보내는 색 필드는 빈 글 (pix_fmt는 늘 있음)."""
+    clip = str(tmp_path / "untagged.mov")
+    make_chroma_clip(clip, count=4)
+    probe = probe_movie(clip)
+    assert (probe.color_space, probe.color_transfer, probe.color_primaries) == ("", "", "")
+    assert (probe.pix_fmt, probe.codec_tag) == ("yuv422p10le", "apch")
+
+
+def test_probe_keeps_raw_color_strings_and_defaults_missing_to_empty(monkeypatch):
+    """ffprobe가 "unknown"이라 쓴 색 필드는 그대로(정규화 없음), 아예 없는 필드는 "". 클립으로는 만들 수 없는 값이라 probe JSON 대역."""
+    video = {"codec_type": "video", "codec_name": "prores", "width": 320, "height": 180, "pix_fmt": "yuv422p10le",
+             "color_space": "unknown", "color_range": "pc", "color_transfer": "smpte2084", "color_primaries": "bt2020",
+             "codec_tag_string": "apcn", "r_frame_rate": "24/1", "avg_frame_rate": "24/1"}
+    monkeypatch.setattr(movie_pipe_source, "_probe", lambda ffprobe, path: {"streams": [video], "format": {}})
+    probe = probe_movie("raw_strings.mov")
+    assert (probe.pix_fmt, probe.color_space, probe.color_range) == ("yuv422p10le", "unknown", "pc")
+    assert (probe.color_transfer, probe.color_primaries, probe.codec_tag) == ("smpte2084", "bt2020", "apcn")
+    bare = {"codec_type": "video", "codec_name": "prores", "width": 320, "height": 180}
+    monkeypatch.setattr(movie_pipe_source, "_probe", lambda ffprobe, path: {"streams": [bare], "format": {}})
+    probe = probe_movie("bare.mov")
+    assert (probe.pix_fmt, probe.color_space, probe.color_range, probe.color_transfer, probe.color_primaries,
+            probe.codec_tag) == ("",) * 6
+
+
+def test_color_fields_do_not_change_the_gate(good_probe):
+    """새 필드는 게이트 판정에 안 쓰인다 — 값이 무엇이든 통과 여부가 같다 (필드는 뒤 작업이 읽음)."""
+    assert pipe_eligible(dataclasses.replace(good_probe, pix_fmt="gbrp", color_space="bt2020nc", color_range="pc",
+                                             color_transfer="smpte2084", color_primaries="bt2020", codec_tag="zzzz"))
+    assert ineligible_reason(dataclasses.replace(good_probe, color_space="unknown")) is None
 
 
 def test_probe_runtime_error_propagates(tmp_path):
