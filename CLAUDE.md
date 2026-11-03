@@ -183,7 +183,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   번들 ffmpeg도 단일 스레드로 돌리면 8.5fps, cv2에 `OPENCV_FFMPEG_CAPTURE_OPTIONS="threads;0"`은 효과 없음 23.0fps) — 번들 ffmpeg의 디코드+bgr24 변환은 8코어를 써서 50.7fps(이 Mac Intel 8코어 실측;
   코덱·기계 탓이 아님 — 다른 재생기는 같은 파일을 실시간으로 틀었음). 새 의존성 없음(ffmpeg·ffprobe는 이미 번들, `external_tools` 경로).
   **앱 안에서의 실측(같은 Mac, 4K 4444 334장 처음부터 끝까지 재생)**: 처음 구현(stdout 파이프 전송) 22.0초(15.2fps) → 소켓 전송 18.54초(18.0fps) → 중복 그리기 제거 등을 거친 **16.57초(20.2fps)** — 링 보관본 복사를 읽기 스레드로 옮긴 판(그 이동은 되돌림)에서 잰 값. 그 뒤 표시 경로를 GL 텍스처 스트리밍으로 바꿔(2026-11-02, `video_widget.py` 항목) **13.60~14.54초**(배치 부하 아래 5회 — 같은 때 예전 경로 17.57~18.13초; idle 재측정은 머지 전 내부 눈 확인 항목).
-  1080p ProRes는 실시간, **4K는 이 Mac에서 24fps 경계**(아래 '알고 둔 한계' ⑦), Windows(raster) 4K는 표시 경로가 그대로라 느림.
+  1080p ProRes는 실시간, **4K는 이 Mac에서 24fps 경계**(아래 '알고 둔 한계' ⑦), **Windows(raster) 4K는 표시 경로가 그대로인데도 실시간 재생 확인**(스튜디오 PC, 사용자 실측 2026-11-03 — 1.6.0 기본 설정).
   - **게이트 `pipe_eligible(probe)`** (`probe_movie`가 ffprobe 1회로 `MovieProbe`를 읽음; **양성 증거로만 켜지는 opt-in** — 한 조건이라도 확인 못 하면 거짓): ① 코덱 `prores`(`PIPE_CODECS`)
     ② `r_frame_rate` 유효(0 < r ≤ 240)이고 `avg_frame_rate == r`(Fraction 등식) ③ nb_frames ≥ 1·크기 ≥ 1 ④ **정확 등식** `Fraction(nb_frames,1)/r == duration_ts × time_base`(프레임 수·길이·속도 삼자 일치)
     ⑤ 회전 0이고 화소 비율(SAR) 없음/1:1 ⑥ 영상 트랙·컨테이너 시작 시각이 유한한 값(0이 아니어도 됨 — 탐색이 오프셋을 보정). 어긋난 첫 조건을 `ineligible_reason`이 조건 번호와 함께 한 줄로 알려 줌.
@@ -285,7 +285,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
     가장 낮은 부하(load 5.1)의 QPixmap 71.9ms가 31차 조건(load 5.7, 72.2ms)과 같은데 그때 GL이 53.3ms였음.
     분해(부하 아래): 업로드(`glTexSubImage2D`) 자체는 5~7ms(스파이크와 같음)이고, 스파이크 투영(29~37ms)보다 ~20ms 무거운 몫은 함께 도는 4K 디코드(ffmpeg 8스레드 + 읽기 스레드 recv 25MB/장 — CPU·메모리 대역 경쟁, +7~12ms)와 틱마다 라벨·슬라이더·오버레이 갱신이 부르는 창 합성(+~7ms) — **둘 다 idle에서도 남음**.
     `paint+events`에는 FBO 합성·swap(vsync) 대기가 섞여 있어 CPU 여유로 읽으면 안 됨. 틱 단축 후속 후보: BGRA 4바이트 업로드(스파이크 −8ms)·ffmpeg 디코드 스레드 수 제한 실험·틱마다의 라벨·슬라이더 갱신 비용 측정.
-    (31차 QPixmap 경로의 병목이던 4K `QPixmap` GL paint 48ms/프레임이 이번에 없앤 것 — 그때 334장 16.57초, load 5.7.) **Windows 4K는 그대로**: 기본 raster라 이 Mac에서 raster로 잰 paint 107ms(≈9.3fps)·틱 131ms(≈7.6fps) 수준일 것이라는 추정이고 Windows 실기는 미측정(`YESONCHECK_VIEWPORT=gl`이면 GL 스트리밍도 켜지나 미확인).
+    (31차 QPixmap 경로의 병목이던 4K `QPixmap` GL paint 48ms/프레임이 이번에 없앤 것 — 그때 334장 16.57초, load 5.7.) **Windows 4K는 실시간 재생 확인**(스튜디오 PC, 사용자 실측 2026-11-03 — 1.6.0 기본 raster): 이 Mac에서 raster로 잰 paint 107ms(≈9.3fps)·틱 131ms(≈7.6fps)를 Windows로 옮긴 '느릴 것' 추정은 틀렸음(Windows raster의 QPixmap 경로는 cocoa raster와 다른 것으로 보임 — 수치는 미측정, `YESONCHECK_VIEWPORT=gl`은 미확인).
     1080p ProRes는 실시간. 근거: 내부 저장소 `docs/superpowers/records/2026-11-02-gl-stream-design/task4-gate.md`.
     ⑧ 새 파일을 열면 옛 캡처를 놓기 직전 `stop_video` → `seek_to_frame(1)`이 옛 캡처에서 돎 — 링 모드면 ffmpeg를 한 번 더 띄움(~0.5초, cv2는 ~0.33초 — 뒤로 재시작이지만 목표가 0이라 미리 채울 장이 없어 그대로), 전체 모드면 채움이 끝난 뒤엔 0번이 전체 저장소에 있어 재시작 없음(채우기 전이면 링 모드와 같음)
     ⑨ 4K 슬라이더 드래그는 보관본·앞 24장 밖으로 뛰는 미리보기 장마다 재시작(449~634ms)이라 cv2(329~372ms)보다 무거움 — 전체 모드에서 채움이 끝난 뒤에는 파일 어디든 보관본 복사(~3ms)라 즉시, 채우기 전(멈춘 뒤 0.3초부터 4K 약 7초)·링 모드는 그대로(드래그 중에는 read가 촘촘해 채움기도 쉼).
@@ -733,7 +733,7 @@ OCR 리뷰 윈도우가 열려있을 때:
 - 4K 자동 감지 (비디오 너비 ≥1920px)
 - 차이 임계값 기반 스마트 프레임 건너뛰기
 - 하드웨어 가속 지원 (CUDA/OpenCL)
-- ProRes류 CFR mov는 ffmpeg 파이프 프레임 소스(`movie_pipe_source`)로 재생 — 4K ProRes 4444의 디코드는 cv2 22fps → 파이프 50.7fps이고, 앱 안의 4K 재생은 이 Mac에서 아래 GL 텍스처 스트리밍과 함께 334장 13.60~14.54초 — 24fps(13.9초) 경계(배치 부하 아래 실측; idle 재측정 14.02~14.04초로 경계 확정, 하니스 틱 55.6ms는 설계 게이트 35ms 미달; 예전 QPixmap 경로 17.6~19.0초), 1080p는 실시간, Windows(raster) 4K는 그대로
+- ProRes류 CFR mov는 ffmpeg 파이프 프레임 소스(`movie_pipe_source`)로 재생 — 4K ProRes 4444의 디코드는 cv2 22fps → 파이프 50.7fps이고, 앱 안의 4K 재생은 이 Mac에서 아래 GL 텍스처 스트리밍과 함께 334장 13.60~14.54초 — 24fps(13.9초) 경계(배치 부하 아래 실측; idle 재측정 14.02~14.04초로 경계 확정, 하니스 틱 55.6ms는 설계 게이트 35ms 미달; 예전 QPixmap 경로 17.6~19.0초), 1080p는 실시간, Windows(raster) 4K는 표시 경로가 그대로인데도 실시간 재생 확인(스튜디오 PC 실측 2026-11-03)
   (위 '주요 파일'의 해당 항목: 게이트·토글·전송·실패 처리·알고 둔 한계)
 - 플레이어가 연 ProRes A/B는 파일의 모든 프레임을 메모리에 둠(전체 프레임 캐시 — 4K 13.9초 334장 ≈8.3GB, 예산은 창(프로세스)마다 물리 RAM의 20%를 A/B가 나눔 + 다른 캡처 몫을 뺀 사용 가능 메모리에 여유 2GiB):
   읽는 동안은 링 8장만 두고(첫 재생 속도 보존), 멈춘 뒤 0.3초부터 따로 띄운 ffmpeg가 쉬는 동안 채움(4K 약 7초) — 그 뒤 되감기·←·슬라이더·반복 재생이 ffmpeg 재시작(~0.5초) 없이 즉시, fps는 그대로. 예산이 모자라면 링 8장(기록 한 줄), 킬 스위치 `YESONCHECK_FRAME_CACHE=ring`
@@ -789,8 +789,8 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 
 **시험은 반드시 `~/coding/p310_tf/bin/python -m pytest`로 돌릴 것** — TensorFlow가 없는 `~/coding/p310`으로 돌리면 11개가 실패함.
 
-`tests/`에 시험 파일 92개 (수집 2,210개). `python -m pytest tests -q`로 돌리며(약 12분), 이 Mac의 소스 실행에서 2,164개가 통과하고 45개는 건너뜀 —
-다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-11-02 기준; `test_fast_startup`의 종료 플레이크 1건(`test_app_exits_cleanly_while_shared_config_load_runs`, 자식 종료 코드 −11)은 러너 상태에 따라 간헐 실패 — main에서도 같은 빈도, 따로 돌리면 통과). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
+`tests/`에 시험 파일 92개 (수집 2,217개). `python -m pytest tests -q`로 돌리며(약 12분), 이 Mac의 소스 실행에서 2,171개가 통과하고 45개는 건너뜀 —
+다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-11-03 기준; `test_fast_startup`의 종료 플레이크 1건(`test_app_exits_cleanly_while_shared_config_load_runs`, 자식 종료 코드 −11)은 러너 상태에 따라 간헐 실패 — main에서도 같은 빈도, 따로 돌리면 통과). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
 정적 빌드(`vendor/ffmpeg/`)를 씀 (`tests/conftest.py`). 시험을 건너뛰거나 지워서 통과시키지 말 것.
 
 시험 구성 (파일 이름 기준):
@@ -1050,7 +1050,7 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 - 토글 `YESONCHECK_VIDEO_ITEM=auto|gl|pixmap`(`pixmap`은 킬 스위치, 나쁜 값은 시작 때 ValueError). 기록 `[표시] GL 텍스처 스트리밍(VideoFrameItem)` 줄이 있으면 새 경로
 - 지켜야 할 것: paint 밖으로 예외를 내보내지 않음(PyQt5 qFatal — 첫 실패만 기록 + 창 1회 + 빈 그림), 스트림 모드의 `pixmap()`은 크기 자리표시자(내용은 `frame()`), GL 화면 검증에 `grab()`·`grabFramebuffer()` 금지(흰 그림 — `screencapture -R`),
   좌표 규칙(`combinedTransform` = 물리, `device().width()` = 논리, 물리 뷰포트 크기는 Qt처럼 qRound — `int(x + 0.5)`, 파이썬 `round` 금지), 고정 기능 GL 전용(ES·core profile 거부), 텍스처 한도 초과는 축소 없이 큰 실패
-- Windows는 기본 raster 그대로(4K 느림 — 바뀐 것 없음), `YESONCHECK_VIEWPORT=gl`이면 이 아이템도 켜짐(미확인). 시험 파일 2개(`test_gl_bindings`·`test_gl_video_item`). 눈 확인(이 Mac — idle 재측정 포함)은 사용자 몫
+- Windows는 기본 raster 그대로(바뀐 것 없음 — 4K는 느릴 것이라 추정했으나 2026-11-03 스튜디오 PC 실측에서 실시간 재생 확인), `YESONCHECK_VIEWPORT=gl`이면 이 아이템도 켜짐(미확인). 시험 파일 2개(`test_gl_bindings`·`test_gl_video_item`). 눈 확인(이 Mac — idle 재측정 포함)은 사용자 몫
 
 ### 2026-10-29 (4K ProRes 재생 — ffmpeg 파이프 프레임 소스)
 - 4K ProRes 4444 mov가 실시간 재생이 안 되던 원인은 cv2 내장 FFmpeg의 단일 스레드 픽셀 변환으로 보임(cv2 22fps, 번들 ffmpeg 50.7fps). ProRes류 CFR mov를 번들 ffmpeg(rawvideo bgr24)로 디코드하는
@@ -1059,7 +1059,7 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 - 눈 확인 중 4K가 실시간에 못 미치는 것을 발견해 고침: ① **전송을 stdout 파이프에서 소켓으로**(POSIX `socketpair`, Windows TCP 127.0.0.1 — 프레임당 `recv` 1회, GUI가 GIL을 쥐고 있어도 읽기 스레드가 굶지 않음)
   (링 보관본 복사를 읽기 스레드로 옮기는 것도 해 봤으나 틱 ~3ms 절감이 fps를 못 바꾸고 캡처당 메모리만 약 174MB(쌍 7장분) 늘어 되돌림.) 그리고 사용자가 승인한 예외로 ② **`update_frame`의 중복 그리기 제거**(틱당 `updateFrame` 2→1, 픽셀 동일 — 이 브랜치에서 기존 표시 코드를 바꾼 유일한 곳)
 - 4K 4444 334장 재생(이 Mac): 22.0초(15.2fps, 처음 구현) → 18.54초(18.0fps, 소켓 전송) → **16.57초(20.2fps)** — 링 복사 이동(되돌림)이 포함된 판에서 잰 값이고, 최종 판 재측정은 내부 눈 확인 항목. 1080p ProRes는 실시간. **4K는 완전한 실시간이 아님** — 남은 병목은 4K `QPixmap`의 GL paint(48ms/프레임),
-  Windows(raster) 4K는 더 느릴 것으로 추정(이 Mac에서 raster로 재면 틱 전체 131ms ≈ 7.6fps, Windows 실기 미측정). 다음 후보: 4K 표시 경로(직접 GL 텍스처 스트리밍·Windows GL 뷰포트) — '주요 파일'의 `movie_pipe_source.py` 항목
+  Windows(raster) 4K는 더 느릴 것으로 추정했음(이 Mac에서 raster로 재면 틱 전체 131ms ≈ 7.6fps) — 2026-11-03 스튜디오 PC 실측에서는 실시간 재생 확인(추정이 틀림). 다음 후보: 4K 표시 경로(직접 GL 텍스처 스트리밍·Windows GL 뷰포트) — '주요 파일'의 `movie_pipe_source.py` 항목
 - 토글 `YESONCHECK_MOVIE_SOURCE=auto|pipe|cv2`(`cv2`는 킬 스위치). 로그 `[재생] ffmpeg 파이프: …` 줄이 있으면 파이프 경로
 - 지켜야 할 것: `-fps_mode passthrough`·`-map 0:V:0`, 재시작 `-ss`의 트랙 오프셋 보정, 정확 등식 게이트(④), 소켓은 blocking(타임아웃을 걸지 말 것), 4:2:2는 Apple Silicon에서 cv2 대비 ±4 레벨(4:4:4는 완전 동일)
 - 시험 파일 9개(+ 공장 `tests/prores_clips.py`)·빌드 앱 smoke 단계 추가. 눈 확인(실물 4K ProRes — 이 Mac 필수, Windows 1회)은 사용자 몫
