@@ -1,7 +1,9 @@
 """Playback and transport controls for VideoPlayer."""
 
 import errno
+import math
 import os
+from typing import NamedTuple
 import stat
 import subprocess
 import sys
@@ -32,6 +34,28 @@ from yesoncheck.sequence_source import ImageSequenceCapture, open_any_capture, r
 from yesoncheck.workers import FFmpegWorker
 from yesoncheck import external_tools, file_names, paths, thumbnails, video_list
 from yesoncheck.player_sidebar import ThumbnailContext
+
+OVERLAY_TEXT_SCALE = 1.5  # B 키 오버레이 글자 크기 — 1080p 기준 예전(scale 0.7)의 배수, 프레임 높이에 비례 (overlay_metrics·overlay_text)
+
+
+class OverlayMetrics(NamedTuple):
+    scale: float  # cv2 글꼴 배율
+    thickness: int  # 획 굵기(px)
+    pad: int  # 흰 상자 안쪽 여백
+    margin_x: int  # 왼쪽 여백
+    margin_y: int  # 아래 여백
+
+
+def overlay_metrics(width, height):
+    """B 키 오버레이의 글자 배율·굵기·여백 — 프레임 크기에 비례: k = OVERLAY_TEXT_SCALE × max(너비/1920, 높이/1080)
+    (1080p는 예전 scale 0.7·굵기 2·여백 10/20/5의 1.5배, 4K는 그 2배 픽셀; 16:9 창에 맞춰 볼 때 어느 비율의 클립이든 같은 크기 — 가로가 긴 스코프 클립은 너비로 맞춰짐).
+
+    굵기만은 더 줌(× √(k/1.5) — 프레임이 큰 만큼): 4K 프레임은 창에 맞춰 반으로 줄여 보이는데 그때 획 가장자리가 섞여 같은 비율의 굵기도 가늘고 연하게 보임
+    (사용자 보고 — 1080p는 굵게, 4K는 보통 굵기로 보였음) → 4K는 2배(6px)가 아니라 8px."""
+    k = OVERLAY_TEXT_SCALE * max(width / 1920, height / 1080)
+    thickness = max(1, round(2 * k * math.sqrt(k / OVERLAY_TEXT_SCALE)))
+    return OverlayMetrics(0.7 * k, thickness, max(1, round(5 * k)), max(1, round(10 * k)), max(1, round(20 * k)))
+
 
 class PlayerPlaybackMixin:
 
@@ -607,27 +631,24 @@ class PlayerPlaybackMixin:
         self.update_position_info()
 
     def overlay_text(self, frame):
+        """B 키 오버레이 — 프레임 왼쪽 아래에 "File: <이름>, Frame: n/N"을 흰 상자 위에 구움(프레임 픽셀에 — 와이프·주석 굽기와 같은 길).
+
+        글자·굵기·여백은 `overlay_metrics(높이)` — 프레임 높이에 비례(1080p는 예전 scale 0.7·굵기 2·여백 10/20/5의 1.5배, 4K는 그 2배 픽셀이라 창에 맞춰 줄여 보면
+        1080p와 같은 크기, 굵기는 줄여 볼 때 가늘어 보이는 만큼 더) — 예전에는 픽셀 고정이라 4K에서 반 크기로 보였음(사용자 보고). 프레임 너비를 넘치면 들어갈 만큼 줄임."""
         height, width = frame.shape[:2]
+        scale, thickness, pad, margin_x, margin_y = overlay_metrics(width, height)
         text = f"File: {os.path.basename(self.filename_a)}, Frame: {int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES))}/{int(self.cap_a.get(cv2.CAP_PROP_FRAME_COUNT))}"
-        font, scale, thickness = cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2
-        (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
-        
-        # 텍스트가 프레임 너비를 초과하지 않도록 위치 조정
-        x = 10
-        y = height - 20
-        
-        # 텍스트가 오른쪽 끝을 넘어가면 왼쪽으로 이동
-        if x + tw + 10 > width:
-            x = width - tw - 10
-        
-        # 텍스트가 여전히 너무 크면 폰트 크기 줄이기
-        if x < 10:
-            scale = 0.5
-            (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
-            x = max(10, width - tw - 10)
-        
-        cv2.rectangle(frame, (x - 5, y - th - 5), (x + tw + 5, y + 5), (255,255,255), -1)
-        cv2.putText(frame, text, (x, y), font, scale, (0,0,0), thickness)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        (tw, th), base = cv2.getTextSize(text, font, scale, thickness)
+        room = max(1, width - 2 * margin_x)  # 아주 좁은 프레임에서도 음수가 되지 않게
+        if tw > room:  # 너비를 넘치면 들어갈 만큼 줄임 (예전엔 0.5로 한 번만 줄여 좁은 프레임에선 여전히 넘쳤음)
+            scale *= room / tw
+            thickness = max(1, round(thickness * room / tw))
+            (tw, th), base = cv2.getTextSize(text, font, scale, thickness)
+        x = margin_x
+        y = height - margin_y
+        cv2.rectangle(frame, (x - pad, y - th - pad), (x + tw + pad, y + max(pad, base)), (255, 255, 255), -1)  # g·p·_ 꼬리(base)까지 상자 안에
+        cv2.putText(frame, text, (x, y), font, scale, (0, 0, 0), thickness)
 
     def on_overlay_slider_pressed(self):
         """오버레이 슬라이더를 누를 때 현재 프레임 라벨 표시"""

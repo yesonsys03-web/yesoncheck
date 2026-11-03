@@ -128,7 +128,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
 - `yesoncheck/main_window_styles.py` (940줄): 어두운·밝은 테마 시트(`DARK_STYLESHEET`·`LIGHT_STYLESHEET`)와 큰 인라인 시트 상수 — 데이터만 있는 잎 모듈
   (한 글자도 바뀌지 않게 `tests/test_stylesheet_freeze.py`가 해시로 지킴)
 - `yesoncheck/worker_lifecycle.py` (76줄): 놓아 준 `QThread` 워커를 끝날 때까지 붙잡아 두기 — `release_worker`·`wait_for_released_workers`·`EXIT_WAIT_S`(30초)
-- `yesoncheck/player_playback.py` (2,658줄): 비디오 재생, 프레임 탐색 및 FFmpeg 작업 — `_open_movie_capture`는 `os.stat` 확인 뒤·`cv2.VideoCapture` 앞에 ffmpeg 파이프 게이트(`maybe_pipe_capture(…, full_cache=True)` — 전체 프레임 캐시를 원하는 곳은 여기뿐)를 끼움(아래 `movie_pipe_source`; 음성이면 기존 cv2 줄이 그대로 돎). `update_frame`은 그린 직후 `refresh_frame_annotations_display(redraw=False)`를 불러 같은 프레임을 두 번 그리지 않음 (틱당 `updateFrame` 2→1, 픽셀 동일 — 이 브랜치에서 기존 표시 코드를 바꾼 유일한 곳, 사용자 승인 예외; 드래그 + OCR 검토 창 분기는 앞 그림이 B를 뺀 그림이라 와이프가 켜져 있을 때만 다시 그림; 같은 패턴인 `_overlay_slider_ui_update`는 무변경; tests/test_display_single_draw.py) — 화살표·휠 프레임 이동 모두 오버레이(V 모드) 슬라이더를 함께 갱신(`_update_ui_fast`도 `update_overlay_controls`를 부름 — tests/test_overlay_slider_sync.py) — 전역 단축키(`keyPressEvent`): V(컨트롤 전체 숨김·오버레이), N/ㅜ(가운데 컨트롤 열 숨김 — `toggle_middle_panel`, V·전체화면 복원 뒤에도 유지), P/ㅔ(북마크 관리 창 — `show_bookmarks`). 사이드바 목록이 포커스를 가질 때는 `player_base.eventFilter`가 같은 키(V·N·P)를 받음
+- `yesoncheck/player_playback.py` (2,660줄): 비디오 재생, 프레임 탐색 및 FFmpeg 작업 — `_open_movie_capture`는 `os.stat` 확인 뒤·`cv2.VideoCapture` 앞에 ffmpeg 파이프 게이트(`maybe_pipe_capture(…, full_cache=True)` — 전체 프레임 캐시를 원하는 곳은 여기뿐)를 끼움(아래 `movie_pipe_source`; 음성이면 기존 cv2 줄이 그대로 돎). `overlay_text`(B 키 — 프레임에 굽는 파일 이름·프레임 번호)는 `overlay_metrics(너비, 높이)`로 크기를 프레임에 비례시킴(`OVERLAY_TEXT_SCALE`, 2026-11-03). `update_frame`은 그린 직후 `refresh_frame_annotations_display(redraw=False)`를 불러 같은 프레임을 두 번 그리지 않음 (틱당 `updateFrame` 2→1, 픽셀 동일 — 이 브랜치에서 기존 표시 코드를 바꾼 유일한 곳, 사용자 승인 예외; 드래그 + OCR 검토 창 분기는 앞 그림이 B를 뺀 그림이라 와이프가 켜져 있을 때만 다시 그림; 같은 패턴인 `_overlay_slider_ui_update`는 무변경; tests/test_display_single_draw.py) — 화살표·휠 프레임 이동 모두 오버레이(V 모드) 슬라이더를 함께 갱신(`_update_ui_fast`도 `update_overlay_controls`를 부름 — tests/test_overlay_slider_sync.py) — 전역 단축키(`keyPressEvent`): V(컨트롤 전체 숨김·오버레이), N/ㅜ(가운데 컨트롤 열 숨김 — `toggle_middle_panel`, V·전체화면 복원 뒤에도 유지), P/ㅔ(북마크 관리 창 — `show_bookmarks`). 사이드바 목록이 포커스를 가질 때는 `player_base.eventFilter`가 같은 키(V·N·P)를 받음
 - `yesoncheck/player_annotations.py` (1,073줄): 수정 사항 주석(프레임별 텍스트·도형) UI와 재생 연동 (`PlayerAnnotationsMixin`) — 주석 모드 버튼은 켜짐을 빨강으로 표시(`ANNOTATION_MODE_BUTTON_STYLE`). `refresh_frame_annotations_display(redraw=True)`·`_redraw_frame_with_annotations(draw=True)`: `False`면 다시 그리기만 빼고 목록·상태 라벨·편집 대상 갱신은 그대로
 - `yesoncheck/player_sidebar.py` (555줄): `PlayerSidebarMixin` — 드롭·파일 넣기·폴더 불러오기, 우클릭 메뉴·파일 복사, 작품 → 시즌 → job 콤보,
   선택한 영상을 A에 열기. 나머지는 아래 부모 믹스인 모듈에 있고 이 모듈은 옛 import 경로를 위해 일부 이름을 다시 내보냄
@@ -784,7 +784,7 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 
 **시험은 반드시 `~/coding/p310_tf/bin/python -m pytest`로 돌릴 것** — TensorFlow가 없는 `~/coding/p310`으로 돌리면 11개가 실패함.
 
-`tests/`에 시험 파일 89개 (수집 2,162개). `python -m pytest tests -q`로 돌리며(약 12분), 이 Mac의 소스 실행에서 2,116개가 통과하고 45개는 건너뜀 —
+`tests/`에 시험 파일 90개 (수집 2,173개). `python -m pytest tests -q`로 돌리며(약 12분), 이 Mac의 소스 실행에서 2,127개가 통과하고 45개는 건너뜀 —
 다른 OS 전용 시험과 CI의 설치 파일 단계에서만 도는 시험이 건너뜀 (2026-11-02 기준; `test_fast_startup`의 종료 플레이크 1건(`test_app_exits_cleanly_while_shared_config_load_runs`, 자식 종료 코드 −11)은 러너 상태에 따라 간헐 실패 — main에서도 같은 빈도, 따로 돌리면 통과). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
 정적 빌드(`vendor/ffmpeg/`)를 씀 (`tests/conftest.py`). 시험을 건너뛰거나 지워서 통과시키지 말 것.
 
@@ -797,7 +797,7 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 - **사이드바·썸네일·북마크**: `test_sidebar_refresh`·`test_video_list`·`test_thumbnails`·`test_bookmarks`·`test_sidebar_all_tab`
 - **워커·OCR·내보내기**: `test_workers_split`·`test_workers_transnetv2_guard`·`test_ocr_worker_lifetime`·`test_animatic2_availability`·`test_transnetv2_detect`·
   `test_runtime`·`test_export`·`test_unsaved_ocr_flag`·`test_review_sync`
-- **창 모양**: `test_stylesheet_freeze`(테마 시트를 해시로 고정)·`test_scrollbar_style`·`test_slider_click`·`test_window_resize`·`test_high_dpi`·`test_force_focus`·`test_middle_panel_toggle`·`test_gl_viewport`(Mac GL 뷰포트 — 선택 규칙·GL 적용 시 보존 설정·테마 배경)·`test_overlay_slider_sync`(화살표 프레임 이동의 오버레이 슬라이더 동기화·대체 탐색 경로 한 칸 어긋남)
+- **창 모양**: `test_stylesheet_freeze`(테마 시트를 해시로 고정)·`test_overlay_text_size`(B 키 오버레이 글자가 프레임 높이에 비례 — 1080p 1.5배·4K 2배 픽셀)·`test_scrollbar_style`·`test_slider_click`·`test_window_resize`·`test_high_dpi`·`test_force_focus`·`test_middle_panel_toggle`·`test_gl_viewport`(Mac GL 뷰포트 — 선택 규칙·GL 적용 시 보존 설정·테마 배경)·`test_overlay_slider_sync`(화살표 프레임 이동의 오버레이 슬라이더 동기화·대체 탐색 경로 한 칸 어긋남)
 - **ffmpeg 파이프 재생(ProRes)**: 실제 ffprobe·ffmpeg로 클립 공장(`tests/prores_clips.py` — numpy 프레임을 `prores_ks`에 파이프, 글꼴 의존인 drawtext 금지; 번호 클립·유채색 클립·경계 클립 voff·held·neg·rot·audio_first·truncated·vfr_h264)의 클립을 읽음 (mock 없음 — 오류 창 호출만 바꿔치기)
   - `test_pipe_spike`: 플랫폼 가정을 고정하는 스파이크 — 클립 공장 자가 검증, 파이프(`-fps_mode passthrough`) 대 cv2의 프레임 정렬과 바이트 기준(4:4:4 동일·4:2:2 ≤5), `-ss` 착지(K=0·K=2), 재시작 시간(시간은 print만)
   - `test_movie_pipe_gate`: 게이트 ①~⑥ — 좋은 probe의 필드 하나만 바꾼 사본으로 조건별 경계, 경계 클립의 판정, ffprobe의 time_base 분모 0("1/0")은 예외 없이 음성
@@ -994,6 +994,12 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 5. 다양한 비디오 콘텐츠 유형으로 테스트
 
 ## 최근 변경 사항
+
+### 2026-11-03 (B 키 오버레이 글자 — 해상도와 상관없이 같은 크기)
+- `overlay_text`(프레임에 굽는 "File: …, Frame: n/N")가 scale 0.7·굵기 2·여백 10/20/5의 **프레임 픽셀 고정**이라 4K에서 반 크기로 보였음(사용자 보고). 이제 글자·굵기·여백을 프레임 높이에 비례
+  (`overlay_metrics(너비, 높이)`: `k = OVERLAY_TEXT_SCALE(1.5) × max(너비/1920, 높이/1080)` — 16:9 창에 맞춰 볼 때 어느 비율이든 같은 크기): 1080p는 예전의 1.5배, 4K는 그 2배 픽셀이라 창에 맞춰 줄이면 같은 크기.
+  굵기는 √(k/1.5)만큼 더(4K 8px — 줄여 볼 때 획 가장자리가 섞여 가늘어 보인다는 사용자 보고). 글자 꼬리(g·p·_)까지 상자 안에, 너비를 넘치면 들어갈 만큼 줄임(예전엔 0.5로 한 번만 줄여 300px 프레임에선 넘쳤음).
+  1:1 줌으로 보면 4K 글자는 2배(창에 맞출 때 기준). 시험 `test_overlay_text_size` 11개(1080p 1.5배·4K 2배 픽셀·굵기 표·너비/높이 큰 쪽·여백·꼬리·720p·600/300px 넘침)
 
 ### 2026-11-02 (북마크 관리 창 — 경로를 그 자리에서 고치기·우클릭 메뉴·P 키)
 - 관리 창의 경로를 DJV처럼 클릭해 고침(고른 항목 다시 클릭·우클릭 → 경로 수정; 더블클릭·Enter는 폴더 열기 그대로). 고친 경로는 commit 즉시 `bookmarks.replace`로 파일에(자리 유지, 다른 창의 것 보존)
