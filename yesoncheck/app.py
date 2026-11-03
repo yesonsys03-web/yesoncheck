@@ -17,7 +17,7 @@ if __package__ in (None, ""):
     from yesoncheck.main_window import VideoPlayer  # type: ignore  # pylint: disable=import-error
     from yesoncheck import (  # type: ignore  # pylint: disable=import-error
         build_info, default_app, error_window, file_associations, gl_video_item, launch_args, mac_app_events, mac_mounts,
-        movie_pipe_source, new_window, paths, timing_log, update_install,
+        mac_native_gate, movie_pipe_source, new_window, paths, timing_log, update_install,
     )
     from yesoncheck.player_base import EXIT_WAIT_S, wait_for_released_workers  # type: ignore  # pylint: disable=import-error
     from yesoncheck.player_update import BOX_TITLE_PROPERTY  # type: ignore  # pylint: disable=import-error
@@ -25,7 +25,7 @@ else:
     from .main_window import VideoPlayer
     from . import (
         build_info, default_app, error_window, file_associations, gl_video_item, launch_args, mac_app_events, mac_mounts,
-        movie_pipe_source, new_window, paths, timing_log, update_install,
+        mac_native_gate, movie_pipe_source, new_window, paths, timing_log, update_install,
     )
     from .player_base import EXIT_WAIT_S, wait_for_released_workers
     from .player_update import BOX_TITLE_PROPERTY
@@ -327,6 +327,7 @@ def launch(argv=None):
     movie_pipe_source.movie_source_mode()
     movie_pipe_source.frame_cache_mode()  # 프레임 캐시 토글(YESONCHECK_FRAME_CACHE)도 같은 이유로 시작 때 검증
     gl_video_item.video_item_mode(os.environ)  # 영상 아이템 토글(YESONCHECK_VIDEO_ITEM)의 나쁜 값도 같은 이유로 여기서
+    mac_native_gate.native_mode()  # 네이티브 재생 토글(YESONCHECK_MAC_NATIVE)도 같은 이유로 여기서
 
     # 스플래시 스크린 생성 (즉시 표시)
     pixmap = QPixmap(500, 300)
