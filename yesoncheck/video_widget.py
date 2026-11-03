@@ -5,6 +5,7 @@ import os
 
 import cv2
 import numpy as np
+from PyQt5 import sip
 from PyQt5.QtCore import Qt, QTimer, QPointF, QRectF, pyqtSignal
 from PyQt5.QtGui import (
     QColor,
@@ -36,6 +37,7 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck import paths
+from yesoncheck.frame_handles import native_surface_of
 from yesoncheck.gl_video_item import LOG_PREFIX, VIDEO_ITEM_ENV, VideoFrameItem, use_stream_item, video_item_mode
 
 VIEWPORT_ENV = "YESONCHECK_VIEWPORT"
@@ -492,6 +494,11 @@ class CustomVideoWidget(QGraphicsView):
             self.video_item.setPixmap(QPixmap())
             return
 
+        if native_surface_of(frame_a) is not None or native_surface_of(frame_b) is not None:
+            self._update_native_frame(frame_a, frame_b)  # (스파이크 spike/mac-native) IOSurface 프레임 — numpy 합성·QImage 없음
+            self._after_frame_update()
+            return
+
         height, width = frame_a.shape[:2]
         bytes_per_line = 3 * width
         
@@ -516,6 +523,46 @@ class CustomVideoWidget(QGraphicsView):
             pixmap = QPixmap.fromImage(q_img)
             self.video_item.setPixmap(pixmap)
 
+        scene_rect_changed = self.scene.sceneRect() != self.video_item.boundingRect()
+        if self.initial_fit or scene_rect_changed:
+            self.scene.setSceneRect(self.video_item.boundingRect())
+            self.fit_to_window()
+            self.initial_fit = False
+        
+        self.updateWipeLine()
+        self._update_roi_item()
+        self._update_edit_handle_items()
+
+    def _update_native_frame(self, frame_a, frame_b):
+        """(스파이크 spike/mac-native) 네이티브 프레임(NativeFrameArray — BGRA, IOSurface)을 그림. 스트림 아이템이면 두 쪽을 그대로
+        set_sides(와이프는 GL scissor — CPU 복사 0). 픽스맵 경로(YESONCHECK_VIDEO_ITEM=pixmap·raster)면 QImage RGB32(BGRA 바이트 순서)가
+        배열 메모리를 그대로 가리키므로 배열을 위젯에 쥠(_pixmap_backing); 와이프는 그 경로에서만 numpy로 합성(복사 — 측정 대상 아님)."""
+        wipe_x, wipe_y = self.wipe_enabled_x, self.wipe_enabled_y
+        if self.video_item_stream:
+            axis = ("x" if wipe_x else "") + ("y" if wipe_y else "")
+            self.video_item.set_sides(frame_a, frame_b if axis else None, axis or None,
+                                      (self.wipe_position_x, self.wipe_position_y))
+            return
+        image_src = frame_a
+        if (wipe_x or wipe_y) and native_surface_of(frame_a) is not None:
+            image_src = np.array(frame_a)  # 복사 (픽스맵 경로만)
+            other = frame_b if frame_b is not None and frame_b.shape == frame_a.shape else np.zeros_like(image_src)
+            height, width = image_src.shape[:2]
+            if wipe_x:
+                image_src[:, int(width * self.wipe_position_x):] = other[:, int(width * self.wipe_position_x):]
+            if wipe_y:
+                image_src[int(height * self.wipe_position_y):, :] = other[int(height * self.wipe_position_y):, :]
+        if image_src.ndim == 3 and image_src.shape[2] == 4:
+            height, width = image_src.shape[:2]
+            q_img = QImage(sip.voidptr(image_src.ctypes.data), width, height, image_src.strides[0], QImage.Format_RGB32)
+        else:  # A가 RGB이고 B만 네이티브 (와이프 꺼짐 등) — 예전 길
+            height, width = image_src.shape[:2]
+            q_img = QImage(image_src.data, width, height, 3 * width, QImage.Format_RGB888)
+        self._pixmap_backing = image_src  # RGB32 픽스맵이 메모리를 함께 쓸 수 있음 — 다음 프레임까지 붙잡음
+        self.video_item.setPixmap(QPixmap.fromImage(q_img))
+
+    def _after_frame_update(self):
+        """(스파이크) updateFrame 끝과 같은 꼬리 — 네이티브 분기용 사본(기존 줄은 글자 그대로 둠)."""
         scene_rect_changed = self.scene.sceneRect() != self.video_item.boundingRect()
         if self.initial_fit or scene_rect_changed:
             self.scene.setSceneRect(self.video_item.boundingRect())

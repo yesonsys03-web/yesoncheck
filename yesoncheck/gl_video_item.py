@@ -37,6 +37,7 @@ QGraphicsView는 paint를 부르지만 painter에 엔진이 없다(QPainter::beg
 
 import ctypes
 import sys
+import time
 import traceback
 from collections.abc import Mapping
 
@@ -45,7 +46,8 @@ from PyQt5.QtCore import QPointF, Qt, QTimer
 from PyQt5.QtGui import QImage, QOpenGLContext, QPaintEngine, QPixmap
 from PyQt5.QtWidgets import QGraphicsPixmapItem
 
-from yesoncheck import error_window, gl_bindings
+from yesoncheck import error_window, gl_bindings, gl_surface
+from yesoncheck.frame_handles import native_surface_of
 from yesoncheck.gl_bindings import (
     GL_BLEND,
     GL_CLAMP_TO_EDGE,
@@ -120,6 +122,15 @@ class VideoFrameItem(QGraphicsPixmapItem):
         self._storage = None  # 텍스처 저장소 크기 (w, h) — 없으면 None
         self._filter = None  # 텍스처에 세운 MIN/MAG 필터 (GL_LINEAR·GL_NEAREST) — transformationMode()가 바뀌면 다시 세움
         self._warned_no_engine = False  # 엔진 없는 paint를 기록했음 — 한 번만 (실패 표시 _failed와 따로)
+        # (스파이크 spike/mac-native) 네이티브 프레임(IOSurface) 두 쪽 그리기 — set_sides
+        self._sides = None  # (a, b, axis, ratio) — a·b는 NativeFrameArray 또는 RGB 배열(b는 None 가능); 쥐고 있어 IOSurface가 살아 있음
+        self._rect_textures = None  # [A, B] 사각형 텍스처 이름 (이 컨텍스트)
+        self._rect_bound = [None, None]  # 각 사각형 텍스처에 지금 묶인 NativeHandle
+        self._extra = None  # gl_surface.ExtraGL (glScissor·glFinish)
+        self._storage_frame = None  # 2D 텍스처에 지금 올라가 있는 RGB 쪽 배열 (set_sides 경로)
+        self._measure = []  # 지난 1초의 paint별 bind+draw CPU 초
+        self._measure_start = None
+        self._measure_finish = []  # 1초마다 한 번 glFinish 표본 (GPU가 끝낸 때까지 — 새 surface 전송 포함)
 
     # ------------------------------------------------------------ 프레임
 
@@ -144,8 +155,25 @@ class VideoFrameItem(QGraphicsPixmapItem):
         placeholder = self.pixmap()
         if placeholder.isNull() or placeholder.width() != w or placeholder.height() != h:
             super().setPixmap(QPixmap(w, h))
+        self._sides = None  # (스파이크) 네이티브 두 쪽 그리기를 끝냄 — 쥔 IOSurface를 놓음
         self._frame = rgb
         self._dirty = True
+        self.update()
+
+    def set_sides(self, a, b, axis, ratio):
+        """(스파이크 spike/mac-native) A·B 프레임을 GL로 — 쪽마다 네이티브(NativeFrameArray)면 IOSurface를 사각형 텍스처에 묶고
+        (CPU 복사 0), RGB 배열이면 기존 2D 업로드. axis: None(와이프 없음)·"x"·"y"·"xy", ratio: (x 비율, y 비율) — B는 x면 오른쪽,
+        y면 아래쪽을 glScissor 안에 그림(둘 다면 둘의 합집합 — numpy 합성과 같음). b가 None인데 와이프면 B 자리는 검정(numpy 경로의 zeros).
+        a·b를 그대로 쥠(복사 없음) — 다음 set_sides·set_frame까지 IOSurface가 살아 있음."""
+        if not self.stream:
+            raise RuntimeError("stream=False 아이템은 set_sides를 받지 않습니다")
+        h, w = a.shape[:2]
+        placeholder = self.pixmap()
+        if placeholder.isNull() or placeholder.width() != w or placeholder.height() != h:
+            super().setPixmap(QPixmap(w, h))
+        self._sides = (a, b, axis, ratio)
+        self._frame = a
+        self._dirty = True  # RGB 쪽이 있으면 다시 올림
         self.update()
 
     def frame(self) -> np.ndarray | None:
@@ -160,6 +188,7 @@ class VideoFrameItem(QGraphicsPixmapItem):
             return
         if pixmap.isNull():
             self._frame = None
+            self._sides = None
             self._dirty = False
             super().setPixmap(QPixmap())
             return
@@ -208,7 +237,10 @@ class VideoFrameItem(QGraphicsPixmapItem):
         try:
             if context is not self._context:
                 self._prepare(context)
-            self._draw_native(pw, ph, [(p.x(), p.y()) for p in corners])
+            if self._sides is not None:  # (스파이크) 네이티브 프레임 — 쪽마다 IOSurface·RGB
+                self._draw_sides(pw, ph, [(p.x(), p.y()) for p in corners])
+            else:
+                self._draw_native(pw, ph, [(p.x(), p.y()) for p in corners])
         finally:
             painter.endNativePainting()
 
@@ -303,6 +335,148 @@ class VideoFrameItem(QGraphicsPixmapItem):
         self._gl = None
         self._storage = None
         self._filter = None
+        self._rect_textures = None  # (스파이크) 사각형 텍스처도 그 컨텍스트와 함께 해제 — 다음 paint가 새로 만들고 다시 묶음
+        self._rect_bound = [None, None]
+        self._extra = None
+        self._storage_frame = None
+
+    # ------------------------------------------------------------ (스파이크 spike/mac-native) 네이티브 두 쪽 그리기
+
+    def _ensure_rect_textures(self):
+        """(native 안) 이 컨텍스트의 사각형 텍스처 둘(A·B)과 glScissor·glFinish — 처음 한 번."""
+        if self._rect_textures is not None:
+            return
+        gl = self._gl
+        self._extra = gl_surface.ExtraGL(self._context)
+        names = (ctypes.c_uint * 2)()
+        gl.glGenTextures(2, names)
+        filt = self._wanted_filter()
+        for name in names:
+            gl.glBindTexture(gl_surface.GL_TEXTURE_RECTANGLE_ARB, name)
+            for pname, value in ((GL_TEXTURE_MIN_FILTER, filt), (GL_TEXTURE_MAG_FILTER, filt),
+                                 (GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE), (GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)):
+                gl.glTexParameteri(gl_surface.GL_TEXTURE_RECTANGLE_ARB, pname, value)
+        gl.glBindTexture(gl_surface.GL_TEXTURE_RECTANGLE_ARB, 0)
+        gl.check_error("사각형 텍스처 준비")
+        self._rect_textures = [names[0], names[1]]
+        self._rect_bound = [None, None]
+
+    def _draw_sides(self, pw, ph, corners):
+        """(native painting 안에서) A를 전체에, 와이프면 B를 glScissor(물리 픽셀, 아래가 0) 안에. 쪽마다 네이티브는 사각형 텍스처에
+        IOSurface를 (새 프레임일 때만) 묶고 픽셀 좌표 텍스처 사각형, RGB는 기존 2D 텍스처에 올려 그림. 끝나면 RECT·2D·scissor를 끄고 0을 묶음.
+        [측정] paint마다 이 블록의 CPU 시간 — 1초마다 한 줄, 그때 한 번 glFinish 표본(GPU가 끝낸 때까지)."""
+        started = time.perf_counter()
+        gl = self._gl
+        gl.check_error("native 진입 — 이전 GL 호출이 남긴 오류")
+        self._ensure_rect_textures()
+        a, b, axis, ratio = self._sides
+        gl.glViewport(0, 0, pw, ph)
+        gl.glMatrixMode(GL_PROJECTION)
+        gl.glLoadIdentity()
+        gl.glOrtho(0, pw, ph, 0, -1, 1)  # y 아래 방향 (Qt와 같음)
+        gl.glMatrixMode(GL_MODELVIEW)
+        gl.glLoadIdentity()
+        gl.glDisable(GL_BLEND)
+        gl.glColor4f(1, 1, 1, 1)
+        try:
+            self._draw_one(0, a, corners)
+            if axis:
+                (x0, y0), (x1, _y1), _p2, (_x3, y3) = corners
+                scissors = []
+                if "x" in axis:  # B = 오른쪽
+                    split = int(x0 + (x1 - x0) * ratio[0] + 0.5)
+                    scissors.append((split, 0, max(0, pw - split), ph))
+                if "y" in axis:  # B = 아래쪽 (GL 창 좌표는 아래가 0)
+                    split = int(y0 + (y3 - y0) * ratio[1] + 0.5)
+                    scissors.append((0, 0, pw, max(0, ph - split)))
+                gl.glEnable(gl_surface.GL_SCISSOR_TEST)
+                for box in scissors:
+                    self._extra.glScissor(*box)
+                    if b is None:
+                        self._draw_black(corners)
+                    else:
+                        self._draw_one(1, b, corners)
+        finally:
+            gl.glDisable(gl_surface.GL_SCISSOR_TEST)
+            gl.glDisable(gl_surface.GL_TEXTURE_RECTANGLE_ARB)
+            gl.glBindTexture(gl_surface.GL_TEXTURE_RECTANGLE_ARB, 0)
+            gl.glDisable(GL_TEXTURE_2D)
+            gl.glBindTexture(GL_TEXTURE_2D, 0)
+        gl.check_error("draw sides")
+        self._dirty = True  # 2D 텍스처 내용은 _storage_frame이 맡음 — set_frame 경로로 돌아가면 다시 올리게
+        self._record_measure(started)
+
+    def _draw_one(self, slot, frame, corners):
+        """쪽 하나: 네이티브면 사각형 텍스처(slot)에 IOSurface, 아니면 RGB를 2D 텍스처에 올려 corners에 그림."""
+        gl = self._gl
+        handle = native_surface_of(frame)
+        if handle is not None:
+            target = gl_surface.GL_TEXTURE_RECTANGLE_ARB
+            gl.glDisable(GL_TEXTURE_2D)
+            gl.glBindTexture(target, self._rect_textures[slot])
+            if self._rect_bound[slot] is not handle:
+                gl_surface.bind_surface(gl_surface.current_cgl_context(), handle)
+                gl.check_error("CGLTexImageIOSurface2D 뒤")
+                self._rect_bound[slot] = handle
+            w, h = handle.width, handle.height
+            coords = ((0, 0), (w, 0), (w, h), (0, h))  # 사각형 텍스처: 픽셀 단위
+        else:
+            target = GL_TEXTURE_2D
+            h, w = frame.shape[:2]
+            gl.glDisable(gl_surface.GL_TEXTURE_RECTANGLE_ARB)
+            before = self._storage
+            self._ensure_storage(w, h)
+            if self._storage != before:  # 새 저장소(크기·컨텍스트가 바뀜)는 내용이 없음
+                self._storage_frame = None
+            gl.glBindTexture(GL_TEXTURE_2D, self._texture)
+            if self._storage_frame is not frame:
+                rgb = np.ascontiguousarray(frame)
+                gl.glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+                try:
+                    gl.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0)
+                    gl.glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, rgb.ctypes.data)
+                finally:
+                    gl.glPixelStorei(GL_UNPACK_ALIGNMENT, GL_DEFAULT_UNPACK_ALIGNMENT)
+                gl.check_error("upload (RGB 쪽)")
+                self._storage_frame = frame
+            coords = QUAD_TEX_COORDS
+        gl.glEnable(target)
+        gl.glBegin(GL_QUADS)
+        for (u, v), (x, y) in zip(coords, corners):
+            gl.glTexCoord2f(u, v)
+            gl.glVertex2f(x, y)
+        gl.glEnd()
+        gl.glDisable(target)
+
+    def _draw_black(self, corners):
+        """와이프인데 B 프레임이 없음 — B 자리를 검정 사각형으로 (numpy 경로의 zeros_like와 같음)."""
+        gl = self._gl
+        gl.glDisable(GL_TEXTURE_2D)
+        gl.glDisable(gl_surface.GL_TEXTURE_RECTANGLE_ARB)
+        gl.glColor4f(0, 0, 0, 1)
+        gl.glBegin(GL_QUADS)
+        for x, y in corners:
+            gl.glVertex2f(x, y)
+        gl.glEnd()
+        gl.glColor4f(1, 1, 1, 1)
+
+    def _record_measure(self, started):
+        """[측정] 이 paint의 bind+draw CPU 시간을 쌓고 1초마다 한 줄 — 그 paint는 glFinish 표본도 (GPU가 끝낸 때까지 ms)."""
+        now = time.perf_counter()
+        self._measure.append(now - started)
+        if self._measure_start is None:
+            self._measure_start = now
+            return
+        if now - self._measure_start < 1.0:
+            return
+        self._extra.glFinish()
+        finish_ms = (time.perf_counter() - now) * 1000
+        values = self._measure
+        if now - self._measure_start <= 3.0:  # 그보다 길면 쉬던 구간이 든 창
+            print(f"[측정] 표시 bind+draw mean={1000 * sum(values) / len(values):.2f} max={1000 * max(values):.2f} n={len(values)} "
+                  f"(glFinish 표본 {finish_ms:.2f}ms)", flush=True)
+        self._measure = []
+        self._measure_start = time.perf_counter()
 
     def _warn_no_engine(self):
         """(paint 안에서) 엔진 없는 paint를 처음 한 번만 기록 — 오류 창 없음, 실패로 치지 않음. _fail처럼 예외를 내보내지 않는다

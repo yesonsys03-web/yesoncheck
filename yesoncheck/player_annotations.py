@@ -33,6 +33,7 @@ from yesoncheck import external_tools, paths, user_files
 from yesoncheck.user_files import UserFileError
 from yesoncheck.annotation_export import AnnotationExportWorker
 from yesoncheck.annotation_burn import burn_annotations_on_frame
+from yesoncheck.frame_handles import native_surface_of
 from yesoncheck.main_window_styles import ANNOTATION_MODE_BUTTON_STYLE
 from yesoncheck.frame_annotations import (
     DEFAULT_COLOR,
@@ -599,6 +600,8 @@ class PlayerAnnotationsMixin:
     def prepare_frame_for_display(self, frame):
         if frame is None:
             return None
+        if native_surface_of(frame) is not None:  # (스파이크 spike/mac-native) 네이티브 프레임은 굽지 않음 — 재생 측정만
+            return frame
         has_annotations = self.current_frame_has_annotations()
         if not self.show_overlay and not has_annotations:
             return frame

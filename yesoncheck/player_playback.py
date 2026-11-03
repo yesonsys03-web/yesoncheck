@@ -27,8 +27,11 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from yesoncheck.frame_handles import native_surface_of
 from yesoncheck.frame_utils import FrameCalculator
-from yesoncheck.movie_pipe_source import PipeCaptureError, maybe_pipe_capture
+from yesoncheck.mac_native_gate import NATIVE_MODE_ENV, native_wanted
+from yesoncheck.mac_native_source import NativeVTCapture, decode_bench
+from yesoncheck.movie_pipe_source import PipeCaptureError, ineligible_reason, maybe_pipe_capture, probe_movie
 from yesoncheck.sequence_scan import is_sequence_path
 from yesoncheck.sequence_source import ImageSequenceCapture, open_any_capture, resolve_frame_path
 from yesoncheck.workers import FFmpegWorker
@@ -58,6 +61,7 @@ def overlay_metrics(width, height):
 
 
 class PlayerPlaybackMixin:
+    _decode_bench_done = set()  # (스파이크) 디코드만 측정을 한 리더 수 — 프로세스에 한 번씩
 
     def get_video_codec(self, file_path):
         """
@@ -410,6 +414,10 @@ class PlayerPlaybackMixin:
             QMessageBox.critical(self, "영상을 열 수 없음",
                                  f"영상을 확인하지 못했습니다 (NAS 연결 끊김·권한 등): {file_path}\n이유: {reason}")
             return None
+        # (스파이크 spike/mac-native) 4K ProRes는 VideoToolbox 네이티브 캡처 — 못 열면 창으로 알리고 아래 파이프로 계속
+        cap = self._maybe_native_capture(file_path)
+        if cap is not None:
+            return cap
         # ffmpeg 파이프 게이트(ProRes류만 양성): 양성이면 파이프 캡처로 반환, 음성이면 None이라 아래 기존 줄이 그대로 돎
         try:
             cap = maybe_pipe_capture(file_path, full_cache=True)
@@ -430,6 +438,43 @@ class PlayerPlaybackMixin:
                                  f"영상을 열지 못했습니다 (OpenCV가 읽지 못함 — 파일이 손상되었거나 지원하지 않는 "
                                  f"형식일 수 있음): {file_path}")
             return None
+        return cap
+
+    def _maybe_native_capture(self, file_path):
+        """(스파이크 spike/mac-native) 네이티브(VideoToolbox) 캡처를 열어야 하면 NativeVTCapture, 아니면 None.
+        켜짐(mac_native_gate.native_wanted) + 4K(너비 ≥ 3840 또는 높이 ≥ 2160) + ProRes + 파이프 게이트 통과일 때만.
+        여는 데 실패하면 트레이스백째 기록·오류 창 → None(부른 쪽이 파이프로 계속)."""
+        if not native_wanted():
+            return None
+        name = os.path.basename(file_path)
+        try:
+            probe = probe_movie(file_path)
+        except RuntimeError:  # ffprobe가 못 읽는 파일 — 아래 파이프 게이트가 같은 일을 알림
+            print(f"[재생] 네이티브 아님 — ffprobe가 파일을 읽지 못함: {name}")
+            return None
+        if probe.width < 3840 and probe.height < 2160:
+            return None
+        reason = None
+        if probe.codec != "prores":
+            reason = f"코덱 {probe.codec or '(영상 트랙 없음)'}"
+        else:
+            reason = ineligible_reason(probe)
+        if reason is not None:
+            print(f"[재생] 네이티브 아님 — {reason}: {name}")
+            return None
+        try:
+            cap = NativeVTCapture(file_path, probe)
+        except Exception as e:
+            details = traceback.format_exc()
+            print(f"[재생] 네이티브(VideoToolbox)로 열지 못함 — 파이프로 계속: {name}")
+            traceback.print_exc()
+            QMessageBox.critical(self, "네이티브 재생을 열 수 없음",
+                                 f"영상을 VideoToolbox(네이티브)로 열지 못해 ffmpeg 파이프로 엽니다: {file_path}\n"
+                                 f"이유: {type(e).__name__}: {e}\n\n{details}\n"
+                                 f"네이티브 재생을 끄려면 환경 변수 {NATIVE_MODE_ENV}=off")
+            return None
+        print(f"[재생] 네이티브(VideoToolbox): {name} ({probe.codec} {probe.width}x{probe.height} {float(probe.avg):g}fps, "
+              f"프레임 {probe.nb_frames}, 32BGRA, {cap.fourcc}, hw={cap.hw})", flush=True)
         return cap
 
     def _open_sequence_capture(self, file_path):
@@ -514,6 +559,8 @@ class PlayerPlaybackMixin:
             self.seek_to_frame(current_pos)
 
     def process_frame(self, frame):
+        if native_surface_of(frame) is not None:  # (스파이크) 네이티브 BGRA 프레임은 그대로 — 변환·복사 없음
+            return frame
         if self.use_gpu:
             if self.gpu_backend == 'cuda':
                 gpu_frame = cv2.cuda_GpuMat()
@@ -706,7 +753,7 @@ class PlayerPlaybackMixin:
                 # 드래그 중일 때는 최소한의 처리만 수행
                 if self.is_dragging:
                     # 컬러 변환만 수행 (GPU 처리 스킵)
-                    self.frame_a = cv2.cvtColor(frame_a, cv2.COLOR_BGR2RGB)
+                    self.frame_a = self._bgr_to_rgb(frame_a)
                 else:
                     # 일반 모드: 4K 최적화 적용
                     self.frame_a = self.optimize_for_4k(frame_a)
@@ -896,7 +943,7 @@ class PlayerPlaybackMixin:
             
             if ret_a and frame_a is not None:
                 # 컬러 변환만 수행 (모든 추가 처리 스킵)
-                self.frame_a = cv2.cvtColor(frame_a, cv2.COLOR_BGR2RGB)
+                self.frame_a = self._bgr_to_rgb(frame_a)
                 
                 # UI 업데이트는 최소한만 (오버레이 스킵)
                 self.videoWidget.updateFrame(self.frame_a, None)
@@ -937,7 +984,7 @@ class PlayerPlaybackMixin:
                 # 드래그 중일 때는 최소한의 처리만 수행
                 if self.is_dragging:
                     # 컬러 변환만 수행 (GPU 처리 스킵)
-                    self.frame_a = cv2.cvtColor(frame_a, cv2.COLOR_BGR2RGB)
+                    self.frame_a = self._bgr_to_rgb(frame_a)
                 else:
                     # 일반 모드: 4K 최적화 적용
                     self.frame_a = self.optimize_for_4k(frame_a)
@@ -1576,6 +1623,7 @@ class PlayerPlaybackMixin:
                         print(f"부드러운 동기화: 프레임 {current_frame}, 오디오 위치 {audio_position}ms (차이: {audio_position - current_audio_pos}ms)")
             
         ret_a, frame_a = self.cap_a.read()
+        run = getattr(self, "_measure_run", None)  # (스파이크) [측정] Play부터 마지막 프레임까지
         if ret_a:
             self.increment_fps_counter()  # 진행한 프레임 — 실제 fps(update_playback_fps). 그리기를 건너뛰어도(OCR 검토 창) 셈, 탐색 그리기는 안 셈
             self.frame_a = self.process_frame(frame_a)
@@ -1583,9 +1631,60 @@ class PlayerPlaybackMixin:
                 ret_b, frame_b = self.cap_b.read()
                 self.frame_b = self.process_frame(frame_b) if ret_b else None
             self.update_frame()
+            if run is not None and not run["done"]:
+                run["frames"] += 1
+                run["last"] = time.perf_counter()
+                if int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES)) >= int(self.cap_a.get(cv2.CAP_PROP_FRAME_COUNT)):
+                    self._print_play_measure(run)
         else:
+            if run is not None and not run["done"] and run["frames"]:
+                self._print_play_measure(run)
             print("Video end detected in next_frame_playback")
             self.handle_video_end()
+
+    def _print_play_measure(self, run):
+        """(스파이크 spike/mac-native) [측정] Play를 누른 때부터 마지막 프레임을 보인 때까지 — 진행한 장 수·초·fps·네이티브·와이프.
+        네이티브였으면 끝난 뒤 한 번(종류마다 프로세스에 한 번) 디코드만 측정을 이어 함(_run_decode_bench_once)."""
+        run["done"] = True
+        elapsed = run["last"] - run["t0"]
+        native_a = native_surface_of(self.frame_a) is not None
+        wiping = bool(self.cap_b and self.videoWidget.wipeEnabled
+                      and (self.videoWidget.wipe_enabled_x or self.videoWidget.wipe_enabled_y) and self.frame_b is not None)
+        native_b = native_surface_of(self.frame_b) is not None
+        detail = f"B 네이티브={'yes' if native_b else 'no'}, " if wiping else ""
+        print(f"[측정] {run['frames']}장 {elapsed:.2f}초 ({run['frames'] / elapsed:.1f}fps) 네이티브={'yes' if native_a else 'no'} "
+              f"와이프={'on' if wiping else 'off'} — {os.path.basename(self.filename_a)} "
+              f"({detail}Play 뒤 진행한 장 수, 시작 프레임 {run['start'] + 1}, 끝 {int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES))}"
+              f"/{int(self.cap_a.get(cv2.CAP_PROP_FRAME_COUNT))})", flush=True)
+        if native_a:
+            paths = [self.filename_a, self.filename_b] if wiping and native_b else [self.filename_a]
+            QTimer.singleShot(1500, lambda: self._run_decode_bench_once(paths))
+
+    def _run_decode_bench_once(self, paths):
+        """(스파이크) 재생과 따로 디코드만 측정(Stage 0-a) — 리더 수마다 프로세스에 한 번. 재생 중이면 건너뜀. 끝날 때까지 모달 진행 창
+        (읽기 스레드 하나·둘이 CPU를 다 쓰는 동안 사용자가 재생을 시작하지 않게)."""
+        done = PlayerPlaybackMixin._decode_bench_done
+        kind = len(paths)
+        if kind in done:
+            return
+        if self.timer.isActive() or self.loopEnabled or self.is_playlist_playing:
+            print(f"[측정] 디코드만 측정 건너뜀 (재생 중·반복·선택 재생) — 리더 {kind}개", flush=True)
+            return
+        done.add(kind)
+        import threading
+
+        dialog = QProgressDialog(f"디코드 속도 측정 중 (리더 {kind}개, 약 {10 * kind}초) — 잠시 기다려 주세요", None, 0, 0, self)
+        dialog.setWindowTitle("[측정]")
+        dialog.setWindowModality(Qt.WindowModal)
+        dialog.setMinimumDuration(0)
+        dialog.show()
+        worker = threading.Thread(target=decode_bench, args=(paths,), kwargs={"restarts": 20 if kind == 1 else 0}, daemon=True)
+        worker.start()
+        while worker.is_alive():
+            QApplication.processEvents()
+            worker.join(0.05)
+        dialog.close()
+        dialog.deleteLater()
 
     def next_frame(self):
         if not self.cap_a: 
@@ -2200,6 +2299,9 @@ class PlayerPlaybackMixin:
                 # 개선된 타이머 설정 - 더 정확한 타이밍
                 timer_interval = max(1, int(1000 / original_fps))
                 self.timer.start(timer_interval)
+                # (스파이크) [측정] 이 Play부터 — next_frame_playback이 마지막 프레임에서 한 줄
+                self._measure_run = {"t0": time.perf_counter(), "frames": 0, "last": None, "done": False,
+                                     "start": max(0, int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES)) - 1)}
                 
                 # 현재 프레임 위치를 비디오의 원래 FPS로 계산하여 오디오 동기화
                 current_frame = int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES)) - 1
@@ -2576,6 +2678,8 @@ class PlayerPlaybackMixin:
 
     def cache_frame(self, frame_idx, frame):
         """프레임을 캐시에 저장"""
+        if native_surface_of(frame) is not None:  # (스파이크) 네이티브 프레임은 넣지 않음 (copy() 4K 33MB — 캡처의 링·재시작이 맡음)
+            return
         if len(self.frame_cache) >= self.cache_size:
             # LRU 캐시: 가장 오래된 항목 제거
             oldest_key = min(self.frame_cache.keys())
@@ -2599,8 +2703,16 @@ class PlayerPlaybackMixin:
             'cache_size': len(self.frame_cache)
         }
 
+    def _bgr_to_rgb(self, frame):
+        """(스파이크) 탐색 미리보기의 cv2.cvtColor 자리 — 네이티브 BGRA 프레임은 그대로(cv2가 4채널을 3채널 복사본으로 바꿔 손잡이를 잃음)."""
+        if native_surface_of(frame) is not None:
+            return frame
+        return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
     def optimize_for_4k(self, frame):
         """4K 프레임 최적화 처리"""
+        if native_surface_of(frame) is not None:  # (스파이크) 네이티브 BGRA 프레임은 그대로
+            return frame
         height, width = frame.shape[:2]
         
         # 4K 이상 해상도 감지
