@@ -823,7 +823,7 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 - **GL 텍스처 스트리밍(Mac GL 뷰포트)**: CI는 GL을 못 그리므로(offscreen) 규칙·계약·가드를 봄
   - `test_gl_bindings`: `getProcAddress` 묶기 — 함수 이름마다 주소·못 찾은 함수의 이름을 든 실패·ES/core profile 거부·텍스처 한도를 `glGetIntegerv`로 읽음(0이면 거부)·`check_error`·`glOrtho` double
   - `test_gl_video_item`: 토글 값·선택 규칙, raster 아이템은 평범한 픽스맵 아이템(`set_frame` 거부), `set_frame` 검증·자리표시자 크기·비우기·픽스맵 → 배열, paint 가드(GL 엔진 아님·텍스처 한도 초과 → 기록·창 1회, 엔진 없음 → 기록 1줄·창 없음, `_fail` 자체가 예외를 안 냄·`str(exc)` 실패·창 실패는 `_last_resort`), 가짜 GL 함수로 호출 순서(native 진입 오류 확인 포함)·물리 픽셀 뷰포트와 매핑 모서리·소수 dpr(1.5·1.25)의 qRound 반올림·정렬 복원(실패해도)·필터가 `transformationMode`를 따름·컨텍스트가 죽으면 다시 준비·업로드, 위젯 연결(강제 GL·cocoa 기본(확인 통과/실패)·킬 스위치·raster에 `gl` 토글은 ValueError·`app.launch` 검증·`updateFrame` 분기와 해상도 변경·raster `updateFrame`은 여전히 `setPixmap`)
-- **그 밖**: `test_smoke`·`test_fast_startup`·`test_files`·`test_user_files`·`test_media_info`(ffprobe JSON → 줄, 픽셀 형식 뜻, 실제 ffprobe로 시험 영상, 창의 HTML·자세히·실패 평문)·`test_frame_annotations_merge`·`test_annotation_click`·`test_external_tools`·`test_build_info`·
+- **그 밖**: `test_smoke`·`test_fast_startup`·`test_files`·`test_user_files`·`test_media_info`(ffprobe JSON → 줄, 픽셀 형식 뜻, 실제 ffprobe로 시험 영상, 창의 HTML·자세히·실패 평문)·`test_frame_annotations_merge`·`test_annotation_burn_color`(도형 주석이 고른 색 그대로 — RGB 순서)·`test_annotation_click`·`test_external_tools`·`test_build_info`·
   `test_check_frozen_imports`·`test_release_tool`·`test_print_crash_reports`·`test_screenshot_check`·`test_refactor_checks`
 
 CI(`.github/workflows/windows-build.yml`)는 세 플랫폼 — Windows(`windows-latest`), Mac Apple Silicon(`macos-15`), Mac Intel(`macos-15-intel`) — 에서
@@ -1000,6 +1000,11 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 5. 다양한 비디오 콘텐츠 유형으로 테스트
 
 ## 최근 변경 사항
+
+### 2026-11-03 (도형 주석 색 — 빨강이 파랑으로 굽히던 버그)
+- `annotation_burn.burn_annotations_on_frame`은 RGB 프레임(표시 경로의 `frame_a`, 내보내기 워커는 BGR → RGB로 바꿔 넘김)에 그리는데 도형(사각형·타원·선·화살표) 색을 `hex_to_bgr`로 넘겨 R·B가 뒤바뀌었음 — 화면과 '주석 포함 영상보내기' 결과 둘 다 (글자 패치는 RGB라 정상, 편집 중 미리보기는 Qt가 그려 정상).
+  BGRX 프레임 경로 설계(내부 저장소 `specs/2026-11-03-bgrx-frame-path-design.md`)의 builder check가 실행으로 찾음. 도형 색을 RGB 순서로 바꾸고 `hex_to_bgr`은 지움(다른 사용처 없음). 함수의 약속: **RGB 3채널 프레임, 색도 RGB**.
+  시험 `tests/test_annotation_burn_color.py` 7개(도형 4종·노랑·글자와 도형의 채널 순서 일치·입력 불변). `ci/screenshot_check.py`의 주석 장면 PNG는 이 수정으로 바뀜(기준 폴더를 다시 찍을 것).
 
 ### 2026-11-03 (미디어 정보 창 — 코덱 세부 정보)
 - 사이드바 우클릭 → 미디어 정보가 `prores` 한 단어만 보여 주던 것을 ffprobe 한 번(`-show_streams -show_format`)으로 코덱 프로파일·태그(`Apple ProRes 4444 (prores · ap4h)`), 픽셀 형식의 뜻(4:4:4 · 12비트 · 알파), 색 공간·범위,
