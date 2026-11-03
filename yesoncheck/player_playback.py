@@ -1,6 +1,7 @@
 """Playback and transport controls for VideoPlayer."""
 
 import errno
+import math
 import os
 import stat
 import subprocess
@@ -563,9 +564,6 @@ class PlayerPlaybackMixin:
             if self._ocr_dialog_frame_skip_counter % 2 != 0:
                 return  # 홀수 프레임은 스킵
         
-        # 재생 중일 때만 FPS 카운터 증가
-        if self.timer.isActive():
-            self.increment_fps_counter()
         
         # 오버레이 컨트롤 상태 동기화
         self.update_overlay_controls()
@@ -1559,6 +1557,7 @@ class PlayerPlaybackMixin:
             
         ret_a, frame_a = self.cap_a.read()
         if ret_a:
+            self.increment_fps_counter()  # 진행한 프레임 — 실제 fps(update_playback_fps). 그리기를 건너뛰어도(OCR 검토 창) 셈, 탐색 그리기는 안 셈
             self.frame_a = self.process_frame(frame_a)
             if self.cap_b and self.videoWidget.wipeEnabled:
                 ret_b, frame_b = self.cap_b.read()
@@ -2636,22 +2635,32 @@ class PlayerPlaybackMixin:
             # GPU 실패 시 CPU로 폴백
             return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-    def update_playback_fps(self):
-        """재생 FPS를 계산하고 표시합니다."""
-        # 비디오의 원래 FPS를 표시하도록 수정
-        if self.cap_a:
-            original_fps = self.cap_a.get(cv2.CAP_PROP_FPS)
-            if original_fps > 0:
-                # 소수점 FPS는 정확히 표시 (23.976 등)
-                if original_fps == int(original_fps):
-                    fps_str = str(int(original_fps))
-                else:
-                    fps_str = f"{original_fps:.3f}"
-                self.labelPlaybackFPS.setText(f'재생: {fps_str} FPS')
-            else:
-                self.labelPlaybackFPS.setText('재생: 0 FPS')
-        else:
+    def update_playback_fps(self, now=None):
+        """1초마다(playback_fps_timer): 영상의 원래 fps와, 재생 중이면 **실제 fps**(지난 틱 뒤로 재생 틱 next_frame_playback이 진행한 프레임 수 ÷ 걸린 시간)를
+        `재생: 24 FPS · 실제 23.8`처럼 함께 — 실제가 원래 fps에 한참 못 미치면 리얼타임 재생이 아님(4K 확인용; 1초 표본이라 ±1 정도 흔들리고 타이머 간격
+        int(1000/fps)ms 때문에 원래 fps보다 조금 높게도 나옴). 진행한 프레임을 세므로 OCR 검토 창이 그리기를 건너뛰어도·탐색이 그려도 값이 흔들리지 않음.
+        재생 중이 아니면 원래 fps만, 재생을 시작한 뒤 첫 틱도 원래 fps만(부분 구간). now는 시험용(기본 time.monotonic)."""
+        if now is None:
+            now = time.monotonic()
+        elapsed = now - self._playback_fps_tick
+        advanced, self.playback_fps_counter = self.playback_fps_counter, 0
+        self._playback_fps_tick = now
+        playing = self.timer.isActive()
+        # 지난 틱과 이번 틱 사이에 재생을 시작했으면 부분 구간이라 적지 않음 (첫 값이 반으로 보이던 것 — 검토)
+        continuous = playing and self._playback_fps_was_playing
+        self._playback_fps_was_playing = playing
+        self.playback_fps_measured = advanced / elapsed if continuous and elapsed > 0 else None
+        original_fps = self.cap_a.get(cv2.CAP_PROP_FPS) if self.cap_a else 0
+        if not (original_fps > 0) or not math.isfinite(original_fps):  # 0·음수·NaN·무한 — 죽은 파이프 캡처는 0.0
+            self.playback_fps_measured = None
             self.labelPlaybackFPS.setText('재생: 0 FPS')
+            return
+        # 소수점 FPS는 정확히 표시 (23.976 등)
+        fps_str = str(int(original_fps)) if original_fps == int(original_fps) else f"{original_fps:.3f}"
+        text = f'재생: {fps_str} FPS'
+        if self.playback_fps_measured is not None:
+            text += f' · 실제 {self.playback_fps_measured:.1f}'
+        self.labelPlaybackFPS.setText(text)
 
     def increment_fps_counter(self):
         """프레임 카운터를 증가시킵니다."""
