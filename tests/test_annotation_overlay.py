@@ -36,7 +36,7 @@ from tests.native_fakes import (  # noqa: F401 (픽스처 — new_player는 nati
     player_with_fake_native,
 )
 from yesoncheck.annotation_burn import burn_annotations_on_frame
-from yesoncheck.frame_annotations import MAX_FONT_SIZE, MIN_FONT_SIZE
+from yesoncheck.frame_annotations import MAX_FONT_SIZE, MAX_STROKE_WIDTH, MIN_FONT_SIZE
 
 W, H = 320, 180
 TOTAL = FAKE_FRAME_COUNT
@@ -150,16 +150,18 @@ def test_shape_items_cover_the_burned_pixels(qapp, kind, stroke, corners):
 
 
 def test_burned_stroke_extent_matches_cv2(qapp):
-    """burned_stroke_extent(t) = cv2가 굵기 t의 선(cv2.line·rectangle·ellipse가 함께 쓰는 ThickLine)으로 실제로 덮는 픽셀 폭 — 이 cv2(4.6)를 그려서 잼:
-    t = 1은 1px, t ≥ 2는 반폭 ceil(t/2)의 다각형 + 끝 픽셀 포함 → 2·ceil(t/2) + 1.
+    """burned_stroke_extent(t) = cv2가 굵기 t의 선(cv2.line·rectangle·ellipse가 함께 쓰는 ThickLine)으로 실제로 덮는 픽셀 폭 — 이 cv2(4.6)를 그려서 잼
+    (굵기 칸이 고를 수 있는 1..MAX_STROKE_WIDTH 전부): t = 1은 1px, t ≥ 2는 반폭 ceil(t/2)의 다각형 + 끝 픽셀 포함 → 2·ceil(t/2) + 1.
 
     깨지는 변경: 식을 굵기 그대로(t)나 t + 1로 바꾸면 홀수 굵기에서 틀림. cv2를 올려 그리는 법이 바뀌면 여기서 드러남(층의 획 폭을 다시 맞출 것)."""
     from yesoncheck.annotation_burn import burned_stroke_extent
 
-    for t in range(1, 13):
-        frame = np.zeros((60, 60), np.uint8)
-        cv2.line(frame, (10, 30), (50, 30), 255, t)
-        covered = int(np.count_nonzero(frame[:, 30]))
+    size = 2 * MAX_STROKE_WIDTH + 20  # 가장 굵은 선이 덮는 줄이 다 들어가고, 가운데 열이 둥근 끝(반지름 ≤ 굵기/2 + 1)에서 멂
+    middle = size // 2
+    for t in range(1, MAX_STROKE_WIDTH + 1):
+        frame = np.zeros((size, size), np.uint8)
+        cv2.line(frame, (10, middle), (size - 10, middle), 255, t)
+        covered = int(np.count_nonzero(frame[:, middle]))
         assert burned_stroke_extent(t) == covered, f"굵기 {t}: cv2가 덮는 폭 {covered}px"
     assert {t: burned_stroke_extent(t) for t in STROKE_PX} == STROKE_PX
 
@@ -320,8 +322,9 @@ def test_update_reuses_items_and_clears(qapp):
     """같은 주석을 다시 주면 자식 아이템을 그대로 씀(같은 객체); 기하만 바뀌면 같은 객체의 기하만 바뀜; 종류가 바뀐 자리부터는 새로 만들되 쌓임은
     주석 차례 그대로(나중 주석이 위 — childItems는 쌓임 차례); 줄면 남는 것을 장면·층에서 뺌; 비우면(빈 목록·clear) 자식 0개·층 숨김, 다시 주면 보임.
 
-    깨지는 변경: 매번 새로 만들면 객체가 바뀜(프레임마다 아이템 생성); 남는 자식을 지우지 않으면 지운 주석이 화면에 남음; 바뀐 자리의 새 아이템을
-    끝에 덧붙이기만 하면 쌓임이 주석 차례와 어긋남; 빈 목록에서 숨기지 않으면 층이 남음."""
+    깨지는 변경: 매번 새로 만들면 객체가 바뀜(프레임마다 아이템 생성); 다시 쓴 자식의 새 값(spec)을 기억하지 않으면 A → B → A에서 B에 남음(프레임을
+    되짚거나 주석을 끌었다 제자리로 돌릴 때); 남는 자식을 지우지 않으면 지운 주석이 화면에 남음; 바뀐 자리의 새 아이템을 끝에 덧붙이기만 하면 쌓임이
+    주석 차례와 어긋남; 빈 목록에서 숨기지 않으면 층이 남음."""
     rect, line, text = ann("rect"), ann("line"), ann("text", text="note")
     layer = new_layer([rect, line, text])
     scene = QGraphicsScene()
@@ -336,6 +339,9 @@ def test_update_reuses_items_and_clears(qapp):
     moved = dict(rect, norm_x1=0.25)
     layer.set_annotations([moved, line, text], W, H)
     assert layer.childItems() == first and first[0].rect().left() == 80.5
+    layer.set_annotations([rect, line, text], W, H)  # 되돌리면 첫 자리로 (고친 값을 기억해야 함)
+    assert first[0].rect().left() == 40.5
+    layer.set_annotations([moved, line, text], W, H)
 
     ellipse = ann("ellipse")
     layer.set_annotations([moved, ellipse, text], W, H)
@@ -497,8 +503,8 @@ LEGACY_SET = [
 @pytest.mark.parametrize("size", [(W, H), (1920, 1080), (720, 486)], ids=["320x180", "1080p", "720x486"])
 def test_burn_output_unchanged_after_refactor(qapp, size):
     """같은 규칙을 두 길이 함께 쓰게 나눈(annotation_spec 등) 뒤에도 구운 프레임이 리팩터 전 함수(434f230 그대로 옮긴 _legacy_burn)와 바이트까지 같음 —
-    다섯 종류·기본 굵기·기본 글자 크기·크기 자르기·빈 글자·x2 없음·굵기 0·음수 굵기·모르는 종류·가장자리·잘못된 색, 검정과 무늬 바탕. 내보내기가 여전히
-    굽는 것은 무수정 tests/test_export.py가 지킴.
+    다섯 종류·기본 굵기·기본 글자 크기·크기 자르기·빈 글자·x2 없음·굵기 0·음수 굵기·모르는 종류·가장자리·잘못된 색, 검정과 무늬 바탕. 주석 포함 영상보내기가
+    여전히 굽는 것은 무수정 tests/test_sequence_annotations.py::test_burnin_export_works_on_sequence(주석 있는 프레임에 구운 표시)가 지킴.
 
     깨지는 변경: 나눈 규칙(기본 굵기·1 아래 자르기·좌표·글자 크기·촉 길이·글꼴 고르기)이 하나라도 예전 식과 다르면 바이트가 달라짐."""
     width, height = size
