@@ -2,12 +2,13 @@
 
 네이티브 프레임(IOSurface 위 BGRX 뷰, 읽기 전용)에는 B 키 글자("File: <이름>, Frame: n/N")를 굽지 않는다: prepare_frame_for_display가 프레임을
 그대로 돌려주고(복사·cv2 굽기 없음 — 예전에는 frame.copy()가 손잡이 없는 4채널 배열이라 updateFrame이 RGB 길로 떨어져 GL set_frame이 ValueError),
-CustomVideoWidget이 가진 오버레이 아이템 한 쌍(흰 QGraphicsRectItem + 검정 QGraphicsSimpleTextItem, 영상 아이템 좌표 = 프레임 픽셀, z 13 — ROI 10 위,
-주석 미리보기 14·편집 핸들 16 아래)이 글자를 보인다. 아이템은 updateFrame의 네이티브 분기가 플레이어가 등록한 공급자(_overlay_text_for_native)에게
+CustomVideoWidget이 가진 오버레이 아이템 한 쌍(흰 QGraphicsRectItem — z 13: ROI 10 위, 주석 미리보기 14·편집 핸들 16 아래 — 과 그 자식인 검정
+QGraphicsSimpleTextItem — 자식이라 늘 상자 위, 영상 아이템 좌표 = 프레임 픽셀)이 글자를 보인다. 아이템은 updateFrame의 네이티브 분기가 플레이어가 등록한 공급자(_overlay_text_for_native)에게
 글자를 물어 갱신 — prepare_frame_for_display를 거치지 않는 _minimal_preview_seek에서도 새 프레임 번호. 크기·자리·굵기는 굽는 길(overlay_text)과 같은
 규칙(overlay_metrics): 상자의 왼쪽·위는 구운 흰 상자와 같은 픽셀, 글자는 Qt 글꼴(모양은 Hershey와 다름 — 사용자 결정)의 대문자 높이를 cv2 글자
 높이에 맞춤, 기준선은 같은 자리.
-비네이티브(Intel·Windows) 굽기는 tests/test_overlay_text_size.py의 무수정 통과와 ci/screenshot_check.py가 지킨다(Ruling 4 — 갈음 시험 없음).
+비네이티브(Intel·Windows) 굽기는 tests/test_overlay_text_size.py의 무수정 통과와 글자 그대로 옮긴 배치 계산(overlay_text_layout.overlay_layout)이
+지킨다 — ci/screenshot_check.py에는 B를 켜는 장면이 없어 그것은 updateFrame의 RGB 길(숨은 아이템이 그림을 바꾸지 않음)만 지킴(Ruling 4 — 갈음 시험 없음).
 """
 
 import math
@@ -27,7 +28,7 @@ from tests.native_fakes import (  # noqa: F401 (픽스처 — new_player는 nati
     new_player,
     player_with_fake_native,
 )
-from yesoncheck.player_playback import overlay_metrics
+from yesoncheck.overlay_text_layout import overlay_metrics
 
 TOTAL = FAKE_FRAME_COUNT
 OVERLAY_Z = 13
@@ -40,22 +41,25 @@ def assert_untouched(rig):
     assert rig.cvt_calls == [], f"네이티브 프레임을 cv2.cvtColor로 변환함 (code {rig.cvt_calls})"
 
 
-def z13_items(widget):
-    return [item for item in widget.scene.items()
-            if isinstance(item, (QGraphicsRectItem, QGraphicsSimpleTextItem)) and item.zValue() == OVERLAY_Z]
+def overlay_candidates(widget):
+    """장면의 B 키 오버레이 아이템 후보 (상자들, 글자들) — z 13의 QGraphicsRectItem, 그리고 그 상자의 자식이거나 z 13인(맨 위 단계)
+    QGraphicsSimpleTextItem. 글자를 자식이 아닌 형제로 두는 구현도 찾아서 쌓임 순서 단언이 그것을 잡게 함."""
+    boxes = [item for item in widget.scene.items() if isinstance(item, QGraphicsRectItem) and item.zValue() == OVERLAY_Z]
+    texts = [item for item in widget.scene.items() if isinstance(item, QGraphicsSimpleTextItem)
+             and (item.parentItem() in boxes or (item.parentItem() is None and item.zValue() == OVERLAY_Z))]
+    return boxes, texts
 
 
 def visible_overlay(widget):
-    """보이는 B 키 오버레이 아이템(z 13의 사각형·글자)."""
-    return [item for item in z13_items(widget) if item.isVisible()]
+    """보이는 B 키 오버레이 아이템(상자·글자)."""
+    boxes, texts = overlay_candidates(widget)
+    return [item for item in boxes + texts if item.isVisible()]
 
 
 def overlay_items(widget):
-    """B 키 오버레이 아이템 (상자, 글자) — 장면에 z 13의 QGraphicsRectItem·QGraphicsSimpleTextItem이 하나씩."""
-    items = z13_items(widget)
-    boxes = [item for item in items if isinstance(item, QGraphicsRectItem)]
-    texts = [item for item in items if isinstance(item, QGraphicsSimpleTextItem)]
-    assert len(boxes) == 1 and len(texts) == 1, f"z {OVERLAY_Z}의 오버레이 아이템: 상자 {len(boxes)}개, 글자 {len(texts)}개"
+    """B 키 오버레이 아이템 (상자, 글자) — 하나씩."""
+    boxes, texts = overlay_candidates(widget)
+    assert len(boxes) == 1 and len(texts) == 1, f"B 키 오버레이 아이템: z {OVERLAY_Z} 상자 {len(boxes)}개, 글자 {len(texts)}개"
     return boxes[0], texts[0]
 
 
@@ -81,10 +85,11 @@ def burned_box(player, width, height):
 
 def test_overlay_item_shown_only_when_show_overlay(player_with_fake_native):
     """B를 누르기 전에는 오버레이 아이템이 보이지 않고, 누르면 흰 상자·검정 글자가 보이며 글자는 굽는 길과 같은 "File: clip_a.mov, Frame: 1/64"
-    (열 때 seek_to_frame(1) → 캡처 위치 1), 재생 틱마다 새 번호, 다시 누르면 숨음 — 그동안 네이티브 픽셀 접근 0.
+    (열 때 seek_to_frame(1) → 캡처 위치 1), 글자가 상자 위에 쌓임, 재생 틱마다 새 번호, 다시 누르면 숨음 — 그동안 네이티브 픽셀 접근 0.
 
     깨지는 변경: 플레이어가 공급자를 등록하지 않거나(set_overlay_provider) updateFrame의 네이티브 분기가 공급자를 부르지 않으면 B를 눌러도 아이템이
-    안 보임; 공급자가 show_overlay를 보지 않으면 다시 눌러도 남음; 아이템을 z 13 사각형·글자로 만들지 않으면 찾지 못함."""
+    안 보임; 공급자가 show_overlay를 보지 않으면 다시 눌러도 남음; 상자를 z 13 사각형으로 만들지 않으면 찾지 못함; 글자를 상자의 자식이 아닌 형제로
+    상자보다 먼저 넣거나 부모 뒤로 쌓으면(ItemStacksBehindParent) 상자가 글자를 가림."""
     rig = player_with_fake_native
     player, widget = rig.player, rig.player.videoWidget
     assert visible_overlay(widget) == []
@@ -93,6 +98,8 @@ def test_overlay_item_shown_only_when_show_overlay(player_with_fake_native):
 
     box, text = overlay_items(widget)
     assert player.show_overlay and box.isVisible() and text.isVisible()
+    order = widget.scene.items(Qt.DescendingOrder)
+    assert order.index(text) < order.index(box), "글자가 흰 상자 아래 — 상자가 글자를 가림"
     assert text.text() == f"File: clip_a.mov, Frame: 1/{TOTAL}"
     assert box.brush().color().getRgb() == (255, 255, 255, 255) and box.pen().style() == Qt.NoPen
     assert text.brush().color().getRgb() == (0, 0, 0, 255)
@@ -207,7 +214,8 @@ def test_rgb_a_with_native_b_burns_the_overlay_once(fake_native_player):
 @pytest.mark.parametrize("size", [(1920, 1080), (3840, 2160)], ids=["1080p", "4k"])
 def test_overlay_item_geometry_follows_overlay_metrics(fake_native_player, size):
     """1080p·4K 네이티브 프레임: 상자의 왼쪽 = margin_x − pad, 위 = 기준선 − cv2 글자 높이 − pad, 아래 = 기준선 + max(pad, cv2 꼬리, Qt 꼬리) — 왼쪽·위·
-    (Qt 꼬리가 cv2보다 짧으면) 아래가 구운 흰 상자와 같은 픽셀; 글자 기준선은 (margin_x, 높이 − margin_y), Qt 대문자 높이 ≈ cv2 글자 높이(±20%),
+    (Qt 꼬리가 cv2보다 짧으면) 아래가 구운 흰 상자와 같은 픽셀; 글자 기준선은 장면(= 프레임) 좌표 (margin_x, 높이 − margin_y), Qt 대문자 높이 ≈ cv2
+    글자 높이(±1px),
     글자 잉크가 상자 안, 상자 오른쪽 = 글자 끝 + pad, 굵기는 cv2 획이 3px 이상이라 Bold.
 
     깨지는 변경: margin_x·margin_y를 바꿔 쓰면 왼쪽·아래가 어긋남; 기준선 대신 글자 아이템 원점(글줄 위)을 높이 − margin_y에 두면 글자가 상자 밑으로;
@@ -235,13 +243,36 @@ def test_overlay_item_geometry_follows_overlay_metrics(fake_native_player, size)
     assert rect.bottom() >= bottom + 1
     if math.ceil(fm.descent()) <= max(m.pad, base):
         assert rect.bottom() == bottom + 1
-    assert text.pos().x() == m.margin_x
-    assert text.pos().y() + fm.ascent() == pytest.approx(baseline)
-    assert fm.capHeight() == pytest.approx(th, rel=0.2)
+    assert text.scenePos().x() == m.margin_x
+    assert text.scenePos().y() + fm.ascent() == pytest.approx(baseline)
+    assert fm.capHeight() == pytest.approx(th, abs=1)
     assert rect.contains(fm.tightBoundingRect(label).translated(m.margin_x, baseline)), "글자 잉크가 흰 상자 밖으로 나감"
     assert rect.right() == pytest.approx(m.margin_x + fm.horizontalAdvance(label) + m.pad + 1, abs=0.01)
     assert text.font().bold() is True and m.thickness >= 3
     assert_untouched(rig)
+
+
+def test_overlay_box_bottom_covers_qt_descent(player_with_fake_native, monkeypatch):
+    """상자 아래 = 기준선 + max(pad, cv2 꼬리, Qt 꼬리) — Qt 글꼴의 꼬리(descent)가 pad·cv2 꼬리보다 길면 그만큼 내려가 g·p·_의 Qt 꼬리가 상자
+    안에 남음. 배치를 pad 1·cv2 꼬리 0으로 바꿔(video_widget이 읽는 overlay_layout을 바꿔치기) Qt 꼬리 항만 남김 — 단언은 글꼴과 상관없음(꼬리가
+    1px 이하인 글꼴 — 예: 상자 글꼴은 0 — 이면 pad 1이 이김).
+
+    깨지는 변경: 상자 아래에서 Qt 꼬리 항(ceil(descent))을 빼면 cv2 배치만 보는 상자가 Qt 글자의 꼬리를 자름."""
+    import yesoncheck.video_widget as video_widget
+
+    real_layout = video_widget.overlay_layout
+    monkeypatch.setattr(video_widget, "overlay_layout",
+                        lambda text, width, height: real_layout(text, width, height)._replace(pad=1, baseline=0))
+    widget = player_with_fake_native.player.videoWidget
+    width, height = 1920, 1080
+
+    widget.set_overlay_text(f"File: clip_a.mov, Frame: 1/{TOTAL}", width, height)
+
+    box, text = overlay_items(widget)
+    fm = QFontMetricsF(text.font())
+    y = height - overlay_metrics(width, height).margin_y
+    assert box_rect(box).bottom() == y + max(1, math.ceil(fm.descent())) + 1
+    assert box_rect(box).bottom() >= y + fm.descent()
 
 
 def test_overlay_item_scales_with_frame_size(player_with_fake_native):

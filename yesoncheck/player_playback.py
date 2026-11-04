@@ -29,10 +29,8 @@ from PyQt5.QtWidgets import (
 from yesoncheck.frame_handles import native_surface_of
 from yesoncheck.frame_utils import FrameCalculator
 from yesoncheck.movie_pipe_source import PipeCaptureError, maybe_pipe_capture
-from yesoncheck.overlay_text_layout import (  # noqa: F401 (OVERLAY_TEXT_SCALE·OverlayMetrics·overlay_metrics: 옛 import 경로 — 시험이 여기서 부름)
+from yesoncheck.overlay_text_layout import (  # noqa: F401 (overlay_metrics: 옛 import 경로 — tests/test_overlay_text_size.py가 여기서 부름)
     OVERLAY_FONT,
-    OVERLAY_TEXT_SCALE,
-    OverlayMetrics,
     overlay_layout,
     overlay_metrics,
 )
