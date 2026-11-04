@@ -343,6 +343,30 @@ def test_launch_validates_native_toggle(qapp, monkeypatch):
         app_module.launch(["yesoncheck"])
 
 
+def test_launch_rejects_on_outside_macos(qapp, monkeypatch):
+    """YESONCHECK_MAC_NATIVE=on은 macOS 밖에서 시작 때 ValueError — 창을 만들기 전에 (값만 맞으면 시작을 통과한 뒤 영상을 열 때마다
+    native_wanted()가 늦게 실패하지 않게 — 스펙 §5.8 "Windows에서 on은 ValueError", "app.launch가 시작 때 검증"). app이 읽는
+    mac_native_gate.native_wanted를 진짜 함수를 Windows 대역(env on·machine AMD64·platform win32)으로 부르는 스파이로 바꿔 봄.
+    깨지는 변경: app.py의 검증을 값만 보는 native_mode()로 두면 스파이가 불리지 않고 창 대역이 불려 AssertionError로 실패."""
+    from yesoncheck import app as app_module
+
+    def no_window(**kwargs):
+        raise AssertionError("macOS 밖의 on인데 창을 만들었습니다")
+
+    real_wanted = mac_native_gate.native_wanted
+    calls = []
+
+    def windows_wanted(*args, **kwargs):
+        calls.append((args, kwargs))
+        return real_wanted({ENV: "on"}, SimpleNamespace(machine=lambda: "AMD64"), SimpleNamespace(platform="win32"))
+
+    monkeypatch.setattr(app_module, "VideoPlayer", no_window)
+    monkeypatch.setattr(mac_native_gate, "native_wanted", windows_wanted)
+    with pytest.raises(ValueError, match="macOS"):
+        app_module.launch(["yesoncheck"])
+    assert calls == [((), {})]  # 시작 때 한 번, 기본 인자(이 프로세스의 환경·플랫폼)로
+
+
 def test_conftest_clears_the_toggle_at_import():
     """개발자 셸에 토글이 남아 있어도 시험은 기본(auto)에서 시작 — conftest가 import 때 지움."""
     assert ENV not in os.environ

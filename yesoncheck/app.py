@@ -327,7 +327,9 @@ def launch(argv=None):
     movie_pipe_source.movie_source_mode()
     movie_pipe_source.frame_cache_mode()  # 프레임 캐시 토글(YESONCHECK_FRAME_CACHE)도 같은 이유로 시작 때 검증
     gl_video_item.video_item_mode(os.environ)  # 영상 아이템 토글(YESONCHECK_VIDEO_ITEM)의 나쁜 값도 같은 이유로 여기서
-    mac_native_gate.native_mode()  # 네이티브 재생 토글(YESONCHECK_MAC_NATIVE)도 같은 이유로 여기서
+    # 네이티브 재생 토글(YESONCHECK_MAC_NATIVE)도 같은 이유로 여기서 — 값(native_mode)과 함께 on이 macOS 밖이면 ValueError (native_wanted가
+    # 열 때마다 늦게 실패하지 않게)
+    mac_native_gate.native_wanted()
 
     # 스플래시 스크린 생성 (즉시 표시)
     pixmap = QPixmap(500, 300)
