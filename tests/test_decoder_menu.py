@@ -13,6 +13,7 @@ conftest가 YESONCHECK_MAC_NATIVE=off를 고정하므로 auto를 보는 시험�
 import os
 import sys
 
+import numpy as np
 import pytest
 from PyQt5.QtGui import QImage, QPainter
 from PyQt5.QtWidgets import QMessageBox, QStyleOptionGraphicsItem
@@ -249,7 +250,8 @@ def test_swap_window_does_not_relatch_the_released_item(fake_native_player, auto
 
     깨지는 변경: reset_failure를 swap 앞에서 부르면 창 안의 paint가 다시 실패해 걸쇠가 다시 걸리고(_failed True) 실패 창이 하나 더 뜸.
     네이티브 그리기 실패의 자동 폴백(Task 5 — 아이템의 실패 콜백)은 끔: 이 시험은 메뉴 길의 순서만 봄(자동 폴백이 먼저 캐시를 ffmpeg로 바꾸면 ffmpeg 선택은
-    저장만 하는 길 — tests/test_native_paint_fallback)."""
+    그대로인 길 — tests/test_native_paint_fallback). 바꿔 끼움 대역은 창 뒤에 새 RGB 프레임을 검(진짜 바꿔 끼움처럼 — 네이티브 프레임이 남은 채 ffmpeg면
+    걸쇠를 일부러 풀지 않으므로(되풀이 방지, Ruling 11) 그 경우는 이 순서 시험이 아님)."""
     rig = fake_native_player()
     player = rig.player
     item = player.videoWidget.video_item
@@ -263,8 +265,9 @@ def test_swap_window_does_not_relatch_the_released_item(fake_native_player, auto
 
     def swap_with_window():
         QMessageBox.critical(player, "재생 디코더를 바꾸지 못함", "가짜 열기 실패")  # 모달 — 그 루프가 아래 paint를 돌림
-        paint_on_raster(item)
-        return False
+        paint_on_raster(item)  # 아직 옛 네이티브 프레임
+        player.videoWidget.updateFrame(np.zeros((8, 16, 3), np.uint8), None)  # 바꿔 끼운 캡처의 RGB 프레임
+        return True
 
     monkeypatch.setattr(player, "swap_movie_captures_for_decoder", swap_with_window)
     player.set_playback_decoder("ffmpeg")
@@ -329,10 +332,12 @@ def test_choosing_ffmpeg_in_fallback_session_saves_without_reopen(make_player, a
 
 
 @mac_only
-def test_choosing_ffmpeg_after_runtime_fallback_saves_without_reopen(fake_native_player, auto, spies, dialogs, capsys):
+@pytest.mark.parametrize("native", ["", "A"])
+def test_choosing_ffmpeg_after_runtime_fallback_saves_without_reopen(fake_native_player, auto, spies, dialogs, capsys, native):
     """실행 중 폴백(Task 5 — 이 창만 ffmpeg, 파일은 그대로)으로 캐시가 ffmpeg인 창: 메뉴는 그 출처를 ffmpeg 툴팁에 보이고, ffmpeg를 고르면 저장만 —
-    이미 ffmpeg로 바꿔 끼운 캡처를 다시 열지 않음(바꿔 끼움·걸쇠 풀기 0회)."""
-    rig = fake_native_player()
+    이미 ffmpeg로 바꿔 끼운 캡처를 다시 열지 않음(바꿔 끼움·걸쇠 풀기 0회). A가 RGB(바꿔 끼운 뒤의 모습)여도, 네이티브 면이어도 걸쇠가 걸려 있지 않으면 —
+    다시 바꿔 끼우는 것은 걸쇠가 네이티브 면에 걸린 창뿐(Ruling 11 — tests/test_native_paint_fallback)."""
+    rig = fake_native_player(native=native)
     player = rig.player
     events = spies(player)
     mac_native_gate.set_preferred_decoder("ffmpeg", source=RUNTIME_SOURCE)

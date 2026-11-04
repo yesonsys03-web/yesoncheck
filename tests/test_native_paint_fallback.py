@@ -52,6 +52,7 @@ SWITCH_LOG = "[표시] GL 텍스처 스트리밍 실패 — 이 창을 ffmpeg �
 STDERR_LOG = "[표시] GL 텍스처 스트리밍 실패 — 영상 영역을 비워 둡니다"  # 아이템의 stderr 줄(트레이스백 앞) — 예전 그대로
 KEEP_LOG = "[표시] 네이티브 프레임이 아직 남아 걸쇠를 풀지 않음"  # 바꿔 끼운 뒤에도 네이티브 면이 남았을 때
 SWAP_FALSE_LOG = "[표시] ffmpeg 방식으로 바꾸지 못한 쪽이 있음"
+RETRY_LOG = "[재생] 이 창은 네이티브 프레임에서 그리기가 멈춰 있어 ffmpeg로 캡처를 다시 바꿔 끼움"  # 메뉴에서 이미 유효한 ffmpeg를 다시 고를 때 (Ruling 11)
 
 
 @pytest.fixture
@@ -335,6 +336,117 @@ def test_rgb_failure_signal_does_nothing(auto, latched, monkeypatch, capsys):
     assert capsys.readouterr().out == "" and checked(player) == ["videotoolbox"]
 
 
+# ---------------------------------------------------------------- 메뉴: 네이티브 면에 걸린 창에서 고르기 (Ruling 11 — 자동 폴백과 같은 헬퍼)
+
+def failing_reopen(rig, monkeypatch):
+    """리그의 열기 자리를 늘 None으로(열지 못함 — 진짜 길에서는 _open_movie_capture가 창을 띄운 뒤 None; NAS 끊김 등) → 부른 경로 list."""
+    calls = []
+    monkeypatch.setattr(rig.player, "_open_movie_capture", lambda path: calls.append(path))
+    return calls
+
+
+@pytest.fixture
+def stuck(auto, player_with_fake_native, fake_gl, prores_probe, dialogs, monkeypatch, capsys, qapp):
+    """자동 폴백의 바꿔 끼움이 실패한 창(다시 열기 → None): 캐시는 ffmpeg(SOURCE_GL_FALLBACK)인데 A는 옛 네이티브 캡처·프레임 그대로라 걸쇠가 걸린 채 →
+    (rig, item). 창·기록은 비워 둠 — 시험이 그 뒤 메뉴를 고름."""
+    rig = player_with_fake_native
+    item = rig.player.videoWidget.video_item
+    old_cap = rig.player.cap_a
+    tried = failing_reopen(rig, monkeypatch)
+    fake_gl.cgl.context = 0
+    paint_gl(item, fake_gl.painter)
+    qapp.processEvents()
+    assert len(tried) == 1 and rig.player.cap_a is old_cap
+    assert effective_decoder() == ("ffmpeg", RUNTIME_SOURCE)
+    assert item._failed and item.has_native_side()
+    assert KEEP_LOG in capsys.readouterr().out
+    dialogs.messages.clear()
+    return rig, item
+
+
+@mac_only
+def test_choosing_ffmpeg_in_a_window_stuck_on_a_native_frame_swaps_again(stuck, monkeypatch, capsys, dialogs):
+    """자동 폴백이 바꾸지 못해 네이티브 프레임에 걸린 창에서 창 글이 권하는 'ffmpeg (예전 방식)'을 고르면(유효 디코더는 이미 ffmpeg — 그대로인 길) 저장만
+    하지 않고 같은 헬퍼로 다시 바꿔 끼움(이번에는 열림) → 네이티브 면이 빠져 걸쇠가 풀림, 메뉴 맞춤(출처 prefs.json), 기록 한 줄. 창 없음.
+
+    깨지는 변경: 그대로인 길에서 다시 바꿔 끼우지 않으면(Task 4의 지름길) swap·걸쇠 단언."""
+    rig, item = stuck
+    player = rig.player
+    swaps = spy_swap(player, monkeypatch)
+    opened = reopen_by_decoder(rig, monkeypatch)
+    capsys.readouterr()
+
+    player.decoder_actions["ffmpeg"].trigger()
+
+    assert mac_prefs.read_prefs() == {mac_native_gate.PREF_KEY: "ffmpeg"}
+    assert effective_decoder() == ("ffmpeg", SOURCE_PREFS)
+    assert [(call.latched, call.decoder) for call in swaps] == [(True, "ffmpeg")]  # 걸쇠는 바꿔 끼운 뒤 풂(Ruling 9)
+    [new_cap] = opened
+    assert isinstance(new_cap, cv2.VideoCapture) and player.cap_a is new_cap
+    assert item._failed is False and not item.has_native_side() and item.failure_count == 1
+    assert checked(player) == ["ffmpeg"] and player.decoder_actions["ffmpeg"].toolTip() == player_base.DECODER_TIP
+    out = capsys.readouterr().out
+    assert out.count(RETRY_LOG + "\n") == 1 and "캡처를 다시 열지 않음" not in out
+    assert dialogs.messages == []
+
+
+@mac_only
+def test_reclicking_ffmpeg_retries_until_the_swap_succeeds(stuck, monkeypatch, capsys):
+    """다시 고른 ffmpeg의 바꿔 끼움도 실패하면(아직 못 엶) 걸쇠를 그대로 둠(다시 그리면 또 실패 — 되풀이 방지), 설정은 저장됨. 체크된 ffmpeg를 또 누르면
+    (이번에는 출처가 prefs.json — 저장할 것이 없는 길) 역시 다시 바꿔 끼우고, 열리면 걸쇠가 풀림."""
+    rig, item = stuck
+    player = rig.player
+    tried = failing_reopen(rig, monkeypatch)
+    player.decoder_actions["ffmpeg"].trigger()
+    assert len(tried) == 1 and item._failed is True and item.has_native_side()
+    assert effective_decoder() == ("ffmpeg", SOURCE_PREFS)
+    out = capsys.readouterr().out
+    assert RETRY_LOG in out and KEEP_LOG in out
+
+    swaps = spy_swap(player, monkeypatch)
+    reopen_by_decoder(rig, monkeypatch)
+    monkeypatch.setattr(mac_prefs, "update_pref", lambda *a: pytest.fail("저장할 것이 없는 길 — 쓰면 안 됩니다"))
+    player.decoder_actions["ffmpeg"].trigger()
+    assert len(swaps) == 1 and item._failed is False and not item.has_native_side()
+    assert checked(player) == ["ffmpeg"]
+    assert capsys.readouterr().out.count(RETRY_LOG + "\n") == 1
+
+
+@mac_only
+def test_choosing_videotoolbox_releases_the_latch_on_the_new_native_frame(stuck, monkeypatch):
+    """걸린 창에서 VideoToolbox를 고르면(유효 디코더가 바뀜) 바꿔 끼운 뒤 네이티브 면이 있어도 걸쇠를 풂 — 네이티브를 다시 그려 보는 것이 그 선택이고
+    (Task 4 §5.4 ④), 다시 실패하면 자동 폴백이 받음. 걸쇠를 남기는 것은 유효 디코더가 ffmpeg인데 네이티브 면이 남았을 때뿐."""
+    rig, item = stuck
+    player = rig.player
+    swaps = spy_swap(player, monkeypatch)
+    reopen_by_decoder(rig, monkeypatch)  # native_wanted() — 리그의 가짜 네이티브 캡처
+    player.decoder_actions["videotoolbox"].trigger()
+    assert effective_decoder() == ("videotoolbox", SOURCE_PREFS)
+    assert len(swaps) == 1 and item.has_native_side()
+    assert item._failed is False
+    assert checked(player) == ["videotoolbox"]
+
+
+@mac_only
+@pytest.mark.parametrize("replaced", [True, False])
+def test_menu_swap_exception_still_settles_latch_and_menu(stuck, monkeypatch, replaced):
+    """메뉴 길도 같은 헬퍼: 바꿔 끼우다 예외가 나도 걸쇠 판단과 메뉴 맞춤 뒤 예외를 그대로 올림(Task 4에서 미뤄 둔 '예외면 걸쇠를 풀지 않음'을 함께 정리) —
+    새 RGB 프레임이 걸렸으면 풀고, 네이티브 프레임 그대로면(ffmpeg) 둠."""
+    rig, item = stuck
+    player = rig.player
+
+    def broken_swap():
+        if replaced:
+            player.videoWidget.updateFrame(np.zeros((FAKE_HEIGHT, FAKE_WIDTH, 3), np.uint8), None)
+        raise RuntimeError("가짜 바꿔 끼움 오류")
+
+    monkeypatch.setattr(player, "swap_movie_captures_for_decoder", broken_swap)
+    with pytest.raises(RuntimeError, match="가짜 바꿔 끼움 오류"):
+        player.set_playback_decoder("ffmpeg")
+    assert item._failed is (not replaced)
+    assert checked(player) == ["ffmpeg"] and effective_decoder() == ("ffmpeg", SOURCE_PREFS)
+
+
 # ---------------------------------------------------------------- 아이템: 실패 콜백·창 글
 
 def rgb_frame():
@@ -386,13 +498,14 @@ def test_failure_callback_gets_native_flag_in_the_qt_loop(qapp, dialogs, picture
 def test_native_failure_window_announces_the_switch(qapp, dialogs, monkeypatch, platform, callback, picture, announces):
     """네이티브 면 실패 + Mac + 콜백이 있으면 창의 첫 줄만 "이 창은 ffmpeg 방식으로 바꿉니다…" — 예외 줄·메뉴 안내(Mac)·킬 스위치 안내는 그대로.
     그 밖은 예전 첫 줄."""
-    monkeypatch.setattr(sys, "platform", platform)
-    item = VideoFrameItem(stream=True)
-    if callback:
-        item.set_failure_callback(lambda native: None)
-    show(item, picture)
-    item._fail(gl_bindings.GLBindingError("x"))
-    qapp.processEvents()
+    with monkeypatch.context() as m:  # 가짜 플랫폼은 실패·창 띄우기 동안만
+        m.setattr(sys, "platform", platform)
+        item = VideoFrameItem(stream=True)
+        if callback:
+            item.set_failure_callback(lambda native: None)
+        show(item, picture)
+        item._fail(gl_bindings.GLBindingError("x"))
+        qapp.processEvents()
     [(_, _, text)] = dialogs.messages
     menu = f"{MENU_HINT}\n" if platform == "darwin" else ""
     assert text == f"{NATIVE_FIRST_LINE if announces else OLD_FIRST_LINE}\n\nGLBindingError: x\n\n{menu}{ENV_HINT}"

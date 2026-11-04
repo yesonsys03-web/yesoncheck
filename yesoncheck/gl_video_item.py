@@ -317,6 +317,11 @@ class VideoFrameItem(QGraphicsPixmapItem):
         """(시험용) 마지막 set_sides·set_surface의 A 면 손잡이(NativeHandle) — A가 RGB이거나 면 그리기가 아니면 None."""
         return self._sides.a.handle if self._sides is not None else None
 
+    @property
+    def latched(self) -> bool:
+        """그리기 실패 걸쇠가 걸려 있는가 — _fail 뒤 reset_failure 전(그동안 paint는 아무것도 그리지 않음)."""
+        return self._failed
+
     def has_native_side(self) -> bool:
         """지금 그림에 IOSurface 면이 있는가 — 면 그리기(set_sides·set_surface)의 _Sides 중 그릴 면(A, 와이프일 때만 B — 와이프가 아니거나 크기가 다른
         B는 set_sides가 이미 뺌)의 _Side.handle(whole_surface_handle이 준 손잡이)이 있으면 True. set_frame(RGB 길)·빈 그림이면 False.

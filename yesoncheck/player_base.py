@@ -86,6 +86,8 @@ DECODER_TIP = "이 창은 바로 바꾸고 이 Mac의 설정 파일(prefs.json)�
 DECODER_ENV_SOURCE_PREFIX = "환경 변수"  # mac_native_gate.effective_decoder가 환경 변수(YESONCHECK_MAC_NATIVE=on|off)가 덮을 때 돌려주는 출처의 머리
 DECODER_CV2_TIP = "YESONCHECK_MOVIE_SOURCE=cv2가 모든 빠른 디코더를 끕니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다"
 GL_FALLBACK_LOG = "[표시] GL 텍스처 스트리밍 실패 — 이 창을 ffmpeg 방식으로 바꿉니다"  # 네이티브 그리기 실패 폴백의 기록 줄 (스펙 2026-11-04 §5.8)
+KEEP_LATCH_LOG = "[표시] 네이티브 프레임이 아직 남아 걸쇠를 풀지 않음 — 다시 그리면 또 실패하므로 영상 영역은 비워 둠"
+DECODER_RETRY_LOG = "[재생] 이 창은 네이티브 프레임에서 그리기가 멈춰 있어 ffmpeg로 캡처를 다시 바꿔 끼움"  # 메뉴에서 이미 유효한 ffmpeg를 다시 고름 (Ruling 11)
 # 무거운 모듈들은 lazy import로 변경 (실제 사용 시점에만 로드)
 # from yesoncheck.workers import OCRWorker, OCRExportWorker, SceneDetectWorker
 # from yesoncheck.player_timeline import CollapsibleBox
@@ -1440,7 +1442,10 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         (스펙 2026-11-04 §5.4). 다른 창(프로세스)의 캐시는 건드리지 않음 — 다음에 켤 때 설정 파일을 따름.
 
         이미 그 값이 설정 파일·기본값에서 온 것이면 아무것도 하지 않고 체크만 맞춤(체크된 항목을 다시 누르면 Qt가 체크를 끔). 설정을 읽지 못해 이 세션만
-        ffmpeg인 창(SOURCE_FALLBACK)에서 ffmpeg를 고르는 것은 저장이다(파일을 고쳤으면 그 값이 남음, 아직 깨져 있으면 아래 ①의 창). 차례:
+        ffmpeg인 창(SOURCE_FALLBACK)에서 ffmpeg를 고르는 것은 저장이다(파일을 고쳤으면 그 값이 남음, 아직 깨져 있으면 아래 ①의 창).
+        예외 — **네이티브 면에 걸린 창**(_latched_on_native_under_ffmpeg: 자동 폴백·앞 선택의 바꿔 끼움이 열지 못해 네이티브 프레임에 걸쇠가 걸린 채 유효 디코더가
+        ffmpeg): 유효 디코더가 그대로인 길(저장할 것이 없는 다시 누름, ③의 '그대로')에서도 기록 한 줄(DECODER_RETRY_LOG) 뒤 ④⑤⑥을 다시 함 — 창 글이 권하는
+        'ffmpeg (예전 방식)'이 아무 일도 하지 않으면 영상 영역이 빈 채 남음(Ruling 11). 차례:
         ① prefs.json에 저장(mac_prefs.update_pref) — 실패(깨진 파일 UserFileError·잠금 시간 초과·쓰기 실패 OSError)면 기록(트레이스백) + 오류 창 1회 +
            체크를 지금 유효한 값으로 되돌리고 끝(캐시·캡처 그대로 — 저장하지 못한 설정을 이 창에만 몰래 적용하지 않음)
         ② 게이트의 캐시를 그 값으로(출처 prefs.json) ③ 기록 한 줄 `[재생] 디코더 설정: <이름> (Setting 메뉴)` — 들어올 때와 유효 디코더(effective_decoder —
@@ -1449,8 +1454,10 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         ④ 열린 A·B의 캡처를 새 디코더로 바꿔 끼움(swap_movie_captures_for_decoder — open_file을 부르지 않음). False면 그 함수가 이미 창을 띄웠으므로
            창을 더 띄우지 않고 기록 한 줄만 — 설정은 저장됐고 바꾸지 못한 쪽은 다음에 열 때부터
         ⑤ 스트림 아이템(VideoFrameItem)이면 GL 그리기 실패 걸쇠를 풂(reset_failure — 디코더를 바꾸는 것이 그 걸쇠의 탈출구). 바꿔 끼운 **뒤**에(Ruling 9):
-           바꿔 끼우는 동안 뜬 창(모달)의 이벤트 루프가 아직 옛(실패하는) 프레임을 그려도 걸쇠가 걸린 채라 다시 실패하지 않고, 풀린 뒤의 paint는 새 프레임
+           바꿔 끼우는 동안 뜬 창(모달)의 이벤트 루프가 아직 옛(실패하는) 프레임을 그려도 걸쇠가 걸린 채라 다시 실패하지 않고, 풀린 뒤의 paint는 새 프레임.
+           단 유효 디코더가 ffmpeg인데 네이티브 면이 남았으면(바꾸지 못한 쪽) 풀지 않음 — 다시 그리면 또 실패해 창이 되풀이됨
         ⑥ 메뉴를 맞춤 — ④⑤가 예외를 내도(finally; 예외는 그대로 올림) 두 항목이 함께 체크된 채 남지 않게.
+        ④⑤⑥은 네이티브 그리기 실패 폴백(_on_stream_paint_failed)과 같은 헬퍼(_swap_captures_and_settle_latch).
         name이 DECODERS 밖이면 ValueError — 파일에 쓰기 전에(나쁜 값이 저장되면 다음 시작이 그 파일을 거부함). macOS가 아니면 RuntimeError(메뉴가 없는 설정)."""
         if sys.platform != "darwin":
             raise RuntimeError(f"재생 디코더 설정은 macOS 전용입니다 (이 시스템: {sys.platform})")
@@ -1458,6 +1465,10 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
             raise ValueError(f"{mac_native_gate.PREF_KEY}는 {', '.join(mac_native_gate.DECODERS)} 중 하나여야 합니다: {name!r}")
         before, source = mac_native_gate.effective_decoder()
         if name == mac_native_gate.preferred_decoder() and source in (mac_native_gate.SOURCE_PREFS, mac_native_gate.SOURCE_DEFAULT):
+            if self._latched_on_native_under_ffmpeg():
+                print(DECODER_RETRY_LOG, flush=True)
+                self._swap_captures_and_settle_latch(f"[재생] 디코더 설정({name}): 이번에도 바꾸지 못한 쪽이 있음 — 그 쪽은 다음에 열 때부터")
+                return
             self._sync_decoder_menu()
             return
         try:
@@ -1475,14 +1486,40 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         print(f"[재생] 디코더 설정: {name} (Setting 메뉴)", flush=True)
         after, _ = mac_native_gate.effective_decoder()
         if after == before:
-            print(f"[재생] 유효 디코더가 그대로({after}) — 캡처를 다시 열지 않음", flush=True)
-            self._sync_decoder_menu()
-            return
+            if self._latched_on_native_under_ffmpeg():
+                print(DECODER_RETRY_LOG, flush=True)
+            else:
+                print(f"[재생] 유효 디코더가 그대로({after}) — 캡처를 다시 열지 않음", flush=True)
+                self._sync_decoder_menu()
+                return
+        self._swap_captures_and_settle_latch(
+            f"[재생] 디코더 설정({name})은 저장했지만 지금 열린 영상 중 바꾸지 못한 쪽이 있음 — 그 쪽은 다음에 열 때부터")
+
+    def _latched_on_native_under_ffmpeg(self) -> bool:
+        """스트림 아이템의 그리기 실패 걸쇠가 네이티브(IOSurface) 면에 걸린 채이고 지금 유효한 디코더가 ffmpeg인가 — 바꿔 끼움이 그 쪽을 열지 못한 창
+        (자동 폴백·메뉴 선택 뒤 — ffprobe·열기 실패, 바꿔 끼우다 예외). 그 걸쇠를 풀면 다음 paint가 같은 표면을 다시 묶다 또 실패하므로
+        _swap_captures_and_settle_latch는 풀지 않고, set_playback_decoder는 유효 디코더가 그대로여도 다시 바꿔 끼움. 유효 디코더가 VideoToolbox면
+        네이티브 면은 고른 길이라 여기 들지 않음(풀어서 다시 그려 봄 — 다시 실패하면 자동 폴백)."""
+        if not self.videoWidget.video_item_stream:
+            return False
+        item = self.videoWidget.video_item
+        return item.latched and item.has_native_side() and mac_native_gate.effective_decoder()[0] == "ffmpeg"
+
+    def _swap_captures_and_settle_latch(self, swap_failed_log: str) -> None:
+        """지금 유효한 디코더로 열린 캡처를 바꿔 끼우고(swap_movie_captures_for_decoder — False면 그 함수가 창을 띄웠으므로 swap_failed_log 한 줄만) →
+        스트림 아이템의 걸쇠를 바꿔 끼운 **뒤**에 풂(reset_failure — Ruling 9) — 단 _latched_on_native_under_ffmpeg면 풀지 않고 KEEP_LATCH_LOG 한 줄 →
+        메뉴를 맞춤. 바꿔 끼우다 예외가 나도 걸쇠 판단과 메뉴 맞춤은 하고(finally) 예외는 그대로 올림. Setting 메뉴(set_playback_decoder)와 네이티브
+        그리기 실패 폴백(_on_stream_paint_failed)이 함께 씀(Ruling 11)."""
         try:
-            if not self.swap_movie_captures_for_decoder():
-                print(f"[재생] 디코더 설정({name})은 저장했지만 지금 열린 영상 중 바꾸지 못한 쪽이 있음 — 그 쪽은 다음에 열 때부터", flush=True)
-            if self.videoWidget.video_item_stream:
-                self.videoWidget.video_item.reset_failure()
+            try:
+                if not self.swap_movie_captures_for_decoder():
+                    print(swap_failed_log, flush=True)
+            finally:
+                if self.videoWidget.video_item_stream:
+                    if self._latched_on_native_under_ffmpeg():
+                        print(KEEP_LATCH_LOG, flush=True)
+                    else:
+                        self.videoWidget.video_item.reset_failure()
         finally:
             self._sync_decoder_menu()
 
@@ -1493,9 +1530,10 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         ① 게이트 캐시를 ffmpeg로(출처 mac_native_gate.SOURCE_GL_FALLBACK) ② 기록 한 줄 GL_FALLBACK_LOG ③ 열린 캡처를 바꿔 끼움(swap_movie_captures_for_decoder —
            False면 그 함수가 창을 띄웠으므로 기록 한 줄만) ④ 아이템의 그림에 네이티브 면이 더 없으면 걸쇠를 풂(reset_failure — 바꿔 끼운 **뒤**: 그동안 뜬
            창의 이벤트 루프가 옛 프레임을 그려도 다시 실패하지 않게, Ruling 9) ⑤ 메뉴를 맞춤(체크 ffmpeg, 툴팁에 그 출처). ③이 예외를 내도 ④⑤는 함(finally)
-           뒤 예외를 그대로 올림(코드·빌드 쪽 — PyQt가 sys.excepthook으로).
+           뒤 예외를 그대로 올림(코드·빌드 쪽 — PyQt가 sys.excepthook으로). ③④⑤는 Setting 메뉴와 같은 헬퍼(_swap_captures_and_settle_latch — Ruling 11).
         ④에서 네이티브 면이 남아 있으면(바꾸지 못한 쪽 — ffprobe·열기 실패, 바꿔 끼우다 예외) 걸쇠를 그대로 두고 기록 한 줄: 풀면 다음 paint가 같은
-        표면을 다시 묶다 또 실패해 창 → 폴백 → 창이 끝없이 되풀이됨. 그 영역은 예전처럼 빈 채(캐시는 ffmpeg — 바꾸지 못한 쪽은 다음에 열 때부터).
+        표면을 다시 묶다 또 실패해 창 → 폴백 → 창이 끝없이 되풀이됨. 그 영역은 빈 채 — 창 글이 권하는 Setting → 재생 디코더 → ffmpeg (예전 방식)을
+        고르면 다시 바꿔 끼움(set_playback_decoder의 '네이티브 면에 걸린 창'; 캐시는 이미 ffmpeg라 바꾸지 못한 쪽은 다음에 열 때도 ffmpeg).
         환경 변수 YESONCHECK_MAC_NATIVE(on·off)가 디코더를 덮으면 캐시를 바꿔도 같은 디코더로 다시 열리므로 바꾸지 않고 기록 한 줄(걸쇠·빈 영역 그대로).
         RGB 면 실패(native False)·macOS 밖은 아무것도 하지 않음 — 예전 규칙(걸쇠·창·빈 영역; Mac의 탈출구는 Setting → 재생 디코더)."""
         if not native or sys.platform != "darwin":
@@ -1506,18 +1544,7 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
             return
         mac_native_gate.set_preferred_decoder("ffmpeg", source=mac_native_gate.SOURCE_GL_FALLBACK)
         print(GL_FALLBACK_LOG, flush=True)
-        item = self.videoWidget.video_item
-        try:
-            try:
-                if not self.swap_movie_captures_for_decoder():
-                    print("[표시] ffmpeg 방식으로 바꾸지 못한 쪽이 있음 — 그 쪽은 다음에 열 때부터 ffmpeg", flush=True)
-            finally:
-                if item.has_native_side():
-                    print("[표시] 네이티브 프레임이 아직 남아 걸쇠를 풀지 않음 — 다시 그리면 또 실패하므로 영상 영역은 비워 둠", flush=True)
-                else:
-                    item.reset_failure()
-        finally:
-            self._sync_decoder_menu()
+        self._swap_captures_and_settle_latch("[표시] ffmpeg 방식으로 바꾸지 못한 쪽이 있음 — 그 쪽은 다음에 열 때부터 ffmpeg")
 
     def _sync_decoder_menu(self):
         """(Mac) Setting → 재생 디코더의 체크·활성·툴팁을 지금 유효한 디코더(mac_native_gate.effective_decoder)에 맞춤 — 메뉴를 만들 때, 고른 뒤(저장
