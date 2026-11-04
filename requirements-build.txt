@@ -49,9 +49,9 @@ tensorflow-io-gcs-filesystem==0.34.0; sys_platform == "darwin"
 cryptography==48.0.1
 # 프레임 캐시 예산 — 물리·사용 가능 메모리. lock에는 이미 간접 의존으로 같은 버전이 있어 lock 재생성 불필요
 psutil==7.2.2
-# Apple Silicon 네이티브 재생(VideoToolbox → IOSurface → GL, yesoncheck/mac_native_source.py) — arm64 Mac에만. Intel·Windows lock에는 넣지 않음
-#   (스펙 §5.9: Intel·Windows 빌드는 PyObjC를 넣지도 불러오지도 않음). Cocoa·CoreAudio·CoreMedia는 AVFoundation이 끌어옴.
+# 네이티브 재생(VideoToolbox → IOSurface → GL, yesoncheck/mac_native_source.py) — Mac 전체(Intel·Apple Silicon 두 lock). Windows lock에는 넣지 않음
+#   (스펙 2026-11-04 §5.6: Windows 빌드는 PyObjC를 넣지도 불러오지도 않음). Cocoa·CoreAudio·CoreMedia는 AVFoundation이 끌어옴.
 #   VideoToolbox 래퍼는 넣지 않음 — 하드웨어 디코드 여부(기록 줄 hw=yes|no)는 VideoToolbox.framework를 ctypes로 부름
-pyobjc-core==12.2.2; sys_platform == "darwin" and platform_machine == "arm64"
-pyobjc-framework-AVFoundation==12.2.2; sys_platform == "darwin" and platform_machine == "arm64"
-pyobjc-framework-Quartz==12.2.2; sys_platform == "darwin" and platform_machine == "arm64"
+pyobjc-core==12.2.2; sys_platform == "darwin"
+pyobjc-framework-AVFoundation==12.2.2; sys_platform == "darwin"
+pyobjc-framework-Quartz==12.2.2; sys_platform == "darwin"
