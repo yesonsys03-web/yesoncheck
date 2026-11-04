@@ -592,10 +592,21 @@ class PlayerAnnotationsMixin:
     def burn_frame_annotations(self, frame):
         if frame is None or not hasattr(self, "annotation_store"):
             return frame
+        if native_surface_of(frame) is not None:
+            # 네이티브(IOSurface) 프레임은 읽기 전용 — 굽지 않고 그대로(굽기는 복사본을 만듦). 주석은 videoWidget의 주석 층이 그림(_annotations_for_native).
+            # prepare_frame_for_display는 이보다 먼저 돌려주지만 이 함수를 바로 부르는 곳이 생겨도 표면을 복사하지 않게
+            return frame
         items = self.annotation_store.get_frame(self.get_current_frame_index())
         if not items:
             return frame
         return burn_annotations_on_frame(frame, items)
+
+    def _annotations_for_native(self):
+        """주석 층 공급자(videoWidget.set_annotation_provider — 창을 만들 때 등록): 보이는 프레임(get_current_frame_index — 캡처 위치 − 1)의 주석.
+        updateFrame의 네이티브 분기가 프레임마다 부름 — 그때 캡처는 이미 그 프레임을 읽은 뒤. 주석 저장소를 만들기 전이면 빈 목록."""
+        if not hasattr(self, "annotation_store"):
+            return []
+        return self.annotation_store.get_frame(self.get_current_frame_index())
 
     def prepare_frame_for_display(self, frame):
         if frame is None:

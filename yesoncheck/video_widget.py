@@ -39,6 +39,7 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck import paths
+from yesoncheck.annotation_overlay import AnnotationOverlay
 from yesoncheck.frame_handles import native_surface_of, whole_surface_handle
 from yesoncheck.gl_video_item import LOG_PREFIX, VIDEO_ITEM_ENV, VideoFrameItem, use_stream_item, video_item_mode
 from yesoncheck.overlay_text_layout import overlay_layout
@@ -53,6 +54,8 @@ VIDEO_BG = {"dark": "#232323", "light": "#fafafa"}
 
 # B 키 오버레이 아이템(네이티브 프레임 — set_overlay_text): 쌓임은 ROI(10) 위, 주석 미리보기(14)·편집 핸들(16) 아래
 OVERLAY_ITEM_Z = 13
+# 주석 층(네이티브 프레임 — annotation_overlay): B 키 상자 위(굽는 길도 B 글자를 먼저, 주석을 그 위에 구움 — Ruling 18), 주석 미리보기(14) 아래
+ANNOTATION_OVERLAY_Z = 13.5
 OVERLAY_FONT_REF_PX = 100  # 글꼴 크기를 정할 때 대문자 높이를 재는 기준 픽셀 크기 (overlay_font)
 
 
@@ -146,6 +149,7 @@ class CustomVideoWidget(QGraphicsView):
             self.video_item = self.scene.addPixmap(QPixmap())
         self._pixmap_backing = None  # 픽스맵 길에 그린 네이티브 프레임 — RGB32 픽스맵이 그 메모리를 함께 쓰므로 다음 그림까지 쥠 (_show_native_frames)
         self._overlay_provider = None  # B 키 글자 공급자 () -> str | None — 플레이어가 등록(set_overlay_provider), updateFrame의 네이티브 분기가 부름
+        self._annotation_provider = None  # 주석 공급자 () -> list[dict] — 보이는 프레임의 주석, 플레이어가 등록(set_annotation_provider)
 
         self.wipe_position_x = 0.5
         self.wipe_position_y = 0.5
@@ -239,6 +243,12 @@ class CustomVideoWidget(QGraphicsView):
         self.overlay_text_item = QGraphicsSimpleTextItem(self.overlay_box_item)
         self.overlay_text_item.setBrush(QColor(0, 0, 0))
         self.scene.addItem(self.overlay_box_item)
+
+        # 주석 층(네이티브 프레임 — 읽기 전용이라 주석을 굽지 않음): 프레임 사각형 하나가 주석마다 자식 아이템(annotation_overlay). 영상 아이템보다 뒤에
+        # 넣고 원점·프레임 좌표라 B 키 상자처럼 줌·맞춤에 따라 구운 주석처럼 커짐; z ANNOTATION_OVERLAY_Z. 갱신은 updateFrame(_refresh_native_annotations)
+        self.annotation_overlay = AnnotationOverlay()
+        self.annotation_overlay.setZValue(ANNOTATION_OVERLAY_Z)
+        self.scene.addItem(self.annotation_overlay)
 
         # Frame annotation overlay
         self.annotation_mode_enabled = False
@@ -538,11 +548,13 @@ class CustomVideoWidget(QGraphicsView):
         if frame_a is None:
             self.video_item.setPixmap(QPixmap())
             self.set_overlay_text(None, 0, 0)  # 비운 화면에 앞 네이티브 프레임의 B 키 글자가 남지 않게
+            self.annotation_overlay.clear()  # 주석 층도
             return
 
         if native_surface_of(frame_a) is not None or native_surface_of(frame_b) is not None:
             self._show_native_frames(frame_a, frame_b)  # 네이티브(IOSurface) 프레임 — RGB 변환·numpy 합성 없음
             self._refresh_native_overlay(frame_a)
+            self._refresh_native_annotations(frame_a)
             self._after_frame_shown()
             return
 
@@ -571,6 +583,7 @@ class CustomVideoWidget(QGraphicsView):
             self.video_item.setPixmap(pixmap)
 
         self.set_overlay_text(None, width, height)  # RGB 프레임의 B 키 글자는 프레임에 구움 — 앞 네이티브 프레임의 아이템이 남지 않게(숨어 있으면 할 일 없음)
+        self.annotation_overlay.clear()  # 주석도 프레임에 구움(prepare_frame_for_display) — 앞 네이티브 프레임의 주석 층을 비움(비어 있으면 할 일 없음)
         self._after_frame_shown()
 
     def _show_native_frames(self, frame_a, frame_b):
@@ -623,6 +636,24 @@ class CustomVideoWidget(QGraphicsView):
             self.set_overlay_text(None, width, height)
             return
         self.set_overlay_text(self._overlay_provider(), width, height)
+
+    def set_annotation_provider(self, provider):
+        """주석 공급자 등록 — provider() -> list[dict](보이는 프레임의 주석 — 플레이어의 annotation_store). 플레이어가 창을 만들 때 한 번
+        (_annotations_for_native); updateFrame의 네이티브 분기가 프레임마다 불러 주석 층을 갱신(공급자가 없으면 층을 비움)."""
+        if not callable(provider):
+            raise TypeError(f"주석 공급자는 호출할 수 있어야 합니다: {provider!r}")
+        self._annotation_provider = provider
+
+    def _refresh_native_annotations(self, frame_a):
+        """네이티브 분기의 주석 층 갱신 — B 키 아이템(_refresh_native_overlay)과 같은 약속: updateFrame 한 곳에서라 prepare_frame_for_display를
+        거치지 않는 길(_minimal_preview_seek 등)과 편집 뒤 다시 그리기(_redraw_frame_with_annotations)도 보이는 프레임의 주석. A가 네이티브일 때만 채움 —
+        A가 RGB(B만 네이티브)면 주석은 prepare_frame_for_display가 A에 이미 구웠으므로 층을 비움(두 번 그리지 않게). 기하는 A의 크기(frame_a.shape —
+        픽셀은 읽지 않음)."""
+        height, width = frame_a.shape[:2]
+        if self._annotation_provider is None or native_surface_of(frame_a) is None:
+            self.annotation_overlay.clear()
+            return
+        self.annotation_overlay.set_annotations(self._annotation_provider(), width, height)
 
     def set_overlay_text(self, text, width, height):
         """B 키 오버레이 아이템(흰 상자 + 검정 글자 — 네이티브 프레임용, 굽지 않음)을 width×height 프레임의 text로. None이면 둘 다 숨김
@@ -836,7 +867,7 @@ class CustomVideoWidget(QGraphicsView):
             self.annotation_edit_handle_items.append(handle)
 
     def set_display_annotations(self, annotations):
-        """Legacy hook; annotations are burned onto frames at playback time."""
+        """Legacy hook (부르는 곳 없음) — 주석은 RGB 프레임에는 재생 때 굽고(prepare_frame_for_display), 네이티브 프레임에는 주석 층(set_annotation_provider)."""
         _ = annotations
 
     def _annotation_pen(self, color_hex, scale=None, stroke_width=None):
