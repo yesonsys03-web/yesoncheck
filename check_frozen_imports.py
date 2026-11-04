@@ -15,9 +15,10 @@
 - 이미지 시퀀스: TGA(RLE)·EXR 프레임 한 장씩 디코딩 (yesoncheck.sequence_source.decode_frame, 메모리에서 만든 작은 프레임).
   이 환경의 cv2에 OpenEXR 코덱이 꺼져 있으면 EXR은 건너뛰고 TGA만 확인 (빌드는 실패시키지 않고, 건너뛴 사실을 결과 줄에 적음).
   PIL 이미지 플러그인(PIL.TgaImagePlugin 등)은 지연 import라 소스 import만으로는 쓰인 모듈에 안 잡히므로, 실제로 디코딩해서 앱에 있는지 대조함
-- 네이티브 재생(Apple Silicon만): 번들 ffmpeg(vendor/ffmpeg/arm64)로 만든 4K ProRes 4444 6장 클립을 yesoncheck.mac_native_source.NativeVTCapture
-  (VideoToolbox → IOSurface 32BGRA)로 3장 읽음 — PyObjC(objc·AVFoundation·CoreMedia·Quartz …)를 import만이 아니라 실제로 써서 그 모듈이 앱에
-  있는지 대조함. Intel Mac·Windows는 건너뛰고 건너뛴 사실을 결과 줄에 적음 (이 빌드에는 PyObjC가 없음 — arm64 lock에만)
+- 네이티브 재생(macOS 빌드마다 — Apple Silicon·Intel 모두): 번들 ffmpeg(vendor/ffmpeg/<machine>)로 만든 4K ProRes 4444 6장 클립을
+  yesoncheck.mac_native_source.NativeVTCapture (VideoToolbox → IOSurface 32BGRA)로 3장 읽음 — PyObjC(objc·AVFoundation·CoreMedia·Quartz …)를
+  import만이 아니라 실제로 써서 그 모듈이 앱에 있는지 대조함. Windows는 건너뛰고 건너뛴 사실을 결과 줄에 적음 (Windows 빌드에는 PyObjC가
+  없음 — PyObjC는 Mac 두 lock에만)
 
 사용법: python check_frozen_imports.py <앱 번들(.app) 또는 Windows 앱 폴더(dist\\YesonCheck_Autocut)>
 누락이 하나라도 있으면 목록을 출력하고 종료 코드 1로 끝납니다.
@@ -141,7 +142,7 @@ def exercise_sequence_decode():
     return decoded
 
 
-NATIVE_SKIPPED = "네이티브 디코드 건너뜀 (Apple Silicon 아님)"
+NATIVE_SKIPPED = "네이티브 디코드 건너뜀 (macOS 아님)"
 NATIVE_CLIP_SIZE = (3840, 2160)  # (너비, 높이) — 네이티브 게이트 ⑥½(4K)를 통과하는 UHD
 NATIVE_CLIP_FRAMES = 6  # 검사 클립의 장 수
 NATIVE_READ_FRAMES = 3  # NativeVTCapture로 읽는 장 수
@@ -221,21 +222,20 @@ def native_frame_problem(ok, frame, index):
 
 
 def exercise_native_decode():
-    """Apple Silicon이면 네이티브 재생 경로(VideoToolbox → IOSurface 32BGRA, yesoncheck.mac_native_source.NativeVTCapture)를 실제로 돌림.
+    """macOS면(Apple Silicon·Intel 모두) 네이티브 재생 경로(VideoToolbox → IOSurface 32BGRA, yesoncheck.mac_native_source.NativeVTCapture)를 실제로 돌림.
     결과 줄(main()이 그대로 출력)을 돌려줌: "네이티브 디코드: VideoToolbox 3장 3840×2160 32BGRA (hw=yes|no|?)".
 
     소스 import(source_imports)가 PyObjC 모듈(objc·AVFoundation·CoreMedia·Foundation·Quartz)을 불러오기는 하지만, 그것만으로는 네이티브
     재생이 실제로 거치는 길(_pyobjc의 메타데이터 등록·AVAssetReader·CVPixelBuffer 잠금·IOSurface 손잡이)이 이 빌드 환경에서 도는지,
     그 길이 지연으로 부르는 모듈까지 앱에 있는지 모른다(스펙 §5.9) — 그래서 번들 ffmpeg로 임시 폴더에 4K 4444 클립을 만들어
     (make_native_clip) probe → 네이티브 게이트 확인 → NativeVTCapture로 NATIVE_READ_FRAMES장을 읽고(native_frame_problem) release한다.
-    Apple Silicon 판정은 토글 auto와 같은 규칙(mac_native_gate.is_apple_silicon — darwin이고 machine()이 arm64). 그 밖(Intel Mac·Windows —
-    PyObjC가 없는 빌드)은 NATIVE_SKIPPED를 돌려줌. 틀린 결과·게이트 음성·번들 ffmpeg 없음은 SystemExit, 캡처가 내는 오류(NativeCaptureError —
-    PyObjC 없음 등)는 잡지 않고 그대로 올림 (스택 트레이스째 검사 실패). 부르기 전에 PROJECT_ROOT가 sys.path에 있어야 함."""
-    from yesoncheck import mac_native_gate
-
-    if not mac_native_gate.is_apple_silicon():
+    실행 조건은 sys.platform == "darwin"뿐 — 칩은 가리지 않음(Intel Mac도 VideoToolbox로 ProRes를 디코드하고 그 빌드에 PyObjC가 있음;
+    하드웨어 디코드는 보통 hw=no). macOS가 아니면(Windows — PyObjC가 없는 빌드) NATIVE_SKIPPED를 돌려줌. 틀린 결과·게이트 음성·번들
+    ffmpeg 없음은 SystemExit, 캡처가 내는 오류(NativeCaptureError — PyObjC 없음 등)는 잡지 않고 그대로 올림 (스택 트레이스째 검사 실패).
+    부르기 전에 PROJECT_ROOT가 sys.path에 있어야 함."""
+    if sys.platform != "darwin":
         return NATIVE_SKIPPED
-    from yesoncheck import mac_native_source, movie_pipe_source
+    from yesoncheck import mac_native_gate, mac_native_source, movie_pipe_source
 
     width, height = NATIVE_CLIP_SIZE
     with tempfile.TemporaryDirectory() as tmp, vendored_ffmpeg_on_path() as ffmpeg:
@@ -272,7 +272,7 @@ def exercise_app():
             skipped.append(f"{name} ({exc})")
 
     frame_formats = exercise_sequence_decode()  # 가볍고 PIL 플러그인 누락을 바로 잡으므로 느린 OCR 앞에서
-    native = exercise_native_decode()  # 같은 이유로 OCR 앞에서 (Apple Silicon만 몇 초, 그 밖은 건너뜀 한 줄)
+    native = exercise_native_decode()  # 같은 이유로 OCR 앞에서 (macOS는 몇 초, Windows는 건너뜀 한 줄)
 
     import cv2
     import numpy as np

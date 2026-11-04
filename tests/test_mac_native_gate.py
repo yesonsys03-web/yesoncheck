@@ -19,7 +19,7 @@ from yesoncheck import mac_native_gate, mac_prefs, movie_pipe_source
 from yesoncheck.mac_native_gate import (
     DECODERS, HDR_PRIMARIES, HDR_TRANSFERS, NATIVE_CODEC, NATIVE_MODE_ENV, NATIVE_MODES, PREF_KEY, SOURCE_FALLBACK,
     effective_decoder,
-    is_apple_silicon, native_eligible, native_ineligible_reason, native_mode, native_wanted, preferred_decoder,
+    native_eligible, native_ineligible_reason, native_mode, native_wanted, preferred_decoder,
     set_preferred_decoder,
 )
 from yesoncheck.movie_pipe_source import probe_movie
@@ -89,19 +89,6 @@ def test_native_mode_reads_the_process_environment_by_default(monkeypatch):
 
 
 # ---------------------------------------------------------------- 플랫폼(darwin 전체)·원함
-
-def test_is_apple_silicon_needs_darwin_and_arm64():
-    assert is_apple_silicon(*mac("arm64")) is True
-    assert is_apple_silicon(*mac("x86_64")) is False
-
-
-@pytest.mark.parametrize("platform_name,machine", [
-    ("linux", "aarch64"), ("linux", "arm64"), ("win32", "ARM64"), ("win32", "AMD64"), ("linux", "x86_64"),
-])
-def test_is_apple_silicon_false_off_darwin_even_for_arm_machines(platform_name, machine):
-    """Windows ARM·Linux ARM이 arm64로 보고해도 Apple Silicon이 아님 — machine()만 보면 auto가 켜짐."""
-    assert is_apple_silicon(SimpleNamespace(machine=lambda: machine), SimpleNamespace(platform=platform_name)) is False
-
 
 def test_auto_is_on_for_any_darwin():
     """auto는 macOS면 어느 칩이든 켬 (Intel Mac·Rosetta 아래 x86_64 빌드도) — 2026-11-04 사용자 결정: 모든 Mac이 QuickTime과 같은 화면.

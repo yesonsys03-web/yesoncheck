@@ -1,11 +1,11 @@
 """영상 열기 경로의 네이티브(VideoToolbox) 분기 (Apple Silicon 네이티브 재생 — 계획 Task 14·B9, 스펙 §5.3·§5.8).
 
 VideoPlayer._open_movie_capture는 os.stat 확인 뒤 _native_or_pipe_capture로 캡처를 고른다: YESONCHECK_MOVIE_SOURCE=cv2면 네이티브 토글도 보지
-않고 probe도 없이 기존 cv2 줄, native_wanted()가 아니면(Intel·Windows·YESONCHECK_MAC_NATIVE=off) 예전 파이프 게이트 줄 그대로, 원하면 ffprobe
+않고 probe도 없이 기존 cv2 줄, native_wanted()가 아니면(Windows·YESONCHECK_MAC_NATIVE=off) 예전 파이프 게이트 줄 그대로, 원하면 ffprobe
 한 번(movie_pipe_source.probe_for_open — ffprobe가 못 읽을 때의 규칙은 파이프와 같음)으로 네이티브 게이트(mac_native_gate.native_ineligible_reason)를
 보고 — 양성이면 네이티브 캡처, 못 열면 기록·오류 창(끝 줄 NATIVE_ESCAPE_HINT) 뒤 같은 probe로 파이프, 음성이면 사유 한 줄 뒤 같은 probe로 파이프.
 
-이 Intel Mac(p310_tf)에는 PyObjC가 없고 is_apple_silicon()이 거짓이라 하드웨어에 기대지 않는다: native_wanted·maybe_pipe_capture는 그 이름을 읽는
+PyObjC·VideoToolbox·플랫폼(sys.platform)이 어떻든 어느 OS에서나 돌도록 하드웨어에 기대지 않는다: native_wanted·maybe_pipe_capture는 그 이름을 읽는
 player_playback에서, probe_movie는 probe_for_open·maybe_pipe_capture가 읽는 movie_pipe_source에서, open_native_capture·_pyobjc는 플레이어가
 지연 import하는 mac_native_source에서 바꿔치기한다 (CLAUDE.md 규칙 — 다른 모듈에 다시 내보낸 이름을 바꾸면 닿지 않음). 4K probe는 실제
 ffprobe로 읽은 1080p ProRes 4444(bt709) 공장 클립의 probe를 dataclasses.replace로 3840×2160으로 바꾼 것(게이트는 probe 값만 봄). 창은 conftest의

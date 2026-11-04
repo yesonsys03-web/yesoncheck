@@ -70,13 +70,6 @@ def native_mode(env=os.environ):
     return mode
 
 
-def is_apple_silicon(platform_mod=platform, sys_mod=sys):
-    """Apple Silicon Mac인가: macOS이고 이 프로세스가 arm64로 보고함 (Rosetta 아래의 x86_64 빌드·Windows ARM·Linux ARM은 아님).
-    네이티브 토글(native_wanted)은 더 이 판정을 쓰지 않는다 — 빌드 검사(check_frozen_imports)가 Apple Silicon 러너에서만 도는 디코드
-    확인을 가를 때 쓴다."""
-    return sys_mod.platform == "darwin" and platform_mod.machine() == "arm64"
-
-
 _preferred = (DEFAULT_DECODER, SOURCE_DEFAULT)  # 프로세스 캐시: (디코더, 출처) — set_preferred_decoder가 바꿈
 
 
