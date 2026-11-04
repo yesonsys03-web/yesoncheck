@@ -1,4 +1,4 @@
-"""네이티브 재생 게이트 (yesoncheck/mac_native_gate.py): 토글·Apple Silicon 판정·파일 게이트.
+"""네이티브 재생 게이트 (yesoncheck/mac_native_gate.py): 토글·플랫폼(darwin 전체) 판정·파일 게이트(HDR이 아닌 ProRes는 모두 통과).
 
 판정은 순수 파이썬이라 플랫폼은 SimpleNamespace 대역으로 바꿔 어느 OS에서나 돌린다 (mock은 platform·sys 모양뿐). 파일 게이트는
 실제 ffprobe로 클립 공장(tests/prores_clips.py)의 4K 클립을 읽은 probe를 쓰고(모듈 범위 — 4K 인코드는 한 번씩), 조건 하나씩의
@@ -17,8 +17,8 @@ import pytest
 from tests.prores_clips import make_numbered_clip
 from yesoncheck import mac_native_gate, movie_pipe_source
 from yesoncheck.mac_native_gate import (
-    COLOR_SPACES_OK, HDR_TRANSFERS, NATIVE_MIN_HEIGHT, NATIVE_MIN_WIDTH, NATIVE_MODE_ENV, NATIVE_MODES, is_apple_silicon,
-    native_eligible, native_ineligible_reason, native_mode, native_wanted,
+    HDR_PRIMARIES, HDR_TRANSFERS, NATIVE_CODEC, NATIVE_MODE_ENV, NATIVE_MODES, is_apple_silicon, native_eligible,
+    native_ineligible_reason, native_mode, native_wanted,
 )
 from yesoncheck.movie_pipe_source import probe_movie
 
@@ -35,9 +35,18 @@ def mac(machine):
 
 def test_constants_match_the_documented_toggle():
     assert (NATIVE_MODE_ENV, NATIVE_MODES) == (ENV, ("auto", "on", "off"))
-    assert (NATIVE_MIN_WIDTH, NATIVE_MIN_HEIGHT) == (3840, 2160)
-    assert COLOR_SPACES_OK == ("bt709", "smpte170m", "bt470bg")
+    assert NATIVE_CODEC == "prores"
     assert HDR_TRANSFERS == ("smpte2084", "arib-std-b67")
+    assert HDR_PRIMARIES == "bt2020"
+
+
+REMOVED_CONSTANTS = ("NATIVE_MIN_WIDTH", "NATIVE_MIN_HEIGHT", "NATIVE_PIX_FMTS", "COLOR_SPACES_OK", "COLOR_RANGES_OK", "UNTAGGED")
+
+
+@pytest.mark.parametrize("name", REMOVED_CONSTANTS)
+def test_removed_constants_are_gone(name):
+    """4K·4:4:4·색 태그 조건과 함께 그 상수도 지움 — 남아 있으면 쓰이지 않는 죽은 코드이거나 조건이 되살아날 길."""
+    assert not hasattr(mac_native_gate, name), name
 
 
 @pytest.mark.parametrize("env,expected", [
@@ -66,7 +75,7 @@ def test_native_mode_reads_the_process_environment_by_default(monkeypatch):
         native_mode()
 
 
-# ---------------------------------------------------------------- Apple Silicon·원함
+# ---------------------------------------------------------------- 플랫폼(darwin 전체)·원함
 
 def test_is_apple_silicon_needs_darwin_and_arm64():
     assert is_apple_silicon(*mac("arm64")) is True
@@ -81,12 +90,10 @@ def test_is_apple_silicon_false_off_darwin_even_for_arm_machines(platform_name, 
     assert is_apple_silicon(SimpleNamespace(machine=lambda: machine), SimpleNamespace(platform=platform_name)) is False
 
 
-def test_auto_is_off_on_x86_64_even_on_mac():
-    """Intel Mac(또는 Rosetta 아래 x86_64 빌드)는 auto에서 꺼짐 — 의도."""
-    assert native_wanted({}, *mac("x86_64")) is False
-
-
-def test_auto_on_arm64_mac():
+def test_auto_is_on_for_any_darwin():
+    """auto는 macOS면 어느 칩이든 켬 (Intel Mac·Rosetta 아래 x86_64 빌드도) — 2026-11-04 사용자 결정: 모든 Mac이 QuickTime과 같은 화면.
+    platform.machine()을 다시 보는 쪽으로 되돌아가면 x86_64 줄이 실패."""
+    assert native_wanted({}, *mac("x86_64")) is True
     assert native_wanted({}, *mac("arm64")) is True
 
 
@@ -108,7 +115,8 @@ def test_on_outside_darwin_raises(platform_name):
 
 
 @pytest.mark.parametrize("platform_name,machine", [("win32", "AMD64"), ("linux", "x86_64"), ("linux", "aarch64"), ("win32", "ARM64")])
-def test_auto_is_never_on_off_apple_silicon(platform_name, machine):
+def test_auto_is_off_outside_darwin(platform_name, machine):
+    """macOS 밖은 칩이 무엇이든(ARM 포함) 꺼짐 — VideoToolbox가 없음."""
     assert native_wanted({}, SimpleNamespace(machine=lambda: machine), SimpleNamespace(platform=platform_name)) is False
 
 
@@ -155,12 +163,10 @@ def test_the_factory_clip_is_the_fixture_we_think_it_is(good_4k_probe):
     assert movie_pipe_source.ineligible_reason(probe) is None
 
 
-def test_gate_requires_4k_prores_tagged(good_4k_probe):
-    """좋은 클립은 통과, 크기·색·HDR·코덱 하나씩 어긋나면 그 말이 든 사유. 게이트 조건을 빼면 해당 줄이 실패."""
+def test_gate_accepts_a_good_prores_and_names_codec_and_hdr(good_4k_probe):
+    """좋은 클립은 통과, 코덱·HDR이 어긋나면 그 말이 든 사유. 게이트 조건을 빼면 해당 줄이 실패."""
     assert native_ineligible_reason(good_4k_probe) is None
     assert native_eligible(good_4k_probe) is True
-    assert "4K" in native_ineligible_reason(dataclasses.replace(good_4k_probe, width=1920, height=1080))
-    assert "색" in native_ineligible_reason(dataclasses.replace(good_4k_probe, color_space=""))
     assert "HDR" in native_ineligible_reason(dataclasses.replace(good_4k_probe, color_transfer="smpte2084"))
     assert "코덱" in native_ineligible_reason(dataclasses.replace(good_4k_probe, codec="h264"))
 
@@ -177,21 +183,14 @@ def test_pipe_conditions_are_reused_not_reimplemented(good_4k_probe, monkeypatch
     assert native_ineligible_reason(good_4k_probe) == "① 센티널"
 
 
-def test_not_4k_reason_names_the_size(good_4k_probe):
-    reason = native_ineligible_reason(dataclasses.replace(good_4k_probe, width=1920, height=1080))
-    assert reason == "⑥½ 4K가 아님(1920×1080)"
-
-
-@pytest.mark.parametrize("width,height,passes", [
-    (3840, 2160, True), (3840, 1080, True), (1920, 2160, True), (4096, 2160, True),
-    (3839, 2159, False), (1920, 1080, False), (2560, 1440, False),
-])
-def test_4k_means_width_or_height_reaches_the_minimum(good_4k_probe, width, height, passes):
-    """4K 판정은 너비 3840 이상 또는 높이 2160 이상 (경계 3839×2159는 음성). and로 바뀌면 (3840, 1080) 줄이 실패."""
-    reason = native_ineligible_reason(dataclasses.replace(good_4k_probe, width=width, height=height))
-    assert (reason is None) is passes
-    if not passes:
-        assert reason.startswith("⑥½") and f"{width}×{height}" in reason
+@pytest.mark.parametrize("width,height", [(3840, 2160), (4096, 2160), (1920, 1080), (1280, 720), (320, 180), (3840, 1080), (1920, 2160)])
+@pytest.mark.parametrize("pix_fmt", ["yuv422p10le", "yuv422p12le", "yuv444p10le", "yuv444p12le", "yuva444p10le", "yuva444p12le"])
+def test_gate_accepts_any_prores_size_and_chroma(good_4k_probe, width, height, pix_fmt):
+    """크기(HD·SD·세로·4K)와 크로마(4:2:2·4:4:4·알파, 10·12비트)는 조건이 아님 — 2026-11-04 사용자 결정(모든 ProRes를 QuickTime과 같은
+    VideoToolbox로). 4K나 4:4:4 조건이 되살아나면 해당 줄이 실패."""
+    probe = dataclasses.replace(good_4k_probe, width=width, height=height, pix_fmt=pix_fmt)
+    assert native_ineligible_reason(probe) is None
+    assert native_eligible(probe) is True
 
 
 def test_codec_condition_holds_even_if_the_pipe_codecs_widen(good_4k_probe, monkeypatch):
@@ -202,68 +201,42 @@ def test_codec_condition_holds_even_if_the_pipe_codecs_widen(good_4k_probe, monk
     assert native_ineligible_reason(h264) == "⑦ 코덱이 prores가 아님(h264)"
 
 
-@pytest.mark.parametrize("pix_fmt", ["yuv444p10le", "yuv444p12le", "yuva444p10le", "yuva444p12le"])
-def test_chroma_444_formats_pass_including_alpha(good_4k_probe, pix_fmt):
-    """4:4:4는 10·12비트 모두, 알파(yuva)도 통과 (Ruling 5·6). 목록에서 알파 형식을 빼면 실패."""
-    assert native_ineligible_reason(dataclasses.replace(good_4k_probe, pix_fmt=pix_fmt)) is None
-
-
-@pytest.mark.parametrize("pix_fmt", ["yuv422p10le", "yuv422p12le", "yuv420p", "yuv444p", "rgb24", "unknown", ""])
-def test_anything_but_listed_444_is_negative_with_the_format_in_the_reason(good_4k_probe, pix_fmt):
-    """4:2:2·4:2:0·8비트·모르는 값·빈 값은 음성 — 양성 증거로만 켜짐. 사유에 번호 ⑧과 받은 값."""
-    reason = native_ineligible_reason(dataclasses.replace(good_4k_probe, pix_fmt=pix_fmt))
-    assert reason.startswith("⑧ 4:4:4가 아님(")
-    assert (pix_fmt or "없음") in reason
-
-
 def test_real_alpha_clip_passes(alpha_4k_probe):
-    """알파 트랙이 있는 4444(디코더 쪽 yuva444p12le)는 통과 (Ruling 6) — ffprobe가 실제로 주는 pix_fmt 이름이 목록에 있어야 함."""
+    """알파 트랙이 있는 4444(디코더 쪽 yuva444p12le)는 통과 (Ruling 6) — ffprobe가 실제로 주는 pix_fmt에서도."""
     assert alpha_4k_probe.pix_fmt == "yuva444p12le"
     assert native_ineligible_reason(alpha_4k_probe) is None
 
 
-def test_real_422_clip_is_negative_at_condition_8(hq_422_4k_probe):
-    """공장의 4K ProRes HQ 4:2:2 클립 (Stage 0: 4:2:2는 네이티브 대 파이프 색 차이가 커서 파이프에 남김)."""
+def test_real_422_clip_passes(hq_422_4k_probe):
+    """공장의 4K ProRes HQ 4:2:2 클립도 통과 (옛 test_real_422_clip_is_negative_at_condition_8를 뒤집음). 근거: 실파일 1080p 4:2:2 HQ에서
+    VideoToolbox 대 ffmpeg 파이프는 평균 1.4·최대 73이고 다른 픽셀은 전부 홀수 열 — 색차(4:2:2 → 4:4:4) 수평 보간 필터 하나의 차이이며
+    VideoToolbox 쪽이 QuickTime과 같음."""
     assert hq_422_4k_probe.pix_fmt == "yuv422p10le"
-    assert native_ineligible_reason(hq_422_4k_probe) == "⑧ 4:4:4가 아님(yuv422p10le)"
-    assert native_eligible(hq_422_4k_probe) is False
+    assert native_ineligible_reason(hq_422_4k_probe) is None
+    assert native_eligible(hq_422_4k_probe) is True
 
 
-def test_real_untagged_clip_is_negative_at_condition_9(untagged_4k_probe):
-    """색 태그 없는 4K 4:4:4 클립은 파이프에 남음 (행렬을 추측하지 않음)."""
+def test_real_untagged_clip_passes(untagged_4k_probe):
+    """색 태그 없는 4K 4:4:4 클립도 통과 (옛 test_real_untagged_clip_is_negative_at_condition_9를 뒤집음). 근거: VideoToolbox는 QuickTime처럼
+    태그 없는 HD를 709, SD를 601로 읽음 — 앱 화면이 QuickTime과 같아짐."""
     assert untagged_4k_probe.pix_fmt == "yuv444p12le"
-    reason = native_ineligible_reason(untagged_4k_probe)
-    assert reason is not None and reason.startswith("⑨ 색 태그 없음")
-    assert native_eligible(untagged_4k_probe) is False
+    assert untagged_4k_probe.color_space in ("", "unknown")
+    assert native_ineligible_reason(untagged_4k_probe) is None
+    assert native_eligible(untagged_4k_probe) is True
 
 
-@pytest.mark.parametrize("color_space", ["bt709", "smpte170m", "bt470bg"])
-def test_709_and_601_family_color_spaces_pass(good_4k_probe, color_space):
+@pytest.mark.parametrize("color_space", ["", "unknown", "bt709", "smpte170m", "bt470bg", "smpte240m", "fcc", "rgb", "ycgco"])
+def test_color_space_is_not_a_condition(good_4k_probe, color_space):
+    """행렬 태그(없음·709·601 계열·그 밖)는 거르지 않음 — 거르는 것은 HDR뿐."""
     assert native_ineligible_reason(dataclasses.replace(good_4k_probe, color_space=color_space)) is None
 
 
-@pytest.mark.parametrize("color_space", ["", "unknown"])
-def test_missing_color_tag_is_negative_for_empty_and_unknown(good_4k_probe, color_space):
-    """ffprobe는 태그가 없으면 빈 값 또는 "unknown" — 둘 다 음성, 사유에 받은 값."""
-    reason = native_ineligible_reason(dataclasses.replace(good_4k_probe, color_space=color_space))
-    assert reason == f"⑨ 색 태그 없음(color_space {color_space!r})"
-
-
-@pytest.mark.parametrize("color_space", ["bt2020nc", "bt2020c", "smpte240m", "fcc", "rgb", "ycgco"])
-def test_other_color_spaces_are_negative_naming_the_space(good_4k_probe, color_space):
-    reason = native_ineligible_reason(dataclasses.replace(good_4k_probe, color_space=color_space))
-    assert reason == f"⑨ 색 공간이 bt709/601 계열이 아님({color_space})"
-
-
-@pytest.mark.parametrize("color_range", ["tv", "pc", "", "unknown"])
-def test_known_or_absent_color_range_passes(good_4k_probe, color_range):
-    assert native_ineligible_reason(dataclasses.replace(good_4k_probe, color_range=color_range)) is None
-
-
-@pytest.mark.parametrize("color_range", ["mpeg", "jpeg", "full"])
-def test_unexpected_color_range_is_negative_naming_it(good_4k_probe, color_range):
-    reason = native_ineligible_reason(dataclasses.replace(good_4k_probe, color_range=color_range))
-    assert reason.startswith("⑨ ") and color_range in reason
+def test_color_tags_other_than_hdr_pass(good_4k_probe):
+    """bt2020nc 행렬이어도 전달 함수·원색이 SDR이면 통과 (HDR 판정은 전달 함수·원색이 정함), 범위 mpeg·jpeg·full·tv·pc·없음도 통과."""
+    sdr_2020 = dataclasses.replace(good_4k_probe, color_space="bt2020nc", color_transfer="bt709", color_primaries="bt709")
+    assert native_ineligible_reason(sdr_2020) is None
+    for color_range in ("mpeg", "jpeg", "full", "tv", "pc", "", "unknown"):
+        assert native_ineligible_reason(dataclasses.replace(good_4k_probe, color_range=color_range)) is None, color_range
 
 
 @pytest.mark.parametrize("transfer", ["smpte2084", "arib-std-b67"])
@@ -282,29 +255,38 @@ def test_a_real_hdr_tag_set_reports_hdr_not_just_the_color_space(good_4k_probe):
     assert native_ineligible_reason(hdr) == "⑨ HDR(smpte2084)"
 
 
+@pytest.mark.parametrize("width,height,pix_fmt,color_space", [(1920, 1080, "yuv422p10le", ""), (320, 180, "yuv422p10le", "bt709")])
+def test_hdr_is_negative_whatever_the_size_chroma_or_matrix(good_4k_probe, width, height, pix_fmt, color_space):
+    """HDR 거름은 크기·크로마·행렬과 상관없이 — 조건이 풀린 만큼 HDR 보호가 유일한 색 조건."""
+    probe = dataclasses.replace(good_4k_probe, width=width, height=height, pix_fmt=pix_fmt, color_space=color_space,
+                                color_transfer="arib-std-b67")
+    assert native_ineligible_reason(probe) == "⑨ HDR(arib-std-b67)"
+
+
 def test_sdr_transfer_and_primaries_tags_pass(good_4k_probe):
     sdr = dataclasses.replace(good_4k_probe, color_transfer="bt709", color_primaries="bt709")
     assert native_ineligible_reason(sdr) is None
     assert native_ineligible_reason(dataclasses.replace(good_4k_probe, color_transfer="", color_primaries="unknown")) is None
 
 
-def test_the_first_failing_condition_wins_in_order(good_4k_probe):
-    """여러 조건이 한꺼번에 어긋나면 번호가 앞선 것: ⑥½ → ⑧ → ⑨. 순서가 바뀌면 해당 줄이 실패."""
-    bad = dataclasses.replace(good_4k_probe, width=1920, height=1080, pix_fmt="yuv422p10le", color_space="", color_transfer="smpte2084")
-    assert native_ineligible_reason(bad).startswith("⑥½")
-    bad = dataclasses.replace(bad, width=3840, height=2160)
-    assert native_ineligible_reason(bad).startswith("⑧")
-    bad = dataclasses.replace(bad, pix_fmt="yuv444p12le")
+def test_the_first_failing_condition_wins_in_order(good_4k_probe, monkeypatch):
+    """여러 조건이 한꺼번에 어긋나면 번호가 앞선 것: ①~⑥ → ⑦ → ⑨. 순서가 바뀌면 해당 줄이 실패."""
+    bad = dataclasses.replace(good_4k_probe, nb_frames=None, codec="h264", color_transfer="smpte2084")
+    assert native_ineligible_reason(bad).startswith("①")
+    monkeypatch.setattr(movie_pipe_source, "PIPE_CODECS", ("prores", "h264"))
+    bad = dataclasses.replace(bad, nb_frames=good_4k_probe.nb_frames)
+    assert native_ineligible_reason(bad).startswith("⑦")
+    bad = dataclasses.replace(bad, codec="prores")
     assert native_ineligible_reason(bad).startswith("⑨")
     assert native_eligible(bad) is False
 
 
 def test_every_reason_leads_with_its_condition_number(good_4k_probe):
-    changes = [dict(nb_frames=None), dict(width=640, height=360), dict(pix_fmt="yuv422p10le"), dict(color_space=""),
-               dict(color_range="jpeg"), dict(color_transfer="arib-std-b67"), dict(color_primaries="bt2020")]
+    """남은 조건 번호는 ①~⑥·⑦·⑨ (⑥½·⑧은 지워짐 — 번호는 다시 매기지 않음: 기록·문서의 ⑨ HDR이 그대로 읽히게)."""
+    changes = [dict(nb_frames=None), dict(codec="h264"), dict(color_transfer="arib-std-b67"), dict(color_primaries="bt2020")]
     for change in changes:
         reason = native_ineligible_reason(dataclasses.replace(good_4k_probe, **change))
-        assert reason is not None and reason[0] in "①②③④⑤⑥⑦⑧⑨", (change, reason)
+        assert reason is not None and reason[0] in "①②③④⑤⑥⑦⑨", (change, reason)
 
 
 def test_no_video_track_probe_is_negative(good_4k_probe):
@@ -367,6 +349,8 @@ def test_launch_rejects_on_outside_macos(qapp, monkeypatch):
     assert calls == [((), {})]  # 시작 때 한 번, 기본 인자(이 프로세스의 환경·플랫폼)로
 
 
-def test_conftest_clears_the_toggle_at_import():
-    """개발자 셸에 토글이 남아 있어도 시험은 기본(auto)에서 시작 — conftest가 import 때 지움."""
-    assert ENV not in os.environ
+def test_conftest_pins_the_toggle_off():
+    """개발자 셸에 토글이 남아 있어도 시험은 off에서 시작 — conftest가 import 때 off로 고정 (옛 test_conftest_clears_the_toggle_at_import 대체).
+    게이트가 모든 ProRes·모든 Mac으로 넓어져 auto면 Mac에서 기존 플레이어 시험의 작은 ProRes 클립이 네이티브로 열리기 때문
+    (YESONCHECK_FRAME_CACHE=ring 고정과 같은 이유). 네이티브를 겨누는 시험은 on을 명시하거나 native_wanted를 바꿔치기."""
+    assert os.environ[ENV] == "off"

@@ -44,7 +44,8 @@ REAL_OPEN_NATIVE = mac_native_source.open_native_capture  # 바꿔치기 전의 
 
 @pytest.fixture(scope="module")
 def clip_1080(tmp_path_factory):
-    """1920×1080 ProRes 4444(bt709) 12장 — 파이프 게이트 양성, 네이티브 게이트는 ⑥½(4K 아님)에서 음성."""
+    """1920×1080 ProRes 4444(bt709) 12장 — 파이프 게이트·네이티브 게이트 둘 다 양성 (크기 조건 없음). 네이티브 음성을 겨누는 시험은 이
+    probe에 HDR 태그를 붙여 쓴다 (파이프 게이트는 색 태그를 보지 않으므로 진짜 파이프가 그대로 열림)."""
     path = str(tmp_path_factory.mktemp("native_open_1080") / "clip_1080.mov")
     make_numbered_clip(path, count=12, fps="24", profile="4", pix_fmt="yuv444p10le", width=1920, height=1080, color="bt709")
     return path
@@ -304,12 +305,30 @@ def test_unexpected_native_error_propagates(player, dialogs, rig, clip_1080, pro
 
 # ---------------------------------------------------------------- 음성: 사유 한 줄 뒤 파이프
 
+def test_small_hd_prores_opens_native_now(player, dialogs, rig, clip_1080, probe_1080, capsys):
+    """1080p ProRes 4444(실제 ffprobe, 크기를 키우지 않음)도 네이티브 양성 — 4K 조건이 없어진 뒤 (옛 ⑥½ 음성 시험을 뒤집음): open_native_capture가
+    준 캡처가 그대로 돌아오고 파이프는 부르지 않음, ffprobe 한 번, 그 probe 그대로 넘김.
+
+    깨지는 변경: 크기 조건이 되살아나면 파이프 대역의 AssertionError."""
+    native_cap = SentinelCapture("native")
+    rig.probe, rig.native, rig.pipe = probe_1080, native_cap, AssertionError("파이프가 불렸다")
+    capsys.readouterr()
+
+    assert player._open_movie_capture(clip_1080) is native_cap
+
+    assert rig.probes == [clip_1080]
+    assert len(rig.opens) == 1 and rig.opens[0][1] is probe_1080
+    assert rig.pipes == [] and dialogs.messages == []
+    assert play_lines(capsys.readouterr().out) == []
+
+
 def test_ineligible_logs_and_uses_pipe(player, dialogs, rig, clip_1080, capsys):
-    """1080p ProRes 4444(실제 ffprobe) → 네이티브 음성 사유 한 줄 `… 아님 — ⑥½ 4K가 아님(1920×1080): <이름>` 뒤 진짜 파이프가 같은 probe로 열림 —
-    ffprobe 한 번, 창 없음, open_native_capture는 불리지 않음.
+    """HDR 태그(전달 함수 smpte2084)를 단 1080p ProRes 4444(실제 ffprobe + 태그만 바꾼 probe) → 네이티브 음성 사유 한 줄
+    `… 아님 — ⑨ HDR(smpte2084): <이름>` 뒤 진짜 파이프가 같은 probe로 열림 — ffprobe 한 번, 창 없음, open_native_capture는 불리지 않음.
 
     깨지는 변경: 음성 기록 줄을 빼면 줄 단언; probe를 파이프에 넘기지 않으면 maybe_pipe_capture가 다시 probe해 probes가 둘;
     게이트를 보지 않고 늘 네이티브를 열면 _refuse_native."""
+    rig.probe = lambda path: dataclasses.replace(probe_movie(path), color_transfer="smpte2084")
     capsys.readouterr()
 
     cap = player._open_movie_capture(clip_1080)
@@ -321,7 +340,7 @@ def test_ineligible_logs_and_uses_pipe(player, dialogs, rig, clip_1080, capsys):
     assert rig.probes == [clip_1080] and rig.opens == []
     assert len(rig.pipes) == 1 and rig.pipes[0][1]["probe"] is rig.probed[0]
     assert play_lines(capsys.readouterr().out) == [
-        "[재생] 네이티브(VideoToolbox): 아님 — ⑥½ 4K가 아님(1920×1080): clip_1080.mov",
+        "[재생] 네이티브(VideoToolbox): 아님 — ⑨ HDR(smpte2084): clip_1080.mov",
         "[재생] ffmpeg 파이프: clip_1080.mov (prores 1920×1080 24fps, 프레임 12)",
     ]
     assert dialogs.messages == []

@@ -310,9 +310,9 @@ def test_native_frame_problem_names_a_wrong_dtype():
 
 
 def test_frozen_check_native_decode_fails_when_the_gate_rejects_the_clip(fake_arm64):
-    """번들 ffmpeg가 만든 클립이 네이티브 게이트를 통과하지 못하면(예: 4:2:2) 캡처를 열지 않고 사유째 실패."""
-    fake_arm64.probe = eligible_probe(pix_fmt="yuv422p10le")
-    with pytest.raises(SystemExit, match="⑧ 4:4:4가 아님"):
+    """번들 ffmpeg가 만든 클립이 네이티브 게이트를 통과하지 못하면(예: HDR 태그) 캡처를 열지 않고 사유째 실패."""
+    fake_arm64.probe = eligible_probe(color_transfer="smpte2084")
+    with pytest.raises(SystemExit, match=r"⑨ HDR\(smpte2084\)"):
         cfi.exercise_native_decode()
     assert fake_arm64.captures == []
 

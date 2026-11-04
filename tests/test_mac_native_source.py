@@ -32,7 +32,7 @@ import numpy as np  # noqa: E402
 from tests import prores_clips  # noqa: E402
 from yesoncheck import error_window, mac_native_source  # noqa: E402
 from yesoncheck.frame_handles import native_surface_of, whole_surface_handle  # noqa: E402
-from yesoncheck.mac_native_gate import NATIVE_PIX_FMTS, native_ineligible_reason  # noqa: E402
+from yesoncheck.mac_native_gate import native_ineligible_reason  # noqa: E402
 from yesoncheck.mac_native_source import (  # noqa: E402
     NATIVE_FAILURE_HEADLINE, NATIVE_KEEP_BEHIND, NATIVE_LOG_PREFIX, NATIVE_READ_TIMEOUT_S, NATIVE_READAHEAD,
     NATIVE_READER_THREAD, NATIVE_SEEK_FORWARD_MAX, NativeCaptureError, NativeVTCapture, open_native_capture,
@@ -206,11 +206,11 @@ def test_colors_within_4_of_pipe(clip_name, request):
 
 def test_alpha_clip_draws_opaque_or_is_ineligible(alpha_clip):
     """알파 클립(왼쪽 절반 알파 0): VideoToolbox BGRA가 straight(Stage 0)라 알파를 무시하고 불투명하게 그리면 파이프와 같은 그림 —
-    그래서 게이트는 알파 4:4:4를 받는다(NATIVE_PIX_FMTS에 yuva). 깨지는 변경: 출력이 premultiplied로 바뀜(알파 0 아래 BGR이 0) —
+    그래서 게이트는 알파 4:4:4를 받는다(크기·크로마 조건이 없고 HDR만 거름). 깨지는 변경: 출력이 premultiplied로 바뀜(알파 0 아래 BGR이 0) —
     그때는 이 시험이 실패하고 게이트가 알파를 음성으로 돌려야 한다."""
     probe = probe_movie(alpha_clip)
-    assert probe.pix_fmt in NATIVE_PIX_FMTS
-    assert "알파" not in (native_ineligible_reason(probe) or "")  # (이 클립은 4K가 아니라 ⑥½로 음성 — 알파 때문이 아님)
+    assert probe.pix_fmt.startswith("yuva444p")
+    assert native_ineligible_reason(probe) is None  # (이 클립은 4K가 아니어도 통과 — 알파 클립이 게이트 밖으로 밀리지 않음)
     cap = NativeVTCapture(alpha_clip, probe)
     try:
         frames = read_until_false(cap)

@@ -17,7 +17,10 @@ os.environ.pop("YESONCHECK_MOVIE_SOURCE", None)
 # 전체 보관을 시험하는 쪽이 YESONCHECK_FRAME_CACHE=auto를 명시해 켠다
 os.environ["YESONCHECK_FRAME_CACHE"] = "ring"
 os.environ.pop("YESONCHECK_VIDEO_ITEM", None)
-os.environ.pop("YESONCHECK_MAC_NATIVE", None)
+# 네이티브 재생 토글도 pop이 아니라 off로 고정: 게이트가 HDR이 아닌 모든 ProRes·모든 Mac으로 넓어져(auto = darwin이면 켬) 지우기만 하면
+# Mac에서 기존 플레이어 시험의 작은(320×180) ProRes 클립이 VideoToolbox로 열려 파이프·cv2 단언이 깨진다. 네이티브를 겨누는 시험이
+# YESONCHECK_MAC_NATIVE=on을 명시하거나 native_wanted를 바꿔치기해 켠다
+os.environ["YESONCHECK_MAC_NATIVE"] = "off"
 
 # fetch_ffmpeg.sh / fetch_ffmpeg_windows.ps1로 받은 정적 ffmpeg를 PATH 맨 앞에 둠
 _FFMPEG_DIR = os.path.join(
