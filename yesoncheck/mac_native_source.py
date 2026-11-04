@@ -74,6 +74,7 @@ NATIVE_READAHEAD 4장 + 링 8장 + 읽기 스레드가 손에 든 1장 ≈ 13장
 """
 
 import collections
+import ctypes
 import math
 import os
 import sys
@@ -110,6 +111,11 @@ _STOPPED = "stopped"  # 세션을 멈춤 (release·죽음·재시작)
 _IMPORT_LOCK = threading.Lock()
 _FRAMEWORKS = None  # _pyobjc()가 처음 부를 때 채움
 
+VIDEOTOOLBOX_FRAMEWORK = "/System/Library/Frameworks/VideoToolbox.framework/VideoToolbox"  # VTIsHardwareDecodeSupported를 ctypes로 (Ruling 15)
+_HW_PROBE_LOCK = threading.Lock()
+_HW_PROBE = None  # ctypes로 묶은 VTIsHardwareDecodeSupported (_ctypes_hw_probe가 처음 부를 때)
+_HW_PROBE_FAILURE = None  # 묶지 못한 사유 — 기록에 한 번 찍은 뒤 다시 열어 보지 않음
+
 
 class NativeCaptureError(Exception):
     """네이티브 캡처를 열지 못함 (생성자·open_native_capture만 올림 — 그 뒤의 실패는 캡처 안에서 끝남). reason: 원인, path: 파일."""
@@ -122,7 +128,7 @@ class NativeCaptureError(Exception):
 
 class _Frameworks:
     """_pyobjc()가 불러온 PyObjC 모듈 묶음. VideoToolbox는 PyObjC 래퍼(pyobjc-framework-VideoToolbox)가 없으면 None (의존성을 더하지
-    않음 — hardware_decode_supported가 None이고 열기 기록이 hw=?)."""
+    않음 — 빌드에는 넣지 않으므로 _hardware_decode_supported가 ctypes로 프레임워크를 직접 부름)."""
 
     def __init__(self, objc, AVFoundation, CoreMedia, Foundation, Quartz, VideoToolbox):  # noqa: N803 (모듈 이름 그대로)
         self.objc = objc
@@ -399,11 +405,37 @@ class _ReaderSession:
             self.cond.notify_all()
 
 
+def _ctypes_hw_probe():
+    """VideoToolbox.framework의 VTIsHardwareDecodeSupported를 ctypes로 묶은 함수 (C 서명 Boolean(CMVideoCodecType) → c_bool(c_uint32);
+    처음 부를 때 잠금 아래 한 번 묶고 다시 씀). 프레임워크를 열지 못하거나(OSError) 함수가 없으면(AttributeError) None — 그 사유를 기록에
+    한 줄로 한 번만 찍고 다시 열어 보지 않음(조용한 hw=? 금지, 열 때마다 같은 줄이 쌓이지 않게). 그 밖의 예외는 그대로 올림.
+    macOS(네이티브 캡처를 연 뒤 — 생성자가 PyObjC를 먼저 부름)에서만 불린다."""
+    global _HW_PROBE, _HW_PROBE_FAILURE
+    with _HW_PROBE_LOCK:
+        if _HW_PROBE is None and _HW_PROBE_FAILURE is None:
+            try:
+                function = ctypes.CDLL(VIDEOTOOLBOX_FRAMEWORK).VTIsHardwareDecodeSupported
+            except (OSError, AttributeError) as exc:
+                _HW_PROBE_FAILURE = f"{type(exc).__name__}: {exc}"
+                print(f"{NATIVE_LOG_PREFIX} 하드웨어 디코드 여부를 알 수 없음(hw=?) — {VIDEOTOOLBOX_FRAMEWORK}의 "
+                      f"VTIsHardwareDecodeSupported를 열지 못했습니다: {_HW_PROBE_FAILURE}", flush=True)
+            else:
+                function.restype = ctypes.c_bool
+                function.argtypes = [ctypes.c_uint32]
+                _HW_PROBE = function
+        return _HW_PROBE
+
+
 def _hardware_decode_supported(fw, codec_type):
-    """VTIsHardwareDecodeSupported(코덱) → bool, PyObjC VideoToolbox 래퍼가 없으면 None (기록 hw=?)."""
-    if fw.VideoToolbox is None:
+    """VTIsHardwareDecodeSupported(코덱 FourCharCode 정수 — 'ap4h'·'apch' …) → bool (기록 hw=yes|no). PyObjC VideoToolbox 래퍼가 있으면
+    그것을, 없으면(빌드에는 넣지 않음 — Ruling 15) ctypes로 프레임워크를 직접(_ctypes_hw_probe). 프레임워크를 열지 못하면 None (기록 hw=?
+    — 사유는 _ctypes_hw_probe가 한 번 찍음)."""
+    if fw.VideoToolbox is not None:
+        return bool(fw.VideoToolbox.VTIsHardwareDecodeSupported(codec_type))
+    function = _ctypes_hw_probe()
+    if function is None:
         return None
-    return bool(fw.VideoToolbox.VTIsHardwareDecodeSupported(codec_type))
+    return bool(function(codec_type))
 
 
 class NativeVTCapture:
