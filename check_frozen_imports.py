@@ -6,7 +6,7 @@
 실패하므로 빌드 단계에서 잡습니다.
 
 실행하는 경로:
-- yesoncheck 소스에 있는 모든 import (함수 안의 지연 import 포함)
+- yesoncheck 소스에 있는 모든 import (함수 안의 지연 import 포함 — `from yesoncheck import X`의 X 모듈도)
 - PaddleOCR 생성 + 인식 (앱의 King 모드 설정, 모델이 없으면 ~/.paddleocr에 내려받음)
 - paddle 3.0 입력 크기 변화 버그 회피(yesoncheck.workers.guard_paddle_buffer_growth)가 통하는지
 - PySceneDetect 씬 감지 (임시 합성 영상)
@@ -15,16 +15,22 @@
 - 이미지 시퀀스: TGA(RLE)·EXR 프레임 한 장씩 디코딩 (yesoncheck.sequence_source.decode_frame, 메모리에서 만든 작은 프레임).
   이 환경의 cv2에 OpenEXR 코덱이 꺼져 있으면 EXR은 건너뛰고 TGA만 확인 (빌드는 실패시키지 않고, 건너뛴 사실을 결과 줄에 적음).
   PIL 이미지 플러그인(PIL.TgaImagePlugin 등)은 지연 import라 소스 import만으로는 쓰인 모듈에 안 잡히므로, 실제로 디코딩해서 앱에 있는지 대조함
+- 네이티브 재생(Apple Silicon만): 번들 ffmpeg(vendor/ffmpeg/arm64)로 만든 4K ProRes 4444 6장 클립을 yesoncheck.mac_native_source.NativeVTCapture
+  (VideoToolbox → IOSurface 32BGRA)로 3장 읽음 — PyObjC(objc·AVFoundation·CoreMedia·Quartz …)를 import만이 아니라 실제로 써서 그 모듈이 앱에
+  있는지 대조함. Intel Mac·Windows는 건너뛰고 건너뛴 사실을 결과 줄에 적음 (이 빌드에는 PyObjC가 없음 — arm64 lock에만)
 
 사용법: python check_frozen_imports.py <앱 번들(.app) 또는 Windows 앱 폴더(dist\\YesonCheck_Autocut)>
 누락이 하나라도 있으면 목록을 출력하고 종료 코드 1로 끝납니다.
 """
 
 import ast
+import contextlib
 import glob
 import importlib
 import os
+import platform
 import plistlib
+import subprocess
 import sys
 import sysconfig
 import tempfile
@@ -71,9 +77,14 @@ class BlockExcluded:
 
 
 def source_imports():
-    """yesoncheck 패키지 소스의 모든 절대 import 모듈 이름을 모읍니다."""
+    """yesoncheck 패키지 소스의 모든 절대 import 모듈 이름을 모읍니다.
+
+    `from yesoncheck import X`에서 X가 이 패키지의 모듈 파일(yesoncheck/X.py)이면 yesoncheck.X도 넣음: 함수 안의 지연 import
+    (player_playback의 `from yesoncheck import mac_native_source`)는 그 함수가 돌지 않으면 X를 불러오지 않아 '실행에 쓰인 모듈'에
+    안 잡히고, 앱에 빠져도 모른다. 모듈이 아닌 이름(상수 등)은 넣지 않음."""
+    package = os.path.join(PROJECT_ROOT, "yesoncheck")
     names = set()
-    for path in glob.glob(os.path.join(PROJECT_ROOT, "yesoncheck", "*.py")):
+    for path in glob.glob(os.path.join(package, "*.py")):
         with open(path, encoding="utf-8") as fh:
             tree = ast.parse(fh.read(), path)
         for node in ast.walk(tree):
@@ -81,6 +92,9 @@ def source_imports():
                 names.update(alias.name for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
                 names.add(node.module)
+                if node.module == "yesoncheck":
+                    names.update(f"yesoncheck.{alias.name}" for alias in node.names
+                                 if os.path.isfile(os.path.join(package, f"{alias.name}.py")))
     return sorted(names)
 
 
@@ -127,6 +141,124 @@ def exercise_sequence_decode():
     return decoded
 
 
+NATIVE_SKIPPED = "네이티브 디코드 건너뜀 (Apple Silicon 아님)"
+NATIVE_CLIP_SIZE = (3840, 2160)  # (너비, 높이) — 네이티브 게이트 ⑥½(4K)를 통과하는 UHD
+NATIVE_CLIP_FRAMES = 6  # 검사 클립의 장 수
+NATIVE_READ_FRAMES = 3  # NativeVTCapture로 읽는 장 수
+NATIVE_MIN_STD = 10  # testsrc2는 알록달록해 채널별 표준 편차가 큼 — 가장 큰 것도 이 값 이하면 빈(한 색) 프레임으로 봄
+_HW_LABELS = {True: "yes", False: "no", None: "?"}  # hardware_decode_supported → 결과 줄 (열기 기록 줄의 hw=와 같은 낱말)
+
+
+def vendored_ffmpeg_dir():
+    """앱에 넣는 정적 ffmpeg·ffprobe 폴더 vendor/ffmpeg/<platform.machine()> (fetch_ffmpeg.sh가 받음 — CI는 빌드 전에 받음)."""
+    return os.path.join(PROJECT_ROOT, "vendor", "ffmpeg", platform.machine())
+
+
+@contextlib.contextmanager
+def vendored_ffmpeg_on_path():
+    """번들 ffmpeg 폴더를 PATH 맨 앞에 둔 동안 — 번들 ffmpeg 경로를 내줌. movie_pipe_source.probe_movie는 소스 환경에서 ffprobe를
+    PATH에서 찾으므로(external_tools.tool_path → shutil.which) 이렇게 해야 번들 ffprobe로 probe함. ffmpeg·ffprobe 중 하나라도 없거나,
+    PATH를 바꿨는데도 앱 코드(movie_pipe_source.ffprobe_path — probe_movie가 읽는 이름)가 다른 ffprobe를 고르면 SystemExit: PATH의
+    다른 ffmpeg로 조용히 대신하지 않음. 끝나면(실패해도) PATH를 되돌림."""
+    from yesoncheck import movie_pipe_source
+
+    folder = vendored_ffmpeg_dir()
+    tools = {name: os.path.join(folder, name) for name in ("ffmpeg", "ffprobe")}
+    for name, path in tools.items():
+        if not os.path.isfile(path):
+            raise SystemExit(f"네이티브 디코드 검사에 쓸 번들 {name}이(가) 없습니다: {path} (./fetch_ffmpeg.sh로 받으세요 — PATH의 다른 {name}로 대신하지 않음)")
+    saved = os.environ.get("PATH")
+    os.environ["PATH"] = folder + (os.pathsep + saved if saved else "")
+    try:
+        found = movie_pipe_source.ffprobe_path()
+        if os.path.realpath(found) != os.path.realpath(tools["ffprobe"]):
+            raise SystemExit(f"PATH 맨 앞에 번들 폴더({folder})를 뒀는데도 앱 코드가 다른 ffprobe를 골랐습니다: {found}")
+        yield tools["ffmpeg"]
+    finally:
+        if saved is None:
+            os.environ.pop("PATH", None)
+        else:
+            os.environ["PATH"] = saved
+
+
+def make_native_clip(ffmpeg, path):
+    """네이티브 게이트를 통과하는 클립을 path에 만듦: 4K ProRes 4444(ap4h — 디코더는 yuv444p12le로 보고) bt709 태그, NATIVE_CLIP_FRAMES장,
+    ffmpeg의 testsrc2(글꼴 없이 그리는 알록달록한 시험 화면). 시험용 클립 공장(tests/prores_clips.py)은 쓰지 않음 — 빌드 검사는 tests/를
+    불러오지 않는다. ffmpeg가 실패하면 명령·stderr째 SystemExit."""
+    width, height = NATIVE_CLIP_SIZE
+    command = [ffmpeg, "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", f"testsrc2=size={width}x{height}:rate=24",
+               "-frames:v", str(NATIVE_CLIP_FRAMES), "-c:v", "prores_ks", "-profile:v", "4", "-pix_fmt", "yuv444p10le",
+               "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", path]
+    proc = subprocess.run(command, capture_output=True, check=False)
+    if proc.returncode != 0:
+        raise SystemExit(f"번들 ffmpeg로 네이티브 디코드 검사 클립을 만들지 못했습니다 (종료 코드 {proc.returncode})\n"
+                         f"명령: {command}\n{proc.stderr.decode('utf-8', 'replace')}")
+
+
+def native_frame_problem(ok, frame, index):
+    """NativeVTCapture의 index번째 read() 결과가 기대와 다르면 그 이유 한 줄, 맞으면 None. 기대: 4K (높이, 너비, 4) uint8 BGRX이고,
+    표면 전체의 IOSurface 손잡이(frame_handles.whole_surface_handle — 32BGRA 표면을 복사 없이 씌운 뷰)가 있고 그 번호가 index이며,
+    그림이 한 색이 아님(testsrc2 — 빈 표면을 거름)."""
+    import numpy as np
+
+    from yesoncheck.frame_handles import whole_surface_handle
+
+    width, height = NATIVE_CLIP_SIZE
+    if not ok or frame is None:
+        return f"{index}번째 read()가 프레임을 주지 않았습니다 ({ok}, {frame!r})"
+    if frame.shape != (height, width, 4) or frame.dtype != np.uint8:
+        return f"{index}번째 프레임의 모양·형이 {frame.shape} {frame.dtype}입니다 (기대 ({height}, {width}, 4) uint8)"
+    handle = whole_surface_handle(frame)
+    if handle is None:
+        return f"{index}번째 프레임에 IOSurface 표면 전체의 손잡이가 없습니다 (frame_handles.whole_surface_handle이 None — 복사본이거나 조각)"
+    if handle.index != index:
+        return f"{index}번째 프레임의 번호(PTS)가 {handle.index}입니다"
+    # 채널마다의 표준 편차 중 가장 큰 값: 한 색(어느 색이든)이면 셋 다 0. 8칸마다 한 점이면 충분 (4K 전체를 실수로 바꾸면 수백 MB)
+    sample = np.asarray(frame)[::8, ::8, :3].reshape(-1, 3).astype(np.float32)
+    spread = float(sample.std(axis=0).max())
+    if spread <= NATIVE_MIN_STD:
+        return f"{index}번째 프레임이 거의 한 색입니다 (채널별 표준 편차 최대 {spread:.1f} ≤ {NATIVE_MIN_STD} — testsrc2는 알록달록해야 함)"
+    return None
+
+
+def exercise_native_decode():
+    """Apple Silicon이면 네이티브 재생 경로(VideoToolbox → IOSurface 32BGRA, yesoncheck.mac_native_source.NativeVTCapture)를 실제로 돌림.
+    결과 줄(main()이 그대로 출력)을 돌려줌: "네이티브 디코드: VideoToolbox 3장 3840×2160 32BGRA (hw=yes|no|?)".
+
+    소스 import(source_imports)가 PyObjC 모듈(objc·AVFoundation·CoreMedia·Foundation·Quartz)을 불러오기는 하지만, 그것만으로는 네이티브
+    재생이 실제로 거치는 길(_pyobjc의 메타데이터 등록·AVAssetReader·CVPixelBuffer 잠금·IOSurface 손잡이)이 이 빌드 환경에서 도는지,
+    그 길이 지연으로 부르는 모듈까지 앱에 있는지 모른다(스펙 §5.9) — 그래서 번들 ffmpeg로 임시 폴더에 4K 4444 클립을 만들어
+    (make_native_clip) probe → 네이티브 게이트 확인 → NativeVTCapture로 NATIVE_READ_FRAMES장을 읽고(native_frame_problem) release한다.
+    Apple Silicon 판정은 토글 auto와 같은 규칙(mac_native_gate.is_apple_silicon — darwin이고 machine()이 arm64). 그 밖(Intel Mac·Windows —
+    PyObjC가 없는 빌드)은 NATIVE_SKIPPED를 돌려줌. 틀린 결과·게이트 음성·번들 ffmpeg 없음은 SystemExit, 캡처가 내는 오류(NativeCaptureError —
+    PyObjC 없음 등)는 잡지 않고 그대로 올림 (스택 트레이스째 검사 실패). 부르기 전에 PROJECT_ROOT가 sys.path에 있어야 함."""
+    from yesoncheck import mac_native_gate
+
+    if not mac_native_gate.is_apple_silicon():
+        return NATIVE_SKIPPED
+    from yesoncheck import mac_native_source, movie_pipe_source
+
+    width, height = NATIVE_CLIP_SIZE
+    with tempfile.TemporaryDirectory() as tmp, vendored_ffmpeg_on_path() as ffmpeg:
+        path = os.path.join(tmp, "native_4k_4444.mov")
+        make_native_clip(ffmpeg, path)
+        probe = movie_pipe_source.probe_movie(path)
+        reason = mac_native_gate.native_ineligible_reason(probe)
+        if reason is not None:
+            raise SystemExit(f"네이티브 디코드 검사 클립이 네이티브 게이트를 통과하지 못했습니다 — {reason}: {probe}")
+        capture = mac_native_source.NativeVTCapture(path, probe)
+        try:
+            for index in range(NATIVE_READ_FRAMES):
+                ok, frame = capture.read()
+                problem = native_frame_problem(ok, frame, index)
+                if problem:
+                    raise SystemExit(f"네이티브 디코드(VideoToolbox) 결과가 다릅니다: {problem}")
+            hw = _HW_LABELS[capture.hardware_decode_supported]
+        finally:
+            capture.release()
+    return f"네이티브 디코드: VideoToolbox {NATIVE_READ_FRAMES}장 {width}×{height} 32BGRA (hw={hw})"
+
+
 def exercise_app():
     """앱이 실행 중에 거치는 경로를 소스 환경에서 실행합니다."""
     sys.path.insert(0, PROJECT_ROOT)
@@ -141,6 +273,7 @@ def exercise_app():
             skipped.append(f"{name} ({exc})")
 
     frame_formats = exercise_sequence_decode()  # 가볍고 PIL 플러그인 누락을 바로 잡으므로 느린 OCR 앞에서
+    native = exercise_native_decode()  # 같은 이유로 OCR 앞에서 (Apple Silicon만 몇 초, 그 밖은 건너뜀 한 줄)
 
     import cv2
     import numpy as np
@@ -198,7 +331,7 @@ def exercise_app():
     cuts = [segment["start_frame"] for segment in segments]
     if cuts != THREE_SHOT_STARTS:
         raise SystemExit(f"TransNetV2 씬 감지 결과가 다릅니다: 씬 시작 {cuts} (기대 {THREE_SHOT_STARTS})")
-    return texts, cuts, skipped, frame_formats
+    return texts, cuts, skipped, frame_formats, native
 
 
 def frozen_contents(bundle):
@@ -333,7 +466,7 @@ def main():
     bundle = sys.argv[1]
 
     baseline = set(sys.modules)  # 인터프리터 시작 시 모듈(.pth 포함)은 앱과 무관
-    texts, cuts, skipped, frame_formats = exercise_app()
+    texts, cuts, skipped, frame_formats, native = exercise_app()
     used = {name: mod for name, mod in sys.modules.items() if name not in baseline and mod is not None}
 
     modules, files = frozen_contents(bundle)
@@ -379,7 +512,8 @@ def main():
         elif rel not in files:
             missing.append(f"{name} (앱에 {rel} 없음)")
 
-    print(f"앱 경로 실행: OCR 결과 {texts}, 애니매틱2(TransNetV2) 씬 시작 {cuts}, 시퀀스 프레임 디코딩 {frame_formats}, 사용 모듈 {len(used)}개")
+    print(f"앱 경로 실행: OCR 결과 {texts}, 애니매틱2(TransNetV2) 씬 시작 {cuts}, 시퀀스 프레임 디코딩 {frame_formats}, {native}, "
+          f"사용 모듈 {len(used)}개")
     if aliases:
         print(f"TensorFlow 별칭 모듈 {len(aliases)}개 (같은 파일이 앱에는 실제 이름으로 들어 있어 통과):")
         for name, real_name in aliases:
