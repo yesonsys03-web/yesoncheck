@@ -555,3 +555,494 @@ def test_raster_update_frame_still_sets_a_pixmap(qapp, monkeypatch):
     monkeypatch.setattr(widget.video_item, "setPixmap", lambda pm: (calls.append(pm), real(pm)))
     widget.updateFrame(np.full((4, 6, 3), 3, np.uint8), None)
     assert len(calls) == 1 and calls[0].width() == 6
+
+
+# ---------------------------------------------------------------- IOSurface 그리기 (set_surface·set_sides — 가짜 GL·가짜 CGL에 기록; 실제 화면은 cocoa의 yc_app_pixel_check 몫)
+
+import gc
+import weakref
+from types import SimpleNamespace
+
+from PyQt5.QtWidgets import QApplication
+
+from yesoncheck import frame_handles, gl_surface
+from yesoncheck.gl_surface import GL_BGRA, GL_RGBA, GL_SCISSOR_TEST, GL_TEXTURE_RECTANGLE_ARB, GL_UNSIGNED_INT_8_8_8_8_REV
+
+CGL_CTX = 0xC61
+ENTRY = ("check_error", ("native 진입 — 이전 GL 호출이 남긴 오류",))
+CORNERS = [(20, 10), (60, 10), (60, 30), (20, 30)]  # 아이템 (0,0)(4,0)(4,2)(0,2) × 10 + (20, 10) — fake_gl_item의 페인터
+UNIT = ((0, 0), (1, 0), (1, 1), (0, 1))  # 2D 텍스처 좌표
+
+
+class FakeCGL:
+    """gl_surface.CGLFunctions 대역 — 호출을 RecordingGL 기록에 함께 남겨 GL 호출과의 순서를 본다. context가 current CGL 컨텍스트(0이면 없음)."""
+    def __init__(self, gl):
+        self.gl, self.context = gl, CGL_CTX
+    def CGLGetCurrentContext(self):
+        self.gl.calls.append(("CGLGetCurrentContext", ()))
+        return self.context
+    def CGLTexImageIOSurface2D(self, *args):
+        self.gl.calls.append(("CGLTexImageIOSurface2D", args))
+        return 0
+
+
+class Owner:
+    """keepalive 대역(버퍼 주인) — weakref로 수명을 본다."""
+
+
+def native(w=4, h=2, surface=0x5000, pad=16):
+    """w×h BGRX 네이티브 프레임(읽기 전용 — 디코더처럼) — 행 끝 pad 바이트 패딩(진짜 CVPixelBuffer처럼 bytesPerRow > 너비×4)."""
+    handle = frame_handles.NativeHandle(iosurface=surface, width=w, height=h, index=0, keepalive=Owner())
+    return frame_handles.wrap_native(memoryview(np.zeros((h, w * 4 + pad), np.uint8)).toreadonly(), handle)
+
+
+@pytest.fixture
+def fake_gl_item(qapp, recording_gl, gl_contexts, shown, monkeypatch):
+    """스트림 아이템(Smooth — 앱과 같음) + 가짜 GL·CGL + GL2 페인터 대역(논리 100×50 × dpr 2 → 뷰포트 200×100, 모서리 CORNERS).
+    기존 경로의 준비(_prepare — 2D 텍스처 5)는 미리 해 두고 기록을 비움 — 면 텍스처는 6부터. paint()는 기록을 비우고 한 번 그린 기록을 돌려줌."""
+    cgl = FakeCGL(recording_gl)
+    monkeypatch.setattr(gl_surface, "bind_cgl", lambda: cgl)
+    item = VideoFrameItem(stream=True)
+    item.setTransformationMode(Qt.SmoothTransformation)
+    painter = FakeGLPainter(recording_gl, QTransform(10, 0, 0, 10, 20, 10), width=100, height=50, dpr=2.0)
+    item._prepare(gl_contexts.current)
+    recording_gl.calls.clear()
+
+    def paint():
+        recording_gl.calls.clear()
+        paint_gl(item, painter)
+        return normalized(recording_gl.calls)
+
+    return SimpleNamespace(item=item, gl=recording_gl, cgl=cgl, contexts=gl_contexts, shown=shown, paint=paint)
+
+
+def normalized(calls):
+    """glGenTextures의 출력 배열(ctypes)은 비교할 수 없어 개수만 남김."""
+    return [(name, args[:1]) if name == "glGenTextures" else (name, args) for name, args in calls]
+
+def new_texture(target, name, where="prepare side", filt=gl_bindings.GL_LINEAR):
+    return [("glGenTextures", (1,)), ("glBindTexture", (target, name)),
+            ("glTexParameteri", (target, GL_TEXTURE_MIN_FILTER, filt)), ("glTexParameteri", (target, GL_TEXTURE_MAG_FILTER, filt)),
+            ("glTexParameteri", (target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)), ("glTexParameteri", (target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)),
+            ("glBindTexture", (target, 0)), ("check_error", (where,))]
+
+def surface_bind(name, frame):
+    handle = frame_handles.whole_surface_handle(frame)
+    return [("glBindTexture", (GL_TEXTURE_RECTANGLE_ARB, name)), ("CGLGetCurrentContext", ()),
+            ("CGLTexImageIOSurface2D", (CGL_CTX, GL_TEXTURE_RECTANGLE_ARB, GL_RGBA, handle.width, handle.height, GL_BGRA,
+                                        GL_UNSIGNED_INT_8_8_8_8_REV, handle.iosurface, 0)),
+            ("check_error", ("CGLTexImageIOSurface2D",))]
+
+def rgb_storage(name, frame):
+    h, w = frame.shape[:2]
+    return [("glBindTexture", (GL_TEXTURE_2D, name)), ("glTexImage2D", (GL_TEXTURE_2D, 0, GL_RGB8, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, None)),
+            ("check_error", ("storage",))]
+
+def rgb_upload(name, frame):
+    h, w = frame.shape[:2]
+    return [("glBindTexture", (GL_TEXTURE_2D, name)), ("glPixelStorei", (GL_UNPACK_ALIGNMENT, 1)), ("glPixelStorei", (GL_UNPACK_ROW_LENGTH, 0)),
+            ("glTexSubImage2D", (GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, frame.ctypes.data)),
+            ("glPixelStorei", (GL_UNPACK_ALIGNMENT, 4)), ("check_error", ("upload",))]
+
+def setup(pw=200, ph=100):
+    return [("glViewport", (0, 0, pw, ph)), ("glMatrixMode", (GL_PROJECTION,)), ("glLoadIdentity", ()),
+            ("glOrtho", (0, pw, ph, 0, -1, 1)), ("glMatrixMode", (GL_MODELVIEW,)), ("glLoadIdentity", ()),
+            ("glDisable", (GL_BLEND,)), ("glColor4f", (1, 1, 1, 1))]
+
+def pixels(w, h):
+    """사각형 텍스처 좌표 — 픽셀 단위."""
+    return ((0, 0), (w, 0), (w, h), (0, h))
+
+def quad(target, name, coords, corners=CORNERS):
+    calls = [("glBindTexture", (target, name)), ("glEnable", (target,)), ("glBegin", (GL_QUADS,))]
+    for (u, v), (x, y) in zip(coords, corners):
+        calls += [("glTexCoord2f", (u, v)), ("glVertex2f", (x, y))]
+    return calls + [("glEnd", ()), ("glDisable", (target,))]
+
+def black(corners=CORNERS):
+    return [("glColor4f", (0, 0, 0, 1)), ("glBegin", (GL_QUADS,)), *[("glVertex2f", corner) for corner in corners],
+            ("glEnd", ()), ("glColor4f", (1, 1, 1, 1))]
+
+def scissor(box):
+    return [("glEnable", (GL_SCISSOR_TEST,)), ("glScissor", box)]
+
+RESTORE = [("glDisable", (GL_SCISSOR_TEST,)), ("glDisable", (GL_TEXTURE_RECTANGLE_ARB,)), ("glDisable", (GL_TEXTURE_2D,)),
+           ("glBindTexture", (GL_TEXTURE_RECTANGLE_ARB, 0)), ("glBindTexture", (GL_TEXTURE_2D, 0))]
+END = [*RESTORE, ("check_error", ("draw sides",))]
+BEGIN, FINISH = ("beginNativePainting", ()), ("endNativePainting", ())
+
+
+def test_set_surface_binds_rect_texture_and_draws(fake_gl_item):
+    """IOSurface → RECT 텍스처 → 픽셀 좌표 사각형, 순서까지 고정. CGLTexImageIOSurface2D 인자(GL_RGBA·GL_BGRA·…_REV·plane 0)·텍스처 좌표를
+    0..1로(RECT는 픽셀 단위)·blend를 켠 채 그리기·RECT/scissor를 켠 채·바인딩을 남긴 채 나오기 중 하나라도 바뀌면 실패. CPU 업로드(glTexSubImage2D) 없음."""
+    frame = native()
+    fake_gl_item.item.set_surface(frame)
+    assert fake_gl_item.paint() == [
+        BEGIN, ENTRY,
+        *new_texture(GL_TEXTURE_RECTANGLE_ARB, 6), *surface_bind(6, frame),
+        *setup(), *quad(GL_TEXTURE_RECTANGLE_ARB, 6, pixels(4, 2)),
+        *END, FINISH,
+    ]
+    assert fake_gl_item.item.failure_count == 0 and fake_gl_item.shown == []
+    assert fake_gl_item.item.surface_handle() is frame.native
+
+
+def test_set_sides_mixed_native_and_rgb_draws_both(fake_gl_item):
+    """A 네이티브·B RGB(h264를 B로 연 와이프): A는 RECT 한 번 묶기, B는 두 번째 2D 텍스처(7)에 glTexSubImage2D 한 번 — 기존 텍스처 5는 건드리지 않음 —,
+    B는 glScissor(오른쪽 — 모서리 매핑의 25% 자리 x=30부터) 안에서만, 검정 없음. B를 검정으로 두거나(np.zeros_like 규칙을 섞음) B를 텍스처 5에 올리거나
+    scissor 밖에서 B를 그리면 실패."""
+    a, b = native(), rgb(2, 4)
+    fake_gl_item.item.set_sides(a, b, "x", 0.25)
+    calls = fake_gl_item.paint()
+    assert calls == [
+        BEGIN, ENTRY,
+        *new_texture(GL_TEXTURE_RECTANGLE_ARB, 6), *surface_bind(6, a),
+        *new_texture(GL_TEXTURE_2D, 7), *rgb_storage(7, b), *rgb_upload(7, b),
+        *setup(), *quad(GL_TEXTURE_RECTANGLE_ARB, 6, pixels(4, 2)),
+        *scissor((30, 0, 170, 100)), *quad(GL_TEXTURE_2D, 7, UNIT),
+        *END, FINISH,
+    ]
+    assert ("glColor4f", (0, 0, 0, 1)) not in calls
+    assert fake_gl_item.item.failure_count == 0
+
+
+def test_set_sides_rgb_native_other_way(fake_gl_item):
+    """A RGB(h264)·B 네이티브, 아래쪽 와이프: A는 면 2D 텍스처(6), B는 RECT(7)를 glScissor(GL 창 좌표는 아래가 0 — 아래 80줄) 안에서.
+    y 와이프의 scissor를 위쪽(0, split)으로 잡거나 A의 RGB를 기존 텍스처 5에 올리면 실패."""
+    a, b = rgb(2, 4), native(surface=0x6000)
+    fake_gl_item.item.set_sides(a, b, "y", 0.5)
+    assert fake_gl_item.paint() == [
+        BEGIN, ENTRY,
+        *new_texture(GL_TEXTURE_2D, 6), *rgb_storage(6, a), *rgb_upload(6, a),
+        *new_texture(GL_TEXTURE_RECTANGLE_ARB, 7), *surface_bind(7, b),
+        *setup(), *quad(GL_TEXTURE_2D, 6, UNIT),
+        *scissor((0, 0, 200, 80)), *quad(GL_TEXTURE_RECTANGLE_ARB, 7, pixels(4, 2)),
+        *END, FINISH,
+    ]
+    assert fake_gl_item.item.surface_handle() is None  # A가 표면이 아님
+
+
+def test_set_sides_both_native_bind_two_rect_textures(fake_gl_item):
+    """4K ProRes A/B 와이프(둘 다 네이티브): 면마다 RECT 텍스처 하나씩(6·7), 그릴 때 각자 다시 바인드. RECT 텍스처를 하나만 두면 B가 A를 덮어 실패."""
+    a, b = native(), native(surface=0x6000)
+    fake_gl_item.item.set_sides(a, b, "x", 0.5)
+    assert fake_gl_item.paint() == [
+        BEGIN, ENTRY,
+        *new_texture(GL_TEXTURE_RECTANGLE_ARB, 6), *surface_bind(6, a),
+        *new_texture(GL_TEXTURE_RECTANGLE_ARB, 7), *surface_bind(7, b),
+        *setup(), *quad(GL_TEXTURE_RECTANGLE_ARB, 6, pixels(4, 2)),
+        *scissor((40, 0, 160, 100)), *quad(GL_TEXTURE_RECTANGLE_ARB, 7, pixels(4, 2)),
+        *END, FINISH,
+    ]
+
+
+def test_set_sides_without_b_draws_black_rect_for_b(fake_gl_item):
+    """와이프인데 B가 없음 → B 자리를 scissor 안에서 검정 사각형으로(기존 numpy 합성의 np.zeros_like 규칙과 같은 그림), B 텍스처는 만들지 않음.
+    검정을 빼면(A가 비침) 또는 scissor 밖까지 칠하면 실패."""
+    a = native()
+    fake_gl_item.item.set_sides(a, None, "x", 0.5)
+    assert fake_gl_item.paint() == [
+        BEGIN, ENTRY,
+        *new_texture(GL_TEXTURE_RECTANGLE_ARB, 6), *surface_bind(6, a),
+        *setup(), *quad(GL_TEXTURE_RECTANGLE_ARB, 6, pixels(4, 2)),
+        *scissor((40, 0, 160, 100)), *black(),
+        *END, FINISH,
+    ]
+
+
+def test_set_sides_xy_draws_b_in_two_scissor_boxes(fake_gl_item):
+    """(Ruling 17) X·Y 와이프가 함께 켜지면 axis="xy"·ratio=(rx, ry): A는 한 번, B는 상자 둘 — 오른쪽 (split_x, 0, pw − split_x, ph)과 아래쪽
+    (0, 0, pw, ph − split_y) — 에 차례로 그려 보이는 B는 합집합(기존 numpy 합성 result[:, wipe_x:] = B 뒤 result[wipe_y:, :] = B와 같음). B 텍스처는 한 번만
+    올림. 상자 하나만 그리거나(교집합·한쪽만) A를 두 번 그리거나 B를 상자마다 다시 올리면 실패."""
+    a, b = native(), rgb(2, 4)
+    fake_gl_item.item.set_sides(a, b, "xy", (0.25, 0.5))
+    calls = fake_gl_item.paint()
+    assert calls == [
+        BEGIN, ENTRY,
+        *new_texture(GL_TEXTURE_RECTANGLE_ARB, 6), *surface_bind(6, a),
+        *new_texture(GL_TEXTURE_2D, 7), *rgb_storage(7, b), *rgb_upload(7, b),
+        *setup(), *quad(GL_TEXTURE_RECTANGLE_ARB, 6, pixels(4, 2)),
+        *scissor((30, 0, 170, 100)), *quad(GL_TEXTURE_2D, 7, UNIT),
+        ("glScissor", (0, 0, 200, 80)), *quad(GL_TEXTURE_2D, 7, UNIT),
+        *END, FINISH,
+    ]
+    names = [name for name, _ in calls]
+    assert names.count("glScissor") == 2 and names.count("glTexSubImage2D") == 1
+
+
+def test_set_sides_xy_without_b_draws_black_in_both_boxes(fake_gl_item):
+    """(Ruling 17) "xy"인데 B가 없으면 두 상자 모두 검정 — 기존 numpy 합성은 np.zeros_like를 두 영역에 넣음. 한 상자만 칠하면 A가 비쳐 실패."""
+    a = native()
+    fake_gl_item.item.set_sides(a, None, "xy", (0.5, 0.5))
+    assert fake_gl_item.paint() == [
+        BEGIN, ENTRY,
+        *new_texture(GL_TEXTURE_RECTANGLE_ARB, 6), *surface_bind(6, a),
+        *setup(), *quad(GL_TEXTURE_RECTANGLE_ARB, 6, pixels(4, 2)),
+        *scissor((40, 0, 160, 100)), *black(), ("glScissor", (0, 0, 200, 80)), *black(),
+        *END, FINISH,
+    ]
+
+
+@pytest.mark.parametrize("axis, ratio", [
+    ("xy", 0.5), ("xy", [0.25, 0.5]), ("xy", (0.5,)), ("xy", (0.5, 0.5, 0.5)), ("xy", (0.5, 1.5)), ("xy", (float("nan"), 0.5)),
+    ("x", (0.25, 0.5)), ("y", (0.25, 0.5)),
+], ids=["xy-float", "xy-list", "xy-one", "xy-three", "xy-out-of-range", "xy-nan", "x-pair", "y-pair"])
+def test_set_sides_xy_requires_ratio_pair(fake_gl_item, axis, ratio):
+    """(Ruling 17) "xy"의 ratio는 [0, 1] 실수 두 개의 tuple (rx, ry)만, "x"·"y"는 실수 하나만 — 어긋나면 ValueError(조용히 한 값을 두 축에 쓰거나 한쪽만
+    쓰지 않음), 아이템은 그대로. 받아들이면 실패."""
+    with pytest.raises(ValueError, match="ratio"):
+        fake_gl_item.item.set_sides(native(), rgb(2, 4), axis, ratio)
+    assert fake_gl_item.item.frame() is None and fake_gl_item.paint() == []
+
+
+@pytest.mark.parametrize("b", [rgb(3, 4), np.zeros((2, 8, 3), np.uint8), "native"], ids=["rgb-taller", "rgb-wider", "native-other-size"])
+def test_set_sides_b_of_other_size_draws_black(fake_gl_item, b):
+    """B의 (높이, 너비)가 A와 다르면 기존 numpy 합성처럼(frame_b.shape != frame_a.shape → zeros) 검정 — 채널 수(BGRX 4 대 RGB 3)는 크기가 아님.
+    다른 크기의 B를 A 사각형에 늘려 그리면(올리기·묶기) 실패."""
+    if isinstance(b, str):
+        b = native(w=8, h=4, surface=0x6000)
+    fake_gl_item.item.set_sides(native(), b, "x", 0.5)
+    calls = fake_gl_item.paint()
+    assert calls[-len(black()) - len(END) - 1:] == [*black(), *END, FINISH]
+    names = [name for name, _ in calls]
+    assert names.count("CGLTexImageIOSurface2D") == 1 and "glTexSubImage2D" not in names
+
+
+def test_context_destroyed_rebinds_surface_texture(fake_gl_item):
+    """컨텍스트가 죽으면(aboutToBeDestroyed) RECT 텍스처 이름과 묶인 손잡이를 놓고, 다음 paint가 새 컨텍스트에서 glGenTextures + CGLTexImageIOSurface2D를
+    다시 — _release_texture가 면 텍스처를 놓지 않으면 죽은 이름(6)을 새 컨텍스트에서 바인드하고 묶기를 건너뛰어(같은 손잡이) 실패."""
+    frame = native()
+    fake_gl_item.item.set_surface(frame)
+    fake_gl_item.paint()
+    fake_gl_item.contexts.current.aboutToBeDestroyed.emit()
+    fake_gl_item.contexts.current = QOpenGLContext()
+    assert fake_gl_item.paint() == [
+        BEGIN, *new_texture(GL_TEXTURE_2D, 7, where="prepare"),  # 기존 준비(_prepare) 그대로
+        ENTRY, *new_texture(GL_TEXTURE_RECTANGLE_ARB, 8), *surface_bind(8, frame),
+        *setup(), *quad(GL_TEXTURE_RECTANGLE_ARB, 8, pixels(4, 2)),
+        *END, FINISH,
+    ]
+
+
+def test_context_switch_drops_surface_textures_of_the_old_context(fake_gl_item):
+    """죽지 않은 다른 컨텍스트로 넘어가도(_prepare) 옛 컨텍스트의 면 텍스처는 버리고 새로 만들어 다시 묶음; 그 뒤 옛 컨텍스트가 죽어도 새 텍스처는 그대로.
+    _prepare가 면 텍스처를 비우지 않으면 옛 컨텍스트의 이름을 새 컨텍스트에서 써서 실패."""
+    frame = native()
+    fake_gl_item.item.set_surface(frame)
+    fake_gl_item.paint()
+    old = fake_gl_item.contexts.current
+    fake_gl_item.contexts.current = QOpenGLContext()
+    names = [name for name, _ in fake_gl_item.paint()]
+    assert names.count("glGenTextures") == 2 and names.count("CGLTexImageIOSurface2D") == 1  # 2D(준비) + RECT, 다시 묶음
+    old.aboutToBeDestroyed.emit()
+    names = [name for name, _ in fake_gl_item.paint()]
+    assert "glGenTextures" not in names and "CGLTexImageIOSurface2D" not in names
+
+
+def test_rebind_only_when_handle_changes(fake_gl_item):
+    """같은 프레임을 다시 그리면 묶기 없이 바인드 + 사각형만(CGLTexImageIOSurface2D 한 번), 같은 프레임을 다시 넘겨도(같은 손잡이) 그대로, 새 손잡이면 같은
+    텍스처(6)에 다시 묶음. 손잡이 비교를 빼면(paint마다 묶기) 또는 이름을 새로 만들면 실패."""
+    item = fake_gl_item.item
+    first = native()
+    item.set_surface(first)
+    fake_gl_item.paint()
+    assert fake_gl_item.paint() == [BEGIN, ENTRY, ("glBindTexture", (GL_TEXTURE_RECTANGLE_ARB, 6)),
+                                    *setup(), *quad(GL_TEXTURE_RECTANGLE_ARB, 6, pixels(4, 2)), *END, FINISH]
+    item.set_surface(first)
+    assert "CGLTexImageIOSurface2D" not in [name for name, _ in fake_gl_item.paint()]
+    second = native(surface=0x7000)
+    item.set_surface(second)
+    calls = fake_gl_item.paint()
+    assert calls[:len(surface_bind(6, second)) + 2] == [BEGIN, ENTRY, *surface_bind(6, second)]
+    assert "glGenTextures" not in [name for name, _ in calls]
+
+
+def test_rgb_side_uploads_only_when_the_array_changes(fake_gl_item):
+    """RGB 면도 같은 배열이면 다시 올리지 않음(set_frame과 같은 약속 — 넘긴 배열은 고치지 않음), 새 배열이면 같은 저장소에 올림(크기가 같으면 glTexImage2D 없음)."""
+    item, a, b = fake_gl_item.item, native(), rgb(2, 4)
+    item.set_sides(a, b, "x", 0.5)
+    fake_gl_item.paint()
+    names = [name for name, _ in fake_gl_item.paint()]
+    assert "glTexSubImage2D" not in names and "glTexImage2D" not in names
+    other = rgb(2, 4, value=9)
+    item.set_sides(a, other, "x", 0.5)
+    calls = fake_gl_item.paint()
+    assert [args for name, args in calls if name == "glTexSubImage2D"] == [rgb_upload(7, other)[3][1]]
+    assert "glTexImage2D" not in [name for name, _ in calls]
+
+
+def test_surface_filter_follows_transformation_mode(fake_gl_item):
+    """(스파이크 검토 지적) RECT 텍스처 필터도 2D 경로처럼 transformationMode()를 따름 — 만들 때 한 번만 세우면 Fast로 바꿔도 GL_LINEAR로 남아 실패."""
+    item = fake_gl_item.item
+    item.set_surface(native())
+    fake_gl_item.paint()
+    item.setTransformationMode(Qt.FastTransformation)
+    assert fake_gl_item.paint()[:5] == [BEGIN, ENTRY, ("glBindTexture", (GL_TEXTURE_RECTANGLE_ARB, 6)),
+                                        ("glTexParameteri", (GL_TEXTURE_RECTANGLE_ARB, GL_TEXTURE_MIN_FILTER, GL_NEAREST)),
+                                        ("glTexParameteri", (GL_TEXTURE_RECTANGLE_ARB, GL_TEXTURE_MAG_FILTER, GL_NEAREST))]
+    assert "glTexParameteri" not in [name for name, _ in fake_gl_item.paint()]
+
+
+def test_existing_rgb_path_unchanged(fake_gl_item):
+    """set_frame 뒤 paint는 예전 호출 그대로 — _draw_native 자체의 순서는 test_draw_call_sequence_is_fixed가 고정하고(재사용: expected_draw), 여기서는
+    paint의 갈래와 set_sides → set_frame 전환을 본다: 면 텍스처·CGL·scissor가 끼지 않고, 와이프 B의 RGB 업로드가 기존 2D 텍스처(5)의 저장소를 건드리지 않아
+    돌아온 set_frame은 저장소를 다시 잡지 않고 올리기만 함. set_frame이 _sides를 비우지 않거나 B의 RGB를 텍스처 5에 올리면 실패."""
+    item = fake_gl_item.item
+    first = rgb(2, 4)
+    item.set_frame(first)
+    assert fake_gl_item.paint() == [BEGIN, ENTRY, *rgb_storage(5, first), *rgb_upload(5, first),
+                                    *normalized(expected_draw(200, 100, CORNERS)), FINISH]
+    item.set_sides(native(), rgb(2, 4, value=3), "x", 0.5)
+    fake_gl_item.paint()
+    second = rgb(2, 4, value=9)
+    item.set_frame(second)
+    assert item.surface_handle() is None and item.frame() is second
+    assert fake_gl_item.paint() == [BEGIN, ENTRY, *rgb_upload(5, second), *normalized(expected_draw(200, 100, CORNERS)), FINISH]
+
+
+def test_null_pixmap_clears_sides(fake_gl_item):
+    """빈 픽스맵(updateFrame(None, …))은 면까지 비움 — 남기면 다음 paint가 지난 IOSurface를 계속 그림."""
+    item = fake_gl_item.item
+    item.set_sides(native(), None, "x", 0.5)
+    item.setPixmap(QPixmap())
+    assert item.frame() is None and item.surface_handle() is None and item.pixmap().isNull()
+    assert fake_gl_item.paint() == []
+
+
+def test_set_sides_keeps_frames_and_sets_placeholder(fake_gl_item):
+    """자리표시자 픽스맵은 A의 크기(boundingRect·fitInView 계약 — set_frame과 같음), frame()은 A, surface_handle()은 A의 손잡이(A가 RGB면 None)."""
+    item, a = fake_gl_item.item, native()
+    item.set_sides(a, rgb(2, 4), "x", 0.5)
+    assert item.frame() is a and item.surface_handle() is a.native
+    assert (item.pixmap().width(), item.pixmap().height()) == (4, 2) and item.boundingRect() == QRectF(0, 0, 4, 2)
+    item.set_sides(rgb(2, 4), a, "x", 0.5)
+    assert item.surface_handle() is None
+
+
+def test_plain_view_of_whole_surface_is_drawn_as_surface(fake_gl_item):
+    """표면 전체를 가리키는 일반 ndarray 뷰(np.asarray)도 표면으로 — 판별은 whole_surface_handle(Ruling 14) 하나. isinstance나 native_surface_of로
+    가르면 이 뷰가 'RGB가 아닌 4채널 배열'로 거부되어 실패."""
+    frame = native()
+    fake_gl_item.item.set_surface(np.asarray(frame))
+    assert fake_gl_item.item.surface_handle() is frame.native
+    assert surface_bind(6, frame)[2] in fake_gl_item.paint()
+
+
+@pytest.mark.parametrize("view", [lambda f: f[::-1], lambda f: f[:, :2], lambda f: f[..., ::-1]], ids=["flipped", "cropped", "channels-reversed"])
+def test_non_whole_surface_native_array_is_rejected(fake_gl_item, view):
+    """손잡이는 있지만 표면 전체가 아닌 뷰(상하 반전·조각·채널 역순)는 어느 자리로 와도 ValueError — 표면으로 묶으면 다른 그림이 나오고, 복사·업로드는
+    네이티브 경로의 약속(CPU 복사 0) 위반. native_surface_of(손잡이 있음)로만 가르면 실패. 거부할 때 아이템 상태는 그대로."""
+    item, frame = fake_gl_item.item, native()
+    bad = view(frame)
+    assert frame_handles.native_surface_of(bad) is frame.native and frame_handles.whole_surface_handle(bad) is None
+    for call in (lambda: item.set_surface(bad), lambda: item.set_sides(bad, None, None, 0.0),
+                 lambda: item.set_sides(native(), bad, "x", 0.5)):
+        with pytest.raises(ValueError, match="표면 전체"):
+            call()
+    assert item.frame() is None and item.pixmap().isNull() and fake_gl_item.paint() == []
+
+
+@pytest.mark.parametrize("args, what", [
+    ((None, None, None, 0.0), "A 면"),
+    ((rgb(2, 4), None, "xz", 0.5), "axis"),
+    ((rgb(2, 4), None, "x", 1.5), "ratio"),
+    ((rgb(2, 4), None, "x", float("nan")), "ratio"),
+    ((np.zeros((2, 4, 3), np.float32), None, None, 0.0), "dtype"),
+    ((np.zeros((2, 4, 4), np.uint8), None, None, 0.0), "채널"),  # 손잡이 없는 BGRX 일반 배열 — 네이티브도 RGB도 아님
+    ((rgb(2, 4), np.zeros((2, 8, 3), np.uint8)[:, ::2], "x", 0.5), "연속"),
+    ((rgb(2, 4), np.zeros((2, 4), np.uint8), "x", 0.5), "3차원"),
+])
+def test_set_sides_rejects_bad_arguments(fake_gl_item, args, what):
+    """조건이 어긋나면 어느 조건인지 ValueError(조용한 복사·변환·자르기 없음) — set_frame과 같은 규칙에 면 이름을 붙임."""
+    with pytest.raises(ValueError, match=what):
+        fake_gl_item.item.set_sides(*args)
+    assert fake_gl_item.item.frame() is None
+
+
+def test_set_surface_needs_a_native_frame_and_stream_item(qapp):
+    """set_surface는 표면 전체 네이티브 프레임만(RGB는 set_frame), stream=False 아이템은 set_sides·set_surface를 받지 않음(set_frame과 같음)."""
+    with pytest.raises(ValueError, match="네이티브"):
+        VideoFrameItem(stream=True).set_surface(rgb(2, 4))
+    raster = VideoFrameItem(stream=False)
+    for call in (lambda: raster.set_surface(native()), lambda: raster.set_sides(native(), None, None, 0.0)):
+        with pytest.raises(RuntimeError, match="stream"):
+            call()
+
+
+def test_surface_stays_alive_while_bound_and_is_released_with_context(fake_gl_item):
+    """IOSurface 수명: 아이템이 받은 프레임을 쥐고(부른 쪽이 놓아도), RECT 텍스처가 그 표면에 묶여 있는 동안은 손잡이를 쥐며(RGB 경로로 돌아가도),
+    다른 손잡이로 다시 묶거나 컨텍스트가 죽으면 놓음. 프레임·손잡이를 쥐지 않으면 버퍼가 풀(pool)로 돌아가 묶인 표면이 다른 프레임으로 덮여 실패,
+    놓지 않으면 버퍼가 샘."""
+    item = fake_gl_item.item
+    frame = native()
+    first = weakref.ref(frame.native.keepalive)
+    item.set_surface(frame)
+    del frame
+    gc.collect()
+    assert first() is not None  # 아이템이 프레임을 쥠
+    fake_gl_item.paint()
+    item.set_frame(rgb(2, 4))
+    gc.collect()
+    assert first() is not None  # RECT 텍스처가 아직 그 표면에 묶여 있음
+    item.set_surface(native(surface=0x7000))
+    fake_gl_item.paint()  # 같은 텍스처를 새 표면에 다시 묶음 → 옛 손잡이를 놓음
+    gc.collect()
+    assert first() is None
+    second = weakref.ref(item.surface_handle().keepalive)
+    item.set_frame(rgb(2, 4))
+    fake_gl_item.contexts.current.aboutToBeDestroyed.emit()
+    gc.collect()
+    assert second() is None
+
+
+def test_no_wipe_neither_draws_nor_holds_b(fake_gl_item):
+    """axis None이면 B는 그리지도 쥐지도 않음 — 쥐면 와이프를 끈 동안 B의 IOSurface 버퍼가 풀로 돌아가지 못하고 묶이지도 않은 채 남아 실패."""
+    b = native(surface=0x6000)
+    held = weakref.ref(b.native.keepalive)
+    fake_gl_item.item.set_sides(native(), b, None, 0.0)
+    del b
+    gc.collect()
+    assert held() is None
+    calls = fake_gl_item.paint()
+    assert [args[-2] for name, args in calls if name == "CGLTexImageIOSurface2D"] == [0x5000] and "glScissor" not in [name for name, _ in calls]
+
+
+def test_surface_bind_failure_fails_loudly_once(fake_gl_item, capsys):
+    """CGL 컨텍스트가 없으면(NULL) 묶지 않고 GLBindingError → 기존 paint 가드(_fail: 기록 + 창 1회, 그 뒤 그리지 않음) — 상태를 되돌린 뒤 native 블록을 닫음.
+    0을 그대로 CGLTexImageIOSurface2D에 넘기면(CGL이 무엇을 할지 모름) 또는 가드를 거치지 않으면 실패."""
+    fake_gl_item.cgl.context = 0
+    fake_gl_item.item.set_surface(native())
+    calls = fake_gl_item.paint()
+    assert fake_gl_item.paint() == []  # 첫 실패 뒤로는 그리지 않음
+    QApplication.instance().processEvents()  # 창은 Qt 루프에서 뜸
+    assert calls[-len(RESTORE) - 2:] == [("CGLGetCurrentContext", ()), *RESTORE, FINISH]
+    assert fake_gl_item.item.failure_count == 1 and len(fake_gl_item.shown) == 1
+    assert "CGLGetCurrentContext" in capsys.readouterr().err
+
+
+def test_failure_while_drawing_sides_still_restores_gl_state(fake_gl_item):
+    """그리는 도중 실패해도(가짜 GL이 glScissor에서 실패) scissor·RECT·2D를 끄고 바인딩 0을 둔 뒤 native 블록을 닫음 — finally가 없으면 scissor가 켜진 채
+    Qt 엔진으로 돌아가 실패."""
+    fake_gl_item.gl.fail_on = "glScissor"
+    fake_gl_item.item.set_sides(native(), None, "x", 0.5)
+    calls = fake_gl_item.paint()
+    QApplication.instance().processEvents()  # 실패 창은 Qt 루프에서 뜸 — 여기서 비우지 않으면 대역이 풀린 뒤 다른 시험에서 진짜 모달이 뜸
+    assert calls[-len(RESTORE) - 2:] == [("glScissor", (40, 0, 160, 100)), *RESTORE, FINISH]
+    assert fake_gl_item.item.failure_count == 1 and len(fake_gl_item.shown) == 1
+
+
+@pytest.mark.parametrize("axis, ratio, corners, box", [
+    ("x", 0.25, CORNERS, (30, 0, 170, 100)),
+    ("x", 0.0, CORNERS, (20, 0, 180, 100)),
+    ("x", 1.0, CORNERS, (60, 0, 140, 100)),
+    ("y", 0.5, CORNERS, (0, 0, 200, 80)),
+    ("x", 0.5, [(10.2, 0), (11.2, 0), (11.2, 5), (10.2, 5)], (11, 0, 189, 100)),  # 10.7 → qRound처럼 .5 올림
+    ("x", 0.5, [(-100, 0), (-20, 0), (-20, 50), (-100, 50)], (0, 0, 200, 100)),  # 나눔 자리가 뷰포트 왼쪽 밖 — 0으로
+    ("x", 0.5, [(250, 0), (400, 0), (400, 50), (250, 50)], (200, 0, 0, 100)),  # 오른쪽 밖 — 너비 0
+    ("y", 0.5, [(0, -100), (50, -100), (50, -50), (0, -50)], (0, 0, 200, 100)),  # 위 밖 — B가 뷰포트 전체
+    ("y", 0.5, [(0, 150), (50, 150), (50, 300), (0, 300)], (0, 0, 200, 0)),  # 아래 밖 — 높이 0
+])
+def test_wipe_scissor_box(axis, ratio, corners, box):
+    """B 면의 scissor 상자(GL 창 좌표 — 물리 픽셀, 원점 왼쪽 아래): x는 오른쪽 (split, 0, pw − split, ph), y는 아래쪽 (0, 0, pw, ph − split),
+    split은 모서리 매핑의 비율 자리(스파이크와 같은 계산)이고 뷰포트 [0, pw]·[0, ph]로 자름. 음수 너비·높이는 GL_INVALID_VALUE라 자르지 않으면 실패."""
+    assert gl_video_item.wipe_scissor(axis, ratio, 200, 100, corners) == box

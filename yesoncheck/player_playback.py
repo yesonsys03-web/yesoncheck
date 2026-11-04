@@ -3,7 +3,6 @@
 import errno
 import math
 import os
-from typing import NamedTuple
 import stat
 import subprocess
 import sys
@@ -27,37 +26,41 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from yesoncheck.frame_handles import native_surface_of
 from yesoncheck.frame_utils import FrameCalculator
-from yesoncheck.movie_pipe_source import PipeCaptureError, maybe_pipe_capture
+from yesoncheck.mac_native_gate import native_ineligible_reason, native_wanted
+from yesoncheck.movie_pipe_source import PipeCaptureError, maybe_pipe_capture, movie_source_mode, probe_for_open
+from yesoncheck.overlay_text_layout import (  # noqa: F401 (overlay_metrics: 옛 import 경로 — tests/test_overlay_text_size.py가 여기서 부름)
+    OVERLAY_FONT,
+    overlay_layout,
+    overlay_metrics,
+)
 from yesoncheck.sequence_scan import is_sequence_path
 from yesoncheck.sequence_source import ImageSequenceCapture, open_any_capture, resolve_frame_path
 from yesoncheck.workers import FFmpegWorker
 from yesoncheck import external_tools, file_names, media_info, paths, thumbnails, video_list
 from yesoncheck.player_sidebar import ThumbnailContext
 
-OVERLAY_TEXT_SCALE = 1.5  # B 키 오버레이 글자 크기 — 1080p 기준 예전(scale 0.7)의 배수, 프레임 높이에 비례 (overlay_metrics·overlay_text)
+
+def measurement_line(frames, elapsed, native, wipe, display, name):
+    """재생 한 바퀴의 [측정] 줄 — `[측정] <장>장 <초>초 (<fps>fps) 네이티브=yes|no 와이프=on|off 표시=gl|pixmap|raster — <파일 이름>`.
+    frames: Play 뒤 진행한 장 수, elapsed: Play 직후부터 마지막 틱의 그리기가 끝난 때까지(초). M1 측정 기록이 이 줄을 읽음(Ruling 3)."""
+    fps = frames / elapsed if elapsed > 0 else 0.0
+    return (f"[측정] {frames}장 {elapsed:.2f}초 ({fps:.1f}fps) 네이티브={'yes' if native else 'no'} "
+            f"와이프={'on' if wipe else 'off'} 표시={display} — {name}")
 
 
-class OverlayMetrics(NamedTuple):
-    scale: float  # cv2 글꼴 배율
-    thickness: int  # 획 굵기(px)
-    pad: int  # 흰 상자 안쪽 여백
-    margin_x: int  # 왼쪽 여백
-    margin_y: int  # 아래 여백
+class _MeasureRun:
+    """[측정] Play 한 번의 기록 — t0: Play 직후 시각, frames: 그 뒤 진행한 장 수, last: 마지막 틱의 update_frame이 끝난 시각 (time.perf_counter)."""
 
+    __slots__ = ("t0", "frames", "last")
 
-def overlay_metrics(width, height):
-    """B 키 오버레이의 글자 배율·굵기·여백 — 프레임 크기에 비례: k = OVERLAY_TEXT_SCALE × max(너비/1920, 높이/1080)
-    (1080p는 예전 scale 0.7·굵기 2·여백 10/20/5의 1.5배, 4K는 그 2배 픽셀; 16:9 창에 맞춰 볼 때 어느 비율의 클립이든 같은 크기 — 가로가 긴 스코프 클립은 너비로 맞춰짐).
-
-    굵기만은 더 줌(× √(k/1.5) — 프레임이 큰 만큼): 4K 프레임은 창에 맞춰 반으로 줄여 보이는데 그때 획 가장자리가 섞여 같은 비율의 굵기도 가늘고 연하게 보임
-    (사용자 보고 — 1080p는 굵게, 4K는 보통 굵기로 보였음) → 4K는 2배(6px)가 아니라 8px."""
-    k = OVERLAY_TEXT_SCALE * max(width / 1920, height / 1080)
-    thickness = max(1, round(2 * k * math.sqrt(k / OVERLAY_TEXT_SCALE)))
-    return OverlayMetrics(0.7 * k, thickness, max(1, round(5 * k)), max(1, round(10 * k)), max(1, round(20 * k)))
+    def __init__(self, t0):
+        self.t0, self.frames, self.last = t0, 0, t0
 
 
 class PlayerPlaybackMixin:
+    _measure_run = None  # [측정] 지금 Play의 _MeasureRun — Play 전이거나 줄을 찍었으면 None
 
     def get_video_codec(self, file_path):
         """
@@ -391,7 +394,7 @@ class PlayerPlaybackMixin:
         return isinstance(self.cap_a, ImageSequenceCapture)
 
     def _open_movie_capture(self, file_path):
-        """mov 등 영상 파일의 cv2 캡처 → 못 열면 창으로 알리고 None (보던 영상은 그대로)."""
+        """mov 등 영상 파일의 캡처(네이티브·ffmpeg 파이프·cv2 — 앞 둘은 _native_or_pipe_capture가 고름) → 못 열면 창으로 알리고 None (보던 영상은 그대로)."""
         try:
             os.stat(file_path)
         except OSError as e:
@@ -410,9 +413,10 @@ class PlayerPlaybackMixin:
             QMessageBox.critical(self, "영상을 열 수 없음",
                                  f"영상을 확인하지 못했습니다 (NAS 연결 끊김·권한 등): {file_path}\n이유: {reason}")
             return None
-        # ffmpeg 파이프 게이트(ProRes류만 양성): 양성이면 파이프 캡처로 반환, 음성이면 None이라 아래 기존 줄이 그대로 돎
+        # 네이티브(VideoToolbox) → ffmpeg 파이프 게이트(ProRes류만 양성) — _native_or_pipe_capture: 양성이면 그 캡처로 반환, 음성이면 None이라
+        # 아래 기존 줄이 그대로 돎 (네이티브 분기의 pipe 모드 ffprobe 실패도 PipeCaptureError로 여기 파이프 오류 창에 옴)
         try:
-            cap = maybe_pipe_capture(file_path, full_cache=True)
+            cap = self._native_or_pipe_capture(file_path)
         except PipeCaptureError as e:
             details = traceback.format_exc()
             print(f"ffmpeg 파이프로 영상을 열지 못함: {file_path}")
@@ -431,6 +435,43 @@ class PlayerPlaybackMixin:
                                  f"형식일 수 있음): {file_path}")
             return None
         return cap
+
+    def _native_or_pipe_capture(self, file_path):
+        """_open_movie_capture의 게이트 둘 — 네이티브(VideoToolbox: Apple Silicon의 4K ProRes 4:4:4 — mac_native_gate) 먼저, 그다음 ffmpeg 파이프
+        (ProRes류 — maybe_pipe_capture): 고른 캡처, 둘 다 음성이면 None (부른 쪽이 기존 cv2 줄로). 순서(스펙 §5.8):
+        - YESONCHECK_MOVIE_SOURCE=cv2가 맨 먼저 — 완전 킬: 네이티브 토글도 보지 않고(토글 값이 잘못돼도 탈출구가 막히지 않음) probe도 없이 None.
+        - native_wanted()가 아니면(Intel·Windows·YESONCHECK_MAC_NATIVE=off) 예전 파이프 게이트 줄 그대로 — mac_native_source를 불러오지도 않음
+          (지연 import: Intel·Windows 앱은 이 모듈을 import하지 않음 — 스펙 §5.9).
+        - 원하면 ffprobe 한 번(probe_for_open — 못 읽으면 파이프와 같은 규칙: auto는 기록 뒤 None이라 cv2, pipe는 PipeCaptureError)으로 네이티브
+          게이트를 보고 그 probe를 파이프 판정에 그대로 넘김(ffprobe를 두 번 돌리지 않음). 양성이면 네이티브 캡처(기록 줄은 open_native_capture가
+          남김). 못 열면(NativeCaptureError — PyObjC 없음도 생성자가 이것으로 감쌈) 스택 트레이스·기록 한 줄·오류 창(끝 줄은 탈출구 안내
+          NATIVE_ESCAPE_HINT)으로 알린 뒤 파이프로 계속(스펙 §5.3 — 조용한 폴백이 아니라 알린 뒤 이어감). 음성이면 사유 한 줄
+          `[재생] 네이티브(VideoToolbox): 아님 — <사유>: <이름>` 뒤 파이프.
+        PipeCaptureError(pipe 모드의 ffprobe 실패·게이트 불통과, 파이프를 열지 못함)는 그대로 올라가 _open_movie_capture의 파이프 오류 창으로.
+        그 밖의 예외(ToolNotFoundError·코드 버그)도 잡지 않음."""
+        mode = movie_source_mode()
+        if mode == "cv2" or not native_wanted():
+            return maybe_pipe_capture(file_path, full_cache=True)
+        from yesoncheck import mac_native_source  # 지연 import — 위 설명
+
+        probe = probe_for_open(file_path, mode)
+        if probe is None:  # auto에서 ffprobe가 못 읽음 — 기록을 남겼고, 기존 cv2 줄로 (maybe_pipe_capture와 같은 규칙)
+            return None
+        name = os.path.basename(file_path)
+        reason = native_ineligible_reason(probe)
+        if reason is not None:
+            print(f"{mac_native_source.NATIVE_LOG_PREFIX} 아님 — {reason}: {name}")
+        else:
+            try:
+                return mac_native_source.open_native_capture(file_path, probe)
+            except mac_native_source.NativeCaptureError as e:
+                details = traceback.format_exc()
+                traceback.print_exc()
+                print(f"{mac_native_source.NATIVE_LOG_PREFIX} 열지 못해 ffmpeg 파이프로 계속: {name}")
+                QMessageBox.critical(self, "영상을 열 수 없음(네이티브)",
+                                     f"VideoToolbox(네이티브)로 영상을 열지 못해 ffmpeg 파이프로 계속합니다: {file_path}\n"
+                                     f"이유: {type(e).__name__}: {e}\n\n{details}\n{mac_native_source.NATIVE_ESCAPE_HINT}")
+        return maybe_pipe_capture(file_path, full_cache=True, probe=probe)
 
     def _open_sequence_capture(self, file_path):
         """시퀀스(.seq 가상 경로)의 캡처 → 못 열면 창으로 알리고 None (보던 영상은 그대로).
@@ -513,8 +554,13 @@ class PlayerPlaybackMixin:
             current_pos = int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES))
             self.seek_to_frame(current_pos)
 
-    def process_frame(self, frame):
-        if self.use_gpu:
+    def process_frame(self, frame, gpu=True):
+        """캡처 프레임을 화면용으로: BGR → RGB(use_gpu면 고른 GPU 백엔드로). 네이티브 프레임(IOSurface 위 BGRX — frame_handles)은 그대로
+        돌려줌 — 변환·복사 없이 GL이 표면을 그림(cv2.cvtColor는 4채널 strided 배열도 받아 3채널 복사본을 만들어 손잡이를 조용히 잃으므로 여기서 막음).
+        gpu=False: CPU 변환만(드래그 미리보기 — GPU 백엔드를 건너뜀)."""
+        if native_surface_of(frame) is not None:
+            return frame
+        if gpu and self.use_gpu:
             if self.gpu_backend == 'cuda':
                 gpu_frame = cv2.cuda_GpuMat()
                 gpu_frame.upload(frame)
@@ -627,25 +673,33 @@ class PlayerPlaybackMixin:
             self.refresh_frame_annotations_display(redraw=False)
         self.update_position_info()
 
+    def overlay_label(self):
+        """B 키 오버레이 글자 "File: <A 파일 이름>, Frame: <캡처 위치>/<전체 장 수>" — 굽는 길(overlay_text)과 네이티브 아이템 길
+        (_overlay_text_for_native)이 함께 씀(두 길의 글자가 어긋나지 않게). 캡처 위치는 CAP_PROP_POS_FRAMES(다음에 읽을 번호 = 지금 보이는 1부터 번호)."""
+        return f"File: {os.path.basename(self.filename_a)}, Frame: {int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES))}/{int(self.cap_a.get(cv2.CAP_PROP_FRAME_COUNT))}"
+
+    def _overlay_text_for_native(self):
+        """네이티브 프레임의 B 키 오버레이 글자 — videoWidget이 updateFrame의 네이티브 분기마다 부르는 공급자(set_overlay_provider, 창을 만들 때 등록).
+        B가 꺼졌거나 A가 없으면 None(아이템을 숨김), 아니면 overlay_label."""
+        if not self.show_overlay or not self.cap_a or not self.filename_a:
+            return None
+        return self.overlay_label()
+
     def overlay_text(self, frame):
         """B 키 오버레이 — 프레임 왼쪽 아래에 "File: <이름>, Frame: n/N"을 흰 상자 위에 구움(프레임 픽셀에 — 와이프·주석 굽기와 같은 길).
 
         글자·굵기·여백은 `overlay_metrics(높이)` — 프레임 높이에 비례(1080p는 예전 scale 0.7·굵기 2·여백 10/20/5의 1.5배, 4K는 그 2배 픽셀이라 창에 맞춰 줄여 보면
-        1080p와 같은 크기, 굵기는 줄여 볼 때 가늘어 보이는 만큼 더) — 예전에는 픽셀 고정이라 4K에서 반 크기로 보였음(사용자 보고). 프레임 너비를 넘치면 들어갈 만큼 줄임."""
+        1080p와 같은 크기, 굵기는 줄여 볼 때 가늘어 보이는 만큼 더) — 예전에는 픽셀 고정이라 4K에서 반 크기로 보였음(사용자 보고). 프레임 너비를 넘치면 들어갈 만큼 줄임
+        (`overlay_layout` — 네이티브 프레임의 아이템 길 video_widget.set_overlay_text와 같은 규칙)."""
         height, width = frame.shape[:2]
-        scale, thickness, pad, margin_x, margin_y = overlay_metrics(width, height)
-        text = f"File: {os.path.basename(self.filename_a)}, Frame: {int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES))}/{int(self.cap_a.get(cv2.CAP_PROP_FRAME_COUNT))}"
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        (tw, th), base = cv2.getTextSize(text, font, scale, thickness)
-        room = max(1, width - 2 * margin_x)  # 아주 좁은 프레임에서도 음수가 되지 않게
-        if tw > room:  # 너비를 넘치면 들어갈 만큼 줄임 (예전엔 0.5로 한 번만 줄여 좁은 프레임에선 여전히 넘쳤음)
-            scale *= room / tw
-            thickness = max(1, round(thickness * room / tw))
-            (tw, th), base = cv2.getTextSize(text, font, scale, thickness)
-        x = margin_x
-        y = height - margin_y
-        cv2.rectangle(frame, (x - pad, y - th - pad), (x + tw + pad, y + max(pad, base)), (255, 255, 255), -1)  # g·p·_ 꼬리(base)까지 상자 안에
-        cv2.putText(frame, text, (x, y), font, scale, (0, 0, 0), thickness)
+        text = self.overlay_label()
+        layout = overlay_layout(text, width, height)
+        x = layout.margin_x
+        y = height - layout.margin_y
+        pad = layout.pad
+        cv2.rectangle(frame, (x - pad, y - layout.text_height - pad), (x + layout.text_width + pad, y + max(pad, layout.baseline)),
+                      (255, 255, 255), -1)  # g·p·_ 꼬리(baseline)까지 상자 안에
+        cv2.putText(frame, text, (x, y), OVERLAY_FONT, layout.scale, (0, 0, 0), layout.thickness)
 
     def on_overlay_slider_pressed(self):
         """오버레이 슬라이더를 누를 때 현재 프레임 라벨 표시"""
@@ -706,7 +760,7 @@ class PlayerPlaybackMixin:
                 # 드래그 중일 때는 최소한의 처리만 수행
                 if self.is_dragging:
                     # 컬러 변환만 수행 (GPU 처리 스킵)
-                    self.frame_a = cv2.cvtColor(frame_a, cv2.COLOR_BGR2RGB)
+                    self.frame_a = self.process_frame(frame_a, gpu=False)
                 else:
                     # 일반 모드: 4K 최적화 적용
                     self.frame_a = self.optimize_for_4k(frame_a)
@@ -896,7 +950,7 @@ class PlayerPlaybackMixin:
             
             if ret_a and frame_a is not None:
                 # 컬러 변환만 수행 (모든 추가 처리 스킵)
-                self.frame_a = cv2.cvtColor(frame_a, cv2.COLOR_BGR2RGB)
+                self.frame_a = self.process_frame(frame_a, gpu=False)
                 
                 # UI 업데이트는 최소한만 (오버레이 스킵)
                 self.videoWidget.updateFrame(self.frame_a, None)
@@ -937,7 +991,7 @@ class PlayerPlaybackMixin:
                 # 드래그 중일 때는 최소한의 처리만 수행
                 if self.is_dragging:
                     # 컬러 변환만 수행 (GPU 처리 스킵)
-                    self.frame_a = cv2.cvtColor(frame_a, cv2.COLOR_BGR2RGB)
+                    self.frame_a = self.process_frame(frame_a, gpu=False)
                 else:
                     # 일반 모드: 4K 최적화 적용
                     self.frame_a = self.optimize_for_4k(frame_a)
@@ -1583,9 +1637,32 @@ class PlayerPlaybackMixin:
                 ret_b, frame_b = self.cap_b.read()
                 self.frame_b = self.process_frame(frame_b) if ret_b else None
             self.update_frame()
+            self._measure_tick()
         else:
+            self._print_measurement()  # 프레임 수를 크게 알리는 캡처(cv2)는 끝을 여기서 앎 — 마지막 틱이 이미 찍었으면 아무것도 안 함
             print("Video end detected in next_frame_playback")
             self.handle_video_end()
+
+    def _measure_tick(self):
+        """[측정] 재생 틱이 프레임 하나를 진행해 그린 뒤: 장 수·시각을 적고, 마지막 프레임(다음 읽을 번호 ≥ 프레임 수)에 닿았으면 줄을 찍음."""
+        run = self._measure_run
+        if run is None:
+            return
+        run.frames += 1
+        run.last = time.perf_counter()
+        if int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES)) >= int(self.cap_a.get(cv2.CAP_PROP_FRAME_COUNT)):
+            self._print_measurement()
+
+    def _print_measurement(self):
+        """[측정] 이 Play의 줄을 찍고 기록을 닫음 — Play마다 한 번(모든 캡처). 진행한 장이 없거나 이미 찍었으면 아무것도 안 함.
+        네이티브 = A가 네이티브 프레임, 와이프 = B를 읽어 실어 그림(B가 열림·와이프 체크·X 또는 Y 축 — 찍는 때의 상태), 표시 = videoWidget.display_path()."""
+        run, self._measure_run = self._measure_run, None
+        if run is None or run.frames == 0:
+            return
+        widget = self.videoWidget
+        wipe = bool(self.cap_b) and widget.wipeEnabled and (widget.wipe_enabled_x or widget.wipe_enabled_y)
+        print(measurement_line(run.frames, run.last - run.t0, native_surface_of(self.frame_a) is not None, wipe,
+                               widget.display_path(), os.path.basename(self.filename_a)), flush=True)
 
     def next_frame(self):
         if not self.cap_a: 
@@ -2200,6 +2277,7 @@ class PlayerPlaybackMixin:
                 # 개선된 타이머 설정 - 더 정확한 타이밍
                 timer_interval = max(1, int(1000 / original_fps))
                 self.timer.start(timer_interval)
+                self._measure_run = _MeasureRun(time.perf_counter())  # [측정] 이 Play부터 (Play마다 새로)
                 
                 # 현재 프레임 위치를 비디오의 원래 FPS로 계산하여 오디오 동기화
                 current_frame = int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES)) - 1
@@ -2575,7 +2653,9 @@ class PlayerPlaybackMixin:
         return None
 
     def cache_frame(self, frame_idx, frame):
-        """프레임을 캐시에 저장"""
+        """프레임을 캐시에 저장 — 네이티브 프레임은 넣지 않음(copy()가 4K 33MB이고, 네이티브 캡처의 탐색은 싸서 캐시 이득이 없음)."""
+        if native_surface_of(frame) is not None:
+            return
         if len(self.frame_cache) >= self.cache_size:
             # LRU 캐시: 가장 오래된 항목 제거
             oldest_key = min(self.frame_cache.keys())
@@ -2600,7 +2680,9 @@ class PlayerPlaybackMixin:
         }
 
     def optimize_for_4k(self, frame):
-        """4K 프레임 최적화 처리"""
+        """4K 프레임 최적화 처리 — 네이티브 프레임은 그대로(process_frame과 같은 이유; 이 함수의 색 변환과 process_frame_gpu_optimized 모두 건너뜀)"""
+        if native_surface_of(frame) is not None:
+            return frame
         height, width = frame.shape[:2]
         
         # 4K 이상 해상도 감지

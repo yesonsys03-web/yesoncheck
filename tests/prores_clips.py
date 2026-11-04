@@ -4,7 +4,11 @@
 정확히 복호된다. 유채색 클립: 시드 고정 무작위 블록 색 (chroma 경로 시험용).
 경계 클립(voff·held·neg·rot·audio_first·truncated·vfr_h264)은 실제로 겪은 문제 파일의 재현 (설계 때 실측한 ffprobe
 성질에 맞춤: 영상 start 오프셋·정지 프레임·편집 목록·회전 메타·트랙 순서·꼬리 잘림). 전부 320x180, 번호/경계 120장(5초).
+번호·유채색 클립은 width·height(기본 320x180)와 color 태그(기본 없음, "bt709"), 유채색 클립은 알파(alpha=True)도 고를 수 있다.
+번호 그림의 블록 자리는 크기에 비례(frame_number가 비율로 읽음) — 4K 클립도 같은 번호로 복호된다.
 ffmpeg는 PATH에서 찾는다 (tests/conftest.py가 저장소의 정적 빌드를 PATH 맨 앞에 둠).
+색 기준은 pipe_frames(앱의 ffmpeg 파이프와 같은 명령의 bgr24) — read_all_frames(cv2)는 색 태그를 무시해(709 클립도 601로 읽음)
+번호·장수 기준일 뿐 색 기준이 아니다.
 
 인코더 입력은 prores_ks가 받는 pix_fmt(PRORES_PIX_FMTS)의 평면을 그대로 만들어 넣는다 — 다른 pix_fmt를 주면 ffmpeg가 경고만
 내고 몰래 변환하므로 ValueError로 막는다. (ProRes 4444 디코더는 12비트(yuv444p12le)로 내보내지만 인코더 입력은 10비트다.)
@@ -39,6 +43,15 @@ RADIX = 14
 STEP = 18
 assert (MAX_COUNT - 1) // RADIX * STEP <= 255 and (RADIX - 1) * STEP <= 255
 AUDIO_SECONDS = 6
+# color= 인자별 ffmpeg 출력 옵션(COLOR_TAG_ARGS)과 유채색 클립의 YCbCr 행렬 계수 (Kr, Kb)(YCBCR_MATRIX). 태그가 없으면(None)
+# 디코더(ffmpeg swscale·cv2)가 601로 읽으므로 601 행렬로 만든다.
+COLOR_TAG_ARGS = {"bt709": ["-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-color_range", "tv"]}
+YCBCR_MATRIX = {None: (0.299, 0.114), "bt709": (0.2126, 0.0722)}
+# 유채색 블록: 색차 평면 기준 가로 5 x 세로 6 칸. RGB 채널은 이 여백 안(24~231)에서 뽑는다 — 0·255에 가까우면 블록 가장자리의
+# 손실 인코드 링잉(실측 최대 ~20 레벨, HQ 4:4:4)으로 영역 밖에 나가 디코더마다 잘라 내는 방식이 갈린다 (여백 8은 0.17% 화소가 잘림).
+CHROMA_BLOCK_W = 5
+CHROMA_BLOCK_H = 6
+RGB_MARGIN = 24
 _HELD_FPS = "24"
 _PLANAR = re.compile(r"yuv(a?)(420|422|444)p(\d*)(?:le)?")
 
@@ -51,6 +64,13 @@ def ffmpeg_exe():
     found = shutil.which("ffmpeg")
     if not found:
         raise FileNotFoundError("ffmpeg를 PATH에서 찾지 못했습니다 (tests/conftest.py가 vendor/ffmpeg를 PATH에 올려야 함)")
+    return found
+
+
+def ffprobe_exe():
+    found = shutil.which("ffprobe")
+    if not found:
+        raise FileNotFoundError("ffprobe를 PATH에서 찾지 못했습니다 (tests/conftest.py가 vendor/ffmpeg를 PATH에 올려야 함)")
     return found
 
 
@@ -91,21 +111,26 @@ def frame_number(arr):
     return _digit(hi) * RADIX + _digit(lo)
 
 
-def _layout(pix_fmt):
+def _layout(pix_fmt, width=WIDTH, height=HEIGHT):
     """평면 YUV pix_fmt 해석 → (알파 여부, 서브샘플링, 비트 수, dtype, 색차 가로, 색차 세로)."""
     match = _PLANAR.fullmatch(pix_fmt)
     if not match:
         raise ValueError(f"평면 YUV pix_fmt만 지원합니다: {pix_fmt}")
     alpha, subsampling, depth = bool(match.group(1)), match.group(2), int(match.group(3) or 8)
     dtype = np.uint8 if depth == 8 else np.dtype("<u2")
-    chroma_w = WIDTH if subsampling == "444" else WIDTH // 2
-    chroma_h = HEIGHT // 2 if subsampling == "420" else HEIGHT
+    chroma_w = width if subsampling == "444" else width // 2
+    chroma_h = height // 2 if subsampling == "420" else height
     return alpha, subsampling, depth, dtype, chroma_w, chroma_h
 
 
 def _check_count(count):
     if not 1 <= count <= MAX_COUNT:
         raise ValueError(f"count는 1~{MAX_COUNT}: {count}")
+
+
+def _check_color(color):
+    if color not in YCBCR_MATRIX:
+        raise ValueError(f"color는 None 또는 {tuple(COLOR_TAG_ARGS)} 중 하나: {color!r}")
 
 
 def number_levels(i):
@@ -129,67 +154,95 @@ def _luma_code(level, depth):
     return round((16 + 219 * level / 255) * 2 ** (depth - 8))
 
 
-def _numbered_raw(count, pix_fmt):
+def _numbered_raw(count, pix_fmt, width=WIDTH, height=HEIGHT):
     """번호 count장의 원시 프레임 바이트, pix_fmt(평면 YUV) 그대로. 번호 인코딩은 위 RADIX·STEP 설명.
+    가운데 상자는 프레임의 가운데 절반(크기에 비례) — frame_number가 비율로 읽으므로 크기가 달라도 같은 번호로 복호된다.
 
     인코더 앞에서 색 변환(swscale)을 거치면 변환 쪽 오차가 밝기를 흔들어서, 목표 pix_fmt의 평면을 직접 만든다.
     색차는 중립 → 디코드하면 B=G=R. 알파(yuva)는 가로 그라데이션 — 알파가 비어 있지 않아야 알파 트랙 시험이 됨.
     """
     _check_count(count)
-    alpha, _, depth, dtype, chroma_w, chroma_h = _layout(pix_fmt)
+    alpha, _, depth, dtype, chroma_w, chroma_h = _layout(pix_fmt, width, height)
     neutral = 2 ** (depth - 1)
     chunks = []
     for i in range(count):
         background, center = number_levels(i)
-        luma = np.full((HEIGHT, WIDTH), _luma_code(background, depth), dtype)
-        luma[HEIGHT // 4:HEIGHT * 3 // 4, WIDTH // 4:WIDTH * 3 // 4] = _luma_code(center, depth)
+        luma = np.full((height, width), _luma_code(background, depth), dtype)
+        luma[height // 4:height * 3 // 4, width // 4:width * 3 // 4] = _luma_code(center, depth)
         planes = [luma, np.full((chroma_h, chroma_w), neutral, dtype), np.full((chroma_h, chroma_w), neutral, dtype)]
         if alpha:
-            planes.append(np.tile(np.linspace(0, 2 ** depth - 1, WIDTH).astype(dtype), (HEIGHT, 1)))
+            planes.append(np.tile(np.linspace(0, 2 ** depth - 1, width).astype(dtype), (height, 1)))
         chunks.extend(plane.tobytes() for plane in planes)
     return b"".join(chunks)
 
 
-def _chroma_raw(count, pix_fmt, seed):
-    """시드 고정 무작위 블록(가로 5 x 세로 6 화소) 색 count장 — 밝기·색차(·알파) 평면 모두 블록마다 다른 합법 값.
+def _rgb_to_ycbcr_codes(rgb, kr, kb):
+    """8비트 RGB (..., 3) -> 제한 범위 8비트 (Y, Cb, Cr) 코드 (행렬 계수 Kr·Kb: 601 / 709). 반올림은 8비트 눈금에서."""
+    red, green, blue = (rgb[..., i] / 255 for i in range(3))
+    luma = kr * red + (1 - kr - kb) * green + kb * blue
+    cb, cr = (blue - luma) / (2 * (1 - kb)), (red - luma) / (2 * (1 - kr))
+    return np.rint(16 + 219 * luma), np.rint(128 + 224 * cb), np.rint(128 + 224 * cr)
 
+
+def _chroma_raw(count, pix_fmt, seed, width=WIDTH, height=HEIGHT, color=None, half_transparent=False):
+    """시드 고정 무작위 블록 색 count장 — 색은 RGB 영역 안에서 뽑아 제한 범위 YCbCr로 바꾼 값 (color: None=601, "bt709"=709).
+
+    블록은 색차 평면 기준 가로 5 x 세로 6 칸 (4:4:4는 화소 5x6, 4:2:2는 화소 10x6, 4:2:0은 10x12) — 색차 한 칸을 같이 쓰는
+    화소들이 같은 RGB 색에서 나와야 (Y, Cb, Cr) 모두가 영역 안이기 때문. YCbCr 코드값을 따로 무작위로 뽑으면 RGB 영역 밖 색이
+    대부분이라 디코더마다 잘라 내는 방식(ffmpeg 대 Apple)이 달라 비교가 최대 255까지 어긋난다.
     블록 가장자리에서 색차 서브샘플링·업샘플링 경로(swscale)가 실제로 일하게 하려는 것. 결정적(같은 시드면 같은 바이트).
+    알파 pix_fmt는 half_transparent면 왼쪽 절반 알파 0·오른쪽 절반 최대(색은 그대로 둠), 아니면 알파도 블록마다 무작위.
     """
     _check_count(count)
-    alpha, _, depth, dtype, chroma_w, chroma_h = _layout(pix_fmt)
+    _check_color(color)
+    alpha, subsampling, depth, dtype, chroma_w, chroma_h = _layout(pix_fmt, width, height)
+    if half_transparent and not alpha:
+        raise ValueError(f"half_transparent는 알파 pix_fmt(yuva...)에서만: {pix_fmt}")
+    sub_x, sub_y = (1 if subsampling == "444" else 2), (2 if subsampling == "420" else 1)
+    block_w, block_h = CHROMA_BLOCK_W * sub_x, CHROMA_BLOCK_H * sub_y  # 화소 단위
+    if width % block_w or height % block_h:
+        raise ValueError(f"{width}x{height} {pix_fmt}는 색 블록({block_w}x{block_h} 화소)으로 나눠떨어지지 않습니다")
+    kr, kb = YCBCR_MATRIX[color]
     rng = np.random.default_rng(seed)
     scale = 2 ** (depth - 8)
 
-    def blocks(height, width, low, high):
-        grid = rng.integers(low, high + 1, size=(height // 6, width // 5))
-        return np.repeat(np.repeat(grid, 6, axis=0), 5, axis=1).astype(dtype)
+    def paint(grid, block_h, block_w):
+        return np.repeat(np.repeat(grid, block_h, axis=0), block_w, axis=1)
 
     chunks = []
     for _ in range(count):
-        planes = [blocks(HEIGHT, WIDTH, 16 * scale, 235 * scale), blocks(chroma_h, chroma_w, 16 * scale, 240 * scale),
-                  blocks(chroma_h, chroma_w, 16 * scale, 240 * scale)]
-        if alpha:
-            planes.append(blocks(HEIGHT, WIDTH, 0, 2 ** depth - 1))
-        chunks.extend(plane.tobytes() for plane in planes)
+        rgb = rng.integers(RGB_MARGIN, 255 - RGB_MARGIN + 1, size=(chroma_h // CHROMA_BLOCK_H, chroma_w // CHROMA_BLOCK_W, 3))
+        luma, cb, cr = (code * scale for code in _rgb_to_ycbcr_codes(rgb, kr, kb))
+        planes = [paint(luma, block_h, block_w), paint(cb, CHROMA_BLOCK_H, CHROMA_BLOCK_W),
+                  paint(cr, CHROMA_BLOCK_H, CHROMA_BLOCK_W)]
+        if alpha and half_transparent:
+            planes.append(np.where(np.arange(width) < width // 2, 0, 2 ** depth - 1)[None, :].repeat(height, axis=0))
+        elif alpha:
+            planes.append(paint(rng.integers(0, 2 ** depth, size=(height // CHROMA_BLOCK_H, width // CHROMA_BLOCK_W)),
+                                CHROMA_BLOCK_H, CHROMA_BLOCK_W))
+        chunks.extend(plane.astype(dtype).tobytes() for plane in planes)
     return b"".join(chunks)
 
 
-def _encode(path, raw, *, fps="24", profile="3", pix_fmt="yuv422p10le", itsoffset=None, vf=None, fps_mode=None,
-            audio=False, audio_first=False, purpose="ProRes 클립 인코드"):
-    """원시 평면 프레임 raw(pix_fmt 그대로)를 ProRes로 인코드. 검증은 호출자 몫."""
+def _encode(path, raw, *, fps="24", profile="3", pix_fmt="yuv422p10le", width=WIDTH, height=HEIGHT, color=None,
+            itsoffset=None, vf=None, fps_mode=None, audio=False, audio_first=False, purpose="ProRes 클립 인코드"):
+    """원시 평면 프레임 raw(pix_fmt·width x height 그대로)를 ProRes로 인코드. color="bt709"면 색 태그를 붙임. 검증은 호출자 몫."""
+    _check_color(color)
     if pix_fmt not in PRORES_PIX_FMTS:
         raise ValueError(f"prores_ks가 그대로 받는 pix_fmt만 지원합니다 {PRORES_PIX_FMTS}: {pix_fmt} "
                          "(다른 값은 ffmpeg가 경고만 내고 몰래 변환함)")
     args = []
     if itsoffset is not None:
         args += ["-itsoffset", str(itsoffset)]
-    args += ["-f", "rawvideo", "-pix_fmt", pix_fmt, "-s", f"{WIDTH}x{HEIGHT}", "-framerate", fps, "-i", "pipe:0"]
+    args += ["-f", "rawvideo", "-pix_fmt", pix_fmt, "-s", f"{width}x{height}", "-framerate", fps, "-i", "pipe:0"]
     if audio:
         args += ["-f", "lavfi", "-i", f"sine=frequency=440:duration={AUDIO_SECONDS}"]
         args += ["-map", "1:a:0", "-map", "0:v:0"] if audio_first else ["-map", "0:v:0", "-map", "1:a:0"]
     if vf:
         args += ["-vf", vf]
     args += ["-c:v", "prores_ks", "-profile:v", profile, "-pix_fmt", pix_fmt]
+    if color:
+        args += COLOR_TAG_ARGS[color]
     if fps_mode:
         args += ["-fps_mode", fps_mode]
     if audio:
@@ -211,6 +264,22 @@ def read_all_frames(path):
         frames.append(frame)
     cap.release()
     return frames
+
+
+def pipe_frames(path):
+    """앱의 ffmpeg 파이프(movie_pipe_source._pipe_command)와 같은 명령 — -map 0:V:0 -fps_mode passthrough, bgr24 — 으로 끝까지
+    디코드한 BGR 프레임 목록 ((높이, 너비, 3) uint8, 읽기 전용). 크기는 ffprobe로(같은 트랙 V:0). 색 기준으로 쓴다 — ffmpeg는 색 태그를
+    따르고(709 클립은 709 행렬) cv2는 따르지 않는다. 바이트 수가 한 장 크기로 나눠떨어지지 않으면 ValueError (조용히 자르지 않음)."""
+    size = run_tool([ffprobe_exe(), "-v", "error", "-select_streams", "V:0", "-show_entries", "stream=width,height",
+                     "-of", "csv=p=0", path], "ffprobe 크기 읽기", TIMEOUT_PROBE)
+    width, height = (int(v) for v in size.stdout.decode("ascii").strip().split(","))
+    result = run_tool([ffmpeg_exe(), "-nostdin", "-v", "error", "-i", path, "-map", "0:V:0", "-fps_mode", "passthrough",
+                       "-f", "rawvideo", "-pix_fmt", "bgr24", "-"], "ffmpeg 파이프 명령으로 bgr24 디코드", TIMEOUT_PIPE)
+    frame_bytes = width * height * 3
+    if not result.stdout or len(result.stdout) % frame_bytes:
+        raise ValueError(f"bgr24 출력 {len(result.stdout)}바이트가 {width}x{height} 한 장({frame_bytes}바이트)으로 나눠떨어지지 "
+                         f"않습니다: {path}")
+    return list(np.frombuffer(result.stdout, np.uint8).reshape(-1, height, width, 3))
 
 
 def _verify_numbered(path, count):
@@ -287,21 +356,34 @@ def stats_summary(stats):
             f"differing pixels {stats['pixel_pct']:.4f}%, diff histogram (pipe-cv2) {stats['histogram']}")
 
 
-def make_numbered_clip(path, count=120, fps="24", profile="3", pix_fmt="yuv444p10le"):
+def make_numbered_clip(path, count=120, fps="24", profile="3", pix_fmt="yuv444p10le", width=WIDTH, height=HEIGHT, color=None):
     """프레임 i를 회색 블록 두 개로 인코딩한 번호 클립(count <= 200, frame_number로 복호). 만든 뒤 cv2로 읽어 복호한 번호열이
     range(count)인지 검증 (실패하면 ValueError) — 밝기 레벨 정확도는 요구하지 않음.
 
     profile은 prores_ks 번호(0 proxy, 1 lt, 2 standard, 3 hq, 4 4444, 5 4444xq). 진짜 4444는 profile="4"
     (profile="3"에 4:4:4 pix_fmt를 주면 HQ 표지의 4:4:4 10비트가 나옴). pix_fmt는 PRORES_PIX_FMTS 중 하나이고,
-    yuva...면 알파 트랙이 있는 클립.
+    yuva...면 알파 트랙이 있는 클립. width x height는 기본 320x180 (4K는 3840x2160), color="bt709"면 색 태그를 붙임 (기본 없음).
     """
-    _encode(path, _numbered_raw(count, pix_fmt), fps=fps, profile=profile, pix_fmt=pix_fmt)
+    _encode(path, _numbered_raw(count, pix_fmt, width, height), fps=fps, profile=profile, pix_fmt=pix_fmt, width=width,
+            height=height, color=color)
     _verify_numbered(path, count)
 
 
-def make_chroma_clip(path, count=48, fps="24", profile="3", pix_fmt="yuv422p10le", seed=7):
-    """시드 고정 무작위 블록 색 클립 (유채색) — 바이트 동일성 시험에서 색차 경로까지 보려는 것. 만든 뒤 cv2로 유채색·장수 검증."""
-    _encode(path, _chroma_raw(count, pix_fmt, seed), fps=fps, profile=profile, pix_fmt=pix_fmt)
+def make_chroma_clip(path, count=48, fps="24", profile=None, pix_fmt=None, seed=7, width=WIDTH, height=HEIGHT, color=None,
+                     alpha=False):
+    """시드 고정 무작위 블록 색 클립 (유채색, 색은 RGB 영역 안 — _chroma_raw) — 바이트 동일성 시험에서 색차 경로까지 보려는 것.
+    만든 뒤 cv2로 유채색·장수 검증.
+
+    profile·pix_fmt 기본값은 "3"·"yuv422p10le"(HQ 4:2:2), alpha=True면 "4"·"yuva444p10le" (알파는 4444 프로파일만 실음 —
+    알파 없는 pix_fmt나 4444가 아닌 프로파일을 같이 주면 ffmpeg가 알파를 몰래 버리므로 ValueError). alpha=True는 왼쪽 절반 알파 0·
+    오른쪽 절반 알파 최대 (투명한 쪽의 색도 그대로 살아 있음). color="bt709"면 709 행렬로 만들고 색 태그를 붙임 (기본 601·태그 없음).
+    """
+    profile = profile or ("4" if alpha else "3")
+    pix_fmt = pix_fmt or ("yuva444p10le" if alpha else "yuv422p10le")
+    if alpha and not (_layout(pix_fmt)[0] and profile in ("4", "5")):
+        raise ValueError(f"alpha=True는 알파 pix_fmt(yuva...)와 4444 프로파일(4·5)이 필요합니다: {pix_fmt}, profile {profile}")
+    raw = _chroma_raw(count, pix_fmt, seed, width, height, color, half_transparent=alpha)
+    _encode(path, raw, fps=fps, profile=profile, pix_fmt=pix_fmt, width=width, height=height, color=color)
     _verify_chromatic(path, count)
 
 

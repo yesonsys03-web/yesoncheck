@@ -17,6 +17,7 @@ os.environ.pop("YESONCHECK_MOVIE_SOURCE", None)
 # 전체 보관을 시험하는 쪽이 YESONCHECK_FRAME_CACHE=auto를 명시해 켠다
 os.environ["YESONCHECK_FRAME_CACHE"] = "ring"
 os.environ.pop("YESONCHECK_VIDEO_ITEM", None)
+os.environ.pop("YESONCHECK_MAC_NATIVE", None)
 
 # fetch_ffmpeg.sh / fetch_ffmpeg_windows.ps1로 받은 정적 ffmpeg를 PATH 맨 앞에 둠
 _FFMPEG_DIR = os.path.join(

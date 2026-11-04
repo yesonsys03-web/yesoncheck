@@ -113,7 +113,10 @@ class MovieProbe:
     """첫 영상 트랙(attached_pic 제외)의 ffprobe 값 중 게이트에 쓰는 것. 없는 값은 None·0·""(영상 트랙이 없으면 전부).
 
     width·height는 ffprobe가 준 그대로 — 화소 비율(SAR)을 곱하지도 회전으로 바꾸지도 않는다 (게이트가 둘 다 없는 파일만
-    통과시키므로 cv2가 주는 크기와 같다)."""
+    통과시키므로 cv2가 주는 크기와 같다).
+
+    pix_fmt부터 codec_tag까지는 게이트(pipe_eligible)가 보지 않는 값으로, 뒤 작업이 읽는다: ffprobe가 준 글 그대로(정규화 없음 —
+    "unknown"도 그대로), 없으면 "". 그래서 기본값이 있다 (dataclasses.replace로 일부만 바꿔 쓰는 곳이 그대로 동작)."""
 
     codec: str
     width: int
@@ -127,6 +130,12 @@ class MovieProbe:
     format_start: float  # 컨테이너 start_time (초)
     rotation: int  # 디스플레이 행렬의 회전 (도, 반올림)
     sar_ok: bool  # 화소 비율이 없거나 1:1
+    pix_fmt: str = ""  # 예: "yuv422p10le"·"yuva444p12le" (4444는 디코더 쪽 값이라 인코더 입력보다 비트가 큼)
+    color_space: str = ""  # 행렬 계수 ("bt709"·"bt470bg"·…), 태그가 없으면 ""
+    color_range: str = ""  # "tv"·"pc"
+    color_transfer: str = ""
+    color_primaries: str = ""
+    codec_tag: str = ""  # codec_tag_string — "apch"(HQ)·"apcn"(422)·"ap4h"(4444)·…
 
 
 def _optional_int(value):
@@ -163,6 +172,12 @@ def probe_movie(path):
         format_start=_start_seconds(info.get("format", {}).get("start_time")),
         rotation=_rotation(video),
         sar_ok=video.get("sample_aspect_ratio") in UNSPECIFIED_SAR,
+        pix_fmt=video.get("pix_fmt", ""),
+        color_space=video.get("color_space", ""),
+        color_range=video.get("color_range", ""),
+        color_transfer=video.get("color_transfer", ""),
+        color_primaries=video.get("color_primaries", ""),
+        codec_tag=video.get("codec_tag_string", ""),
     )
 
 
@@ -1468,19 +1483,39 @@ def _last_resort(message):
 PLAY_LOG_PREFIX = "[재생]"
 
 
-def maybe_pipe_capture(path, full_cache=False):
+def probe_for_open(path, mode):
+    """열기 경로의 ffprobe 한 번(probe_movie) → MovieProbe, 또는 None — ffprobe가 파일을 못 읽었을 때(RuntimeError — 깨진 파일·확인 불가,
+    파일 쪽 문제)의 규칙을 한 곳에 둔다: maybe_pipe_capture와 플레이어의 네이티브 분기(VideoPlayer._native_or_pipe_capture — 게이트를 본
+    probe를 파이프 판정에 그대로 넘김)가 같이 부름. mode: movie_source_mode()의 "auto"·"pipe" ("cv2"면 부르는 쪽이 probe하지 않음).
+    - "auto": 기록 한 줄과 스택 트레이스·stderr 전문을 남기고 None — 부른 쪽은 기존 cv2 줄로 (cv2도 못 열면 기존 오류 창).
+    - "pipe": PipeCaptureError로 감싸 올림 (원인 체인 유지 — 강제 모드는 cv2로 조용히 돌리지 않음).
+    ffprobe 실행 파일이 없음(ToolNotFoundError — 빌드 깨짐)·probe 결과 해석 오류(KeyError·ValueError… — 코드 버그)는 잡지 않고 그대로."""
+    try:
+        return probe_movie(path)
+    except RuntimeError as exc:  # ffprobe 종료 코드 ≠ 0 — 파일 쪽 문제 (ToolNotFoundError는 RuntimeError가 아님)
+        if mode == "pipe":  # 강제 모드는 cv2로 조용히 돌리지 않음 — 사용자는 파이프로 재생 중이라고 믿게 됨
+            raise PipeCaptureError(f"{SOURCE_MODE_ENV}=pipe지만 ffprobe가 파일을 읽지 못했습니다: {path}\n{exc}", [], "") from exc
+        print(f"{PLAY_LOG_PREFIX} ffprobe가 파일을 읽지 못해 기존 cv2 경로로 엽니다: {os.path.basename(path)}")
+        traceback.print_exc()
+        return None
+
+
+def maybe_pipe_capture(path, full_cache=False, probe=None):
     """영상 파일 path를 ffmpeg 파이프로 읽어야 하면 FFmpegPipeCapture, 아니면 None (부른 쪽이 기존 cv2.VideoCapture로 엶).
 
     full_cache: 캡처가 전체 프레임 캐시를 원하는가 — 플레이어 A/B만 True (VideoPlayer._open_movie_capture). 판정은 캡처의 첫 read
     (예산·킬 스위치 YESONCHECK_FRAME_CACHE=ring — FFmpegPipeCapture._decide_cache), 그 밖(open_any_capture — 주석 내보내기)은 링.
+
+    probe: 부른 쪽이 이미 읽은 MovieProbe — 플레이어의 네이티브 분기(VideoPlayer._native_or_pipe_capture)가 네이티브 게이트를 본 probe를 넘겨
+    ffprobe를 한 번만 돌림. 주면 probe_movie를 다시 부르지 않고 그 값으로 판정(모드·게이트·기록 줄은 그대로), None(기본)이면 여기서 probe_for_open.
 
     open_any_capture(annotation_export)와 VideoPlayer._open_movie_capture의 삽입 분기가 같은 이 함수를 부른다 — 판정 중복 없음.
     게이트는 양성 증거로만 켜진다(opt-in). 모드(YESONCHECK_MOVIE_SOURCE, movie_source_mode):
     - "cv2": probe도 하지 않고 None — 1.5.0 동작으로 돌리는 킬 스위치.
     - "auto": probe_movie → pipe_eligible이면 캡처(로그 한 줄), 아니면 None(어느 조건이 어긋났는지 로그 한 줄).
     - "pipe": ① 코덱만 면제하고 정확도 조건 ②~⑥을 요구 — 어긋나면 PipeCaptureError (비 CFR 파일을 조용히 틀어 주지 않음).
-    예외의 경계: ffprobe가 파일을 못 읽음(RuntimeError — 깨진 파일·확인 불가, 파일 쪽 문제)은 auto에서만 스택 트레이스·stderr 전문을
-    로그에 남기고 None(cv2도 못 열면 기존 오류 창) — pipe 모드는 PipeCaptureError로 감싸 올림(원인 체인 유지, cv2로 조용히 가지 않음).
+    예외의 경계: ffprobe가 파일을 못 읽음(RuntimeError — 깨진 파일·확인 불가, 파일 쪽 문제)은 probe_for_open의 규칙 — auto에서만 스택
+    트레이스·stderr 전문을 로그에 남기고 None(cv2도 못 열면 기존 오류 창), pipe 모드는 PipeCaptureError로 감싸 올림(원인 체인 유지, cv2로 조용히 가지 않음).
     ffprobe 실행 파일이 없음(ToolNotFoundError — 빌드 깨짐)·probe 결과 해석 오류
     (KeyError·ValueError… — 코드 버그)·캡처 생성의 PipeCaptureError는 잡지 않고 그대로 올린다 (조용히 숨기면 안 됨).
     """
@@ -1488,14 +1523,10 @@ def maybe_pipe_capture(path, full_cache=False):
     if mode == "cv2":
         return None
     name = os.path.basename(path)
-    try:
-        probe = probe_movie(path)
-    except RuntimeError as exc:  # ffprobe 종료 코드 ≠ 0 — 파일 쪽 문제 (ToolNotFoundError는 RuntimeError가 아님)
-        if mode == "pipe":  # 강제 모드는 cv2로 조용히 돌리지 않음 — 사용자는 파이프로 재생 중이라고 믿게 됨
-            raise PipeCaptureError(f"{SOURCE_MODE_ENV}=pipe지만 ffprobe가 파일을 읽지 못했습니다: {path}\n{exc}", [], "") from exc
-        print(f"{PLAY_LOG_PREFIX} ffprobe가 파일을 읽지 못해 기존 cv2 경로로 엽니다: {name}")
-        traceback.print_exc()
-        return None
+    if probe is None:
+        probe = probe_for_open(path, mode)
+        if probe is None:  # auto에서 ffprobe가 못 읽음 — probe_for_open이 기록을 남겼고, 기존 cv2 경로로
+            return None
     reason = ineligible_reason(probe, check_codec=mode != "pipe")
     if reason is not None:
         if mode == "pipe":

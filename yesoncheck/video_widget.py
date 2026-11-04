@@ -5,10 +5,13 @@ import os
 
 import cv2
 import numpy as np
+from PyQt5 import sip
 from PyQt5.QtCore import Qt, QTimer, QPointF, QRectF, pyqtSignal
 from PyQt5.QtGui import (
     QColor,
     QBrush,
+    QFont,
+    QFontMetricsF,
     QImage,
     QOpenGLContext,
     QPainter,
@@ -36,7 +39,10 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck import paths
+from yesoncheck.annotation_overlay import AnnotationOverlay
+from yesoncheck.frame_handles import native_surface_of, whole_surface_handle
 from yesoncheck.gl_video_item import LOG_PREFIX, VIDEO_ITEM_ENV, VideoFrameItem, use_stream_item, video_item_mode
+from yesoncheck.overlay_text_layout import overlay_layout
 
 VIEWPORT_ENV = "YESONCHECK_VIEWPORT"
 VIEWPORT_MODES = ("gl", "raster")
@@ -45,6 +51,12 @@ VIEWPORT_MODES = ("gl", "raster")
 # GL 뷰포트는 스타일시트 배경 칠을 받지 않아(WA_OpaquePaintEvent) backgroundBrush로 GPU가 칠함.
 # 시트는 해시로 얼어 있어(tests/test_stylesheet_freeze.py) 값이 어긋날 일 없음.
 VIDEO_BG = {"dark": "#232323", "light": "#fafafa"}
+
+# B 키 오버레이 아이템(네이티브 프레임 — set_overlay_text): 쌓임은 ROI(10) 위, 주석 미리보기(14)·편집 핸들(16) 아래
+OVERLAY_ITEM_Z = 13
+# 주석 층(네이티브 프레임 — annotation_overlay): B 키 상자 위(굽는 길도 B 글자를 먼저, 주석을 그 위에 구움 — Ruling 18), 주석 미리보기(14) 아래
+ANNOTATION_OVERLAY_Z = 13.5
+OVERLAY_FONT_REF_PX = 100  # 글꼴 크기를 정할 때 대문자 높이를 재는 기준 픽셀 크기 (overlay_font)
 
 
 def viewport_mode(platform_name, env):
@@ -73,6 +85,29 @@ def viewport_forced(env):
 def gl_context_available():
     """OpenGL 컨텍스트를 실제로 만들 수 있는지 — cocoa에서도 드물게 실패할 수 있음(원격 세션·드라이버 문제)."""
     return QOpenGLContext().create()
+
+
+def overlay_font(text, layout):
+    """B 키 오버레이 아이템의 글꼴 — 앱 기본 글꼴을 굽는 길(cv2 Hershey)의 글자 크기에 맞춤(모양은 다름 — 사용자 결정 "같아 보이면 OK").
+
+    크기: 대문자 높이(QFontMetricsF.capHeight)가 cv2 글자 높이(layout.text_height — 기준선 위 높이, 대문자 높이에 획 반 굵기를 더한 값)와 같게 —
+    OVERLAY_FONT_REF_PX에서 잰 대문자 높이로 비례 계산(대문자 높이는 픽셀 크기에 비례). 그래도 Qt 글자가 들어갈 너비(layout.room)보다 넓으면
+    (글꼴마다 폭이 다름) 들어갈 때까지 더 줄임(1px까지). 굵기: cv2 획이 3px 이상(1080p 3·4K 8 — overlay_metrics)이면 Bold, 그보다 가늘면(720p 이하 2) 보통.
+    굽는 길이 4K 획을 √(k/1.5)만큼 더 굵게 하는 것(줄여 볼 때 획 가장자리가 섞여 가늘어 보임)은 아이템에는 필요 없음 — Qt 글자는 화면 해상도로
+    그려져 줄여 봐도 가늘어지지 않음. 대문자 높이를 잴 수 없는 글꼴(0 이하)이면 ValueError — 크기를 지어내지 않음."""
+    font = QFont()
+    font.setBold(layout.thickness >= 3)
+    font.setPixelSize(OVERLAY_FONT_REF_PX)
+    cap = QFontMetricsF(font).capHeight()
+    if not cap > 0:
+        raise ValueError(f"글꼴 {font.family()!r}의 대문자 높이를 잴 수 없습니다(capHeight {cap}, 픽셀 크기 {OVERLAY_FONT_REF_PX}, "
+                         f"Qt 플랫폼 {QApplication.platformName()!r}) — B 키 오버레이 글자 크기를 정할 수 없음")
+    font.setPixelSize(max(1, round(layout.text_height * OVERLAY_FONT_REF_PX / cap)))
+    advance = QFontMetricsF(font).horizontalAdvance(text)
+    while advance > layout.room and font.pixelSize() > 1:  # 작은 크기에서는 폭이 크기에 비례하지 않아(글꼴의 작은 크기용 자간) 다시 잼
+        font.setPixelSize(max(1, min(font.pixelSize() - 1, math.floor(font.pixelSize() * layout.room / advance))))
+        advance = QFontMetricsF(font).horizontalAdvance(text)
+    return font
 
 
 class CustomVideoWidget(QGraphicsView):
@@ -112,6 +147,9 @@ class CustomVideoWidget(QGraphicsView):
             self.scene.addItem(self.video_item)
         else:
             self.video_item = self.scene.addPixmap(QPixmap())
+        self._pixmap_backing = None  # 픽스맵 길에 그린 네이티브 프레임 — RGB32 픽스맵이 그 메모리를 함께 쓰므로 다음 그림까지 쥠 (_show_native_frames)
+        self._overlay_provider = None  # B 키 글자 공급자 () -> str | None — 플레이어가 등록(set_overlay_provider), updateFrame의 네이티브 분기가 부름
+        self._annotation_provider = None  # 주석 공급자 () -> list[dict] — 보이는 프레임의 주석, 플레이어가 등록(set_annotation_provider)
 
         self.wipe_position_x = 0.5
         self.wipe_position_y = 0.5
@@ -192,6 +230,25 @@ class CustomVideoWidget(QGraphicsView):
         self.roi_rect_item.setVisible(False)
         self.roi_rect_item.setZValue(10)
         self.scene.addItem(self.roi_rect_item)
+
+        # B 키 오버레이 아이템(네이티브 프레임 — 읽기 전용이라 굽지 않음): 흰 상자 + 검정 글자, 영상 아이템 좌표(= 프레임 픽셀)라
+        # 줌·맞춤에 따라 구운 글자처럼 함께 커짐. 영상 아이템보다 뒤에 넣고 z OVERLAY_ITEM_Z (주석 층이 13과 14 사이에 끼므로 쌓임 약속).
+        # 글자는 상자의 자식 — 자식은 늘 부모 위에 그려지므로 z·넣은 차례와 상관없이 글자가 상자 위, 보임/숨김도 상자 하나로 (set_overlay_text).
+        # 상자는 원점(0, 0)에 두고 사각형을 프레임 좌표로 잡으므로 상자 좌표 = 프레임 좌표
+        self.overlay_box_item = QGraphicsRectItem()
+        self.overlay_box_item.setPen(QPen(Qt.NoPen))
+        self.overlay_box_item.setBrush(QColor(255, 255, 255))
+        self.overlay_box_item.setZValue(OVERLAY_ITEM_Z)
+        self.overlay_box_item.setVisible(False)
+        self.overlay_text_item = QGraphicsSimpleTextItem(self.overlay_box_item)
+        self.overlay_text_item.setBrush(QColor(0, 0, 0))
+        self.scene.addItem(self.overlay_box_item)
+
+        # 주석 층(네이티브 프레임 — 읽기 전용이라 주석을 굽지 않음): 프레임 사각형 하나가 주석마다 자식 아이템(annotation_overlay). 영상 아이템보다 뒤에
+        # 넣고 원점·프레임 좌표라 B 키 상자처럼 줌·맞춤에 따라 구운 주석처럼 커짐; z ANNOTATION_OVERLAY_Z. 갱신은 updateFrame(_refresh_native_annotations)
+        self.annotation_overlay = AnnotationOverlay()
+        self.annotation_overlay.setZValue(ANNOTATION_OVERLAY_Z)
+        self.scene.addItem(self.annotation_overlay)
 
         # Frame annotation overlay
         self.annotation_mode_enabled = False
@@ -490,6 +547,16 @@ class CustomVideoWidget(QGraphicsView):
     def updateFrame(self, frame_a, frame_b):
         if frame_a is None:
             self.video_item.setPixmap(QPixmap())
+            self._pixmap_backing = None  # 빈 픽스맵을 건 뒤에 놓음 — 픽스맵 길이 앞 네이티브 프레임의 표면(4K 33MB)을 더 쥐지 않게
+            self.set_overlay_text(None, 0, 0)  # 비운 화면에 앞 네이티브 프레임의 B 키 글자가 남지 않게
+            self.annotation_overlay.clear()  # 주석 층도
+            return
+
+        if native_surface_of(frame_a) is not None or native_surface_of(frame_b) is not None:
+            self._show_native_frames(frame_a, frame_b)  # 네이티브(IOSurface) 프레임 — RGB 변환·numpy 합성 없음
+            self._refresh_native_overlay(frame_a)
+            self._refresh_native_annotations(frame_a)
+            self._after_frame_shown()
             return
 
         height, width = frame_a.shape[:2]
@@ -516,6 +583,108 @@ class CustomVideoWidget(QGraphicsView):
             pixmap = QPixmap.fromImage(q_img)
             self.video_item.setPixmap(pixmap)
 
+        self._pixmap_backing = None  # RGB 그림을 건 뒤에 놓음 — 픽스맵 길이 앞 네이티브 프레임의 표면을 더 쥐지 않게(스트림 길에선 늘 None)
+        self.set_overlay_text(None, width, height)  # RGB 프레임의 B 키 글자는 프레임에 구움 — 앞 네이티브 프레임의 아이템이 남지 않게(숨어 있으면 할 일 없음)
+        self.annotation_overlay.clear()  # 주석도 프레임에 구움(prepare_frame_for_display) — 앞 네이티브 프레임의 주석 층을 비움(비어 있으면 할 일 없음)
+        self._after_frame_shown()
+
+    def _show_native_frames(self, frame_a, frame_b):
+        """A 또는 B가 네이티브 프레임(frame_handles — IOSurface 위 BGRX 뷰)일 때 그리기 — CPU로 픽셀을 읽거나 합성하지 않는다.
+
+        스트림 아이템(GL): 두 면을 그대로 set_sides — 네이티브 면은 아이템이 IOSurface를 텍스처로 묶고, 아닌 면(h264 등 RGB)은 아이템이 올림.
+        와이프는 numpy 합성 대신 axis·ratio(GL scissor): X만 → ("x", wipe_position_x), Y만 → ("y", wipe_position_y), 둘 다 → ("xy", (rx, ry)),
+        꺼짐 → (None, 0.0)이고 그때 B는 넘기지 않음.
+        픽스맵 아이템(킬 스위치 YESONCHECK_VIDEO_ITEM=pixmap·raster 뷰포트 — 느려도 되는 끄는 길): **A만** 그림(와이프 합성은 GL 길의 몫 — 와이프 선은
+        그대로 보이지만 B는 그리지 않음). 네이티브 A는 QImage Format_RGB32(리틀 엔디언 B·G·R·X 바이트 = BGRX)로 표면 메모리를 복사 없이 가리키고
+        행 간격은 strides[0](bytesPerRow); RGB32 픽스맵은 그 메모리를 함께 쓸 수 있어 배열을 _pixmap_backing에 다음 그림까지 쥔다(배열이 손잡이로
+        IOSurface를 살림). 표면 전체가 아닌 네이티브 뷰(조각·뒤집힌 뷰)는 바이트 배치가 달라 ValueError. A가 RGB(B만 네이티브)면 RGB888."""
+        wipe_x, wipe_y = self.wipe_enabled_x, self.wipe_enabled_y
+        if self.video_item_stream:
+            if wipe_x and wipe_y:
+                axis, ratio = "xy", (self.wipe_position_x, self.wipe_position_y)
+            elif wipe_x:
+                axis, ratio = "x", self.wipe_position_x
+            elif wipe_y:
+                axis, ratio = "y", self.wipe_position_y
+            else:
+                axis, ratio = None, 0.0
+            self.video_item.set_sides(frame_a, frame_b if axis else None, axis, ratio)
+            return
+        height, width = frame_a.shape[:2]
+        if native_surface_of(frame_a) is None:
+            q_img = QImage(frame_a.data, width, height, 3 * width, QImage.Format_RGB888)
+        else:
+            if whole_surface_handle(frame_a) is None:
+                raise ValueError(f"A 면이 네이티브 프레임의 표면 전체가 아닙니다(조각·상하 반전·채널 역순 뷰 — shape {frame_a.shape}, "
+                                 f"strides {frame_a.strides}) — RGB32 픽스맵으로 가리킬 수 없습니다")
+            q_img = QImage(sip.voidptr(frame_a.ctypes.data), width, height, frame_a.strides[0], QImage.Format_RGB32)
+        self.video_item.setPixmap(QPixmap.fromImage(q_img))
+        self._pixmap_backing = frame_a  # 새 픽스맵을 건 뒤에 바꿈 — 옛 픽스맵이 걸려 있는 동안 옛 배열을 놓지 않게
+
+    def set_overlay_provider(self, provider):
+        """B 키 글자 공급자 등록 — provider() -> str | None(None이면 숨김). 플레이어가 창을 만들 때 한 번(_overlay_text_for_native);
+        updateFrame의 네이티브 분기가 프레임마다 불러 아이템을 갱신(공급자가 없으면 아이템을 숨김)."""
+        if not callable(provider):
+            raise TypeError(f"B 키 글자 공급자는 호출할 수 있어야 합니다: {provider!r}")
+        self._overlay_provider = provider
+
+    def _refresh_native_overlay(self, frame_a):
+        """네이티브 분기의 B 키 아이템 갱신 — updateFrame이 한 곳에서: prepare_frame_for_display를 거치지 않고 updateFrame을 바로 부르는 길
+        (_minimal_preview_seek 등)에서도 새 프레임 번호. A가 네이티브일 때만 보임 — A가 RGB(B만 네이티브)면 B 키 글자는 굽는 길의 몫이라
+        아이템은 숨김(prepare_frame_for_display가 A에 이미 구웠으면 두 번 그리지 않게, 굽지 않는 미리보기 길은 예전 RGB 길처럼 글자 없음).
+        기하는 A의 크기(frame_a.shape — 픽셀은 읽지 않음)."""
+        height, width = frame_a.shape[:2]
+        if self._overlay_provider is None or native_surface_of(frame_a) is None:
+            self.set_overlay_text(None, width, height)
+            return
+        self.set_overlay_text(self._overlay_provider(), width, height)
+
+    def set_annotation_provider(self, provider):
+        """주석 공급자 등록 — provider() -> list[dict](보이는 프레임의 주석 — 플레이어의 annotation_store). 플레이어가 창을 만들 때 한 번
+        (_annotations_for_native); updateFrame의 네이티브 분기가 프레임마다 불러 주석 층을 갱신(공급자가 없으면 층을 비움)."""
+        if not callable(provider):
+            raise TypeError(f"주석 공급자는 호출할 수 있어야 합니다: {provider!r}")
+        self._annotation_provider = provider
+
+    def _refresh_native_annotations(self, frame_a):
+        """네이티브 분기의 주석 층 갱신 — B 키 아이템(_refresh_native_overlay)과 같은 약속: updateFrame 한 곳에서라 prepare_frame_for_display를
+        거치지 않는 길(_minimal_preview_seek 등)과 편집 뒤 다시 그리기(_redraw_frame_with_annotations)도 보이는 프레임의 주석. A가 네이티브일 때만 채움 —
+        A가 RGB(B만 네이티브)면 주석은 prepare_frame_for_display가 A에 이미 구웠으므로 층을 비움(두 번 그리지 않게). 기하는 A의 크기(frame_a.shape —
+        픽셀은 읽지 않음)."""
+        height, width = frame_a.shape[:2]
+        if self._annotation_provider is None or native_surface_of(frame_a) is None:
+            self.annotation_overlay.clear()
+            return
+        self.annotation_overlay.set_annotations(self._annotation_provider(), width, height)
+
+    def set_overlay_text(self, text, width, height):
+        """B 키 오버레이 아이템(흰 상자 + 검정 글자 — 네이티브 프레임용, 굽지 않음)을 width×height 프레임의 text로. None이면 둘 다 숨김
+        (이미 숨었으면 할 일 없음).
+
+        굽는 길(player_playback.overlay_text)과 같은 규칙(overlay_layout — overlay_metrics의 크기·여백, 너비를 넘치면 줄임): 기준선은
+        (margin_x, 높이 − margin_y), 상자는 글자 상자를 pad만큼 넓힌 것 — 왼쪽 margin_x − pad, 위 기준선 − cv2 글자 높이 − pad(구운 상자와 같은
+        픽셀), 아래 기준선 + max(pad, cv2 꼬리, Qt 꼬리)(Qt 글꼴의 g·p·_ 꼬리도 상자 안), 오른쪽 Qt 글자 끝 + pad. cv2.rectangle처럼 끝 픽셀까지
+        칠하도록 너비·높이에 1을 더함. 글꼴은 overlay_font(대문자 높이 = cv2 글자 높이). 글자 아이템은 상자의 자식이라 자리는 상자 좌표 — 상자가
+        원점에 있어 프레임 좌표와 같음 — 이고 보임/숨김은 상자를 따름."""
+        if text is None:
+            if self.overlay_box_item.isVisible():
+                self.overlay_box_item.setVisible(False)  # 자식인 글자도 함께 숨음
+            return
+        layout = overlay_layout(text, width, height)
+        font = overlay_font(text, layout)
+        metrics = QFontMetricsF(font)
+        x, y = layout.margin_x, height - layout.margin_y  # 기준선 왼쪽 끝
+        pad = layout.pad
+        below = max(pad, layout.baseline, math.ceil(metrics.descent()))
+        self.overlay_text_item.setFont(font)
+        self.overlay_text_item.setText(text)
+        self.overlay_text_item.setPos(x, y - metrics.ascent())  # 상자 좌표(= 프레임 좌표). 글자 아이템의 원점은 글줄 위 — 기준선이 y에 오게
+        self.overlay_box_item.setRect(QRectF(x - pad, y - layout.text_height - pad,
+                                             metrics.horizontalAdvance(text) + 2 * pad + 1, layout.text_height + pad + below + 1))
+        self.overlay_box_item.setVisible(True)  # 자식인 글자도 함께 보임
+
+    def _after_frame_shown(self):
+        """updateFrame의 꼬리(두 그리기 길이 함께 씀): 새 그림 크기에 장면·맞춤을 맞추고 와이프 선·ROI·편집 핸들을 다시 놓음."""
         scene_rect_changed = self.scene.sceneRect() != self.video_item.boundingRect()
         if self.initial_fit or scene_rect_changed:
             self.scene.setSceneRect(self.video_item.boundingRect())
@@ -525,6 +694,13 @@ class CustomVideoWidget(QGraphicsView):
         self.updateWipeLine()
         self._update_roi_item()
         self._update_edit_handle_items()
+
+    def display_path(self):
+        """프레임을 화면에 그리는 길 — "gl"(GL 뷰포트 + 스트림 아이템), "pixmap"(GL 뷰포트 + 픽스맵 아이템 — 킬 스위치
+        YESONCHECK_VIDEO_ITEM=pixmap), "raster"(라스터 뷰포트). [측정] 줄의 표시= 값."""
+        if self.video_item_stream:
+            return "gl"
+        return "pixmap" if isinstance(self.viewport(), QOpenGLWidget) else "raster"
 
     def toggleWipeEffect(self, enabled):
         self.wipeEnabled = enabled
@@ -693,7 +869,7 @@ class CustomVideoWidget(QGraphicsView):
             self.annotation_edit_handle_items.append(handle)
 
     def set_display_annotations(self, annotations):
-        """Legacy hook; annotations are burned onto frames at playback time."""
+        """Legacy hook (부르는 곳 없음) — 주석은 RGB 프레임에는 재생 때 굽고(prepare_frame_for_display), 네이티브 프레임에는 주석 층(set_annotation_provider)."""
         _ = annotations
 
     def _annotation_pen(self, color_hex, scale=None, stroke_width=None):
