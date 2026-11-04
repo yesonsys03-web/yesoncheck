@@ -22,7 +22,8 @@ glOrtho(0, pw, ph, 0, -1, 1)(y 아래 방향 — Qt와 같음), 정점은 매핑
 
 paint 가드: PyQt5 가상 함수(paint)에서 빠져나간 예외는 qFatal(프로세스 종료, 오류 창 없음 — CLAUDE.md 함정)이다. 그래서 스트림 모드의
 paint 본문 전체를 except BaseException으로 받아 첫 실패만 기록(트레이스백 전문, [표시]) + 오류 창(Qt 루프에서 1회 — paint 안에서 모달 금지)으로
-알리고, 그 뒤 paint는 아무것도 그리지 않는다(빈 영상 영역). 재생·UI는 계속되고 탈출구는 YESONCHECK_VIDEO_ITEM=pixmap(예전 QPixmap 경로).
+알리고, 그 뒤 paint는 아무것도 그리지 않는다(빈 영상 영역). 재생·UI는 계속되고 탈출구는 YESONCHECK_VIDEO_ITEM=pixmap(예전 QPixmap 경로),
+Mac은 Setting → 재생 디코더 → ffmpeg (예전 방식)도(그 선택이 reset_failure로 걸쇠를 풀어 다음 paint가 다시 그림 — 창 글에 그 안내 한 줄).
 
 IOSurface 면 그리기(set_sides·set_surface — Apple Silicon 네이티브 재생 경로): 네이티브 프레임(frame_handles — IOSurface 위의 BGRX 뷰)은 CPU로
 읽거나 올리지 않고 gl_surface.CGLTexImageIOSurface2D로 GL_TEXTURE_RECTANGLE_ARB 텍스처에 그대로 묶어 그린다(복사 0, 텍스처 좌표는 픽셀 단위).
@@ -82,6 +83,8 @@ from yesoncheck.gl_surface import GL_BGRA, GL_RGBA, GL_SCISSOR_TEST, GL_TEXTURE_
 VIDEO_ITEM_ENV = "YESONCHECK_VIDEO_ITEM"
 VIDEO_ITEM_MODES = ("auto", "gl", "pixmap")
 LOG_PREFIX = "[표시]"
+# (Mac) 실패 창의 킬 스위치 안내 앞에 붙는 줄 — player_base의 Setting 메뉴 '재생 디코더 (Mac)'가 그 걸쇠를 풂 (스펙 2026-11-04 §5.4 ④)
+DECODER_MENU_HINT = "Setting → 재생 디코더 → ffmpeg (예전 방식) 으로 바꾸면 예전 방식으로 재생합니다"
 
 GL_DEFAULT_UNPACK_ALIGNMENT = 4  # GL 기본값 — 업로드 뒤 되돌림 (endNativePainting은 픽셀 저장 상태를 되돌리지 않음)
 QUAD_TEX_COORDS = ((0, 0), (1, 0), (1, 1), (0, 1))  # 모서리 (0,0)(w,0)(w,h)(0,h)와 짝 — 텍스처 행 0 = 배열 행 0 = 위
@@ -211,7 +214,7 @@ def _side(label, frame):
 class VideoFrameItem(QGraphicsPixmapItem):
     """픽스맵 아이템 자리에 들어가는 영상 프레임 아이템 (모듈 설명). stream: 스트림(GL 텍스처) 모드인지 — 만든 뒤 바꾸지 않음.
 
-    시험 훅: failure_count(_fail이 실패를 알린 수 — 첫 실패만 알리므로 0 또는 1)."""
+    시험 훅: failure_count(_fail이 실패를 알린 수 — 걸쇠가 걸린 동안은 첫 실패만 알리므로 reset_failure 사이마다 많아야 1씩 늚)."""
 
     def __init__(self, stream: bool):
         super().__init__()
@@ -340,6 +343,17 @@ class VideoFrameItem(QGraphicsPixmapItem):
         except BaseException as exc:  # paint 밖으로 나가면 PyQt5가 프로세스를 끝냄(qFatal) — 첫 실패만 크게 알리고 비워 둠
             self._fail(exc)
 
+    def reset_failure(self) -> None:
+        """그리기 실패 걸쇠(_failed)를 풀고 다시 그리기를 예약 — 다음 paint가 지금 프레임을 다시 그린다(다시 실패하면 _fail이 다시 기록 + 창 1회).
+        Setting → 재생 디코더에서 고를 때 플레이어가 부름(디코더를 바꾸는 것이 걸쇠의 탈출구 — 스펙 2026-11-04 §5.4 ④). failure_count(알린 수)는 그대로.
+
+        GL 상태는 비우지 않는다 — 다음 paint는 실패한 단계부터 다시 한다: 단계마다 성공한 뒤에만 기록하기 때문(준비 — _context는 _prepare 끝에서·
+        옛 컨텍스트 신호를 끊으면 바로 None, 저장소 — _storage는 잡은 뒤, 업로드 — _dirty는 올린 뒤에 False, 면 — 텍스처의 storage·content는 잡고
+        묶고 올린 뒤). 텍스처를 버리고 새로 만들게 하지 않는 이유: 여기(paint 밖)에는 current 컨텍스트가 없어 glDeleteTextures를 못 부르고,
+        IOSurface에 묶인 면 텍스처를 놓아 버리면 그 표면이 창을 닫을 때까지 GPU에 남음 — 메뉴로 디코더를 바꿀 때마다 부르므로 쌓임."""
+        self._failed = False
+        self.update()
+
     def _paint_stream(self, painter):
         engine = painter.paintEngine()
         if engine is None:  # GL 뷰포트에 컨텍스트가 없음 — Qt도 못 그림 (모듈 설명의 '엔진 없는 paint')
@@ -411,6 +425,7 @@ class VideoFrameItem(QGraphicsPixmapItem):
         면 텍스처(set_sides)는 여기서 만들지 않는다 — 처음 그릴 때(_side_texture)."""
         if self._context is not None:  # 죽지 않은 다른 컨텍스트에서 넘어옴 — 옛 신호가 새 텍스처를 지우지 않게 끊음(옛 텍스처는 그 컨텍스트와 함께 해제)
             self._context.aboutToBeDestroyed.disconnect(self._release_texture)
+            self._context = None  # 끊었음 — 아래에서 실패해도(걸쇠를 푼 뒤의) 다음 준비가 다시 끊으려다 TypeError로 또 실패하지 않게
         self._gl = gl_bindings.bind(context)
         filt = self._wanted_filter()
         self._texture = self._new_texture(GL_TEXTURE_2D, filt, "prepare")
@@ -633,9 +648,11 @@ class VideoFrameItem(QGraphicsPixmapItem):
         except BaseException:  # 기록 파일이 닫힘·꽉 참 등
             _last_resort("GL 텍스처 스트리밍 실패를 기록하지 못했습니다")
         try:
+            menu_hint = f"{DECODER_MENU_HINT}\n" if sys.platform == "darwin" else ""  # 그 메뉴는 Mac에만 있음
             text = (
                 "영상 화면(GL 텍스처 스트리밍)을 그리지 못했습니다 — 영상 영역을 비워 둡니다 (재생·다른 기능은 그대로).\n\n"
                 f"{type(exc).__name__}: {exc}\n\n"
+                f"{menu_hint}"
                 f"{VIDEO_ITEM_ENV}=pixmap 으로 켜면 예전 방식으로 그립니다"
             )
             QTimer.singleShot(0, lambda: _show_failure_window(text))

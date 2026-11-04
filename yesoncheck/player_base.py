@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import time
+import traceback
 
 # cv2는 lazy import로 변경 (실제 사용 시점에만 로드)
 # import cv2
@@ -44,7 +45,9 @@ from PyQt5.QtWidgets import (
 
 from yesoncheck.video_widget import CustomVideoWidget
 from yesoncheck import bookmarks, build_info, default_app, error_window, external_tools, file_associations, \
-    instance_link, instances, paths, timing_log, video_list
+    instance_link, instances, mac_native_gate, mac_prefs, paths, timing_log, video_list
+from yesoncheck.movie_pipe_source import movie_source_mode
+from yesoncheck.user_files import UserFileError
 from yesoncheck.main_window_styles import (
     BOOKMARK_BUTTON_STYLE,
     BOOKMARK_LIST_REFRESH_BUTTON_STYLE,
@@ -74,6 +77,14 @@ from yesoncheck.window_layout import ElidedLabel, InfoRowLayout, VerticalScrollA
 # wait_for_released_workers`)를 위해 여기서 다시 내보냄. _RELEASED_WORKERS는 읽는 쪽(시험)용 같은 dict 객체 — 바꿔치기하려면
 # worker_lifecycle에서 할 것 (이 모듈의 이름을 바꿔도 release_worker는 worker_lifecycle의 것을 씀)
 from yesoncheck.worker_lifecycle import EXIT_WAIT_S, _RELEASED_WORKERS, release_worker, wait_for_released_workers
+
+# Setting → '재생 디코더 (Mac)' (스펙 2026-11-04 §5.4) — 항목 차례는 mac_native_gate.DECODERS
+DECODER_MENU_TEXT = "재생 디코더 (Mac)"
+DECODER_ACTION_TEXTS = {"videotoolbox": "VideoToolbox (기본)", "ffmpeg": "ffmpeg (예전 방식)"}
+DECODER_SAVE_TITLE = "재생 디코더 설정"  # 저장 실패 창 제목 (app.load_playback_decoder의 읽기 실패 창과 같은 제목)
+DECODER_TIP = "이 창은 바로 바꾸고 이 Mac의 설정 파일(prefs.json)에 저장합니다 — 이미 열린 다른 창은 다음에 켤 때부터 따릅니다"
+DECODER_ENV_SOURCE_PREFIX = "환경 변수"  # mac_native_gate.effective_decoder가 환경 변수(YESONCHECK_MAC_NATIVE=on|off)가 덮을 때 돌려주는 출처의 머리
+DECODER_CV2_TIP = "YESONCHECK_MOVIE_SOURCE=cv2가 모든 빠른 디코더를 끕니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다"
 # 무거운 모듈들은 lazy import로 변경 (실제 사용 시점에만 로드)
 # from yesoncheck.workers import OCRWorker, OCRExportWorker, SceneDetectWorker
 # from yesoncheck.player_timeline import CollapsibleBox
@@ -1344,6 +1355,20 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
             opencl_action.triggered.connect(lambda: self.set_gpu_mode(2))
             self.gpu_action_group.append(opencl_action)
         
+        # 재생 디코더 서브메뉴 (Mac만 — VideoToolbox는 macOS에만 있음; Windows·Linux 메뉴는 그대로). 라디오는 GPU 서브메뉴처럼 맞춤 함수가 체크를 정함
+        self.decoder_action_group = []  # 항목 차례(mac_native_gate.DECODERS) — Mac이 아니면 빈 채
+        self.decoder_actions = {}  # 디코더 이름 → 항목
+        if sys.platform == "darwin":
+            decoder_menu = settings_menu.addMenu(DECODER_MENU_TEXT)
+            decoder_menu.setToolTipsVisible(True)  # 비활성 사유·출처를 항목 툴팁으로 알림
+            for name in mac_native_gate.DECODERS:
+                action = decoder_menu.addAction(DECODER_ACTION_TEXTS[name])
+                action.setCheckable(True)
+                action.triggered.connect(lambda checked, decoder=name: self.set_playback_decoder(decoder))
+                self.decoder_action_group.append(action)
+                self.decoder_actions[name] = action
+            self._sync_decoder_menu()
+
         # 공유 설정 폴더 변경 (Windows: PC마다 고름)
         if paths.IS_WINDOWS:
             shared_config_action = settings_menu.addAction('공유 설정 폴더 변경...')
@@ -1408,6 +1433,69 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         if hasattr(self, 'gpuComboBox'):
             self.gpuComboBox.setCurrentIndex(index)
     
+    def set_playback_decoder(self, name: str) -> None:
+        """(Mac) Setting → 재생 디코더에서 고른 디코더(mac_native_gate.DECODERS — videotoolbox·ffmpeg)를 이 Mac의 설정 파일에 저장하고 이 창에 바로 적용
+        (스펙 2026-11-04 §5.4). 다른 창(프로세스)의 캐시는 건드리지 않음 — 다음에 켤 때 설정 파일을 따름.
+
+        이미 그 값이 설정 파일·기본값에서 온 것이면 아무것도 하지 않고 체크만 맞춤(체크된 항목을 다시 누르면 Qt가 체크를 끔). 설정을 읽지 못해 이 세션만
+        ffmpeg인 창(SOURCE_FALLBACK)에서 ffmpeg를 고르는 것은 저장이다(파일을 고쳤으면 그 값이 남음, 아직 깨져 있으면 아래 ①의 창). 차례:
+        ① prefs.json에 저장(mac_prefs.update_pref) — 실패(깨진 파일 UserFileError·잠금 시간 초과·쓰기 실패 OSError)면 기록(트레이스백) + 오류 창 1회 +
+           체크를 지금 유효한 값으로 되돌리고 끝(캐시·캡처 그대로 — 저장하지 못한 설정을 이 창에만 몰래 적용하지 않음)
+        ② 게이트의 캐시를 그 값으로(출처 prefs.json) ③ 기록 한 줄 `[재생] 디코더 설정: <이름> (Setting 메뉴)`
+        ④ 스트림 아이템(VideoFrameItem)이면 GL 그리기 실패 걸쇠를 풂(reset_failure — 디코더를 바꾸는 것이 그 걸쇠의 탈출구)
+        ⑤ 열린 A·B의 캡처를 새 디코더로 바꿔 끼움(swap_movie_captures_for_decoder — open_file을 부르지 않음). False면 그 함수가 이미 창을 띄웠으므로
+           창을 더 띄우지 않고 기록 한 줄만 — 설정은 저장됐고 바꾸지 못한 쪽은 다음에 열 때부터 ⑥ 메뉴를 맞춤.
+        name이 DECODERS 밖이면 ValueError — 파일에 쓰기 전에(나쁜 값이 저장되면 다음 시작이 그 파일을 거부함). macOS가 아니면 RuntimeError(메뉴가 없는 설정)."""
+        if sys.platform != "darwin":
+            raise RuntimeError(f"재생 디코더 설정은 macOS 전용입니다 (이 시스템: {sys.platform})")
+        if name not in mac_native_gate.DECODERS:
+            raise ValueError(f"{mac_native_gate.PREF_KEY}는 {', '.join(mac_native_gate.DECODERS)} 중 하나여야 합니다: {name!r}")
+        _, source = mac_native_gate.effective_decoder()
+        if name == mac_native_gate.preferred_decoder() and source in (mac_native_gate.SOURCE_PREFS, mac_native_gate.SOURCE_DEFAULT):
+            self._sync_decoder_menu()
+            return
+        try:
+            mac_prefs.update_pref(mac_native_gate.PREF_KEY, name)
+        except (UserFileError, OSError) as e:  # TimeoutError(잠금)도 OSError
+            details = traceback.format_exc()
+            print(f"[재생] 디코더 설정을 저장하지 못해 바꾸지 않음: {name} — {mac_prefs.prefs_path()}", flush=True)
+            traceback.print_exc()
+            QMessageBox.critical(self, DECODER_SAVE_TITLE,
+                                 f"재생 디코더 설정({DECODER_ACTION_TEXTS[name]})을 설정 파일에 저장하지 못해 바꾸지 않았습니다 — 지금 디코더 그대로입니다.\n"
+                                 f"설정 파일: {mac_prefs.prefs_path()}\n이유: {type(e).__name__}: {e}\n\n{details}")
+            self._sync_decoder_menu()
+            return
+        mac_native_gate.set_preferred_decoder(name, source=mac_native_gate.SOURCE_PREFS)
+        print(f"[재생] 디코더 설정: {name} (Setting 메뉴)", flush=True)
+        if self.videoWidget.video_item_stream:
+            self.videoWidget.video_item.reset_failure()
+        if not self.swap_movie_captures_for_decoder():
+            print(f"[재생] 디코더 설정({name})은 저장했지만 지금 열린 영상 중 바꾸지 못한 쪽이 있음 — 그 쪽은 다음에 열 때부터", flush=True)
+        self._sync_decoder_menu()
+
+    def _sync_decoder_menu(self):
+        """(Mac) Setting → 재생 디코더의 체크·활성·툴팁을 지금 유효한 디코더(mac_native_gate.effective_decoder)에 맞춤 — 메뉴를 만들 때, 고른 뒤(저장
+        실패면 되돌림), 디코더 캐시를 바꾼 다른 길(네이티브 그리기 실패 폴백) 뒤에 부름. 메뉴가 없으면(macOS가 아님) 할 일이 없음.
+        - YESONCHECK_MOVIE_SOURCE=cv2(킬 스위치 — 네이티브·파이프 모두 끔): 두 항목 비활성 + DECODER_CV2_TIP (환경 변수보다 먼저 — cv2가 둘 다 덮음)
+        - 환경 변수 YESONCHECK_MAC_NATIVE=on|off가 설정을 덮음(출처가 "환경 변수"로 시작): 그 값으로 체크, 두 항목 비활성 + "<출처>가 우선합니다 — …"
+        - 출처가 prefs.json·기본값: 두 항목 활성 + DECODER_TIP(다른 창은 다음에 켤 때 — 스펙 §5.2)
+        - 그 밖의 출처(prefs.json을 읽지 못해 이 세션만 ffmpeg — SOURCE_FALLBACK 등): 활성, 체크된 항목의 툴팁이 그 출처 글."""
+        if not self.decoder_actions:
+            return
+        decoder, source = mac_native_gate.effective_decoder()
+        if movie_source_mode() == "cv2":
+            enabled, tips = False, dict.fromkeys(self.decoder_actions, DECODER_CV2_TIP)
+        elif source.startswith(DECODER_ENV_SOURCE_PREFIX):
+            enabled, tips = False, dict.fromkeys(self.decoder_actions, f"{source}가 우선합니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다")
+        else:
+            enabled, tips = True, dict.fromkeys(self.decoder_actions, DECODER_TIP)
+            if source not in (mac_native_gate.SOURCE_PREFS, mac_native_gate.SOURCE_DEFAULT):
+                tips[decoder] = source
+        for name, action in self.decoder_actions.items():
+            action.setChecked(name == decoder)
+            action.setEnabled(enabled)
+            action.setToolTip(tips[name])
+
     def set_performance_mode(self, index):
         """성능 모드를 설정합니다."""
         # 라디오 버튼처럼 동작하도록 다른 액션들의 체크 해제
