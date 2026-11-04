@@ -13,8 +13,9 @@ movie_pipe_source(ineligible_reason·MovieProbe — Qt는 알릴 때만 불러�
 재생 디코더 설정 (prefs.json의 "playback_decoder": "videotoolbox" | "ffmpeg", 없으면 videotoolbox) — 우선순위 환경 변수(on·off) > 설정 > 기본:
 이 모듈은 파일을 읽지 않는다 (순수 유지 — 파일 I/O·Qt 없음). app.launch가 Mac에서 시작 때 한 번 mac_prefs로 읽어 검증한 값을 이 모듈의 프로세스
 캐시에 넣고(set_preferred_decoder), native_wanted는 그 캐시만 본다. 캐시는 (디코더, 출처)를 함께 기억해 effective_decoder가 지금 유효한
-디코더와 그 출처("환경 변수 YESONCHECK_MAC_NATIVE=on|off"·"prefs.json"·"기본값", 설정을 읽지 못해 이 세션만 ffmpeg면 SOURCE_FALLBACK)를 돌려줌 —
-시작 기록과 Setting 메뉴가 같은 판단을 씀 (환경 변수가 덮는 경우는 출처가 "환경 변수"로 시작).
+디코더와 그 출처("환경 변수 YESONCHECK_MAC_NATIVE=on|off"·"prefs.json"·"기본값", 설정을 읽지 못해 이 세션만 ffmpeg면 SOURCE_FALLBACK, 네이티브 화면
+그리기가 실패해 플레이어가 이 창만 ffmpeg로 바꿨으면 SOURCE_GL_FALLBACK)를 돌려줌 — 시작 기록과 Setting 메뉴가 같은 판단을 씀 (환경 변수가 덮는 경우는
+출처가 "환경 변수"로 시작).
 다른 창(프로세스)의 캐시는 건드리지 않는다: 설정을 바꾸면 다른 창은 다음에 켤 때 따라온다.
 "켬"은 후보일 뿐이고 파일마다 아래 게이트를 다시 통과해야 한다 — 양성 증거로만 켜지며 한 조건이라도 확인하지 못하면(값이 없거나
 맞지 않으면) 음성이라 파이프 경로로 간다 (movie_pipe_source.pipe_eligible과 같은 원칙).
@@ -53,6 +54,7 @@ DEFAULT_DECODER = "videotoolbox"
 SOURCE_DEFAULT = "기본값"  # effective_decoder의 출처 — 설정을 읽지 않았거나 파일에 키가 없음
 SOURCE_PREFS = "prefs.json"  # 출처 — 설정 파일에서 읽은 값
 SOURCE_FALLBACK = "prefs.json 읽기 실패 — 이 세션만 ffmpeg"  # 출처 — 깨진 파일·나쁜 값 때문에 app.launch가 이 세션만 ffmpeg로 정함 (파일은 그대로)
+SOURCE_GL_FALLBACK = "네이티브 화면 그리기 실패 — 이 창만 ffmpeg"  # 출처 — 네이티브(IOSurface) 프레임을 그리다 처음 실패해 플레이어가 이 창(프로세스)만 ffmpeg로 바꿈 (파일은 그대로 — 다음 창은 다시 시도)
 
 NATIVE_CODEC = "prores"  # ⑦
 HDR_TRANSFERS = ("smpte2084", "arib-std-b67")  # ⑨ PQ·HLG
@@ -79,7 +81,8 @@ _preferred = (DEFAULT_DECODER, SOURCE_DEFAULT)  # 프로세스 캐시: (디코�
 
 
 def set_preferred_decoder(name, source=SOURCE_DEFAULT) -> None:
-    """프로세스 캐시의 선호 디코더를 name으로 (app.launch가 prefs.json에서 읽은 값을 source="prefs.json"으로, Setting 메뉴가 고른 값을). source는
+    """프로세스 캐시의 선호 디코더를 name으로 (app.launch가 prefs.json에서 읽은 값을 source="prefs.json"으로, Setting 메뉴가 고른 값을, 네이티브 화면
+    그리기 실패 폴백이 "ffmpeg"을 SOURCE_GL_FALLBACK으로 — 파일은 쓰지 않음). source는
     effective_decoder가 돌려주는 출처 글. DECODERS 밖의 name은 ValueError(설정 키와 받은 값을 글에) — 조용히 기본으로 넘기지 않으며 캐시는 그대로."""
     global _preferred
     if name not in DECODERS:
@@ -94,7 +97,7 @@ def preferred_decoder() -> str:
 
 def effective_decoder(env=os.environ):
     """(지금 유효한 디코더, 출처) — 환경 변수 on은 ("videotoolbox", "환경 변수 YESONCHECK_MAC_NATIVE=on"), off는 ("ffmpeg", "환경 변수
-    YESONCHECK_MAC_NATIVE=off"), auto(없음·빈 값 포함)는 캐시의 (디코더, 출처: "prefs.json"·"기본값"·SOURCE_FALLBACK). 나쁜 환경 변수 값은
+    YESONCHECK_MAC_NATIVE=off"), auto(없음·빈 값 포함)는 캐시의 (디코더, 출처: "prefs.json"·"기본값"·SOURCE_FALLBACK·SOURCE_GL_FALLBACK). 나쁜 환경 변수 값은
     native_mode의 ValueError. 플랫폼은 보지 않는다 — Mac 전용 호출처(시작 기록·Setting 메뉴)가 쓰며, 실제로 네이티브를 고르는 길은 native_wanted."""
     mode = native_mode(env)
     if mode == "on":

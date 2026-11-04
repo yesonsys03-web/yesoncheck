@@ -146,8 +146,10 @@ def test_preference_constants_match_the_documented_values():
     assert DECODERS == ("videotoolbox", "ffmpeg")
     assert (mac_native_gate.SOURCE_DEFAULT, mac_native_gate.SOURCE_PREFS) == ("기본값", "prefs.json")
     assert SOURCE_FALLBACK == "prefs.json 읽기 실패 — 이 세션만 ffmpeg"
+    assert mac_native_gate.SOURCE_GL_FALLBACK == "네이티브 화면 그리기 실패 — 이 창만 ffmpeg"  # 실행 중 폴백(Task 5 — 파일은 그대로)
     # 메뉴(Task 4)가 환경 변수가 덮는 경우를 출처의 머리글로 알아봄 — 다른 출처는 그 머리글로 시작하면 안 됨
-    assert not any(label.startswith("환경 변수") for label in (mac_native_gate.SOURCE_DEFAULT, mac_native_gate.SOURCE_PREFS, SOURCE_FALLBACK))
+    assert not any(label.startswith("환경 변수") for label in (mac_native_gate.SOURCE_DEFAULT, mac_native_gate.SOURCE_PREFS, SOURCE_FALLBACK,
+                                                              mac_native_gate.SOURCE_GL_FALLBACK))
 
 
 def test_preferred_decoder_defaults_to_videotoolbox():

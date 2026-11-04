@@ -119,6 +119,9 @@ class CustomVideoWidget(QGraphicsView):
     annotationMovePressed = pyqtSignal(float, float)
     annotationMoveDragged = pyqtSignal(float, float)
     annotationMoveReleased = pyqtSignal(float, float)
+    # 스트림 아이템(VideoFrameItem)이 그리기에 실패해 알릴 때(걸쇠 사이마다 첫 실패 — Qt 루프에서) — 값: 그리던 그림에 네이티브(IOSurface) 면이 있었는가.
+    # 플레이어가 받아 Mac의 네이티브 면 실패면 이 창만 ffmpeg로 바꿈 (스펙 2026-11-04 §5.8). 기록·오류 창은 아이템이 이미 냄
+    streamPaintFailed = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -144,6 +147,7 @@ class CustomVideoWidget(QGraphicsView):
         self.video_item_stream = use_stream_item(gl_ok, video_item_mode(os.environ))
         if self.video_item_stream:
             self.video_item = VideoFrameItem(stream=True)
+            self.video_item.set_failure_callback(self._on_stream_failure)  # → streamPaintFailed
             self.scene.addItem(self.video_item)
         else:
             self.video_item = self.scene.addPixmap(QPixmap())
@@ -620,6 +624,10 @@ class CustomVideoWidget(QGraphicsView):
             q_img = QImage(sip.voidptr(frame_a.ctypes.data), width, height, frame_a.strides[0], QImage.Format_RGB32)
         self.video_item.setPixmap(QPixmap.fromImage(q_img))
         self._pixmap_backing = frame_a  # 새 픽스맵을 건 뒤에 바꿈 — 옛 픽스맵이 걸려 있는 동안 옛 배열을 놓지 않게
+
+    def _on_stream_failure(self, native):
+        """(Qt 루프 — 스트림 아이템의 _fail이 미뤄 부름) 아이템의 그리기 실패를 streamPaintFailed(native)로 넘김."""
+        self.streamPaintFailed.emit(native)
 
     def set_overlay_provider(self, provider):
         """B 키 글자 공급자 등록 — provider() -> str | None(None이면 숨김). 플레이어가 창을 만들 때 한 번(_overlay_text_for_native);

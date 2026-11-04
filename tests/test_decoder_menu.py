@@ -247,10 +247,13 @@ def test_swap_window_does_not_relatch_the_released_item(fake_native_player, auto
     """GL 그리기 실패로 걸쇠가 걸린 스트림 아이템: ffmpeg를 고르는 동안 바꿔 끼움이 창을 띄우고(열기·ffprobe 실패 — 모달의 중첩 이벤트 루프) 그 루프가
     아직 옛(실패하는) 프레임을 그려도 걸쇠가 걸린 채라 다시 실패하지 않음 → 끝에 걸쇠가 풀려 있고 알린 실패는 처음 1번뿐 (Ruling 9 — 걸쇠는 바꿔 끼운 뒤 풂).
 
-    깨지는 변경: reset_failure를 swap 앞에서 부르면 창 안의 paint가 다시 실패해 걸쇠가 다시 걸리고(_failed True) 실패 창이 하나 더 뜸."""
+    깨지는 변경: reset_failure를 swap 앞에서 부르면 창 안의 paint가 다시 실패해 걸쇠가 다시 걸리고(_failed True) 실패 창이 하나 더 뜸.
+    네이티브 그리기 실패의 자동 폴백(Task 5 — 아이템의 실패 콜백)은 끔: 이 시험은 메뉴 길의 순서만 봄(자동 폴백이 먼저 캐시를 ffmpeg로 바꾸면 ffmpeg 선택은
+    저장만 하는 길 — tests/test_native_paint_fallback)."""
     rig = fake_native_player()
     player = rig.player
     item = player.videoWidget.video_item
+    item.set_failure_callback(None)
     paint_on_raster(item)  # 옛 프레임을 그리다 실패 → 걸쇠
     player.timer.stop()
     from PyQt5.QtWidgets import QApplication

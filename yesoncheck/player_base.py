@@ -85,6 +85,7 @@ DECODER_SAVE_TITLE = "재생 디코더 설정"  # 저장 실패 창 제목 (app.
 DECODER_TIP = "이 창은 바로 바꾸고 이 Mac의 설정 파일(prefs.json)에 저장합니다 — 이미 열린 다른 창은 다음에 켤 때부터 따릅니다"
 DECODER_ENV_SOURCE_PREFIX = "환경 변수"  # mac_native_gate.effective_decoder가 환경 변수(YESONCHECK_MAC_NATIVE=on|off)가 덮을 때 돌려주는 출처의 머리
 DECODER_CV2_TIP = "YESONCHECK_MOVIE_SOURCE=cv2가 모든 빠른 디코더를 끕니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다"
+GL_FALLBACK_LOG = "[표시] GL 텍스처 스트리밍 실패 — 이 창을 ffmpeg 방식으로 바꿉니다"  # 네이티브 그리기 실패 폴백의 기록 줄 (스펙 2026-11-04 §5.8)
 # 무거운 모듈들은 lazy import로 변경 (실제 사용 시점에만 로드)
 # from yesoncheck.workers import OCRWorker, OCRExportWorker, SceneDetectWorker
 # from yesoncheck.player_timeline import CollapsibleBox
@@ -351,6 +352,7 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         self.videoWidget.wipePositionChanged.connect(self.update_frame)
         self.videoWidget.set_overlay_provider(self._overlay_text_for_native)  # B 키 글자 — 네이티브 프레임은 굽지 않고 위젯의 아이템으로
         self.videoWidget.set_annotation_provider(self._annotations_for_native)  # 주석도 — 네이티브 프레임은 위젯의 주석 층으로
+        self.videoWidget.streamPaintFailed.connect(self._on_stream_paint_failed)  # (Mac) 네이티브 그리기 첫 실패 → 이 창만 ffmpeg
         self.videoWidget.roiSelectionFinished.connect(self.on_roi_selected)
         self.init_annotation_system()
 
@@ -1481,6 +1483,39 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
                 print(f"[재생] 디코더 설정({name})은 저장했지만 지금 열린 영상 중 바꾸지 못한 쪽이 있음 — 그 쪽은 다음에 열 때부터", flush=True)
             if self.videoWidget.video_item_stream:
                 self.videoWidget.video_item.reset_failure()
+        finally:
+            self._sync_decoder_menu()
+
+    def _on_stream_paint_failed(self, native: bool) -> None:
+        """(Qt 루프 — CustomVideoWidget.streamPaintFailed) 스트림 아이템이 그리기에 실패했다고 알림(걸쇠 사이마다 첫 실패; 기록·오류 창은 아이템이 이미
+        냄 — 여기서 창을 더 띄우지 않음). 네이티브(IOSurface) 면을 그리다 난 실패이고 macOS면 **큰 소리 폴백**(스펙 2026-11-04 §5.8·§7-9): 이 창(프로세스)만
+        ffmpeg로 바꿔 계속 — 설정 파일(prefs.json)은 쓰지 않으므로 다음 창은 다시 VideoToolbox를 시도한다. 차례:
+        ① 게이트 캐시를 ffmpeg로(출처 mac_native_gate.SOURCE_GL_FALLBACK) ② 기록 한 줄 GL_FALLBACK_LOG ③ 열린 캡처를 바꿔 끼움(swap_movie_captures_for_decoder —
+           False면 그 함수가 창을 띄웠으므로 기록 한 줄만) ④ 아이템의 그림에 네이티브 면이 더 없으면 걸쇠를 풂(reset_failure — 바꿔 끼운 **뒤**: 그동안 뜬
+           창의 이벤트 루프가 옛 프레임을 그려도 다시 실패하지 않게, Ruling 9) ⑤ 메뉴를 맞춤(체크 ffmpeg, 툴팁에 그 출처). ③이 예외를 내도 ④⑤는 함(finally)
+           뒤 예외를 그대로 올림(코드·빌드 쪽 — PyQt가 sys.excepthook으로).
+        ④에서 네이티브 면이 남아 있으면(바꾸지 못한 쪽 — ffprobe·열기 실패, 바꿔 끼우다 예외) 걸쇠를 그대로 두고 기록 한 줄: 풀면 다음 paint가 같은
+        표면을 다시 묶다 또 실패해 창 → 폴백 → 창이 끝없이 되풀이됨. 그 영역은 예전처럼 빈 채(캐시는 ffmpeg — 바꾸지 못한 쪽은 다음에 열 때부터).
+        환경 변수 YESONCHECK_MAC_NATIVE(on·off)가 디코더를 덮으면 캐시를 바꿔도 같은 디코더로 다시 열리므로 바꾸지 않고 기록 한 줄(걸쇠·빈 영역 그대로).
+        RGB 면 실패(native False)·macOS 밖은 아무것도 하지 않음 — 예전 규칙(걸쇠·창·빈 영역; Mac의 탈출구는 Setting → 재생 디코더)."""
+        if not native or sys.platform != "darwin":
+            return
+        _, source = mac_native_gate.effective_decoder()
+        if source.startswith(DECODER_ENV_SOURCE_PREFIX):
+            print(f"[표시] GL 텍스처 스트리밍 실패 — 디코더를 바꾸지 않음(우선: {source}) — 영상 영역은 비워 둠", flush=True)
+            return
+        mac_native_gate.set_preferred_decoder("ffmpeg", source=mac_native_gate.SOURCE_GL_FALLBACK)
+        print(GL_FALLBACK_LOG, flush=True)
+        item = self.videoWidget.video_item
+        try:
+            try:
+                if not self.swap_movie_captures_for_decoder():
+                    print("[표시] ffmpeg 방식으로 바꾸지 못한 쪽이 있음 — 그 쪽은 다음에 열 때부터 ffmpeg", flush=True)
+            finally:
+                if item.has_native_side():
+                    print("[표시] 네이티브 프레임이 아직 남아 걸쇠를 풀지 않음 — 다시 그리면 또 실패하므로 영상 영역은 비워 둠", flush=True)
+                else:
+                    item.reset_failure()
         finally:
             self._sync_decoder_menu()
 
