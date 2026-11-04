@@ -116,7 +116,7 @@ YesonCheck는 PyQt5 기반의 영상 비교/검토 툴입니다. 이번 리팩�
   읽지 못한 프레임(깨진 파일·네트워크 끊김)은 직전 프레임으로 채워 길이는 그대로 만들고, 몇 개를 채웠는지 진행 창 로그에 항목마다·끝날 때 알려 줍니다(오류는 아님 — 납품 전에 원본 프레임을 확인하세요).
 
 ## ProRes 영상 빠른 재생 (자동)
-ProRes mov(예: 4K ProRes 4444)는 **자동으로 더 빠른 디코더(앱에 들어 있는 ffmpeg)로 열려** 더 빠르게 재생됩니다 (Apple Silicon Mac의 4K ProRes 4444는 아래 'Apple Silicon Mac의 4K ProRes 4444'처럼 Mac의 디코더로 엽니다). 1080p ProRes는 실시간으로 재생됩니다. **Mac에서는 4K 화면 그리기도 빨라져** 4K ProRes 4444가 24fps 실시간의 경계까지 왔습니다 — Intel Mac 한 대의 실측으로 334프레임 재생이 **13.6~14.5초**입니다(24fps 실시간이면 13.9초, 같은 때 예전 방식으로 재면 17.6~18.1초). 한가할 때 다시 재도 14.0초 안팎(예전 방식 18.4~19.0초)으로, 24fps 경계에서 여유는 없습니다. **Windows는 4K에서 실시간에 조금 못 미칩니다** — 334프레임 한 바퀴를 스톱워치로 재면 스튜디오 Windows PC 약 15.1초(≈22fps)입니다(2026-11-03 실측; 정보 줄의 `실제` 값으로도 보입니다). Apple Silicon Mac도 이 ffmpeg 방식으로는 약 18.4초(≈18fps, M1 Mac mini 2020·16GB — ProRes 전용 디코더가 없어 CPU가 디코드에 2/3를 씀)였고, 그래서 4K ProRes 4444는 Mac의 디코더로 여는 길을 따로 두었습니다(아래). h264 같은 다른 형식은 예전과 똑같이 열립니다.
+ProRes mov는 **자동으로 더 빠른 디코더로 열려** 더 빠르게 재생됩니다. Apple Silicon Mac의 4K ProRes 4444는 Mac의 디코더(VideoToolbox)로 열어 실시간으로 재생되고(아래 'Apple Silicon Mac의 4K ProRes 4444'), 그 밖의 ProRes는 앱에 들어 있는 ffmpeg로 엽니다 — 1080p는 실시간, 4K는 Intel Mac에서 24fps 경계, Windows는 실시간에 조금 못 미칩니다. 재생이 끝날 때마다 앱 기록에 `[측정] … (fps)` 줄이 남으므로 속도는 그 줄로 확인합니다. h264 같은 다른 형식은 예전과 똑같이 열립니다.
 
 - **대상**: 프레임 속도가 일정하고 편집 목록·회전 정보가 없는 ProRes mov만입니다. 그 밖의 파일은 ProRes여도 예전 방식으로 엽니다.
 - **프레임 번호는 예전과 같습니다** — 주석·구간의 프레임 번호가 다른 PC·예전 버전과 어긋나지 않습니다. 다만 Apple Silicon Mac에서 ProRes 422 영상의 색이 예전과 아주 미세하게(255단계 중 최대 4) 다를 수 있습니다 (ProRes 4444는 같음 — 단 Apple Silicon의 4K 4444는 아래 'Apple Silicon Mac의 4K ProRes 4444'의 방식이라 최대 1).
@@ -274,7 +274,7 @@ YesonCheck는 **창 하나가 앱 하나**입니다. 창을 더 열면 앱이 �
 - **미디어 정보**: 사이드바 우클릭 → 미디어 정보에 코덱 프로파일·태그(예 Apple ProRes 4444 · ap4h), 픽셀 형식(4:4:4 · 12비트 · 알파), 색 공간·범위, 비트레이트, 음성 트랙, 컨테이너·파일 크기까지 보이고, '자세히'에 ffprobe 원본이 있습니다 (길이는 영상 트랙 길이)
 - **북마크**: 폴더 즐겨찾기 — 관리 창(**P** 키)에서 경로를 클릭해 그 자리에서 고치면 바로 반영, 우클릭으로 경로 복사 (아래 '북마크')
 - **Apple Silicon 4K 재생**: Apple Silicon Mac에서 4K ProRes 4444는 Mac의 디코더(VideoToolbox)로 GPU에 곧바로 그려 24fps 실시간(M1 Mac mini 시험 빌드 실측 334프레임 13.9~14.1초; 4K A/B 와이프는 M1 기본형에서 약 14fps) — 끄는 길 `YESONCHECK_MAC_NATIVE=off` (위 'Apple Silicon Mac의 4K ProRes 4444')
-- **ProRes 빠른 재생**: ProRes mov는 자동으로 ffmpeg 파이프 디코더로 열려 더 빠르게 재생 (Intel Mac 한 대의 실측 기준 — 1080p는 실시간, 4K는 Mac에서 화면 그리기도 빨라져 334프레임 13.6~14.5초로 24fps 실시간(13.9초)의 경계(같은 때 예전 방식 17.6~18.1초, 다른 작업이 함께 도는 중에 잰 값); Windows 4K ≈22fps(한 바퀴 15.1초) — 2026-11-03 스톱워치 실측, 실시간은 13.9초; M1 Mac mini는 이 방식으로 ≈18fps(18.4초)였고 2026-11-04부터 위 'Apple Silicon 4K 재생'으로 실시간)
+- **ProRes 빠른 재생**: ProRes mov는 자동으로 ffmpeg 파이프 디코더로 열려 더 빠르게 재생 (1080p는 실시간, 4K는 Intel Mac에서 24fps 경계·Windows는 ≈22fps; Apple Silicon의 4K 4444는 위 'Apple Silicon 4K 재생'으로 실시간)
 
 ## 프로젝트 구조 요약
 ```
