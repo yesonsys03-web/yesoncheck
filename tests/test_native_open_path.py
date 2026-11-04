@@ -189,6 +189,17 @@ def test_native_wanted_and_eligible_opens_native_not_pipe(player, dialogs, rig, 
     assert play_lines(capsys.readouterr().out) == []  # 양성 기록 줄은 open_native_capture 몫 (여기선 바꿔치기라 없음 — 중복 없음)
 
 
+def test_pipe_mode_still_prefers_native_when_eligible(player, dialogs, rig, clip_1080, probe_4k, monkeypatch):
+    """YESONCHECK_MOVIE_SOURCE=pipe는 네이티브 음성일 때의 강제일 뿐(스펙 §5.8) — 네이티브 양성 파일은 pipe 모드에서도 네이티브로 열림.
+
+    깨지는 변경: pipe 모드도 네이티브를 건너뛰게 하면(예: 분기 조건을 `mode != "auto"`로) 파이프 대역의 AssertionError."""
+    monkeypatch.setenv(ENV, "pipe")
+    native_cap = SentinelCapture("native")
+    rig.probe, rig.native, rig.pipe = probe_4k, native_cap, AssertionError("파이프가 불렸다")
+    assert player._open_movie_capture(clip_1080) is native_cap
+    assert dialogs.messages == []
+
+
 def test_open_file_shows_the_native_capture(new_player, dialogs, rig, tmp_path, probe_4k, monkeypatch):  # noqa: F811
     """창 수준: open_file이 이 분기로 연 네이티브 캡처가 cap_a가 되고 첫 프레임이 복사·변환 없이 GL 스트림 아이템의 표면으로 감, 창 없음.
     (가짜 네이티브 캡처 — tests/native_fakes; 소리 재생기용으로 진짜 영상 파일 경로를 엶)
@@ -259,6 +270,24 @@ def test_pyobjc_missing_is_a_failure_window_not_a_crash(player, dialogs, rig, cl
 
     assert_native_failure_window(dialogs, clip_1080, "ModuleNotFoundError: No module named 'objc'")
     assert len(rig.pipes) == 1 and rig.pipes[0][1]["probe"] is probe_4k
+
+
+def test_native_then_pipe_failure_shows_both_windows(player, dialogs, rig, clip_1080, probe_4k):
+    """네이티브도 파이프도 못 열면 창 둘이 차례로 — 네이티브 실패 창(끝 줄 YESONCHECK_MAC_NATIVE=off), 그다음 기존 파이프 오류 창(끝 줄
+    YESONCHECK_MOVIE_SOURCE=cv2) — 결과 None(보던 영상은 그대로), ffprobe 한 번(같은 probe가 파이프로).
+
+    깨지는 변경: 파이프 호출을 네이티브 except 안으로 옮기거나 그 PipeCaptureError를 다른 길로 보내면 둘째 창이 없거나 다름;
+    네이티브 창을 빼면 첫 창 단언."""
+    rig.probe = probe_4k
+    rig.native = NativeCaptureError("AVAssetReader 시작 실패", clip_1080)
+    rig.pipe = PipeCaptureError(f"영상을 ffmpeg 파이프로 열지 못했습니다 (시험): {clip_1080}", ["ffmpeg", "-i", clip_1080], "Invalid data found")
+
+    assert player._open_movie_capture(clip_1080) is None
+
+    assert [(kind, title) for kind, title, _ in dialogs.messages] == [("critical", NATIVE_WINDOW_TITLE), ("critical", "영상을 열 수 없음")]
+    assert dialogs.criticals[0].endswith("\n" + NATIVE_ESCAPE_HINT), dialogs.criticals[0]
+    assert "Invalid data found" in dialogs.criticals[1] and dialogs.criticals[1].endswith("\n" + KILL_SWITCH_HINT), dialogs.criticals[1]
+    assert rig.probes == [clip_1080] and len(rig.pipes) == 1 and rig.pipes[0][1]["probe"] is probe_4k
 
 
 def test_unexpected_native_error_propagates(player, dialogs, rig, clip_1080, probe_4k):
@@ -342,23 +371,28 @@ def test_not_wanted_leaves_existing_path_untouched(player, dialogs, rig, mp4v_cl
 
 
 def test_player_does_not_import_native_source_unless_wanted():
-    """플레이어는 mac_native_source를 맨 위에서 불러오지 않고, 원하지 않을 때(native_wanted 거짓)의 열기 분기에서도 불러오지 않음 — 원할 때만
-    분기 안에서 지연 import (스펙 §5.8·§5.9: Intel·Windows 앱은 이 모듈을 import하지 않음). 새 프로세스에서 player_playback을 불러 sys.modules를
-    보고(이 프로세스는 다른 시험이 이미 불러옴), 원하지 않음·파이프 대역으로 분기를 한 번 돌린 뒤 다시 봄 (창·QApplication 없이 — 그 길은 self를 안 씀).
+    """플레이어는 mac_native_source를 맨 위에서 불러오지 않고, 원하지 않을 때(native_wanted 거짓) 영상 열기 전체(_open_movie_capture — os.stat
+    확인부터 캡처를 돌려줄 때까지)에서도 불러오지 않음 — 원할 때만 분기 안에서 지연 import (스펙 §5.8·§5.9: Intel·Windows 앱은 이 모듈을 import하지
+    않음). 새 프로세스에서 player_playback을 불러 sys.modules를 보고(이 프로세스는 다른 시험이 이미 불러옴), 원하지 않음·표지를 주는 파이프 대역으로
+    진짜 _open_movie_capture를 있는 파일(그 모듈 파일 자체)에 한 번 돌린 뒤 다시 봄 — 창·QApplication 없이(os.stat이 되고 대역이 cv2 앞에서 돌려줌).
+    자식 출력은 utf-8로 (tests/test_workers_split 선례).
 
     깨지는 변경: player_playback 맨 위에 `from yesoncheck import mac_native_source`(또는 그 이름들의 import)를 두면 첫 값이, 지연 import를
-    native_wanted 검사 앞으로 옮기면 둘째 값이 True."""
+    native_wanted 검사 앞으로 옮기거나 _open_movie_capture 안(분기 밖)에 두면 둘째 값이 True."""
     code = (
         "import sys\n"
         "from yesoncheck import player_playback\n"
         "print('yesoncheck.mac_native_source' in sys.modules)\n"
         "player_playback.native_wanted = lambda: False\n"
-        "player_playback.maybe_pipe_capture = lambda *args, **kwargs: None\n"
-        "assert player_playback.PlayerPlaybackMixin._native_or_pipe_capture(None, 'clip.mov') is None\n"
+        "sentinel = object()\n"
+        "player_playback.maybe_pipe_capture = lambda *args, **kwargs: sentinel\n"
+        "assert player_playback.PlayerPlaybackMixin()._open_movie_capture(player_playback.__file__) is sentinel\n"
         "print('yesoncheck.mac_native_source' in sys.modules)\n"
     )
-    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120, check=False, cwd=PROJECT_ROOT)
-    assert proc.returncode == 0, proc.stderr
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    proc = subprocess.run([sys.executable, "-c", code], cwd=PROJECT_ROOT, env=env, capture_output=True, text=True, encoding="utf-8",
+                          timeout=300, check=False)
+    assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     assert proc.stdout.strip().splitlines()[-2:] == ["False", "False"], proc.stdout
 
 
