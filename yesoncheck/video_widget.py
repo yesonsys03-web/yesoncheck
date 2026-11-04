@@ -10,6 +10,8 @@ from PyQt5.QtCore import Qt, QTimer, QPointF, QRectF, pyqtSignal
 from PyQt5.QtGui import (
     QColor,
     QBrush,
+    QFont,
+    QFontMetricsF,
     QImage,
     QOpenGLContext,
     QPainter,
@@ -39,6 +41,7 @@ from PyQt5.QtWidgets import (
 from yesoncheck import paths
 from yesoncheck.frame_handles import native_surface_of, whole_surface_handle
 from yesoncheck.gl_video_item import LOG_PREFIX, VIDEO_ITEM_ENV, VideoFrameItem, use_stream_item, video_item_mode
+from yesoncheck.overlay_text_layout import overlay_layout
 
 VIEWPORT_ENV = "YESONCHECK_VIEWPORT"
 VIEWPORT_MODES = ("gl", "raster")
@@ -47,6 +50,10 @@ VIEWPORT_MODES = ("gl", "raster")
 # GL 뷰포트는 스타일시트 배경 칠을 받지 않아(WA_OpaquePaintEvent) backgroundBrush로 GPU가 칠함.
 # 시트는 해시로 얼어 있어(tests/test_stylesheet_freeze.py) 값이 어긋날 일 없음.
 VIDEO_BG = {"dark": "#232323", "light": "#fafafa"}
+
+# B 키 오버레이 아이템(네이티브 프레임 — set_overlay_text): 쌓임은 ROI(10) 위, 주석 미리보기(14)·편집 핸들(16) 아래
+OVERLAY_ITEM_Z = 13
+OVERLAY_FONT_REF_PX = 100  # 글꼴 크기를 정할 때 대문자 높이를 재는 기준 픽셀 크기 (overlay_font)
 
 
 def viewport_mode(platform_name, env):
@@ -75,6 +82,29 @@ def viewport_forced(env):
 def gl_context_available():
     """OpenGL 컨텍스트를 실제로 만들 수 있는지 — cocoa에서도 드물게 실패할 수 있음(원격 세션·드라이버 문제)."""
     return QOpenGLContext().create()
+
+
+def overlay_font(text, layout):
+    """B 키 오버레이 아이템의 글꼴 — 앱 기본 글꼴을 굽는 길(cv2 Hershey)의 글자 크기에 맞춤(모양은 다름 — 사용자 결정 "같아 보이면 OK").
+
+    크기: 대문자 높이(QFontMetricsF.capHeight)가 cv2 글자 높이(layout.text_height — 기준선 위 높이, 대문자 높이에 획 반 굵기를 더한 값)와 같게 —
+    OVERLAY_FONT_REF_PX에서 잰 대문자 높이로 비례 계산(대문자 높이는 픽셀 크기에 비례). 그래도 Qt 글자가 들어갈 너비(layout.room)보다 넓으면
+    (글꼴마다 폭이 다름) 들어갈 때까지 더 줄임(1px까지). 굵기: cv2 획이 3px 이상(1080p 3·4K 8 — overlay_metrics)이면 Bold, 그보다 가늘면(720p 이하 2) 보통.
+    굽는 길이 4K 획을 √(k/1.5)만큼 더 굵게 하는 것(줄여 볼 때 획 가장자리가 섞여 가늘어 보임)은 아이템에는 필요 없음 — Qt 글자는 화면 해상도로
+    그려져 줄여 봐도 가늘어지지 않음. 대문자 높이를 잴 수 없는 글꼴(0 이하)이면 ValueError — 크기를 지어내지 않음."""
+    font = QFont()
+    font.setBold(layout.thickness >= 3)
+    font.setPixelSize(OVERLAY_FONT_REF_PX)
+    cap = QFontMetricsF(font).capHeight()
+    if not cap > 0:
+        raise ValueError(f"글꼴 {font.family()!r}의 대문자 높이를 잴 수 없습니다(capHeight {cap}, 픽셀 크기 {OVERLAY_FONT_REF_PX}) — "
+                         f"B 키 오버레이 글자 크기를 정할 수 없음")
+    font.setPixelSize(max(1, round(layout.text_height * OVERLAY_FONT_REF_PX / cap)))
+    advance = QFontMetricsF(font).horizontalAdvance(text)
+    while advance > layout.room and font.pixelSize() > 1:  # 작은 크기에서는 폭이 크기에 비례하지 않아(글꼴의 작은 크기용 자간) 다시 잼
+        font.setPixelSize(max(1, min(font.pixelSize() - 1, math.floor(font.pixelSize() * layout.room / advance))))
+        advance = QFontMetricsF(font).horizontalAdvance(text)
+    return font
 
 
 class CustomVideoWidget(QGraphicsView):
@@ -115,6 +145,7 @@ class CustomVideoWidget(QGraphicsView):
         else:
             self.video_item = self.scene.addPixmap(QPixmap())
         self._pixmap_backing = None  # 픽스맵 길에 그린 네이티브 프레임 — RGB32 픽스맵이 그 메모리를 함께 쓰므로 다음 그림까지 쥠 (_show_native_frames)
+        self._overlay_provider = None  # B 키 글자 공급자 () -> str | None — 플레이어가 등록(set_overlay_provider), updateFrame의 네이티브 분기가 부름
 
         self.wipe_position_x = 0.5
         self.wipe_position_y = 0.5
@@ -195,6 +226,20 @@ class CustomVideoWidget(QGraphicsView):
         self.roi_rect_item.setVisible(False)
         self.roi_rect_item.setZValue(10)
         self.scene.addItem(self.roi_rect_item)
+
+        # B 키 오버레이 아이템 한 쌍(네이티브 프레임 — 읽기 전용이라 굽지 않음): 흰 상자 + 검정 글자, 영상 아이템 좌표(= 프레임 픽셀)라
+        # 줌·맞춤에 따라 구운 글자처럼 함께 커짐. 영상 아이템보다 뒤에 넣고 z OVERLAY_ITEM_Z — 같은 z라 넣은 차례대로 글자가 상자 위 (set_overlay_text)
+        self.overlay_box_item = QGraphicsRectItem()
+        self.overlay_box_item.setPen(QPen(Qt.NoPen))
+        self.overlay_box_item.setBrush(QColor(255, 255, 255))
+        self.overlay_box_item.setZValue(OVERLAY_ITEM_Z)
+        self.overlay_box_item.setVisible(False)
+        self.scene.addItem(self.overlay_box_item)
+        self.overlay_text_item = QGraphicsSimpleTextItem()
+        self.overlay_text_item.setBrush(QColor(0, 0, 0))
+        self.overlay_text_item.setZValue(OVERLAY_ITEM_Z)
+        self.overlay_text_item.setVisible(False)
+        self.scene.addItem(self.overlay_text_item)
 
         # Frame annotation overlay
         self.annotation_mode_enabled = False
@@ -493,10 +538,12 @@ class CustomVideoWidget(QGraphicsView):
     def updateFrame(self, frame_a, frame_b):
         if frame_a is None:
             self.video_item.setPixmap(QPixmap())
+            self.set_overlay_text(None, 0, 0)  # 비운 화면에 앞 네이티브 프레임의 B 키 글자가 남지 않게
             return
 
         if native_surface_of(frame_a) is not None or native_surface_of(frame_b) is not None:
             self._show_native_frames(frame_a, frame_b)  # 네이티브(IOSurface) 프레임 — RGB 변환·numpy 합성 없음
+            self._refresh_native_overlay(frame_a)
             self._after_frame_shown()
             return
 
@@ -524,6 +571,7 @@ class CustomVideoWidget(QGraphicsView):
             pixmap = QPixmap.fromImage(q_img)
             self.video_item.setPixmap(pixmap)
 
+        self.set_overlay_text(None, width, height)  # RGB 프레임의 B 키 글자는 프레임에 구움 — 앞 네이티브 프레임의 아이템이 남지 않게(숨어 있으면 할 일 없음)
         self._after_frame_shown()
 
     def _show_native_frames(self, frame_a, frame_b):
@@ -558,6 +606,51 @@ class CustomVideoWidget(QGraphicsView):
             q_img = QImage(sip.voidptr(frame_a.ctypes.data), width, height, frame_a.strides[0], QImage.Format_RGB32)
         self.video_item.setPixmap(QPixmap.fromImage(q_img))
         self._pixmap_backing = frame_a  # 새 픽스맵을 건 뒤에 바꿈 — 옛 픽스맵이 걸려 있는 동안 옛 배열을 놓지 않게
+
+    def set_overlay_provider(self, provider):
+        """B 키 글자 공급자 등록 — provider() -> str | None(None이면 숨김). 플레이어가 창을 만들 때 한 번(_overlay_text_for_native);
+        updateFrame의 네이티브 분기가 프레임마다 불러 아이템을 갱신(공급자가 없으면 아이템을 숨김)."""
+        if not callable(provider):
+            raise TypeError(f"B 키 글자 공급자는 호출할 수 있어야 합니다: {provider!r}")
+        self._overlay_provider = provider
+
+    def _refresh_native_overlay(self, frame_a):
+        """네이티브 분기의 B 키 아이템 갱신 — updateFrame이 한 곳에서: prepare_frame_for_display를 거치지 않고 updateFrame을 바로 부르는 길
+        (_minimal_preview_seek 등)에서도 새 프레임 번호. A가 네이티브일 때만 보임 — A가 RGB(B만 네이티브)면 B 키 글자는 굽는 길의 몫이라
+        아이템은 숨김(prepare_frame_for_display가 A에 이미 구웠으면 두 번 그리지 않게, 굽지 않는 미리보기 길은 예전 RGB 길처럼 글자 없음).
+        기하는 A의 크기(frame_a.shape — 픽셀은 읽지 않음)."""
+        height, width = frame_a.shape[:2]
+        if self._overlay_provider is None or native_surface_of(frame_a) is None:
+            self.set_overlay_text(None, width, height)
+            return
+        self.set_overlay_text(self._overlay_provider(), width, height)
+
+    def set_overlay_text(self, text, width, height):
+        """B 키 오버레이 아이템(흰 상자 + 검정 글자 — 네이티브 프레임용, 굽지 않음)을 width×height 프레임의 text로. None이면 둘 다 숨김
+        (이미 숨었으면 할 일 없음).
+
+        굽는 길(player_playback.overlay_text)과 같은 규칙(overlay_layout — overlay_metrics의 크기·여백, 너비를 넘치면 줄임): 기준선은
+        (margin_x, 높이 − margin_y), 상자는 글자 상자를 pad만큼 넓힌 것 — 왼쪽 margin_x − pad, 위 기준선 − cv2 글자 높이 − pad(구운 상자와 같은
+        픽셀), 아래 기준선 + max(pad, cv2 꼬리, Qt 꼬리)(Qt 글꼴의 g·p·_ 꼬리도 상자 안), 오른쪽 Qt 글자 끝 + pad. cv2.rectangle처럼 끝 픽셀까지
+        칠하도록 너비·높이에 1을 더함. 글꼴은 overlay_font(대문자 높이 = cv2 글자 높이)."""
+        if text is None:
+            if self.overlay_box_item.isVisible() or self.overlay_text_item.isVisible():
+                self.overlay_box_item.setVisible(False)
+                self.overlay_text_item.setVisible(False)
+            return
+        layout = overlay_layout(text, width, height)
+        font = overlay_font(text, layout)
+        metrics = QFontMetricsF(font)
+        x, y = layout.margin_x, height - layout.margin_y  # 기준선 왼쪽 끝
+        pad = layout.pad
+        below = max(pad, layout.baseline, math.ceil(metrics.descent()))
+        self.overlay_text_item.setFont(font)
+        self.overlay_text_item.setText(text)
+        self.overlay_text_item.setPos(x, y - metrics.ascent())  # 글자 아이템의 원점은 글줄 위 — 기준선이 y에 오게
+        self.overlay_box_item.setRect(QRectF(x - pad, y - layout.text_height - pad,
+                                             metrics.horizontalAdvance(text) + 2 * pad + 1, layout.text_height + pad + below + 1))
+        self.overlay_box_item.setVisible(True)
+        self.overlay_text_item.setVisible(True)
 
     def _after_frame_shown(self):
         """updateFrame의 꼬리(두 그리기 길이 함께 씀): 새 그림 크기에 장면·맞춤을 맞추고 와이프 선·ROI·편집 핸들을 다시 놓음."""

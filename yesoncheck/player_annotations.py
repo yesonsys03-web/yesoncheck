@@ -33,6 +33,7 @@ from yesoncheck import external_tools, paths, user_files
 from yesoncheck.user_files import UserFileError
 from yesoncheck.annotation_export import AnnotationExportWorker
 from yesoncheck.annotation_burn import burn_annotations_on_frame
+from yesoncheck.frame_handles import native_surface_of
 from yesoncheck.main_window_styles import ANNOTATION_MODE_BUTTON_STYLE
 from yesoncheck.frame_annotations import (
     DEFAULT_COLOR,
@@ -599,6 +600,10 @@ class PlayerAnnotationsMixin:
     def prepare_frame_for_display(self, frame):
         if frame is None:
             return None
+        if native_surface_of(frame) is not None:
+            # 네이티브(IOSurface) 프레임은 읽기 전용 — 복사·굽기 없이 그대로 (복사본은 손잡이 없는 4채널 배열이라 updateFrame의 RGB 길에서 실패).
+            # B 키 글자는 videoWidget의 오버레이 아이템이 updateFrame에서 그리고, 주석은 이 프레임에 굽지 않음
+            return frame
         has_annotations = self.current_frame_has_annotations()
         if not self.show_overlay and not has_annotations:
             return frame

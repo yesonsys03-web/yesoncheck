@@ -338,6 +338,7 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         self.videoWidget = CustomVideoWidget(self)
         self.videoWidget.apply_theme_background(self.current_theme)  # 시작 테마가 바뀌어도 GL 여백 색이 따라오게
         self.videoWidget.wipePositionChanged.connect(self.update_frame)
+        self.videoWidget.set_overlay_provider(self._overlay_text_for_native)  # B 키 글자 — 네이티브 프레임은 굽지 않고 위젯의 아이템으로
         self.videoWidget.roiSelectionFinished.connect(self.on_roi_selected)
         self.init_annotation_system()
 
