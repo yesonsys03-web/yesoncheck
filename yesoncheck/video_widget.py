@@ -5,6 +5,7 @@ import os
 
 import cv2
 import numpy as np
+from PyQt5 import sip
 from PyQt5.QtCore import Qt, QTimer, QPointF, QRectF, pyqtSignal
 from PyQt5.QtGui import (
     QColor,
@@ -36,6 +37,7 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck import paths
+from yesoncheck.frame_handles import native_surface_of, whole_surface_handle
 from yesoncheck.gl_video_item import LOG_PREFIX, VIDEO_ITEM_ENV, VideoFrameItem, use_stream_item, video_item_mode
 
 VIEWPORT_ENV = "YESONCHECK_VIEWPORT"
@@ -112,6 +114,7 @@ class CustomVideoWidget(QGraphicsView):
             self.scene.addItem(self.video_item)
         else:
             self.video_item = self.scene.addPixmap(QPixmap())
+        self._pixmap_backing = None  # 픽스맵 길에 그린 네이티브 프레임 — RGB32 픽스맵이 그 메모리를 함께 쓰므로 다음 그림까지 쥠 (_show_native_frames)
 
         self.wipe_position_x = 0.5
         self.wipe_position_y = 0.5
@@ -492,6 +495,11 @@ class CustomVideoWidget(QGraphicsView):
             self.video_item.setPixmap(QPixmap())
             return
 
+        if native_surface_of(frame_a) is not None or native_surface_of(frame_b) is not None:
+            self._show_native_frames(frame_a, frame_b)  # 네이티브(IOSurface) 프레임 — RGB 변환·numpy 합성 없음
+            self._after_frame_shown()
+            return
+
         height, width = frame_a.shape[:2]
         bytes_per_line = 3 * width
         
@@ -516,6 +524,43 @@ class CustomVideoWidget(QGraphicsView):
             pixmap = QPixmap.fromImage(q_img)
             self.video_item.setPixmap(pixmap)
 
+        self._after_frame_shown()
+
+    def _show_native_frames(self, frame_a, frame_b):
+        """A 또는 B가 네이티브 프레임(frame_handles — IOSurface 위 BGRX 뷰)일 때 그리기 — CPU로 픽셀을 읽거나 합성하지 않는다.
+
+        스트림 아이템(GL): 두 면을 그대로 set_sides — 네이티브 면은 아이템이 IOSurface를 텍스처로 묶고, 아닌 면(h264 등 RGB)은 아이템이 올림.
+        와이프는 numpy 합성 대신 axis·ratio(GL scissor): X만 → ("x", wipe_position_x), Y만 → ("y", wipe_position_y), 둘 다 → ("xy", (rx, ry)),
+        꺼짐 → (None, 0.0)이고 그때 B는 넘기지 않음.
+        픽스맵 아이템(킬 스위치 YESONCHECK_VIDEO_ITEM=pixmap·raster 뷰포트 — 느려도 되는 끄는 길): **A만** 그림(와이프 합성은 GL 길의 몫 — 와이프 선은
+        그대로 보이지만 B는 그리지 않음). 네이티브 A는 QImage Format_RGB32(리틀 엔디언 B·G·R·X 바이트 = BGRX)로 표면 메모리를 복사 없이 가리키고
+        행 간격은 strides[0](bytesPerRow); RGB32 픽스맵은 그 메모리를 함께 쓸 수 있어 배열을 _pixmap_backing에 다음 그림까지 쥔다(배열이 손잡이로
+        IOSurface를 살림). 표면 전체가 아닌 네이티브 뷰(조각·뒤집힌 뷰)는 바이트 배치가 달라 ValueError. A가 RGB(B만 네이티브)면 RGB888."""
+        wipe_x, wipe_y = self.wipe_enabled_x, self.wipe_enabled_y
+        if self.video_item_stream:
+            if wipe_x and wipe_y:
+                axis, ratio = "xy", (self.wipe_position_x, self.wipe_position_y)
+            elif wipe_x:
+                axis, ratio = "x", self.wipe_position_x
+            elif wipe_y:
+                axis, ratio = "y", self.wipe_position_y
+            else:
+                axis, ratio = None, 0.0
+            self.video_item.set_sides(frame_a, frame_b if axis else None, axis, ratio)
+            return
+        height, width = frame_a.shape[:2]
+        if native_surface_of(frame_a) is None:
+            q_img = QImage(frame_a.data, width, height, 3 * width, QImage.Format_RGB888)
+        else:
+            if whole_surface_handle(frame_a) is None:
+                raise ValueError(f"A 면이 네이티브 프레임의 표면 전체가 아닙니다(조각·상하 반전·채널 역순 뷰 — shape {frame_a.shape}, "
+                                 f"strides {frame_a.strides}) — RGB32 픽스맵으로 가리킬 수 없습니다")
+            q_img = QImage(sip.voidptr(frame_a.ctypes.data), width, height, frame_a.strides[0], QImage.Format_RGB32)
+        self.video_item.setPixmap(QPixmap.fromImage(q_img))
+        self._pixmap_backing = frame_a  # 새 픽스맵을 건 뒤에 바꿈 — 옛 픽스맵이 걸려 있는 동안 옛 배열을 놓지 않게
+
+    def _after_frame_shown(self):
+        """updateFrame의 꼬리(두 그리기 길이 함께 씀): 새 그림 크기에 장면·맞춤을 맞추고 와이프 선·ROI·편집 핸들을 다시 놓음."""
         scene_rect_changed = self.scene.sceneRect() != self.video_item.boundingRect()
         if self.initial_fit or scene_rect_changed:
             self.scene.setSceneRect(self.video_item.boundingRect())
@@ -525,6 +570,13 @@ class CustomVideoWidget(QGraphicsView):
         self.updateWipeLine()
         self._update_roi_item()
         self._update_edit_handle_items()
+
+    def display_path(self):
+        """프레임을 화면에 그리는 길 — "gl"(GL 뷰포트 + 스트림 아이템), "pixmap"(GL 뷰포트 + 픽스맵 아이템 — 킬 스위치
+        YESONCHECK_VIDEO_ITEM=pixmap), "raster"(라스터 뷰포트). [측정] 줄의 표시= 값."""
+        if self.video_item_stream:
+            return "gl"
+        return "pixmap" if isinstance(self.viewport(), QOpenGLWidget) else "raster"
 
     def toggleWipeEffect(self, enabled):
         self.wipeEnabled = enabled

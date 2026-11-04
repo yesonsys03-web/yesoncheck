@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from yesoncheck.frame_handles import native_surface_of
 from yesoncheck.frame_utils import FrameCalculator
 from yesoncheck.movie_pipe_source import PipeCaptureError, maybe_pipe_capture
 from yesoncheck.sequence_scan import is_sequence_path
@@ -57,7 +58,25 @@ def overlay_metrics(width, height):
     return OverlayMetrics(0.7 * k, thickness, max(1, round(5 * k)), max(1, round(10 * k)), max(1, round(20 * k)))
 
 
+def measurement_line(frames, elapsed, native, wipe, display, name):
+    """재생 한 바퀴의 [측정] 줄 — `[측정] <장>장 <초>초 (<fps>fps) 네이티브=yes|no 와이프=on|off 표시=gl|pixmap|raster — <파일 이름>`.
+    frames: Play 뒤 진행한 장 수, elapsed: Play 직후부터 마지막 틱의 그리기가 끝난 때까지(초). M1 측정 기록이 이 줄을 읽음(Ruling 3)."""
+    fps = frames / elapsed if elapsed > 0 else 0.0
+    return (f"[측정] {frames}장 {elapsed:.2f}초 ({fps:.1f}fps) 네이티브={'yes' if native else 'no'} "
+            f"와이프={'on' if wipe else 'off'} 표시={display} — {name}")
+
+
+class _MeasureRun:
+    """[측정] Play 한 번의 기록 — t0: Play 직후 시각, frames: 그 뒤 진행한 장 수, last: 마지막 틱의 update_frame이 끝난 시각 (time.perf_counter)."""
+
+    __slots__ = ("t0", "frames", "last")
+
+    def __init__(self, t0):
+        self.t0, self.frames, self.last = t0, 0, t0
+
+
 class PlayerPlaybackMixin:
+    _measure_run = None  # [측정] 지금 Play의 _MeasureRun — Play 전이거나 줄을 찍었으면 None
 
     def get_video_codec(self, file_path):
         """
@@ -513,8 +532,13 @@ class PlayerPlaybackMixin:
             current_pos = int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES))
             self.seek_to_frame(current_pos)
 
-    def process_frame(self, frame):
-        if self.use_gpu:
+    def process_frame(self, frame, gpu=True):
+        """캡처 프레임을 화면용으로: BGR → RGB(use_gpu면 고른 GPU 백엔드로). 네이티브 프레임(IOSurface 위 BGRX — frame_handles)은 그대로
+        돌려줌 — 변환·복사 없이 GL이 표면을 그림(cv2.cvtColor는 4채널 strided 배열도 받아 3채널 복사본을 만들어 손잡이를 조용히 잃으므로 여기서 막음).
+        gpu=False: CPU 변환만(드래그 미리보기 — GPU 백엔드를 건너뜀)."""
+        if native_surface_of(frame) is not None:
+            return frame
+        if gpu and self.use_gpu:
             if self.gpu_backend == 'cuda':
                 gpu_frame = cv2.cuda_GpuMat()
                 gpu_frame.upload(frame)
@@ -706,7 +730,7 @@ class PlayerPlaybackMixin:
                 # 드래그 중일 때는 최소한의 처리만 수행
                 if self.is_dragging:
                     # 컬러 변환만 수행 (GPU 처리 스킵)
-                    self.frame_a = cv2.cvtColor(frame_a, cv2.COLOR_BGR2RGB)
+                    self.frame_a = self.process_frame(frame_a, gpu=False)
                 else:
                     # 일반 모드: 4K 최적화 적용
                     self.frame_a = self.optimize_for_4k(frame_a)
@@ -896,7 +920,7 @@ class PlayerPlaybackMixin:
             
             if ret_a and frame_a is not None:
                 # 컬러 변환만 수행 (모든 추가 처리 스킵)
-                self.frame_a = cv2.cvtColor(frame_a, cv2.COLOR_BGR2RGB)
+                self.frame_a = self.process_frame(frame_a, gpu=False)
                 
                 # UI 업데이트는 최소한만 (오버레이 스킵)
                 self.videoWidget.updateFrame(self.frame_a, None)
@@ -937,7 +961,7 @@ class PlayerPlaybackMixin:
                 # 드래그 중일 때는 최소한의 처리만 수행
                 if self.is_dragging:
                     # 컬러 변환만 수행 (GPU 처리 스킵)
-                    self.frame_a = cv2.cvtColor(frame_a, cv2.COLOR_BGR2RGB)
+                    self.frame_a = self.process_frame(frame_a, gpu=False)
                 else:
                     # 일반 모드: 4K 최적화 적용
                     self.frame_a = self.optimize_for_4k(frame_a)
@@ -1583,9 +1607,32 @@ class PlayerPlaybackMixin:
                 ret_b, frame_b = self.cap_b.read()
                 self.frame_b = self.process_frame(frame_b) if ret_b else None
             self.update_frame()
+            self._measure_tick()
         else:
+            self._print_measurement()  # 프레임 수를 크게 알리는 캡처(cv2)는 끝을 여기서 앎 — 마지막 틱이 이미 찍었으면 아무것도 안 함
             print("Video end detected in next_frame_playback")
             self.handle_video_end()
+
+    def _measure_tick(self):
+        """[측정] 재생 틱이 프레임 하나를 진행해 그린 뒤: 장 수·시각을 적고, 마지막 프레임(다음 읽을 번호 ≥ 프레임 수)에 닿았으면 줄을 찍음."""
+        run = self._measure_run
+        if run is None:
+            return
+        run.frames += 1
+        run.last = time.perf_counter()
+        if int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES)) >= int(self.cap_a.get(cv2.CAP_PROP_FRAME_COUNT)):
+            self._print_measurement()
+
+    def _print_measurement(self):
+        """[측정] 이 Play의 줄을 찍고 기록을 닫음 — Play마다 한 번(모든 캡처). 진행한 장이 없거나 이미 찍었으면 아무것도 안 함.
+        네이티브 = A가 네이티브 프레임, 와이프 = B를 읽어 실어 그림(B가 열림·와이프 체크·X 또는 Y 축 — 찍는 때의 상태), 표시 = videoWidget.display_path()."""
+        run, self._measure_run = self._measure_run, None
+        if run is None or run.frames == 0:
+            return
+        widget = self.videoWidget
+        wipe = bool(self.cap_b) and widget.wipeEnabled and (widget.wipe_enabled_x or widget.wipe_enabled_y)
+        print(measurement_line(run.frames, run.last - run.t0, native_surface_of(self.frame_a) is not None, wipe,
+                               widget.display_path(), os.path.basename(self.filename_a)), flush=True)
 
     def next_frame(self):
         if not self.cap_a: 
@@ -2200,6 +2247,7 @@ class PlayerPlaybackMixin:
                 # 개선된 타이머 설정 - 더 정확한 타이밍
                 timer_interval = max(1, int(1000 / original_fps))
                 self.timer.start(timer_interval)
+                self._measure_run = _MeasureRun(time.perf_counter())  # [측정] 이 Play부터 (Play마다 새로)
                 
                 # 현재 프레임 위치를 비디오의 원래 FPS로 계산하여 오디오 동기화
                 current_frame = int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES)) - 1
@@ -2575,7 +2623,9 @@ class PlayerPlaybackMixin:
         return None
 
     def cache_frame(self, frame_idx, frame):
-        """프레임을 캐시에 저장"""
+        """프레임을 캐시에 저장 — 네이티브 프레임은 넣지 않음(copy()가 4K 33MB이고, 네이티브 캡처의 탐색은 싸서 캐시 이득이 없음)."""
+        if native_surface_of(frame) is not None:
+            return
         if len(self.frame_cache) >= self.cache_size:
             # LRU 캐시: 가장 오래된 항목 제거
             oldest_key = min(self.frame_cache.keys())
@@ -2600,7 +2650,9 @@ class PlayerPlaybackMixin:
         }
 
     def optimize_for_4k(self, frame):
-        """4K 프레임 최적화 처리"""
+        """4K 프레임 최적화 처리 — 네이티브 프레임은 그대로(process_frame과 같은 이유; 이 함수의 색 변환과 process_frame_gpu_optimized 모두 건너뜀)"""
+        if native_surface_of(frame) is not None:
+            return frame
         height, width = frame.shape[:2]
         
         # 4K 이상 해상도 감지
