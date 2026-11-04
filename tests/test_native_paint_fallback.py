@@ -52,7 +52,7 @@ SWITCH_LOG = "[표시] GL 텍스처 스트리밍 실패 — 이 창을 ffmpeg �
 STDERR_LOG = "[표시] GL 텍스처 스트리밍 실패 — 영상 영역을 비워 둡니다"  # 아이템의 stderr 줄(트레이스백 앞) — 예전 그대로
 KEEP_LOG = "[표시] 네이티브 프레임이 아직 남아 걸쇠를 풀지 않음"  # 바꿔 끼운 뒤에도 네이티브 면이 남았을 때
 SWAP_FALSE_LOG = "[표시] ffmpeg 방식으로 바꾸지 못한 쪽이 있음"
-RETRY_LOG = "[재생] 이 창은 네이티브 프레임에서 그리기가 멈춰 있어 ffmpeg로 캡처를 다시 바꿔 끼움"  # 메뉴에서 이미 유효한 ffmpeg를 다시 고를 때 (Ruling 11)
+RETRY_LOG = "[재생] 이 창은 그리기가 멈춰 있어(걸쇠) ffmpeg로 캡처를 다시 바꿔 끼우고 걸쇠를 정리함"  # 메뉴에서 이미 유효한 ffmpeg를 다시 고를 때 (Ruling 11)
 
 
 @pytest.fixture
@@ -384,6 +384,41 @@ def test_choosing_ffmpeg_in_a_window_stuck_on_a_native_frame_swaps_again(stuck, 
     [new_cap] = opened
     assert isinstance(new_cap, cv2.VideoCapture) and player.cap_a is new_cap
     assert item._failed is False and not item.has_native_side() and item.failure_count == 1
+    assert checked(player) == ["ffmpeg"] and player.decoder_actions["ffmpeg"].toolTip() == player_base.DECODER_TIP
+    out = capsys.readouterr().out
+    assert out.count(RETRY_LOG + "\n") == 1 and "캡처를 다시 열지 않음" not in out
+    assert dialogs.messages == []
+
+
+@mac_only
+@pytest.mark.parametrize("source", [RUNTIME_SOURCE, SOURCE_PREFS], ids=["runtime-fallback-source", "prefs-source"])
+def test_choosing_ffmpeg_in_a_window_latched_on_an_rgb_picture_swaps_again_and_releases(stuck, monkeypatch, capsys, dialogs, source):
+    """걸쇠가 걸렸는데 지금 그림이 RGB(IOSurface 면 없음)인 창 — 부분 성공 뒤 와이프를 끄거나 파이프 RGB 업로드가 실패한 창 — 에서도 창 글이 권하는
+    'ffmpeg (예전 방식)'은 아무 일도 안 하는 길이 아니어야 함(최종 리뷰 F1): 유효 디코더가 이미 ffmpeg여도 같은 헬퍼로 다시 바꿔 끼우고, 네이티브 면이
+    없으니 걸쇠를 풂(RGB는 다시 그려도 같은 표면을 묶지 않음 — _latched_on_native_under_ffmpeg는 그대로 고리 막기). 기록 줄 RETRY_LOG, 창 없음.
+    source=폴백 출처(RUNTIME_SOURCE — 저장하고 들어온 값과 같아지는 길)·SOURCE_PREFS(저장할 것이 없는 길) 둘 다.
+
+    깨지는 변경: 메뉴 두 길의 판단을 _latched_on_native_under_ffmpeg(네이티브 면이 있어야 참)로 되돌리면 swap·걸쇠·RETRY_LOG 단언."""
+    rig, item = stuck
+    player = rig.player
+    item.set_frame(np.zeros((FAKE_HEIGHT, FAKE_WIDTH, 3), np.uint8))
+    assert item.latched and not item.has_native_side()
+    if source == SOURCE_PREFS:
+        mac_native_gate.set_preferred_decoder("ffmpeg", source=SOURCE_PREFS)
+        monkeypatch.setattr(mac_prefs, "update_pref", lambda *a: pytest.fail("저장할 것이 없는 길 — 쓰면 안 됩니다"))
+    swaps = spy_swap(player, monkeypatch)
+    opened = reopen_by_decoder(rig, monkeypatch)
+    capsys.readouterr()
+
+    player.decoder_actions["ffmpeg"].trigger()
+
+    if source == RUNTIME_SOURCE:
+        assert mac_prefs.read_prefs() == {mac_native_gate.PREF_KEY: "ffmpeg"}
+    assert effective_decoder() == ("ffmpeg", SOURCE_PREFS)
+    assert [(call.latched, call.decoder) for call in swaps] == [(True, "ffmpeg")]  # 걸쇠는 바꿔 끼운 뒤 풂(Ruling 9)
+    [new_cap] = opened
+    assert isinstance(new_cap, cv2.VideoCapture) and player.cap_a is new_cap
+    assert item.latched is False and not item.has_native_side()
     assert checked(player) == ["ffmpeg"] and player.decoder_actions["ffmpeg"].toolTip() == player_base.DECODER_TIP
     out = capsys.readouterr().out
     assert out.count(RETRY_LOG + "\n") == 1 and "캡처를 다시 열지 않음" not in out

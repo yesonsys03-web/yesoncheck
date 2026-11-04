@@ -227,7 +227,7 @@ def test_open_file_shows_the_native_capture(new_player, dialogs, rig, tmp_path, 
 # ---------------------------------------------------------------- 네이티브 실패: 알린 뒤 파이프로
 
 def test_native_failure_shows_window_then_pipe(player, dialogs, rig, clip_1080, probe_4k, capsys):
-    """open_native_capture가 NativeCaptureError → 오류 창 한 번(경로·예외 이름·트레이스백, 끝 줄 YESONCHECK_MAC_NATIVE=off 안내) 뒤 같은 probe로
+    """open_native_capture가 NativeCaptureError → 오류 창 한 번(경로·예외 이름·트레이스백, 끝 줄 NATIVE_ESCAPE_HINT(메뉴·환경 변수 안내)) 뒤 같은 probe로
     파이프 — 그 캡처가 결과. 기록: 트레이스백(stderr) + 한 줄 '열지 못해 ffmpeg 파이프로 계속'.
 
     깨지는 변경: 창을 빼면 criticals 0; 창 뒤 return None이면 결과·pipes; probe를 넘기지 않으면(두 번 probe) kwargs의 probe;
@@ -275,7 +275,7 @@ def test_pyobjc_missing_is_a_failure_window_not_a_crash(player, dialogs, rig, cl
 
 
 def test_native_then_pipe_failure_shows_both_windows(player, dialogs, rig, clip_1080, probe_4k):
-    """네이티브도 파이프도 못 열면 창 둘이 차례로 — 네이티브 실패 창(끝 줄 YESONCHECK_MAC_NATIVE=off), 그다음 기존 파이프 오류 창(끝 줄
+    """네이티브도 파이프도 못 열면 창 둘이 차례로 — 네이티브 실패 창(끝 줄 NATIVE_ESCAPE_HINT(메뉴·환경 변수 안내)), 그다음 기존 파이프 오류 창(끝 줄
     YESONCHECK_MOVIE_SOURCE=cv2) — 결과 None(보던 영상은 그대로), ffprobe 한 번(같은 probe가 파이프로).
 
     깨지는 변경: 파이프 호출을 네이티브 except 안으로 옮기거나 그 PipeCaptureError를 다른 길로 보내면 둘째 창이 없거나 다름;
@@ -370,7 +370,7 @@ def test_cv2_kill_switch_skips_native(player, dialogs, rig, clip_1080, monkeypat
 
 
 def test_not_wanted_leaves_existing_path_untouched(player, dialogs, rig, mp4v_clip, capsys):
-    """native_wanted()가 거짓(Intel·Windows·YESONCHECK_MAC_NATIVE=off) → 이 분기는 probe하지 않고 예전 줄 `maybe_pipe_capture(path, full_cache=True)`
+    """native_wanted()가 거짓(Windows·재생 디코더 ffmpeg·YESONCHECK_MAC_NATIVE=off) → 이 분기는 probe하지 않고 예전 줄 `maybe_pipe_capture(path, full_cache=True)`
     (probe 인자 없음) 하나만 — 여기서는 대역이 None을 줘서 기존 cv2.VideoCapture까지. 네이티브 기록 줄 없음.
     (진짜 파이프·cv2 줄의 무회귀는 test_movie_pipe_integration·test_pipe_player의 무수정 통과)
 
@@ -392,7 +392,7 @@ def test_not_wanted_leaves_existing_path_untouched(player, dialogs, rig, mp4v_cl
 
 def test_player_does_not_import_native_source_unless_wanted():
     """플레이어는 mac_native_source를 맨 위에서 불러오지 않고, 원하지 않을 때(native_wanted 거짓) 영상 열기 전체(_open_movie_capture — os.stat
-    확인부터 캡처를 돌려줄 때까지)에서도 불러오지 않음 — 원할 때만 분기 안에서 지연 import (스펙 §5.8·§5.9: Intel·Windows 앱은 이 모듈을 import하지
+    확인부터 캡처를 돌려줄 때까지)에서도 불러오지 않음 — 원할 때만 분기 안에서 지연 import (스펙 §5.8·§5.9: Windows 앱·재생 디코더 ffmpeg·off인 실행은 이 모듈을 import하지
     않음). 새 프로세스에서 player_playback을 불러 sys.modules를 보고(이 프로세스는 다른 시험이 이미 불러옴), 원하지 않음·표지를 주는 파이프 대역으로
     진짜 _open_movie_capture를 있는 파일(그 모듈 파일 자체)에 한 번 돌린 뒤 다시 봄 — 창·QApplication 없이(os.stat이 되고 대역이 cv2 앞에서 돌려줌).
     자식 출력은 utf-8로 (tests/test_workers_split 선례).

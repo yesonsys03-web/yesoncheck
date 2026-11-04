@@ -34,7 +34,7 @@ from yesoncheck import error_window, mac_native_source  # noqa: E402
 from yesoncheck.frame_handles import native_surface_of, whole_surface_handle  # noqa: E402
 from yesoncheck.mac_native_gate import native_ineligible_reason  # noqa: E402
 from yesoncheck.mac_native_source import (  # noqa: E402
-    NATIVE_FAILURE_HEADLINE, NATIVE_KEEP_BEHIND, NATIVE_LOG_PREFIX, NATIVE_READ_TIMEOUT_S, NATIVE_READAHEAD,
+    NATIVE_ESCAPE_HINT, NATIVE_FAILURE_HEADLINE, NATIVE_KEEP_BEHIND, NATIVE_LOG_PREFIX, NATIVE_READ_TIMEOUT_S, NATIVE_READAHEAD,
     NATIVE_READER_THREAD, NATIVE_SEEK_FORWARD_MAX, NativeCaptureError, NativeVTCapture, open_native_capture,
 )
 from yesoncheck.movie_pipe_source import probe_movie  # noqa: E402
@@ -458,7 +458,7 @@ def test_short_file_is_failure_not_eof(clip30, claimed, delivered, qapp, windows
         assert windows == []  # 창은 Qt 루프로 미룸
         qapp.processEvents()
         assert len(windows) == 1 and f"프레임 수 {claimed}" in windows[0]
-        assert windows[0].rstrip().endswith("YESONCHECK_MAC_NATIVE=off")
+        assert windows[0].rstrip().endswith("\n" + NATIVE_ESCAPE_HINT)
     finally:
         cap.release()
 
@@ -491,7 +491,7 @@ def test_reader_stall_dies_with_one_window(clip30, monkeypatch, qapp, windows, c
         assert windows == []
         qapp.processEvents()
         assert len(windows) == 1 and NATIVE_FAILURE_HEADLINE in windows[0] and clip30 in windows[0]
-        assert windows[0].rstrip().endswith("YESONCHECK_MAC_NATIVE=off")
+        assert windows[0].rstrip().endswith("\n" + NATIVE_ESCAPE_HINT)
         for _ in range(3):
             assert cap.read() == (False, None)
         qapp.processEvents()

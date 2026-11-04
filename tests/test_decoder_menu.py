@@ -337,7 +337,7 @@ def test_choosing_ffmpeg_in_fallback_session_saves_without_reopen(make_player, a
 def test_choosing_ffmpeg_after_runtime_fallback_saves_without_reopen(fake_native_player, auto, spies, dialogs, capsys, native):
     """실행 중 폴백(Task 5 — 이 창만 ffmpeg, 파일은 그대로)으로 캐시가 ffmpeg인 창: 메뉴는 그 출처를 ffmpeg 툴팁에 보이고, ffmpeg를 고르면 저장만 —
     이미 ffmpeg로 바꿔 끼운 캡처를 다시 열지 않음(바꿔 끼움·걸쇠 풀기 0회). A가 RGB(바꿔 끼운 뒤의 모습)여도, 네이티브 면이어도 걸쇠가 걸려 있지 않으면 —
-    다시 바꿔 끼우는 것은 걸쇠가 네이티브 면에 걸린 창뿐(Ruling 11 — tests/test_native_paint_fallback)."""
+    다시 바꿔 끼우는 것은 걸쇠가 걸린 창뿐(Ruling 11·최종 리뷰 F1 — tests/test_native_paint_fallback)."""
     rig = fake_native_player(native=native)
     player = rig.player
     events = spies(player)
