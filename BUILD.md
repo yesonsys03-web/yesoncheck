@@ -66,6 +66,20 @@ Apple Silicon Mac에서 직접 빌드해도 같은 결과(두 검사 `통과`, �
 세 줄은 `sys_platform == "darwin" and platform_machine == "arm64"` 마커가 있어 **`requirements-build-arm64.lock`에만** 들어가고 Intel·Windows lock은
 그대로입니다(`tests/test_build_lock.py`가 지킴 — 하드웨어 디코드 여부 `hw=yes|no`는 VideoToolbox 래퍼 없이 ctypes). 고정 목록을 고친 뒤 arm64 lock은
 파일 맨 위 명령으로 다시 만듭니다: `MACOSX_DEPLOYMENT_TARGET=12.0 uv pip compile requirements-build.txt --python-version 3.10 --python-platform aarch64-apple-darwin --no-header -o requirements-build-arm64.lock`.
+PyObjC를 lock에 넣기 전에 만든 Apple Silicon 환경(`~/coding/p310_tf`)에는 PyObjC가 없으니 arm64 lock과 같은 판으로 한 번 넣으세요:
+`uv pip install --python ~/coding/p310_tf/bin/python pyobjc-core==12.2.2 pyobjc-framework-avfoundation==12.2.2 pyobjc-framework-cocoa==12.2.2 pyobjc-framework-coreaudio==12.2.2 pyobjc-framework-coremedia==12.2.2 pyobjc-framework-quartz==12.2.2`
+— 없으면 빌드 검사(`check_frozen_imports.py`, 2절)가 네이티브 디코드에서 실패하고, 소스 실행은 4K ProRes 4444를 열 때마다 '영상을 열 수 없음(네이티브)' 창 뒤 ffmpeg 파이프로 엽니다.
+
+**네이티브 시험을 Intel Mac에서 돌리려면(개발용 — 빌드 환경 아님)**: `tests/test_mac_native_source.py`와 진짜 네이티브 디코드 시험은 PyObjC가 있어야 돌고,
+Intel 빌드 환경 `~/coding/p310_tf`(x86_64 lock — PyObjC 없음)에서는 이유를 찍고 건너뜁니다. Intel 빌드 환경에는 PyObjC를 넣지 마세요(넣으면 Intel 앱에 들어감) —
+따로 개발용 venv를 만듭니다(VideoToolbox는 Intel Mac에서도 ProRes를 디코드함; 이 venv로는 빌드하지 않음):
+```bash
+uv venv ~/coding/p310_native --python 3.10 --managed-python
+MACOSX_DEPLOYMENT_TARGET=12.0 uv pip install --python ~/coding/p310_native/bin/python --python-platform x86_64-apple-darwin -r requirements-build-x86_64.lock
+uv pip install --python ~/coding/p310_native/bin/python pyobjc-core==12.2.2 pyobjc-framework-avfoundation==12.2.2 pyobjc-framework-cocoa==12.2.2 pyobjc-framework-coreaudio==12.2.2 pyobjc-framework-coremedia==12.2.2 pyobjc-framework-quartz==12.2.2
+uv pip install --python ~/coding/p310_native/bin/python -r requirements-test.txt
+~/coding/p310_native/bin/python -m pytest tests/test_mac_native_source.py tests/test_native_player_paths.py tests/test_native_overlay_item.py tests/test_annotation_overlay.py tests/test_gl_surface.py tests/test_hw_decode_probe.py -q
+```
 
 ## 2. 빌드
 
@@ -90,6 +104,7 @@ git 저장소가 아닌 폴더에서는 버전을 정할 수 없어 빌드가 �
    - 빌드 환경에서 OCR 인식과 씬 감지(애니매틱, 애니매틱2 TransNetV2)를 실제로 실행해 쓰인 모듈을 모으고, 그 모듈이 앱 안에 모두 있는지 대조합니다.
    - 애니매틱2는 합성 3샷 영상(30프레임씩)에서 씬 시작 `[0, 30, 60]`을 찾아야 하고, TensorFlow나 가중치가 없으면 검사가 실패합니다.
    - 이미지 시퀀스 프레임(RLE TGA·EXR 한 장씩, 메모리에서 만든 작은 프레임)도 `decode_frame`으로 디코딩합니다. PIL 이미지 플러그인(`PIL.TgaImagePlugin` 등)은 처음 쓸 때 불러오는 모듈이라, 실제로 디코딩해야 앱에 빠졌는지 잡힙니다.
+   - Apple Silicon 빌드는 4K ProRes 네이티브 재생 길도 실제로 돌립니다: 번들 ffmpeg(`vendor/ffmpeg/arm64` — 없으면 실패, PATH의 다른 ffmpeg로 대신하지 않음)로 임시 폴더에 4K ProRes 4444 6프레임을 만들어 VideoToolbox(`NativeVTCapture`)로 3프레임을 디코드하고, 결과 줄에 `네이티브 디코드: VideoToolbox 3장 3840×2160 32BGRA (hw=yes|no|?)`를 적습니다. PyObjC 모듈은 처음 쓸 때 불러오므로 이렇게 돌려야 앱에 빠졌는지 잡힙니다. Intel·Windows 빌드는 `네이티브 디코드 건너뜀 (Apple Silicon 아님)`.
    - PyInstaller가 놓친 모듈 때문에 앱이 실행 중 `No module named ...`로 죽는 문제를 빌드 단계에서 잡습니다.
    - OCR 모델이 없으면 `~/.paddleocr`에 내려받으므로 인터넷 연결이 필요합니다.
 
