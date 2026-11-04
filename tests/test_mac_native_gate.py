@@ -17,7 +17,8 @@ import pytest
 from tests.prores_clips import make_numbered_clip
 from yesoncheck import mac_native_gate, mac_prefs, movie_pipe_source
 from yesoncheck.mac_native_gate import (
-    DECODERS, HDR_PRIMARIES, HDR_TRANSFERS, NATIVE_CODEC, NATIVE_MODE_ENV, NATIVE_MODES, PREF_KEY, effective_decoder,
+    DECODERS, HDR_PRIMARIES, HDR_TRANSFERS, NATIVE_CODEC, NATIVE_MODE_ENV, NATIVE_MODES, PREF_KEY, SOURCE_FALLBACK,
+    effective_decoder,
     is_apple_silicon, native_eligible, native_ineligible_reason, native_mode, native_wanted, preferred_decoder,
     set_preferred_decoder,
 )
@@ -32,17 +33,10 @@ def mac(machine):
     return SimpleNamespace(machine=lambda: machine), SimpleNamespace(platform="darwin")
 
 
-@pytest.fixture(autouse=True)
-def _reset_preferred_decoder():
-    """게이트의 선호 디코더 캐시는 프로세스에 하나 — 시험이 바꾼 값(app.launch가 prefs를 읽어 정한 값 포함)이 다음 시험에 남지 않게 끝나고 기본으로."""
-    yield
-    set_preferred_decoder("videotoolbox")
-
-
 @pytest.fixture
 def home(monkeypatch, tmp_path):
-    """prefs.json은 시험마다 새 HOME 아래에 (사용자의 ~/Library/Application Support를 건드리지 않음). Windows의 expanduser는
-    USERPROFILE을 봄 — 둘 다. (tests/test_default_app.py의 home과 같은 모양)"""
+    """prefs.json은 시험마다 새 HOME 아래에 (사용자의 ~/Library/Application Support를 건드리지 않음) — tests/conftest.py의 autouse 격리
+    위에 경로를 시험이 아는 폴더로 바꿔 줌. Windows의 expanduser는 USERPROFILE을 봄 — 둘 다. (tests/test_default_app.py의 home과 같은 모양)"""
     path = tmp_path / "home"
     path.mkdir()
     monkeypatch.setenv("HOME", str(path))
@@ -150,11 +144,15 @@ def test_native_wanted_validates_the_toggle():
 def test_preference_constants_match_the_documented_values():
     assert PREF_KEY == "playback_decoder"
     assert DECODERS == ("videotoolbox", "ffmpeg")
+    assert (mac_native_gate.SOURCE_DEFAULT, mac_native_gate.SOURCE_PREFS) == ("기본값", "prefs.json")
+    assert SOURCE_FALLBACK == "prefs.json 읽기 실패 — 이 세션만 ffmpeg"
+    # 메뉴(Task 4)가 환경 변수가 덮는 경우를 출처의 머리글로 알아봄 — 다른 출처는 그 머리글로 시작하면 안 됨
+    assert not any(label.startswith("환경 변수") for label in (mac_native_gate.SOURCE_DEFAULT, mac_native_gate.SOURCE_PREFS, SOURCE_FALLBACK))
 
 
 def test_preferred_decoder_defaults_to_videotoolbox():
-    """새 프로세스의 캐시는 videotoolbox·출처 "기본값" (prefs.json을 읽는 app.launch가 부르기 전의 모듈 기본). 시험 사이에는 autouse 픽스처가
-    되돌리므로 이 기본은 새 프로세스로 봄."""
+    """새 프로세스의 캐시는 videotoolbox·출처 "기본값" (prefs.json을 읽는 app.launch가 부르기 전의 모듈 기본). 시험 사이에는 conftest의 autouse
+    픽스처가 이미 set_preferred_decoder로 맞춰 두므로 모듈 기본은 새 프로세스로 봄."""
     code = (
         "import yesoncheck.mac_native_gate as g\n"
         "print(g.preferred_decoder(), g.effective_decoder({}))\n"
@@ -162,6 +160,27 @@ def test_preferred_decoder_defaults_to_videotoolbox():
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, f"stdout {result.stdout!r} stderr {result.stderr!r}"
     assert result.stdout.strip() == "videotoolbox ('videotoolbox', '기본값')"
+
+
+def test_conftest_isolates_home_from_the_developers_prefs(tmp_path_factory):
+    """HOME·USERPROFILE은 시험마다 pytest 임시 폴더 아래 새 폴더 — 개발자의 진짜 ~/Library/Application Support/YesonCheck/prefs.json을 읽지 않음
+    (깨진 파일이면 launch 시험이 대역 없는 창에서 멈췄고, playback_decoder가 있으면 결과가 사람마다 달랐음). conftest의 autouse 픽스처를 지우면 실패."""
+    base = str(tmp_path_factory.getbasetemp())
+    assert os.path.expanduser("~").startswith(base) and os.environ["HOME"].startswith(base)
+    assert os.environ["USERPROFILE"] == os.environ["HOME"]
+    assert not os.path.exists(mac_prefs.prefs_path()) and mac_prefs.read_prefs() == {}
+
+
+def test_conftest_leaves_the_cache_changed_by_a_test_behind_1():
+    """(1/2) 캐시를 ffmpeg·출처 prefs.json으로 바꿔 둔 채 끝남 — 바로 다음 시험이 기본을 보는지 봄 (정의 순서대로 도는 쌍)."""
+    set_preferred_decoder("ffmpeg", source="prefs.json")
+    assert effective_decoder({}) == ("ffmpeg", "prefs.json")
+
+
+def test_conftest_resets_the_cache_between_tests_2():
+    """(2/2) 앞 시험이 바꾼 캐시가 남지 않음 — conftest의 autouse 픽스처가 끝날 때 videotoolbox·"기본값"으로 되돌림."""
+    assert preferred_decoder() == "videotoolbox"
+    assert effective_decoder({}) == ("videotoolbox", "기본값")
 
 
 @pytest.mark.parametrize("bad", ["quicktime", "", "VideoToolbox", "FFMPEG", None, 3])
@@ -446,8 +465,9 @@ def test_module_imports_without_qt_or_pyobjc():
 # ---------------------------------------------------------------- app.launch: 토글 검증
 
 def test_launch_validates_native_toggle(qapp, monkeypatch, home):
-    """YESONCHECK_MAC_NATIVE가 나쁜 값이면 시작 때 ValueError — 창을 만들기 전에 (다른 세 토글과 같은 자리).
-    app.py의 검증 줄을 지우면 창 대역이 불려 AssertionError로 실패."""
+    """YESONCHECK_MAC_NATIVE가 나쁜 값이면 시작 때 ValueError(변수 이름과 받은 값 포함) — 창을 만들기 전에 (다른 세 토글과 같은 자리).
+    Mac에서는 load_playback_decoder 끝의 effective_decoder()가, 그 밖에서는 native_wanted()가 같은 native_mode의 글로 올림 — 어느 쪽이든 ValueError가
+    창 대역 앞에서 나와야 하므로, 둘 다 지우면 창 대역이 불려 AssertionError로 실패."""
     from yesoncheck import app as app_module
 
     def no_window(**kwargs):
@@ -575,7 +595,8 @@ def test_launch_broken_prefs_warns_once_and_uses_ffmpeg(qapp, monkeypatch, home,
     assert "prefs.json" in text and text.endswith(FALLBACK_NOTE)
     captured = capsys.readouterr()
     assert "Traceback" in captured.err and "UserFileError" in captured.err
-    assert "[재생] 디코더: ffmpeg (기본값)\n" in captured.out
+    assert f"[재생] 디코더: ffmpeg ({SOURCE_FALLBACK})\n" in captured.out
+    assert effective_decoder({}) == ("ffmpeg", SOURCE_FALLBACK)
     with open(path, encoding="utf-8") as fh:
         assert fh.read() == "not json"
 
@@ -589,7 +610,8 @@ def test_launch_bad_pref_value_warns_once_and_uses_ffmpeg(qapp, monkeypatch, hom
     assert PREF_KEY in text and repr("quicktime") in text and text.endswith(FALLBACK_NOTE)
     captured = capsys.readouterr()
     assert "Traceback" in captured.err and "ValueError" in captured.err
-    assert "[재생] 디코더: ffmpeg (기본값)\n" in captured.out
+    assert f"[재생] 디코더: ffmpeg ({SOURCE_FALLBACK})\n" in captured.out
+    assert effective_decoder({}) == ("ffmpeg", SOURCE_FALLBACK)
 
 
 def test_launch_on_windows_ignores_prefs(qapp, monkeypatch, home, dialogs, capsys):

@@ -191,6 +191,23 @@ def _instances_in_tmp(monkeypatch, tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_prefs_and_decoder_cache(monkeypatch, tmp_path_factory):
+    """HOME·USERPROFILE을 시험마다 새 빈 폴더로 — app.launch가 Mac에서 읽는 ~/Library/Application Support/YesonCheck/prefs.json이 개발자의
+    진짜 설정이 아니라 없는 파일이 되게 (깨진 파일이면 launch 시험이 대역 없는 창에서 멈추고, playback_decoder가 있으면 시험 결과가 사람마다 달라짐).
+    Windows의 expanduser는 USERPROFILE을 봄 — 둘 다. 게이트의 선호 디코더 캐시(프로세스에 하나)도 시험 앞뒤로 기본 videotoolbox로: app.launch가
+    prefs를 읽어 정한 값·시험이 set_preferred_decoder로 바꾼 값이 다른 시험(다른 파일)에 남지 않게. 파일마다의 home 픽스처는 이 뒤에 돌아 HOME을 다시 바꿀 뿐 —
+    무해. (mac_prefs.prefs_path를 바꿔치지 않는 이유: default_app이 from-import로 묶고 test_default_app이 default_app.prefs_path()를 직접 부름)"""
+    from yesoncheck import mac_native_gate
+
+    home = str(tmp_path_factory.mktemp("home"))
+    monkeypatch.setenv("HOME", home)
+    monkeypatch.setenv("USERPROFILE", home)
+    mac_native_gate.set_preferred_decoder("videotoolbox")
+    yield
+    mac_native_gate.set_preferred_decoder("videotoolbox")
+
+
+@pytest.fixture(autouse=True)
 def _fresh_shortcut_cache():
     """바로 가기 대상 캐시는 프로세스 전체에 하나 → 시험마다 비움 (가짜 경로가 다른 시험의 결과를 쓰지 않게)."""
     from yesoncheck import path_map_setup

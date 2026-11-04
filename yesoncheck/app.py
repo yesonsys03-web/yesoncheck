@@ -208,7 +208,8 @@ def load_playback_decoder():
     `[재생] 디코더: videotoolbox|ffmpeg (환경 변수 …|prefs.json|기본값)` — 환경 변수(YESONCHECK_MAC_NATIVE=on|off)가 설정을 덮으면 그 출처.
 
     깨진 prefs.json(UserFileError)이나 나쁜 값(ValueError — 손으로 고친 파일만)은 빈 값·기본값으로 치지 않음: 트레이스백을 기록하고 창을 한 번 띄운 뒤
-    이 세션은 ffmpeg(예전 방식)로 — 설정을 읽지 못한 채 새 경로를 켜지 않음. 파일은 건드리지 않는다 (고치면 다음에 켤 때 따라옴).
+    이 세션은 ffmpeg(예전 방식)로 — 설정을 읽지 못한 채 새 경로를 켜지 않음 (출처는 SOURCE_FALLBACK이라 기록 줄이 "기본값"이라고 거짓말하지 않음).
+    파일은 건드리지 않는다 (고치면 다음에 켤 때 따라옴).
     macOS가 아니면 아무것도 읽지 않는다 (이 설정은 Mac 전용 — Windows는 native_wanted가 늘 False). 나쁜 환경 변수 값은 ValueError 그대로."""
     if sys.platform != "darwin":
         return
@@ -221,7 +222,7 @@ def load_playback_decoder():
     except (user_files.UserFileError, ValueError) as exc:
         traceback.print_exc()
         QMessageBox.warning(None, PLAYBACK_DECODER_TITLE, f"{exc}\n\n{PLAYBACK_DECODER_FALLBACK_NOTE}")
-        mac_native_gate.set_preferred_decoder("ffmpeg", source=mac_native_gate.SOURCE_DEFAULT)
+        mac_native_gate.set_preferred_decoder("ffmpeg", source=mac_native_gate.SOURCE_FALLBACK)
     decoder, source = mac_native_gate.effective_decoder()
     print(f"[재생] 디코더: {decoder} ({source})", flush=True)
 
