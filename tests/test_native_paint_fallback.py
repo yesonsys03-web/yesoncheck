@@ -46,7 +46,7 @@ mac_only = pytest.mark.skipif(sys.platform != "darwin", reason="Mac 전용 폴�
 RUNTIME_SOURCE = "네이티브 화면 그리기 실패 — 이 창만 ffmpeg"  # mac_native_gate.SOURCE_GL_FALLBACK (Ruling 10)
 NATIVE_FIRST_LINE = "네이티브 화면 그리기에 실패해 이 창은 ffmpeg 방식으로 바꿉니다(설정 파일은 그대로 — 다음 창은 다시 시도)"
 OLD_FIRST_LINE = "영상 화면(GL 텍스처 스트리밍)을 그리지 못했습니다 — 영상 영역을 비워 둡니다 (재생·다른 기능은 그대로)."
-MENU_HINT = "Setting → 재생 디코더 → ffmpeg (예전 방식) 으로 바꾸면 예전 방식으로 재생합니다"
+MENU_HINT = "Settings → 재생 디코더 (Mac) → ffmpeg (예전 방식) 으로 바꾸면 예전 방식으로 재생합니다"
 ENV_HINT = f"{VIDEO_ITEM_ENV}=pixmap 으로 켜면 예전 방식으로 그립니다"
 SWITCH_LOG = "[표시] GL 텍스처 스트리밍 실패 — 이 창을 ffmpeg 방식으로 바꿉니다"  # 플레이어의 stdout 줄 (스펙 §5.8)
 STDERR_LOG = "[표시] GL 텍스처 스트리밍 실패 — 영상 영역을 비워 둡니다"  # 아이템의 stderr 줄(트레이스백 앞) — 예전 그대로

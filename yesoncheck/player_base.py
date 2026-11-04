@@ -78,7 +78,7 @@ from yesoncheck.window_layout import ElidedLabel, InfoRowLayout, VerticalScrollA
 # worker_lifecycle에서 할 것 (이 모듈의 이름을 바꿔도 release_worker는 worker_lifecycle의 것을 씀)
 from yesoncheck.worker_lifecycle import EXIT_WAIT_S, _RELEASED_WORKERS, release_worker, wait_for_released_workers
 
-# Setting → '재생 디코더 (Mac)' (스펙 2026-11-04 §5.4) — 항목 차례는 mac_native_gate.DECODERS
+# Settings → '재생 디코더 (Mac)' (스펙 2026-11-04 §5.4) — 항목 차례는 mac_native_gate.DECODERS
 DECODER_MENU_TEXT = "재생 디코더 (Mac)"
 DECODER_ACTION_TEXTS = {"videotoolbox": "VideoToolbox (기본)", "ffmpeg": "ffmpeg (예전 방식)"}
 DECODER_SAVE_TITLE = "재생 디코더 설정"  # 저장 실패 창 제목 (app.load_playback_decoder의 읽기 실패 창과 같은 제목)
@@ -1438,7 +1438,7 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
             self.gpuComboBox.setCurrentIndex(index)
     
     def set_playback_decoder(self, name: str) -> None:
-        """(Mac) Setting → 재생 디코더에서 고른 디코더(mac_native_gate.DECODERS — videotoolbox·ffmpeg)를 이 Mac의 설정 파일에 저장하고 이 창에 바로 적용
+        """(Mac) Settings → 재생 디코더 (Mac)에서 고른 디코더(mac_native_gate.DECODERS — videotoolbox·ffmpeg)를 이 Mac의 설정 파일에 저장하고 이 창에 바로 적용
         (스펙 2026-11-04 §5.4). 다른 창(프로세스)의 캐시는 건드리지 않음 — 다음에 켤 때 설정 파일을 따름.
 
         이미 그 값이 설정 파일·기본값에서 온 것이면 아무것도 하지 않고 체크만 맞춤(체크된 항목을 다시 누르면 Qt가 체크를 끔). 설정을 읽지 못해 이 세션만
@@ -1532,10 +1532,10 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
            창의 이벤트 루프가 옛 프레임을 그려도 다시 실패하지 않게, Ruling 9) ⑤ 메뉴를 맞춤(체크 ffmpeg, 툴팁에 그 출처). ③이 예외를 내도 ④⑤는 함(finally)
            뒤 예외를 그대로 올림(코드·빌드 쪽 — PyQt가 sys.excepthook으로). ③④⑤는 Setting 메뉴와 같은 헬퍼(_swap_captures_and_settle_latch — Ruling 11).
         ④에서 네이티브 면이 남아 있으면(바꾸지 못한 쪽 — ffprobe·열기 실패, 바꿔 끼우다 예외) 걸쇠를 그대로 두고 기록 한 줄: 풀면 다음 paint가 같은
-        표면을 다시 묶다 또 실패해 창 → 폴백 → 창이 끝없이 되풀이됨. 그 영역은 빈 채 — 창 글이 권하는 Setting → 재생 디코더 → ffmpeg (예전 방식)을
+        표면을 다시 묶다 또 실패해 창 → 폴백 → 창이 끝없이 되풀이됨. 그 영역은 빈 채 — 창 글이 권하는 Settings → 재생 디코더 (Mac) → ffmpeg (예전 방식)을
         고르면 다시 바꿔 끼움(set_playback_decoder의 '네이티브 면에 걸린 창'; 캐시는 이미 ffmpeg라 바꾸지 못한 쪽은 다음에 열 때도 ffmpeg).
         환경 변수 YESONCHECK_MAC_NATIVE(on·off)가 디코더를 덮으면 캐시를 바꿔도 같은 디코더로 다시 열리므로 바꾸지 않고 기록 한 줄(걸쇠·빈 영역 그대로).
-        RGB 면 실패(native False)·macOS 밖은 아무것도 하지 않음 — 예전 규칙(걸쇠·창·빈 영역; Mac의 탈출구는 Setting → 재생 디코더)."""
+        RGB 면 실패(native False)·macOS 밖은 아무것도 하지 않음 — 예전 규칙(걸쇠·창·빈 영역; Mac의 탈출구는 Settings → 재생 디코더 (Mac))."""
         if not native or sys.platform != "darwin":
             return
         _, source = mac_native_gate.effective_decoder()
@@ -1547,10 +1547,10 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         self._swap_captures_and_settle_latch("[표시] ffmpeg 방식으로 바꾸지 못한 쪽이 있음 — 그 쪽은 다음에 열 때부터 ffmpeg")
 
     def _sync_decoder_menu(self):
-        """(Mac) Setting → 재생 디코더의 체크·활성·툴팁을 지금 유효한 디코더(mac_native_gate.effective_decoder)에 맞춤 — 메뉴를 만들 때, 고른 뒤(저장
+        """(Mac) Settings → 재생 디코더 (Mac)의 체크·활성·툴팁을 지금 유효한 디코더(mac_native_gate.effective_decoder)에 맞춤 — 메뉴를 만들 때, 고른 뒤(저장
         실패면 되돌림), 디코더 캐시를 바꾼 다른 길(네이티브 그리기 실패 폴백) 뒤에 부름. 메뉴가 없으면(macOS가 아님) 할 일이 없음.
         - YESONCHECK_MOVIE_SOURCE=cv2(킬 스위치 — 네이티브·파이프 모두 끔): 두 항목 비활성 + DECODER_CV2_TIP (환경 변수보다 먼저 — cv2가 둘 다 덮음)
-        - 환경 변수 YESONCHECK_MAC_NATIVE=on|off가 설정을 덮음(출처가 "환경 변수"로 시작): 그 값으로 체크, 두 항목 비활성 + "<출처>가 우선합니다 — …"
+        - 환경 변수 YESONCHECK_MAC_NATIVE=on|off가 설정을 덮음(출처가 "환경 변수"로 시작): 그 값으로 체크, 두 항목 비활성 + "<출처>이|가 우선합니다 — …"(on이·off가)
         - 출처가 prefs.json·기본값: 두 항목 활성 + DECODER_TIP(다른 창은 다음에 켤 때 — 스펙 §5.2)
         - 그 밖의 출처(prefs.json을 읽지 못해 이 세션만 ffmpeg — SOURCE_FALLBACK 등): 활성, 체크된 항목의 툴팁이 그 출처 글."""
         if not self.decoder_actions:
@@ -1559,7 +1559,8 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         if movie_source_mode() == "cv2":
             enabled, tips = False, dict.fromkeys(self.decoder_actions, DECODER_CV2_TIP)
         elif source.startswith(DECODER_ENV_SOURCE_PREFIX):
-            enabled, tips = False, dict.fromkeys(self.decoder_actions, f"{source}가 우선합니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다")
+            josa = "이" if source.endswith("=on") else "가"  # 받침 따라: on(온)이 · off(오프)가
+            enabled, tips = False, dict.fromkeys(self.decoder_actions, f"{source}{josa} 우선합니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다")
         else:
             enabled, tips = True, dict.fromkeys(self.decoder_actions, DECODER_TIP)
             if source not in (mac_native_gate.SOURCE_PREFS, mac_native_gate.SOURCE_DEFAULT):

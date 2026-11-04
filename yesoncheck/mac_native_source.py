@@ -5,9 +5,9 @@
 알파로 읽지 말 것), .native가 NativeHandle(IOSurface 포인터·크기·프레임 번호·keepalive)이고 whole_surface_handle(frame)이 그 손잡이를
 돌려준다(GPU 쪽이 표면을 복사 없이 질감으로 씀).
 
-판정은 하지 않는다: 어느 파일을 이 캡처로 열지는 mac_native_gate(토글·Apple Silicon·4K ProRes 4:4:4·색 태그)를 본 플레이어가 정한다
+판정은 하지 않는다: 어느 파일을 이 캡처로 열지는 mac_native_gate(토글·재생 디코더 설정·macOS·HDR이 아닌 ProRes)를 본 플레이어가 정한다
 (시험은 게이트 없이 아무 크기의 클립이나 직접 연다). PyObjC는 함수 안(_pyobjc — 잠금 아래 한 번)에서만 불러온다: 이 모듈은 PyObjC가
-없는 Intel Mac·Windows에서도 import된다(빌드의 모듈 검사·플레이어의 지연 분기). 두 스레드가 처음으로 동시에 PyObjC 프레임워크를
+없는 Windows(와 Mac lock을 설치하지 않은 소스 환경)에서도 import된다(빌드의 모듈 검사·플레이어의 지연 분기). 두 스레드가 처음으로 동시에 PyObjC 프레임워크를
 import하면 멈춘 일이 있어(Stage 0 디코드만 측정의 두 리더) 잠금 아래에서 부른다.
 
 계약 (cv2와 같음 — FFmpegPipeCapture 설명과 같은 낱말): read()는 다음 프레임을 주고 pos를 1 올림. 끝에서는 (False, None)이고 pos는

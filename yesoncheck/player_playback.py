@@ -437,11 +437,11 @@ class PlayerPlaybackMixin:
         return cap
 
     def _native_or_pipe_capture(self, file_path):
-        """_open_movie_capture의 게이트 둘 — 네이티브(VideoToolbox: Apple Silicon의 4K ProRes 4:4:4 — mac_native_gate) 먼저, 그다음 ffmpeg 파이프
+        """_open_movie_capture의 게이트 둘 — 네이티브(VideoToolbox: Mac(Intel·Apple Silicon)의 HDR이 아닌 ProRes — mac_native_gate) 먼저, 그다음 ffmpeg 파이프
         (ProRes류 — maybe_pipe_capture): 고른 캡처, 둘 다 음성이면 None (부른 쪽이 기존 cv2 줄로). 순서(스펙 §5.8):
         - YESONCHECK_MOVIE_SOURCE=cv2가 맨 먼저 — 완전 킬: 네이티브 토글도 보지 않고(토글 값이 잘못돼도 탈출구가 막히지 않음) probe도 없이 None.
-        - native_wanted()가 아니면(Intel·Windows·YESONCHECK_MAC_NATIVE=off) 예전 파이프 게이트 줄 그대로 — mac_native_source를 불러오지도 않음
-          (지연 import: Intel·Windows 앱은 이 모듈을 import하지 않음 — 스펙 §5.9).
+        - native_wanted()가 아니면(Windows·Settings → 재생 디코더 (Mac)에서 ffmpeg·YESONCHECK_MAC_NATIVE=off) 예전 파이프 게이트 줄 그대로 —
+          mac_native_source를 불러오지도 않음 (지연 import: Windows 앱은 이 모듈을 import하지 않음 — 스펙 §5.9).
         - 원하면 ffprobe 한 번(probe_for_open — 못 읽으면 파이프와 같은 규칙: auto는 기록 뒤 None이라 cv2, pipe는 PipeCaptureError)으로 네이티브
           게이트를 보고 그 probe를 파이프 판정에 그대로 넘김(ffprobe를 두 번 돌리지 않음). 양성이면 네이티브 캡처(기록 줄은 open_native_capture가
           남김). 못 열면(NativeCaptureError — PyObjC 없음도 생성자가 이것으로 감쌈) 스택 트레이스·기록 한 줄·오류 창(끝 줄은 탈출구 안내

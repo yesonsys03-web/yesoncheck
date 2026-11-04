@@ -23,12 +23,12 @@ glOrtho(0, pw, ph, 0, -1, 1)(y 아래 방향 — Qt와 같음), 정점은 매핑
 paint 가드: PyQt5 가상 함수(paint)에서 빠져나간 예외는 qFatal(프로세스 종료, 오류 창 없음 — CLAUDE.md 함정)이다. 그래서 스트림 모드의
 paint 본문 전체를 except BaseException으로 받아 첫 실패만 기록(트레이스백 전문, [표시]) + 오류 창(Qt 루프에서 1회 — paint 안에서 모달 금지)으로
 알리고, 그 뒤 paint는 아무것도 그리지 않는다(빈 영상 영역). 재생·UI는 계속되고 탈출구는 YESONCHECK_VIDEO_ITEM=pixmap(예전 QPixmap 경로),
-Mac은 Setting → 재생 디코더 → ffmpeg (예전 방식)도(그 선택이 reset_failure로 걸쇠를 풀어 다음 paint가 다시 그림 — 창 글에 그 안내 한 줄).
+Mac은 Settings → 재생 디코더 (Mac) → ffmpeg (예전 방식)도(그 선택이 reset_failure로 걸쇠를 풀어 다음 paint가 다시 그림 — 창 글에 그 안내 한 줄).
 실패를 알릴 때마다 창 예약 바로 뒤에 실패 콜백(set_failure_callback — 위젯이 등록해 streamPaintFailed 신호로 플레이어에)도 Qt 루프로 미뤄 부른다 —
 값은 그리던 그림에 IOSurface 면이 있었는가(has_native_side). Mac의 플레이어는 네이티브 면 실패면 이 창만 ffmpeg로 바꿔(바꿔 끼움 + 걸쇠 풀기) 계속하므로
 (스펙 2026-11-04 §5.8 — 큰 소리 폴백) 그때 창의 첫 줄은 NATIVE_FALLBACK_LINE(나머지 줄은 같음). RGB 면 실패는 위 규칙 그대로.
 
-IOSurface 면 그리기(set_sides·set_surface — Apple Silicon 네이티브 재생 경로): 네이티브 프레임(frame_handles — IOSurface 위의 BGRX 뷰)은 CPU로
+IOSurface 면 그리기(set_sides·set_surface — Mac 네이티브 재생 경로): 네이티브 프레임(frame_handles — IOSurface 위의 BGRX 뷰)은 CPU로
 읽거나 올리지 않고 gl_surface.CGLTexImageIOSurface2D로 GL_TEXTURE_RECTANGLE_ARB 텍스처에 그대로 묶어 그린다(복사 0, 텍스처 좌표는 픽셀 단위).
 A/B 와이프는 numpy 합성 대신 A를 전체에, B를 glScissor(wipe_scissor — 물리 픽셀, GL 창 좌표라 원점이 왼쪽 아래) 안에 그린다(X·Y 와이프가 함께면
 상자 둘 — 오른쪽과 아래쪽 — 에 그려 합집합, Ruling 17). 면은 네이티브(표면
@@ -86,8 +86,8 @@ from yesoncheck.gl_surface import GL_BGRA, GL_RGBA, GL_SCISSOR_TEST, GL_TEXTURE_
 VIDEO_ITEM_ENV = "YESONCHECK_VIDEO_ITEM"
 VIDEO_ITEM_MODES = ("auto", "gl", "pixmap")
 LOG_PREFIX = "[표시]"
-# (Mac) 실패 창의 킬 스위치 안내 앞에 붙는 줄 — player_base의 Setting 메뉴 '재생 디코더 (Mac)'가 그 걸쇠를 풂 (스펙 2026-11-04 §5.4 ④)
-DECODER_MENU_HINT = "Setting → 재생 디코더 → ffmpeg (예전 방식) 으로 바꾸면 예전 방식으로 재생합니다"
+# (Mac) 실패 창의 킬 스위치 안내 앞에 붙는 줄 — player_base의 Settings 메뉴 '재생 디코더 (Mac)'가 그 걸쇠를 풂 (스펙 2026-11-04 §5.4 ④)
+DECODER_MENU_HINT = "Settings → 재생 디코더 (Mac) → ffmpeg (예전 방식) 으로 바꾸면 예전 방식으로 재생합니다"
 # (Mac) 네이티브 면을 그리다 실패했고 받을 쪽(실패 콜백)이 있을 때 실패 창의 첫 줄 — 플레이어가 이 창만 ffmpeg로 바꿈 (스펙 2026-11-04 §5.8)
 NATIVE_FALLBACK_LINE = "네이티브 화면 그리기에 실패해 이 창은 ffmpeg 방식으로 바꿉니다(설정 파일은 그대로 — 다음 창은 다시 시도)"
 FAILURE_LINE = "영상 화면(GL 텍스처 스트리밍)을 그리지 못했습니다 — 영상 영역을 비워 둡니다 (재생·다른 기능은 그대로)."  # 그 밖의 실패 창 첫 줄
@@ -374,7 +374,7 @@ class VideoFrameItem(QGraphicsPixmapItem):
 
     def reset_failure(self) -> None:
         """그리기 실패 걸쇠(_failed)를 풀고 다시 그리기를 예약 — 다음 paint가 지금 프레임을 다시 그린다(다시 실패하면 _fail이 다시 기록 + 창 1회).
-        Setting → 재생 디코더에서 고를 때 플레이어가 캡처를 바꿔 끼운 뒤 부름(디코더를 바꾸는 것이 걸쇠의 탈출구 — 스펙 2026-11-04 §5.4 ④; 바꿔 끼우는 동안의
+        Settings → 재생 디코더 (Mac)에서 고를 때 플레이어가 캡처를 바꿔 끼운 뒤 부름(디코더를 바꾸는 것이 걸쇠의 탈출구 — 스펙 2026-11-04 §5.4 ④; 바꿔 끼우는 동안의
         창이 옛 프레임을 그려도 다시 실패하지 않게 그 뒤에). failure_count(알린 수)는 그대로.
 
         GL 상태는 비우지 않는다 — 다음 paint는 실패한 단계부터 다시 한다: 단계마다 성공한 뒤에만 기록하기 때문(준비 — _context는 _prepare 끝에서·

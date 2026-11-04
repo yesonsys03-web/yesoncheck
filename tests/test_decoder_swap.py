@@ -1,11 +1,12 @@
 """재생 디코더를 바꿀 때의 캡처 바꿔 끼움 — VideoPlayer.swap_movie_captures_for_decoder (스펙 2026-11-04 §5.4 ③·§7-4·§8).
 
 Setting 메뉴(Task 4)와 네이티브 그리기 실패 폴백(Task 5)이 디코더 캐시를 바꾼 뒤 부른다. open_file을 거치지 않으므로 OCR 상태(돌아가는 분석·
-저장 안 된 결과·검토 창)·주석·소리(setMedia)·줌(initial_fit)·와이프·재생목록 상태는 그대로이고, 열린 A(와 B) 중 **ProRes 영상 파일**만
-지금 유효한 디코더로 다시 연 캡처로 바꿔 끼워 같은 프레임에 놓는다(재생 중이었으면 이어서 재생). h264·시퀀스(.seq)·빈 쪽은 건드리지 않는다.
+저장 안 된 결과·검토 창)·주석·소리(setMedia)·줌(initial_fit)·와이프·재생목록 상태는 그대로이고, 열린 A(와 B) 중 **디코더에 따라 길이
+갈리는 영상 파일**(네이티브 게이트를 통과하는 ProRes — HDR·VFR ProRes·h264는 어느 설정에서나 같은 길)만 지금 유효한 디코더로 다시 연
+캡처로 바꿔 끼워 같은 프레임에 놓는다(재생 중이었으면 이어서 재생). h264·시퀀스(.seq)·빈 쪽은 건드리지 않는다.
 새 캡처를 열지 못하면(_open_movie_capture가 창으로 알림) 그 쪽은 옛 캡처 그대로 두고 False.
 
-가짜 네이티브 리그(tests/native_fakes — _open_movie_capture를 부를 때마다 새 FakeNativeCapture)로 바꿔 끼움을 객체 동일성으로 보고, ProRes 판정의
+가짜 네이티브 리그(tests/native_fakes — _open_movie_capture를 부를 때마다 새 FakeNativeCapture)로 바꿔 끼움을 객체 동일성으로 보고, 게이트 판정의
 ffprobe(player_playback.probe_movie)는 바꿔치기해 경로를 기록한다(리그의 시험 영상은 mp4v라 진짜 ffprobe는 prores라고 하지 않음). h264·시퀀스는
 진짜 캡처와 진짜 ffprobe로 본다. 창은 conftest의 dialogs가 가로챈다.
 """
@@ -42,7 +43,7 @@ MEASURE_PREFIX = "[측정]"
 
 
 def fake_probe(codec):
-    """swap이 읽는 값은 codec뿐 — 나머지는 가짜 리그의 영상에 맞춘 그럴듯한 값."""
+    """swap은 이 probe로 네이티브 게이트(native_ineligible_reason)를 봄 — codec이 가르고, 나머지는 게이트를 통과하는(가짜 리그의 영상에 맞춘) 값."""
     return MovieProbe(codec=codec, width=FAKE_WIDTH, height=FAKE_HEIGHT, r=Fraction(24), avg=Fraction(24),
                       nb_frames=FAKE_FRAME_COUNT, duration_ts=FAKE_FRAME_COUNT * 512, time_base=Fraction(1, 12288),
                       video_start=0.0, format_start=0.0, rotation=0, sar_ok=True, pix_fmt="yuv422p10le", codec_tag="apcn")

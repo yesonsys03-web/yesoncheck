@@ -1,15 +1,16 @@
-"""영상 열기 경로의 네이티브(VideoToolbox) 분기 (Apple Silicon 네이티브 재생 — 계획 Task 14·B9, 스펙 §5.3·§5.8).
+"""영상 열기 경로의 네이티브(VideoToolbox) 분기 (Mac 네이티브 재생 — 2026-11-03 계획 Task 14·B9, 스펙 §5.3·§5.8; 2026-11-04에 Mac 전체 ProRes로 넓힘).
 
 VideoPlayer._open_movie_capture는 os.stat 확인 뒤 _native_or_pipe_capture로 캡처를 고른다: YESONCHECK_MOVIE_SOURCE=cv2면 네이티브 토글도 보지
-않고 probe도 없이 기존 cv2 줄, native_wanted()가 아니면(Windows·YESONCHECK_MAC_NATIVE=off) 예전 파이프 게이트 줄 그대로, 원하면 ffprobe
+않고 probe도 없이 기존 cv2 줄, native_wanted()가 아니면(Windows·재생 디코더 ffmpeg·YESONCHECK_MAC_NATIVE=off) 예전 파이프 게이트 줄 그대로, 원하면 ffprobe
 한 번(movie_pipe_source.probe_for_open — ffprobe가 못 읽을 때의 규칙은 파이프와 같음)으로 네이티브 게이트(mac_native_gate.native_ineligible_reason)를
 보고 — 양성이면 네이티브 캡처, 못 열면 기록·오류 창(끝 줄 NATIVE_ESCAPE_HINT) 뒤 같은 probe로 파이프, 음성이면 사유 한 줄 뒤 같은 probe로 파이프.
 
 PyObjC·VideoToolbox·플랫폼(sys.platform)이 어떻든 어느 OS에서나 돌도록 하드웨어에 기대지 않는다: native_wanted·maybe_pipe_capture는 그 이름을 읽는
 player_playback에서, probe_movie는 probe_for_open·maybe_pipe_capture가 읽는 movie_pipe_source에서, open_native_capture·_pyobjc는 플레이어가
 지연 import하는 mac_native_source에서 바꿔치기한다 (CLAUDE.md 규칙 — 다른 모듈에 다시 내보낸 이름을 바꾸면 닿지 않음). 4K probe는 실제
-ffprobe로 읽은 1080p ProRes 4444(bt709) 공장 클립의 probe를 dataclasses.replace로 3840×2160으로 바꾼 것(게이트는 probe 값만 봄). 창은 conftest의
-dialogs. 예전 파이프·cv2 줄 자체의 무회귀는 tests/test_movie_pipe_integration.py·test_pipe_player.py의 무수정 통과가 지킨다.
+ffprobe로 읽은 1080p ProRes 4444(bt709) 공장 클립의 probe를 dataclasses.replace로 3840×2160으로 바꾼 것(게이트는 probe 값만 보고
+크기는 조건이 아님 — 옛 4K 게이트 때의 픽스처, 1080p 그대로도 양성). 창은 conftest의 dialogs. 예전 파이프·cv2 줄 자체의
+무회귀는 tests/test_movie_pipe_integration.py·test_pipe_player.py의 무수정 통과가 지킨다.
 """
 
 import dataclasses
@@ -254,7 +255,7 @@ def test_native_failure_shows_window_then_pipe(player, dialogs, rig, clip_1080, 
 
 
 def test_pyobjc_missing_is_a_failure_window_not_a_crash(player, dialogs, rig, clip_1080, probe_4k, monkeypatch):
-    """PyObjC가 없음(ModuleNotFoundError — Intel Mac의 YESONCHECK_MAC_NATIVE=on, 빠진 번들): 진짜 open_native_capture·NativeVTCapture가
+    """PyObjC가 없음(ModuleNotFoundError — Mac lock을 설치하지 않은 소스 환경, 빠진 번들): 진짜 open_native_capture·NativeVTCapture가
     NativeCaptureError로 감싸 올리므로(_pyobjc의 ModuleNotFoundError는 생성자의 except가 받음 — 밖으로 새지 않음) 같은 창 + 파이프로 계속.
     어느 기계에서나 같게 _pyobjc를 'objc 없음'으로 바꿔치기 (Mac lock을 설치한 환경에는 PyObjC가 있음).
 

@@ -449,9 +449,9 @@ def test_paint_stream_prepares_once_per_context_and_drops_old_context_signal(qap
     assert item.failure_count == 0 and shown == []
 
 
-# ---------------------------------------------------------------- 걸쇠 풀기 reset_failure (Setting → 재생 디코더 — 스펙 2026-11-04 §5.4 ④)
+# ---------------------------------------------------------------- 걸쇠 풀기 reset_failure (Settings → 재생 디코더 (Mac) — 스펙 2026-11-04 §5.4 ④)
 
-MENU_HINT = "Setting → 재생 디코더 → ffmpeg (예전 방식) 으로 바꾸면 예전 방식으로 재생합니다"
+MENU_HINT = "Settings → 재생 디코더 (Mac) → ffmpeg (예전 방식) 으로 바꾸면 예전 방식으로 재생합니다"
 ENV_HINT = f"{VIDEO_ITEM_ENV}=pixmap 으로 켜면 예전 방식으로 그립니다"
 
 
@@ -537,7 +537,7 @@ def test_reset_failure_schedules_a_repaint(qapp, shown, monkeypatch):
 
 @pytest.mark.parametrize("platform, menu", [("darwin", True), ("win32", False), ("linux", False)])
 def test_failure_window_names_the_decoder_menu_on_mac(qapp, shown, monkeypatch, platform, menu):
-    """Mac의 실패 창은 킬 스위치 안내 앞에 Setting → 재생 디코더 → ffmpeg 안내 한 줄(그 선택이 걸쇠를 풂) — 다른 플랫폼에는 그 메뉴가 없으므로 예전 글 그대로."""
+    """Mac의 실패 창은 킬 스위치 안내 앞에 Settings → 재생 디코더 (Mac) → ffmpeg 안내 한 줄(그 선택이 걸쇠를 풂) — 다른 플랫폼에는 그 메뉴가 없으므로 예전 글 그대로."""
     monkeypatch.setattr(sys, "platform", platform)
     item = VideoFrameItem(stream=True)
     item._fail(gl_bindings.GLBindingError("x"))

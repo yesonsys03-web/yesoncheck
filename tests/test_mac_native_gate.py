@@ -392,7 +392,7 @@ def test_bt2020_primaries_are_hdr_negative(good_4k_probe):
 
 
 def test_a_real_hdr_tag_set_reports_hdr_not_just_the_color_space(good_4k_probe):
-    """진짜 HDR 파일은 bt2020nc + smpte2084 + bt2020 — 사유가 색 공간 한 줄이 아니라 HDR이라고 말해야 읽는 사람이 이유를 안다."""
+    """진짜 HDR 파일은 bt2020nc + smpte2084 + bt2020 — 사유는 원색(bt2020)이 아니라 전달 함수(smpte2084)로 나와야 PQ·HLG라는 이유가 보인다 (_hdr_reason은 전달 함수를 먼저 봄)."""
     hdr = dataclasses.replace(good_4k_probe, color_space="bt2020nc", color_transfer="smpte2084", color_primaries="bt2020")
     assert native_ineligible_reason(hdr) == "⑨ HDR(smpte2084)"
 
@@ -494,7 +494,7 @@ def test_launch_rejects_on_outside_macos(qapp, monkeypatch, home):
 
 # ---------------------------------------------------------------- app.launch: 재생 디코더 설정(prefs.json) 읽기
 
-FALLBACK_NOTE = "이 세션은 예전 방식(ffmpeg)으로 재생합니다 — Setting → 재생 디코더에서 바꿀 수 있습니다"
+FALLBACK_NOTE = "이 세션은 예전 방식(ffmpeg)으로 재생합니다 — Settings → 재생 디코더 (Mac)에서 바꿀 수 있습니다"
 
 
 class _StopLaunch(Exception):

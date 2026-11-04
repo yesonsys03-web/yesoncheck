@@ -143,7 +143,7 @@ def exercise_sequence_decode():
 
 
 NATIVE_SKIPPED = "네이티브 디코드 건너뜀 (macOS 아님)"
-NATIVE_CLIP_SIZE = (3840, 2160)  # (너비, 높이) — 네이티브 게이트 ⑥½(4K)를 통과하는 UHD
+NATIVE_CLIP_SIZE = (3840, 2160)  # (너비, 높이) — UHD: 게이트는 크기를 보지 않지만 가장 무거운 실사용 디코드(큰 IOSurface)로 확인
 NATIVE_CLIP_FRAMES = 6  # 검사 클립의 장 수
 NATIVE_READ_FRAMES = 3  # NativeVTCapture로 읽는 장 수
 NATIVE_MIN_STD = 10  # testsrc2는 알록달록해 채널별 표준 편차가 큼 — 가장 큰 것도 이 값 이하면 빈(한 색) 프레임으로 봄

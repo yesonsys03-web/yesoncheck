@@ -1,4 +1,4 @@
-"""Setting → '재생 디코더 (Mac)' 메뉴 — VideoToolbox(기본)·ffmpeg(예전 방식) 라디오, prefs.json 저장, 이 창에 바로 적용 (스펙 2026-11-04 §5.4).
+"""Settings → '재생 디코더 (Mac)' 메뉴 — VideoToolbox(기본)·ffmpeg(예전 방식) 라디오, prefs.json 저장, 이 창에 바로 적용 (스펙 2026-11-04 §5.4).
 
 - 메뉴는 macOS에서만 만든다(sys.platform == "darwin" — Windows·Linux에는 VideoToolbox가 없음): Mac 전용 시험은 Windows CI에서 skip(Ruling 2)하고,
   메뉴가 없음은 sys.platform을 win32·linux로 바꾼 뒤 만든 창으로 어느 플랫폼에서나 본다(메뉴는 창을 만들 때 sys.platform을 읽음).
@@ -160,13 +160,14 @@ def test_menu_checks_the_effective_decoder_at_start(make_player, auto, dialogs, 
 @mac_only
 @pytest.mark.parametrize("mode, expected", [("off", "ffmpeg"), ("on", "videotoolbox"), ("OFF", "ffmpeg")])
 def test_menu_disabled_with_tooltip_when_env_overrides(make_player, monkeypatch, mode, expected):
-    """YESONCHECK_MAC_NATIVE가 설정을 덮으면 그 값으로 체크하고 두 항목 비활성 + 툴팁 "<출처>가 우선합니다 — …" (설정값이 달라도)."""
+    """YESONCHECK_MAC_NATIVE가 설정을 덮으면 그 값으로 체크하고 두 항목 비활성 + 툴팁 "<출처>이|가 우선합니다 — …"(on이·off가 — 받침 따라) (설정값이 달라도)."""
     write_prefs('{"playback_decoder": "%s"}' % ("videotoolbox" if expected == "ffmpeg" else "ffmpeg"))
     monkeypatch.setenv(NATIVE_MODE_ENV, mode)
     app.load_playback_decoder()
     player = make_player()
     assert checked(player) == [expected]
-    tip = f"환경 변수 {NATIVE_MODE_ENV}={mode.lower()}가 우선합니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다"
+    josa = "이" if mode.lower() == "on" else "가"
+    tip = f"환경 변수 {NATIVE_MODE_ENV}={mode.lower()}{josa} 우선합니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다"
     for action in player.decoder_actions.values():
         assert not action.isEnabled()
         assert action.toolTip() == tip

@@ -1,4 +1,4 @@
-"""주석 층 — 네이티브(IOSurface) 프레임의 주석을 굽지 않고 Qt 아이템으로 겹쳐 그림 (Apple Silicon 네이티브 재생).
+"""주석 층 — 네이티브(IOSurface) 프레임의 주석을 굽지 않고 Qt 아이템으로 겹쳐 그림 (Mac 네이티브 재생).
 
 네이티브 프레임은 읽기 전용 표면이라 burn_annotations_on_frame처럼 픽셀 복사본에 구울 수 없다(복사하면 4K 프레임마다 CPU 복사·변환이 생기고, 복사본은
 손잡이 없는 4채널 배열이라 GL 아이템의 RGB 길에서 실패). 그래서 CustomVideoWidget이 이 층 하나를 장면에 두고(z ANNOTATION_OVERLAY_Z — B 키 상자 위,

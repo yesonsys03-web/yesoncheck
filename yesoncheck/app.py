@@ -199,13 +199,14 @@ def load_mount_map():
 
 
 PLAYBACK_DECODER_TITLE = "재생 디코더 설정"
-PLAYBACK_DECODER_FALLBACK_NOTE = "이 세션은 예전 방식(ffmpeg)으로 재생합니다 — Setting → 재생 디코더에서 바꿀 수 있습니다"
+PLAYBACK_DECODER_FALLBACK_NOTE = "이 세션은 예전 방식(ffmpeg)으로 재생합니다 — Settings → 재생 디코더 (Mac)에서 바꿀 수 있습니다"
 
 
 def load_playback_decoder():
     """(Mac) 재생 디코더 설정(prefs.json의 "playback_decoder")을 시작 때 한 번 읽어 mac_native_gate의 캐시에 둠 — native_wanted가 열 때마다 파일을
     읽지 않게. 키가 없으면(파일이 없는 것 포함) 기본 videotoolbox(출처 "기본값"), 있으면 그 값(출처 "prefs.json"). 끝에 한 줄:
-    `[재생] 디코더: videotoolbox|ffmpeg (환경 변수 …|prefs.json|기본값)` — 환경 변수(YESONCHECK_MAC_NATIVE=on|off)가 설정을 덮으면 그 출처.
+    `[재생] 디코더: videotoolbox|ffmpeg (<출처>)` — 출처는 넷: 환경 변수(YESONCHECK_MAC_NATIVE=on|off — 설정을 덮음)·prefs.json·기본값·
+    SOURCE_FALLBACK("prefs.json 읽기 실패 — 이 세션만 ffmpeg", 아래). (실행 중 네이티브 그리기 실패 폴백의 SOURCE_GL_FALLBACK은 여기서 찍지 않음.)
 
     깨진 prefs.json(UserFileError)이나 나쁜 값(ValueError — 손으로 고친 파일만)은 빈 값·기본값으로 치지 않음: 트레이스백을 기록하고 창을 한 번 띄운 뒤
     이 세션은 ffmpeg(예전 방식)로 — 설정을 읽지 못한 채 새 경로를 켜지 않음 (출처는 SOURCE_FALLBACK이라 기록 줄이 "기본값"이라고 거짓말하지 않음).
