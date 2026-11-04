@@ -67,7 +67,7 @@ Apple Silicon Mac에서 직접 빌드해도 같은 결과(두 검사 `통과`, �
 Windows lock에는 들어가지 않습니다(`tests/test_build_lock.py`가 지킴 — 하드웨어 디코드 여부 `hw=yes|no`는 VideoToolbox 래퍼 없이 ctypes). 고정 목록을 고친 뒤 lock은
 파일 맨 위 명령으로 다시 만듭니다: `MACOSX_DEPLOYMENT_TARGET=12.0 uv pip compile requirements-build.txt --python-version 3.10 --python-platform x86_64-apple-darwin --no-header -o requirements-build-x86_64.lock`
 (Apple Silicon은 `--python-platform aarch64-apple-darwin`, `-o requirements-build-arm64.lock`).
-PyObjC가 없는 빌드 환경에서는 빌드 검사(`check_frozen_imports.py`, 2절)가 네이티브 디코드에서 실패하고, `tests/test_mac_native_source.py` 같은 네이티브 시험은
+PyObjC가 없는 **Mac** 빌드 환경에서는 빌드 검사(`check_frozen_imports.py`, 2절)가 네이티브 디코드에서 실패하고, `tests/test_mac_native_source.py` 같은 네이티브 시험은
 이유를 찍고 건너뛰며, 소스 실행은 ProRes를 열 때마다 '영상을 열 수 없음(네이티브)' 창 뒤 ffmpeg 파이프로 엽니다.
 PyObjC를 lock에 넣기 전에 만든 빌드 환경(`~/coding/p310_tf`)에는 lock대로 설치하면 PyObjC가 들어옵니다 — 새로 만들 때는 `setup_build_env.sh`가 알아서 넣고,
 이미 있는 환경(스크립트는 있는 환경에서 멈춤)은 `MACOSX_DEPLOYMENT_TARGET=12.0 uv pip install --python ~/coding/p310_tf/bin/python -r requirements-build-x86_64.lock`
