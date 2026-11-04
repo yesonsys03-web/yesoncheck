@@ -301,6 +301,14 @@ def test_frozen_check_native_decode_fails_loudly_on_a_wrong_frame(fake_arm64, ca
     assert os.environ["PATH"] == path_before
 
 
+def test_native_frame_problem_names_a_wrong_dtype():
+    """모양은 4K BGRX인데 형이 uint8이 아니면 '모양·형' 사유에 그 형을 적음 — whole_surface_handle도 uint8만 받지만 그 사유('손잡이 없음')로
+    넘기지 않음 (형 검사를 빼면 이 시험이 실패). 4K uint16 프레임은 broadcast_to로 메모리 없이."""
+    frame = np.broadcast_to(np.zeros(4, np.uint16), (NATIVE_HEIGHT, NATIVE_WIDTH, 4))
+    problem = cfi.native_frame_problem(True, frame, 0)
+    assert problem == (f"0번째 프레임의 모양·형이 {frame.shape} uint16입니다 (기대 ({NATIVE_HEIGHT}, {NATIVE_WIDTH}, 4) uint8)")
+
+
 def test_frozen_check_native_decode_fails_when_the_gate_rejects_the_clip(fake_arm64):
     """번들 ffmpeg가 만든 클립이 네이티브 게이트를 통과하지 못하면(예: 4:2:2) 캡처를 열지 않고 사유째 실패."""
     fake_arm64.probe = eligible_probe(pix_fmt="yuv422p10le")

@@ -115,6 +115,7 @@ VIDEOTOOLBOX_FRAMEWORK = "/System/Library/Frameworks/VideoToolbox.framework/Vide
 _HW_PROBE_LOCK = threading.Lock()
 _HW_PROBE = None  # ctypes로 묶은 VTIsHardwareDecodeSupported (_ctypes_hw_probe가 처음 부를 때)
 _HW_PROBE_FAILURE = None  # 묶지 못한 사유 — 기록에 한 번 찍은 뒤 다시 열어 보지 않음
+HW_LABELS = {True: "yes", False: "no", None: "?"}  # hardware_decode_supported → hw= 낱말 (열기 기록 줄·check_frozen_imports 결과 줄이 함께 씀)
 
 
 class NativeCaptureError(Exception):
@@ -726,7 +727,7 @@ def open_native_capture(path, probe):
     """path를 네이티브 캡처로 열고 기록 한 줄을 남김 — `[재생] 네이티브(VideoToolbox): <이름> (prores 3840×2160 24fps, 프레임 334,
     32BGRA, hw=yes|no|?)` (기록에 이 줄이 있으면 네이티브 경로). 게이트는 부른 쪽 몫. 못 열면 NativeCaptureError (기록 줄 없음)."""
     capture = NativeVTCapture(path, probe)
-    hw = {True: "yes", False: "no", None: "?"}[capture.hardware_decode_supported]
+    hw = HW_LABELS[capture.hardware_decode_supported]
     print(f"{NATIVE_LOG_PREFIX} {os.path.basename(path)} ({probe.codec} {probe.width}×{probe.height} {float(probe.avg):g}fps, "
           f"프레임 {probe.nb_frames}, 32BGRA, hw={hw})")
     return capture

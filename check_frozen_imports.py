@@ -146,7 +146,6 @@ NATIVE_CLIP_SIZE = (3840, 2160)  # (너비, 높이) — 네이티브 게이트 �
 NATIVE_CLIP_FRAMES = 6  # 검사 클립의 장 수
 NATIVE_READ_FRAMES = 3  # NativeVTCapture로 읽는 장 수
 NATIVE_MIN_STD = 10  # testsrc2는 알록달록해 채널별 표준 편차가 큼 — 가장 큰 것도 이 값 이하면 빈(한 색) 프레임으로 봄
-_HW_LABELS = {True: "yes", False: "no", None: "?"}  # hardware_decode_supported → 결과 줄 (열기 기록 줄의 hw=와 같은 낱말)
 
 
 def vendored_ffmpeg_dir():
@@ -253,7 +252,7 @@ def exercise_native_decode():
                 problem = native_frame_problem(ok, frame, index)
                 if problem:
                     raise SystemExit(f"네이티브 디코드(VideoToolbox) 결과가 다릅니다: {problem}")
-            hw = _HW_LABELS[capture.hardware_decode_supported]
+            hw = mac_native_source.HW_LABELS[capture.hardware_decode_supported]  # 열기 기록 줄의 hw=와 같은 낱말
         finally:
             capture.release()
     return f"네이티브 디코드: VideoToolbox {NATIVE_READ_FRAMES}장 {width}×{height} 32BGRA (hw={hw})"
