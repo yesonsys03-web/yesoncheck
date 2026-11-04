@@ -256,7 +256,7 @@ def test_native_failure_shows_window_then_pipe(player, dialogs, rig, clip_1080, 
 def test_pyobjc_missing_is_a_failure_window_not_a_crash(player, dialogs, rig, clip_1080, probe_4k, monkeypatch):
     """PyObjC가 없음(ModuleNotFoundError — Intel Mac의 YESONCHECK_MAC_NATIVE=on, 빠진 번들): 진짜 open_native_capture·NativeVTCapture가
     NativeCaptureError로 감싸 올리므로(_pyobjc의 ModuleNotFoundError는 생성자의 except가 받음 — 밖으로 새지 않음) 같은 창 + 파이프로 계속.
-    어느 기계에서나 같게 _pyobjc를 'objc 없음'으로 바꿔치기 (p310_native·arm64에는 PyObjC가 있음).
+    어느 기계에서나 같게 _pyobjc를 'objc 없음'으로 바꿔치기 (Mac lock을 설치한 환경에는 PyObjC가 있음).
 
     깨지는 변경: 생성자가 ModuleNotFoundError를 감싸지 않으면(또는 분기가 NativeCaptureError만 받는데 다른 것이 새면) 예외가 열기 밖으로 —
     앱이 그 파일을 못 엶; 창을 빼면 창 단언."""

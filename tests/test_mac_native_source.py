@@ -24,7 +24,7 @@ from types import SimpleNamespace
 
 import pytest
 
-AVFoundation = pytest.importorskip("AVFoundation", reason="PyObjC 없음 — 네이티브 캡처 시험은 p310_native·arm64 CI에서")
+AVFoundation = pytest.importorskip("AVFoundation", reason="PyObjC 없음 — 네이티브 캡처 시험은 Mac lock을 설치한 환경(두 Mac CI job)에서")
 
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
