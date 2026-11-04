@@ -750,6 +750,51 @@ def test_set_sides_without_b_draws_black_rect_for_b(fake_gl_item):
     ]
 
 
+def test_set_sides_xy_draws_b_in_two_scissor_boxes(fake_gl_item):
+    """(Ruling 17) X·Y 와이프가 함께 켜지면 axis="xy"·ratio=(rx, ry): A는 한 번, B는 상자 둘 — 오른쪽 (split_x, 0, pw − split_x, ph)과 아래쪽
+    (0, 0, pw, ph − split_y) — 에 차례로 그려 보이는 B는 합집합(기존 numpy 합성 result[:, wipe_x:] = B 뒤 result[wipe_y:, :] = B와 같음). B 텍스처는 한 번만
+    올림. 상자 하나만 그리거나(교집합·한쪽만) A를 두 번 그리거나 B를 상자마다 다시 올리면 실패."""
+    a, b = native(), rgb(2, 4)
+    fake_gl_item.item.set_sides(a, b, "xy", (0.25, 0.5))
+    calls = fake_gl_item.paint()
+    assert calls == [
+        BEGIN, ENTRY,
+        *new_texture(GL_TEXTURE_RECTANGLE_ARB, 6), *surface_bind(6, a),
+        *new_texture(GL_TEXTURE_2D, 7), *rgb_storage(7, b), *rgb_upload(7, b),
+        *setup(), *quad(GL_TEXTURE_RECTANGLE_ARB, 6, pixels(4, 2)),
+        *scissor((30, 0, 170, 100)), *quad(GL_TEXTURE_2D, 7, UNIT),
+        ("glScissor", (0, 0, 200, 80)), *quad(GL_TEXTURE_2D, 7, UNIT),
+        *END, FINISH,
+    ]
+    names = [name for name, _ in calls]
+    assert names.count("glScissor") == 2 and names.count("glTexSubImage2D") == 1
+
+
+def test_set_sides_xy_without_b_draws_black_in_both_boxes(fake_gl_item):
+    """(Ruling 17) "xy"인데 B가 없으면 두 상자 모두 검정 — 기존 numpy 합성은 np.zeros_like를 두 영역에 넣음. 한 상자만 칠하면 A가 비쳐 실패."""
+    a = native()
+    fake_gl_item.item.set_sides(a, None, "xy", (0.5, 0.5))
+    assert fake_gl_item.paint() == [
+        BEGIN, ENTRY,
+        *new_texture(GL_TEXTURE_RECTANGLE_ARB, 6), *surface_bind(6, a),
+        *setup(), *quad(GL_TEXTURE_RECTANGLE_ARB, 6, pixels(4, 2)),
+        *scissor((40, 0, 160, 100)), *black(), ("glScissor", (0, 0, 200, 80)), *black(),
+        *END, FINISH,
+    ]
+
+
+@pytest.mark.parametrize("axis, ratio", [
+    ("xy", 0.5), ("xy", [0.25, 0.5]), ("xy", (0.5,)), ("xy", (0.5, 0.5, 0.5)), ("xy", (0.5, 1.5)), ("xy", (float("nan"), 0.5)),
+    ("x", (0.25, 0.5)), ("y", (0.25, 0.5)),
+], ids=["xy-float", "xy-list", "xy-one", "xy-three", "xy-out-of-range", "xy-nan", "x-pair", "y-pair"])
+def test_set_sides_xy_requires_ratio_pair(fake_gl_item, axis, ratio):
+    """(Ruling 17) "xy"의 ratio는 [0, 1] 실수 두 개의 tuple (rx, ry)만, "x"·"y"는 실수 하나만 — 어긋나면 ValueError(조용히 한 값을 두 축에 쓰거나 한쪽만
+    쓰지 않음), 아이템은 그대로. 받아들이면 실패."""
+    with pytest.raises(ValueError, match="ratio"):
+        fake_gl_item.item.set_sides(native(), rgb(2, 4), axis, ratio)
+    assert fake_gl_item.item.frame() is None and fake_gl_item.paint() == []
+
+
 @pytest.mark.parametrize("b", [rgb(3, 4), np.zeros((2, 8, 3), np.uint8), "native"], ids=["rgb-taller", "rgb-wider", "native-other-size"])
 def test_set_sides_b_of_other_size_draws_black(fake_gl_item, b):
     """B의 (높이, 너비)가 A와 다르면 기존 numpy 합성처럼(frame_b.shape != frame_a.shape → zeros) 검정 — 채널 수(BGRX 4 대 RGB 3)는 크기가 아님.
@@ -899,7 +944,7 @@ def test_non_whole_surface_native_array_is_rejected(fake_gl_item, view):
 
 @pytest.mark.parametrize("args, what", [
     ((None, None, None, 0.0), "A 면"),
-    ((rgb(2, 4), None, "xy", 0.5), "axis"),
+    ((rgb(2, 4), None, "xz", 0.5), "axis"),
     ((rgb(2, 4), None, "x", 1.5), "ratio"),
     ((rgb(2, 4), None, "x", float("nan")), "ratio"),
     ((np.zeros((2, 4, 3), np.float32), None, None, 0.0), "dtype"),

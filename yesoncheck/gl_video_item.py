@@ -26,7 +26,8 @@ paint 본문 전체를 except BaseException으로 받아 첫 실패만 기록(�
 
 IOSurface 면 그리기(set_sides·set_surface — Apple Silicon 네이티브 재생 경로): 네이티브 프레임(frame_handles — IOSurface 위의 BGRX 뷰)은 CPU로
 읽거나 올리지 않고 gl_surface.CGLTexImageIOSurface2D로 GL_TEXTURE_RECTANGLE_ARB 텍스처에 그대로 묶어 그린다(복사 0, 텍스처 좌표는 픽셀 단위).
-A/B 와이프는 numpy 합성 대신 A를 전체에, B를 glScissor(wipe_scissor — 물리 픽셀, GL 창 좌표라 원점이 왼쪽 아래) 안에 그린다. 면은 네이티브(표면
+A/B 와이프는 numpy 합성 대신 A를 전체에, B를 glScissor(wipe_scissor — 물리 픽셀, GL 창 좌표라 원점이 왼쪽 아래) 안에 그린다(X·Y 와이프가 함께면
+상자 둘 — 오른쪽과 아래쪽 — 에 그려 합집합, Ruling 17). 면은 네이티브(표면
 전체 — frame_handles.whole_surface_handle로만 가름; 조각·뒤집힌 뷰는 ValueError)·RGB 배열(set_frame과 같은 업로드 코드, 면마다 따로 둔 2D 텍스처라
 set_frame의 텍스처를 건드리지 않음)·없음(B — 검정, 기존 np.zeros_like 규칙) 중 하나. 면 텍스처는 처음 그릴 때 만들고 컨텍스트가 바뀌거나 죽으면 버린다
 (다음 paint가 새 컨텍스트에서 다시 만들고 다시 묶음). 묶인 표면의 손잡이는 텍스처가 그 표면에 묶여 있는 동안 쥔다(버퍼가 풀로 돌아가 다른 프레임으로
@@ -84,7 +85,7 @@ LOG_PREFIX = "[표시]"
 
 GL_DEFAULT_UNPACK_ALIGNMENT = 4  # GL 기본값 — 업로드 뒤 되돌림 (endNativePainting은 픽셀 저장 상태를 되돌리지 않음)
 QUAD_TEX_COORDS = ((0, 0), (1, 0), (1, 1), (0, 1))  # 모서리 (0,0)(w,0)(w,h)(0,h)와 짝 — 텍스처 행 0 = 배열 행 0 = 위
-WIPE_AXES = ("x", "y", None)  # set_sides의 axis — B = 오른쪽·아래쪽·와이프 없음
+WIPE_AXES = ("x", "y", "xy", None)  # set_sides의 axis — B = 오른쪽·아래쪽·둘의 합집합(ratio = (rx, ry))·와이프 없음
 
 
 def video_item_mode(env: Mapping) -> str:
@@ -144,11 +145,11 @@ class _Side(NamedTuple):
 
 
 class _Sides(NamedTuple):
-    """다음 그림(set_sides) — a: _Side, b: _Side 또는 None(와이프면 검정), axis: WIPE_AXES, ratio: [0, 1]."""
+    """다음 그림(set_sides) — a: _Side, b: _Side 또는 None(와이프면 검정), wipes: B를 그릴 scissor 상자마다 (축 "x"·"y", 나눔 자리) — 와이프 없음은 (),
+    "x"·"y"는 하나, "xy"는 (("x", rx), ("y", ry)) 둘(B는 두 상자에 그려 합집합)."""
     a: _Side
     b: _Side | None
-    axis: str | None
-    ratio: float
+    wipes: tuple
 
 
 class _SideTexture:
@@ -162,6 +163,27 @@ class _SideTexture:
         self.target, self.name, self.filter = target, name, filt
         self.storage = None
         self.content = None
+
+
+def _wipes(axis, ratio):
+    """set_sides의 axis·ratio를 scissor 상자마다의 (축, 나눔 자리) tuple로 — None은 (), "x"·"y"는 하나, "xy"는 (("x", rx), ("y", ry)) (Ruling 17).
+    "xy"는 ratio가 [0, 1] 실수 두 개의 tuple, 그 밖은 [0, 1] 실수 하나여야 하고 어긋나면 ValueError(한 값을 두 축에 몰래 쓰지 않음)."""
+    if axis not in WIPE_AXES:
+        raise ValueError(f"와이프 axis는 'x', 'y', 'xy' 또는 None이어야 합니다: {axis!r}")
+    if axis == "xy":
+        if not (isinstance(ratio, tuple) and len(ratio) == 2):
+            raise ValueError(f"와이프 axis 'xy'의 ratio는 (rx, ry) 두 값 tuple이어야 합니다: {ratio!r}")
+        ratios = ratio
+    else:
+        if isinstance(ratio, (tuple, list)):
+            raise ValueError(f"와이프 axis {axis!r}의 ratio는 실수 하나여야 합니다 (두 값은 axis 'xy'): {ratio!r}")
+        ratios = (ratio,)
+    for value in ratios:
+        if not 0 <= value <= 1:
+            raise ValueError(f"와이프 ratio는 0~1이어야 합니다: {ratio!r}")
+    if axis is None:
+        return ()
+    return tuple(zip(("x", "y") if axis == "xy" else (axis,), ratios))
 
 
 def _side(label, frame):
@@ -249,9 +271,11 @@ class VideoFrameItem(QGraphicsPixmapItem):
         b는 None일 수 있다. 손잡이는 있지만 표면 전체가 아닌 뷰(조각·상하 반전·채널 역순)는 ValueError — 복사하거나 올리지 않는다. 그 밖에 어긋나도
         어느 조건인지 ValueError이고, 그때 아이템은 그대로다.
 
-        axis: "x"(B = 오른쪽)·"y"(B = 아래쪽)·None(와이프 없음 — B를 그리지도 쥐지도 않음), ratio: 나눔 자리 [0, 1](video_widget의
-        wipe_position_x/y). 와이프인데 B가 None이거나 B의 (높이, 너비)가 A와 다르면 B 자리는 검정 — 기존 numpy 합성(updateFrame의 np.zeros_like)과
-        같은 그림(채널 수 — BGRX 4 대 RGB 3 — 는 크기로 치지 않음).
+        axis·ratio: "x"(B = 오른쪽)·"y"(B = 아래쪽)는 ratio가 나눔 자리 실수 하나 [0, 1](video_widget의 wipe_position_x/y), "xy"(X·Y 와이프가 함께 —
+        Ruling 17)는 ratio = (rx, ry) tuple — B를 오른쪽(rx부터)과 아래쪽(ry부터) 두 scissor 상자에 그려 보이는 B가 합집합(기존 numpy 합성이
+        result[:, wipe_x:] = B 뒤 result[wipe_y:, :] = B로 만드는 그림), None은 와이프 없음(B를 그리지도 쥐지도 않음; ratio는 [0, 1] 실수 — 쓰지 않음).
+        모양이 어긋나면("xy"에 실수·리스트·길이가 2가 아닌 tuple, "x"·"y"에 tuple, 범위 밖·NaN) ValueError. 와이프인데 B가 None이거나 B의 (높이, 너비)가
+        A와 다르면 B 자리는 검정 — 기존 numpy 합성(updateFrame의 np.zeros_like)과 같은 그림(채널 수 — BGRX 4 대 RGB 3 — 는 크기로 치지 않음).
 
         배열 소유: set_frame과 같다 — 넘긴 배열은 고치지 말 것. 아이템은 마지막 a·b를 쥐고(IOSurface 수명), 같은 배열·같은 손잡이면 다시 올리거나
         묶지 않는다. 자리표시자 픽스맵과 frame()은 A를 따른다."""
@@ -259,19 +283,16 @@ class VideoFrameItem(QGraphicsPixmapItem):
             raise RuntimeError("stream=False 아이템은 set_sides를 받지 않습니다 — 픽스맵 아이템 그대로 setPixmap으로 그립니다")
         if a is None:
             raise ValueError("A 면이 없습니다 — 빈 그림은 setPixmap(QPixmap())")
-        if axis not in WIPE_AXES:
-            raise ValueError(f"와이프 axis는 'x', 'y' 또는 None이어야 합니다: {axis!r}")
-        if not 0 <= ratio <= 1:
-            raise ValueError(f"와이프 ratio는 0~1이어야 합니다: {ratio!r}")
+        wipes = _wipes(axis, ratio)
         side_a = _side("A", a)
         side_b = None if b is None else _side("B", b)
-        if axis is None or (side_b is not None and side_b.size != side_a.size):
+        if not wipes or (side_b is not None and side_b.size != side_a.size):
             side_b = None  # 와이프 없음 — 그리지 않음 / 크기가 다른 B — 검정 (위 docstring)
         w, h = side_a.size
         placeholder = self.pixmap()
         if placeholder.isNull() or placeholder.width() != w or placeholder.height() != h:
             super().setPixmap(QPixmap(w, h))
-        self._sides = _Sides(side_a, side_b, axis, ratio)
+        self._sides = _Sides(side_a, side_b, wipes)
         self._frame = a
         self.update()
 
@@ -466,14 +487,14 @@ class VideoFrameItem(QGraphicsPixmapItem):
 
     def _draw_sides(self, pw, ph, corners):
         """(native painting 안에서) 들어온 GL 오류 확인 → 면마다 내용을 그 면의 텍스처에(_load_side — 바뀌었을 때만) → 뷰포트·투영(_draw_native와
-        같음), blend 끔 → A를 corners 전체에 → 와이프면 B를 glScissor(wipe_scissor) 안에(B가 없으면 검정) → (실패해도) scissor·RECT·2D를 끄고
+        같음), blend 끔 → A를 corners 전체에 → 와이프면 상자마다(wipes — "xy"면 둘) B를 glScissor(wipe_scissor) 안에(B가 없으면 검정) → (실패해도) scissor·RECT·2D를 끄고
         바인딩 0 → 오류 확인. corners: 물리 픽셀 (x, y) 네 개 — 아이템의 (0,0)(w,0)(w,h)(0,h)를 매핑한 값 그대로."""
         gl = self._gl
         sides = self._sides
         gl.check_error("native 진입 — 이전 GL 호출이 남긴 오류")
         try:
             drawn_a = self._load_side(0, sides.a)
-            drawn_b = self._load_side(1, sides.b) if sides.axis is not None and sides.b is not None else None
+            drawn_b = self._load_side(1, sides.b) if sides.wipes and sides.b is not None else None
             gl.glViewport(0, 0, pw, ph)
             gl.glMatrixMode(GL_PROJECTION)
             gl.glLoadIdentity()
@@ -483,13 +504,14 @@ class VideoFrameItem(QGraphicsPixmapItem):
             gl.glDisable(GL_BLEND)  # 텍스처의 넷째 채널(BGRX의 X — 알파 아님)이 섞이지 않게
             gl.glColor4f(1, 1, 1, 1)
             self._draw_textured(*drawn_a, corners)
-            if sides.axis is not None:
+            if sides.wipes:
                 gl.glEnable(GL_SCISSOR_TEST)
-                gl.glScissor(*wipe_scissor(sides.axis, sides.ratio, pw, ph, corners))
-                if drawn_b is None:
-                    self._draw_black(corners)
-                else:
-                    self._draw_textured(*drawn_b, corners)
+                for axis, ratio in sides.wipes:  # "xy"면 상자 둘 — 겹친 곳은 같은 B를 두 번(blend 꺼짐 — 그림 같음)
+                    gl.glScissor(*wipe_scissor(axis, ratio, pw, ph, corners))
+                    if drawn_b is None:
+                        self._draw_black(corners)
+                    else:
+                        self._draw_textured(*drawn_b, corners)
         finally:  # 실패해도 scissor·텍스처를 켠 채 Qt 엔진으로 돌아가지 않음
             gl.glDisable(GL_SCISSOR_TEST)
             gl.glDisable(GL_TEXTURE_RECTANGLE_ARB)
