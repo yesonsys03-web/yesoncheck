@@ -33,6 +33,16 @@ def test_factory_defaults_are_320x180_untagged(tmp_path):
     assert (probe.width, probe.height, probe.color_space) == (320, 180, "")
 
 
+def test_pipe_frames_decodes_like_the_pipe(tmp_path):
+    """pipe_frames: 파이프와 같은 명령의 bgr24 — 장수·번호·모양이 클립 그대로(cv2와 같은 프레임 정렬), 크기가 기본이 아니어도.
+    깨지는 변경: 크기를 기본 320x180으로 가정 / -fps_mode passthrough를 빠뜨림(장 복제) / 채널·reshape 순서가 어긋남."""
+    clip = str(tmp_path / "p.mov")
+    prores_clips.make_numbered_clip(clip, count=5, width=480, height=270, color="bt709")
+    frames = prores_clips.pipe_frames(clip)
+    assert [f.shape for f in frames] == [(270, 480, 3)] * 5
+    assert [prores_clips.frame_number(f) for f in frames] == list(range(5))
+
+
 def test_factory_rejects_unknown_color_tag(tmp_path):
     with pytest.raises(ValueError, match="bt709"):
         prores_clips.make_numbered_clip(str(tmp_path / "x.mov"), count=1, color="bt2020")

@@ -7,6 +7,8 @@
 번호·유채색 클립은 width·height(기본 320x180)와 color 태그(기본 없음, "bt709"), 유채색 클립은 알파(alpha=True)도 고를 수 있다.
 번호 그림의 블록 자리는 크기에 비례(frame_number가 비율로 읽음) — 4K 클립도 같은 번호로 복호된다.
 ffmpeg는 PATH에서 찾는다 (tests/conftest.py가 저장소의 정적 빌드를 PATH 맨 앞에 둠).
+색 기준은 pipe_frames(앱의 ffmpeg 파이프와 같은 명령의 bgr24) — read_all_frames(cv2)는 색 태그를 무시해(709 클립도 601로 읽음)
+번호·장수 기준일 뿐 색 기준이 아니다.
 
 인코더 입력은 prores_ks가 받는 pix_fmt(PRORES_PIX_FMTS)의 평면을 그대로 만들어 넣는다 — 다른 pix_fmt를 주면 ffmpeg가 경고만
 내고 몰래 변환하므로 ValueError로 막는다. (ProRes 4444 디코더는 12비트(yuv444p12le)로 내보내지만 인코더 입력은 10비트다.)
@@ -62,6 +64,13 @@ def ffmpeg_exe():
     found = shutil.which("ffmpeg")
     if not found:
         raise FileNotFoundError("ffmpeg를 PATH에서 찾지 못했습니다 (tests/conftest.py가 vendor/ffmpeg를 PATH에 올려야 함)")
+    return found
+
+
+def ffprobe_exe():
+    found = shutil.which("ffprobe")
+    if not found:
+        raise FileNotFoundError("ffprobe를 PATH에서 찾지 못했습니다 (tests/conftest.py가 vendor/ffmpeg를 PATH에 올려야 함)")
     return found
 
 
@@ -255,6 +264,22 @@ def read_all_frames(path):
         frames.append(frame)
     cap.release()
     return frames
+
+
+def pipe_frames(path):
+    """앱의 ffmpeg 파이프(movie_pipe_source._pipe_command)와 같은 명령 — -map 0:V:0 -fps_mode passthrough, bgr24 — 으로 끝까지
+    디코드한 BGR 프레임 목록 ((높이, 너비, 3) uint8, 읽기 전용). 크기는 ffprobe로(같은 트랙 V:0). 색 기준으로 쓴다 — ffmpeg는 색 태그를
+    따르고(709 클립은 709 행렬) cv2는 따르지 않는다. 바이트 수가 한 장 크기로 나눠떨어지지 않으면 ValueError (조용히 자르지 않음)."""
+    size = run_tool([ffprobe_exe(), "-v", "error", "-select_streams", "V:0", "-show_entries", "stream=width,height",
+                     "-of", "csv=p=0", path], "ffprobe 크기 읽기", TIMEOUT_PROBE)
+    width, height = (int(v) for v in size.stdout.decode("ascii").strip().split(","))
+    result = run_tool([ffmpeg_exe(), "-nostdin", "-v", "error", "-i", path, "-map", "0:V:0", "-fps_mode", "passthrough",
+                       "-f", "rawvideo", "-pix_fmt", "bgr24", "-"], "ffmpeg 파이프 명령으로 bgr24 디코드", TIMEOUT_PIPE)
+    frame_bytes = width * height * 3
+    if not result.stdout or len(result.stdout) % frame_bytes:
+        raise ValueError(f"bgr24 출력 {len(result.stdout)}바이트가 {width}x{height} 한 장({frame_bytes}바이트)으로 나눠떨어지지 "
+                         f"않습니다: {path}")
+    return list(np.frombuffer(result.stdout, np.uint8).reshape(-1, height, width, 3))
 
 
 def _verify_numbered(path, count):
