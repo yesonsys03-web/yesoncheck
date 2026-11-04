@@ -16,6 +16,7 @@ test_overlay_slider_sync·test_gl_video_item 등)의 무수정 통과와 ci/scre
 
 import re
 
+import numpy as np
 import pytest
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import QGraphicsPixmapItem, QOpenGLWidget
@@ -264,9 +265,10 @@ def test_frame_cache_skips_native(player_with_fake_native):
 def test_pixmap_fallback_keeps_backing(fake_native_player, viewport, video_item):
     """스트림 아이템이 아닌 화면(킬 스위치 YESONCHECK_VIDEO_ITEM=pixmap·raster 뷰포트): 네이티브 A를 QImage Format_RGB32로 복사 없이 가리켜
     픽스맵으로 — 그 배열을 _pixmap_backing에 쥠(RGB32 픽스맵은 버퍼를 함께 씀), 그림은 BGRX 바이트 그대로의 색(행 패딩 반영), 와이프를 켜도 A만.
+    다음 그림이 RGB 프레임이거나 화면을 비우면(updateFrame(None, None)) 놓음 — 네이티브 파일을 떠난 뒤 4K 표면 하나(33MB)를 쥐고 있지 않게.
 
     깨지는 변경: _pixmap_backing을 쥐지 않으면 backing 단언; bytesPerLine을 너비×4로 두면(행 패딩 무시) 둘째 행부터 색이 어긋남; RGB888로 읽으면
-    색·크기가 틀림; 픽스맵 길에서 B를 합성하면 오른쪽 절반이 B 색."""
+    색·크기가 틀림; 픽스맵 길에서 B를 합성하면 오른쪽 절반이 B 색; updateFrame의 RGB 분기·None 분기에서 _pixmap_backing을 놓지 않으면 None 단언."""
     rig = fake_native_player(ab=True, viewport=viewport, video_item=video_item)
     player, widget = rig.player, rig.player.videoWidget
     assert widget.video_item_stream is False and type(widget.video_item) is QGraphicsPixmapItem
@@ -285,6 +287,13 @@ def test_pixmap_fallback_keeps_backing(fake_native_player, viewport, video_item)
     player.next_frame_playback()
     assert widget._pixmap_backing is rig.cap_a.frames[2]  # 다음 그림의 배열로 바뀜
     assert rig.cvt_calls == []
+
+    widget.updateFrame(np.zeros((FAKE_HEIGHT, FAKE_WIDTH, 3), np.uint8), None)
+    assert widget._pixmap_backing is None  # RGB 그림을 건 뒤엔 앞 네이티브 프레임을 놓음
+    player.next_frame_playback()
+    assert widget._pixmap_backing is rig.cap_a.frames[3]  # 네이티브 그림이면 다시 쥠
+    widget.updateFrame(None, None)
+    assert widget._pixmap_backing is None  # 비운 화면도 놓음
 
 
 # ---------------------------------------------------------------- [측정] 줄

@@ -547,6 +547,7 @@ class CustomVideoWidget(QGraphicsView):
     def updateFrame(self, frame_a, frame_b):
         if frame_a is None:
             self.video_item.setPixmap(QPixmap())
+            self._pixmap_backing = None  # 빈 픽스맵을 건 뒤에 놓음 — 픽스맵 길이 앞 네이티브 프레임의 표면(4K 33MB)을 더 쥐지 않게
             self.set_overlay_text(None, 0, 0)  # 비운 화면에 앞 네이티브 프레임의 B 키 글자가 남지 않게
             self.annotation_overlay.clear()  # 주석 층도
             return
@@ -582,6 +583,7 @@ class CustomVideoWidget(QGraphicsView):
             pixmap = QPixmap.fromImage(q_img)
             self.video_item.setPixmap(pixmap)
 
+        self._pixmap_backing = None  # RGB 그림을 건 뒤에 놓음 — 픽스맵 길이 앞 네이티브 프레임의 표면을 더 쥐지 않게(스트림 길에선 늘 None)
         self.set_overlay_text(None, width, height)  # RGB 프레임의 B 키 글자는 프레임에 구움 — 앞 네이티브 프레임의 아이템이 남지 않게(숨어 있으면 할 일 없음)
         self.annotation_overlay.clear()  # 주석도 프레임에 구움(prepare_frame_for_display) — 앞 네이티브 프레임의 주석 층을 비움(비어 있으면 할 일 없음)
         self._after_frame_shown()
