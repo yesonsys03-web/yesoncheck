@@ -28,7 +28,8 @@ from PyQt5.QtWidgets import (
 
 from yesoncheck.frame_handles import native_surface_of
 from yesoncheck.frame_utils import FrameCalculator
-from yesoncheck.movie_pipe_source import PipeCaptureError, maybe_pipe_capture
+from yesoncheck.mac_native_gate import native_ineligible_reason, native_wanted
+from yesoncheck.movie_pipe_source import PipeCaptureError, maybe_pipe_capture, movie_source_mode, probe_for_open
 from yesoncheck.overlay_text_layout import (  # noqa: F401 (overlay_metrics: 옛 import 경로 — tests/test_overlay_text_size.py가 여기서 부름)
     OVERLAY_FONT,
     overlay_layout,
@@ -393,7 +394,7 @@ class PlayerPlaybackMixin:
         return isinstance(self.cap_a, ImageSequenceCapture)
 
     def _open_movie_capture(self, file_path):
-        """mov 등 영상 파일의 cv2 캡처 → 못 열면 창으로 알리고 None (보던 영상은 그대로)."""
+        """mov 등 영상 파일의 캡처(네이티브·ffmpeg 파이프·cv2 — 앞 둘은 _native_or_pipe_capture가 고름) → 못 열면 창으로 알리고 None (보던 영상은 그대로)."""
         try:
             os.stat(file_path)
         except OSError as e:
@@ -412,9 +413,10 @@ class PlayerPlaybackMixin:
             QMessageBox.critical(self, "영상을 열 수 없음",
                                  f"영상을 확인하지 못했습니다 (NAS 연결 끊김·권한 등): {file_path}\n이유: {reason}")
             return None
-        # ffmpeg 파이프 게이트(ProRes류만 양성): 양성이면 파이프 캡처로 반환, 음성이면 None이라 아래 기존 줄이 그대로 돎
+        # 네이티브(VideoToolbox) → ffmpeg 파이프 게이트(ProRes류만 양성) — _native_or_pipe_capture: 양성이면 그 캡처로 반환, 음성이면 None이라
+        # 아래 기존 줄이 그대로 돎 (네이티브 분기의 pipe 모드 ffprobe 실패도 PipeCaptureError로 여기 파이프 오류 창에 옴)
         try:
-            cap = maybe_pipe_capture(file_path, full_cache=True)
+            cap = self._native_or_pipe_capture(file_path)
         except PipeCaptureError as e:
             details = traceback.format_exc()
             print(f"ffmpeg 파이프로 영상을 열지 못함: {file_path}")
@@ -433,6 +435,43 @@ class PlayerPlaybackMixin:
                                  f"형식일 수 있음): {file_path}")
             return None
         return cap
+
+    def _native_or_pipe_capture(self, file_path):
+        """_open_movie_capture의 게이트 둘 — 네이티브(VideoToolbox: Apple Silicon의 4K ProRes 4:4:4 — mac_native_gate) 먼저, 그다음 ffmpeg 파이프
+        (ProRes류 — maybe_pipe_capture): 고른 캡처, 둘 다 음성이면 None (부른 쪽이 기존 cv2 줄로). 순서(스펙 §5.8):
+        - YESONCHECK_MOVIE_SOURCE=cv2가 맨 먼저 — 완전 킬: 네이티브 토글도 보지 않고(토글 값이 잘못돼도 탈출구가 막히지 않음) probe도 없이 None.
+        - native_wanted()가 아니면(Intel·Windows·YESONCHECK_MAC_NATIVE=off) 예전 파이프 게이트 줄 그대로 — mac_native_source를 불러오지도 않음
+          (지연 import: Intel·Windows 앱은 이 모듈을 import하지 않음 — 스펙 §5.9).
+        - 원하면 ffprobe 한 번(probe_for_open — 못 읽으면 파이프와 같은 규칙: auto는 기록 뒤 None이라 cv2, pipe는 PipeCaptureError)으로 네이티브
+          게이트를 보고 그 probe를 파이프 판정에 그대로 넘김(ffprobe를 두 번 돌리지 않음). 양성이면 네이티브 캡처(기록 줄은 open_native_capture가
+          남김). 못 열면(NativeCaptureError — PyObjC 없음도 생성자가 이것으로 감쌈) 스택 트레이스·기록 한 줄·오류 창(끝 줄은 탈출구 안내
+          NATIVE_ESCAPE_HINT)으로 알린 뒤 파이프로 계속(스펙 §5.3 — 조용한 폴백이 아니라 알린 뒤 이어감). 음성이면 사유 한 줄
+          `[재생] 네이티브(VideoToolbox): 아님 — <사유>: <이름>` 뒤 파이프.
+        PipeCaptureError(pipe 모드의 ffprobe 실패·게이트 불통과, 파이프를 열지 못함)는 그대로 올라가 _open_movie_capture의 파이프 오류 창으로.
+        그 밖의 예외(ToolNotFoundError·코드 버그)도 잡지 않음."""
+        mode = movie_source_mode()
+        if mode == "cv2" or not native_wanted():
+            return maybe_pipe_capture(file_path, full_cache=True)
+        from yesoncheck import mac_native_source  # 지연 import — 위 설명
+
+        probe = probe_for_open(file_path, mode)
+        if probe is None:  # auto에서 ffprobe가 못 읽음 — 기록을 남겼고, 기존 cv2 줄로 (maybe_pipe_capture와 같은 규칙)
+            return None
+        name = os.path.basename(file_path)
+        reason = native_ineligible_reason(probe)
+        if reason is not None:
+            print(f"{mac_native_source.NATIVE_LOG_PREFIX} 아님 — {reason}: {name}")
+        else:
+            try:
+                return mac_native_source.open_native_capture(file_path, probe)
+            except mac_native_source.NativeCaptureError as e:
+                details = traceback.format_exc()
+                traceback.print_exc()
+                print(f"{mac_native_source.NATIVE_LOG_PREFIX} 열지 못해 ffmpeg 파이프로 계속: {name}")
+                QMessageBox.critical(self, "영상을 열 수 없음(네이티브)",
+                                     f"VideoToolbox(네이티브)로 영상을 열지 못해 ffmpeg 파이프로 계속합니다: {file_path}\n"
+                                     f"이유: {type(e).__name__}: {e}\n\n{details}\n{mac_native_source.NATIVE_ESCAPE_HINT}")
+        return maybe_pipe_capture(file_path, full_cache=True, probe=probe)
 
     def _open_sequence_capture(self, file_path):
         """시퀀스(.seq 가상 경로)의 캡처 → 못 열면 창으로 알리고 None (보던 영상은 그대로).
