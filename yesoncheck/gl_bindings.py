@@ -1,11 +1,12 @@
 """GL 함수 묶기: QOpenGLContext.getProcAddress로 필요한 OpenGL 함수의 주소를 얻어 ctypes로 감싼다.
 
 왜 ctypes + getProcAddress인가: 비디오 아이템이 paint() 안에서 프레임을 GL 텍스처로 직접 올리려면 glTexSubImage2D 같은 데스크톱
-GL 함수 20개가 필요하다. PyOpenGL을 들이면 의존성이 하나 늘고 PyInstaller 번들·플랫폼별 로더 문제가 따라오므로, Qt가 이미 열어 둔
+GL 함수 21개가 필요하다. PyOpenGL을 들이면 의존성이 하나 늘고 PyInstaller 번들·플랫폼별 로더 문제가 따라오므로, Qt가 이미 열어 둔
 컨텍스트에게 이름으로 주소를 물어(getProcAddress) ctypes 함수 객체로 감싼다 — 의존성 0, 컨텍스트가 실제로 제공하는 함수만 쓴다.
-시그니처 20개 중 17개는 스파이크(docs/superpowers/records/2026-11-02-gl-stream-design/yc_gl_stream_spike.py)에서 Mac(GL 2.1)로 검증한
+시그니처 21개 중 17개는 스파이크(docs/superpowers/records/2026-11-02-gl-stream-design/yc_gl_stream_spike.py)에서 Mac(GL 2.1)로 검증한
 것 그대로다(glOrtho는 c_double 6개, 포인터 인자는 c_void_p, glGetError는 c_uint 반환, glGetIntegerv는 POINTER(c_int)). 스파이크에 없는
-glDeleteTextures·glLoadIdentity·glEnd 3개는 표준 시그니처(glGenTextures와 같은 모양, 인자 없음)로 채웠다.
+glDeleteTextures·glLoadIdentity·glEnd 3개는 표준 시그니처(glGenTextures와 같은 모양, 인자 없음)로 채웠다. glScissor(c_int 4개)는 IOSurface 와이프
+(gl_video_item.set_sides — B 면을 scissor 안에)용으로, 네이티브 재생 스파이크(spike/mac-native 브랜치의 gl_surface.ExtraGL)와 같은 시그니처다.
 
 ES 컨텍스트(Windows의 ANGLE 등)와 데스크톱 core profile 컨텍스트는 거부한다: 고정 기능 파이프라인(glBegin·glOrtho·glMatrixMode…)이
 없어서 이 함수들이 아예 없거나 동작하지 않는다. 몰래 다른 경로로 돌리지 않고 GLBindingError로 알려, 부른 쪽이 환경변수(YESONCHECK_VIDEO_ITEM=pixmap 등)로 기존 경로를
@@ -55,6 +56,7 @@ FUNCTIONS = {
     "glEnable": (None, [_UINT]),
     "glDisable": (None, [_UINT]),
     "glViewport": (None, [_INT, _INT, _INT, _INT]),
+    "glScissor": (None, [_INT, _INT, _INT, _INT]),
     "glMatrixMode": (None, [_UINT]),
     "glLoadIdentity": (None, []),
     "glOrtho": (None, [_DOUBLE] * 6),
