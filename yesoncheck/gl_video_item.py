@@ -345,7 +345,8 @@ class VideoFrameItem(QGraphicsPixmapItem):
 
     def reset_failure(self) -> None:
         """그리기 실패 걸쇠(_failed)를 풀고 다시 그리기를 예약 — 다음 paint가 지금 프레임을 다시 그린다(다시 실패하면 _fail이 다시 기록 + 창 1회).
-        Setting → 재생 디코더에서 고를 때 플레이어가 부름(디코더를 바꾸는 것이 걸쇠의 탈출구 — 스펙 2026-11-04 §5.4 ④). failure_count(알린 수)는 그대로.
+        Setting → 재생 디코더에서 고를 때 플레이어가 캡처를 바꿔 끼운 뒤 부름(디코더를 바꾸는 것이 걸쇠의 탈출구 — 스펙 2026-11-04 §5.4 ④; 바꿔 끼우는 동안의
+        창이 옛 프레임을 그려도 다시 실패하지 않게 그 뒤에). failure_count(알린 수)는 그대로.
 
         GL 상태는 비우지 않는다 — 다음 paint는 실패한 단계부터 다시 한다: 단계마다 성공한 뒤에만 기록하기 때문(준비 — _context는 _prepare 끝에서·
         옛 컨텍스트 신호를 끊으면 바로 None, 저장소 — _storage는 잡은 뒤, 업로드 — _dirty는 올린 뒤에 False, 면 — 텍스처의 storage·content는 잡고

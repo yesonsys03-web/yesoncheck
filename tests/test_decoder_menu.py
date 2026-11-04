@@ -4,8 +4,9 @@
   메뉴가 없음은 sys.platform을 win32·linux로 바꾼 뒤 만든 창으로 어느 플랫폼에서나 본다(메뉴는 창을 만들 때 sys.platform을 읽음).
 - 체크·활성·툴팁은 지금 유효한 디코더(mac_native_gate.effective_decoder — 환경 변수 > prefs.json > 기본값)를 따른다. 환경 변수(YESONCHECK_MAC_NATIVE)나
   YESONCHECK_MOVIE_SOURCE=cv2가 덮으면 두 항목 비활성 + 툴팁, prefs.json을 읽지 못한 세션(SOURCE_FALLBACK)은 ffmpeg 체크 + 그 출처를 툴팁에(활성 그대로).
-- 고르면 set_playback_decoder: ① prefs.json 저장(실패 → 기록 + 창 1회 + 체크 되돌림) ② 캐시(출처 prefs.json) ③ 기록 한 줄 ④ 스트림 아이템의 GL 실패 걸쇠
-  풀기(reset_failure) ⑤ 캡처 바꿔 끼움(swap_movie_captures_for_decoder — 시험에서는 스파이) ⑥ 메뉴 맞춤.
+- 고르면 set_playback_decoder: ① prefs.json 저장(실패 → 기록 + 창 1회 + 체크 되돌림) ② 캐시(출처 prefs.json) ③ 기록 한 줄 — 유효 디코더가 그대로면 여기서
+  메뉴만 맞춤 — ④ 캡처 바꿔 끼움(swap_movie_captures_for_decoder — 시험에서는 스파이) ⑤ 스트림 아이템의 GL 실패 걸쇠 풀기(reset_failure — 바꿔 끼운 뒤)
+  ⑥ 메뉴 맞춤(바꿔 끼우다 예외가 나도 — finally).
 conftest가 YESONCHECK_MAC_NATIVE=off를 고정하므로 auto를 보는 시험은 delenv하고, HOME은 conftest가 시험마다 빈 폴더로 돌려 prefs.json이 격리된다.
 """
 
@@ -13,6 +14,8 @@ import os
 import sys
 
 import pytest
+from PyQt5.QtGui import QImage, QPainter
+from PyQt5.QtWidgets import QMessageBox, QStyleOptionGraphicsItem
 
 from tests.native_fakes import fake_native_player, new_player  # noqa: F401 (픽스처 — new_player는 fake_native_player가 요청함)
 from tests.test_work_paths_ui import make_config
@@ -26,6 +29,8 @@ MENU_TEXT = "재생 디코더 (Mac)"
 LABELS = {"videotoolbox": "VideoToolbox (기본)", "ffmpeg": "ffmpeg (예전 방식)"}
 CV2_TIP = "YESONCHECK_MOVIE_SOURCE=cv2가 모든 빠른 디코더를 끕니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다"
 SET_LOG = "[재생] 디코더 설정: {} (Setting 메뉴)"
+SAME_LOG = "캡처를 다시 열지 않음"  # 유효 디코더가 그대로일 때의 기록 줄 끝
+RUNTIME_SOURCE = "네이티브 화면 그리기 실패 — 이 창만 ffmpeg"  # Task 5의 실행 중 폴백이 둘 출처(그 모양의 대역 — 메뉴는 알지 못하는 출처 글)
 
 
 def settings_menu(player):
@@ -88,6 +93,16 @@ def spies(monkeypatch):
     return install
 
 
+def paint_on_raster(item):
+    """아이템을 raster QImage에 그림 — 중첩 이벤트 루프(창)가 도는 동안의 paint 대역. 스트림 아이템은 GL 엔진이 아니라 실패(_fail)하거나, 걸쇠가 걸려 있으면 아무것도 안 함."""
+    target = QImage(16, 16, QImage.Format_ARGB32)
+    painter = QPainter(target)
+    try:
+        item.paint(painter, QStyleOptionGraphicsItem(), None)
+    finally:
+        painter.end()
+
+
 def forbid_save(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError(f"설정 파일에 쓰면 안 됩니다: {args}")
@@ -112,9 +127,11 @@ def test_menu_exists_on_mac_after_gpu_submenu(make_player, auto):
 
 @pytest.mark.parametrize("platform", ["win32", "linux"])
 def test_no_decoder_menu_off_mac(make_player, monkeypatch, platform):
-    """macOS가 아니면 메뉴를 만들지 않음 (Windows 메뉴는 글자 하나 안 바뀜 — Linux도 VideoToolbox가 없음). 맞춤 함수는 할 일이 없음."""
-    monkeypatch.setattr(sys, "platform", platform)
-    player = make_player()
+    """macOS가 아니면 메뉴를 만들지 않음 (Windows 메뉴는 글자 하나 안 바뀜 — Linux도 VideoToolbox가 없음). 맞춤 함수는 할 일이 없음.
+    가짜 플랫폼은 창을 만드는 동안만 — 창을 닫는(픽스처 끝) 길은 진짜 플랫폼으로."""
+    with monkeypatch.context() as m:
+        m.setattr(sys, "platform", platform)
+        player = make_player()
     assert MENU_TEXT not in [a.text() for a in settings_menu(player).actions()]
     assert player.decoder_actions == {} and player.decoder_action_group == []
     player._sync_decoder_menu()
@@ -184,11 +201,11 @@ def test_menu_after_prefs_read_failure_checks_ffmpeg_with_the_source(make_player
 # ---------------------------------------------------------------- 고르기
 
 @mac_only
-def test_choosing_ffmpeg_saves_logs_resets_and_swaps(fake_native_player, auto, spies, dialogs, capsys):
-    """VideoToolbox(기본)로 연 창에서 ffmpeg를 고름(항목 trigger): prefs.json에 저장(다른 키는 그대로) → 캐시(출처 prefs.json) → 기록 한 줄 → 스트림
-    아이템의 걸쇠 풀기 → 캡처 바꿔 끼움 1회(그때 이미 저장·캐시가 ffmpeg) → ffmpeg 체크. 창 없음.
+def test_choosing_ffmpeg_saves_logs_swaps_then_resets(fake_native_player, auto, spies, dialogs, capsys):
+    """VideoToolbox(기본)로 연 창에서 ffmpeg를 고름(항목 trigger): prefs.json에 저장(다른 키는 그대로) → 캐시(출처 prefs.json) → 기록 한 줄 → 캡처
+    바꿔 끼움 1회(그때 이미 저장·캐시가 ffmpeg) → 스트림 아이템의 걸쇠 풀기(바꿔 끼운 뒤 — Ruling 9) → ffmpeg 체크. 창 없음.
 
-    깨지는 변경: 저장을 빼면 파일에 값이 없음; 캐시를 swap 뒤에 바꾸면 swap 기록의 캐시가 videotoolbox; reset을 swap 뒤로 옮기면 차례가 바뀜;
+    깨지는 변경: 저장을 빼면 파일에 값이 없음; 캐시를 swap 뒤에 바꾸면 swap 기록의 캐시가 videotoolbox; reset을 swap 앞으로 옮기면 차례가 바뀜;
     set_preferred_decoder를 출처 없이 부르면 출처가 '기본값'."""
     write_prefs('{"asked_default_video_app": true}')
     rig = fake_native_player()
@@ -201,7 +218,7 @@ def test_choosing_ffmpeg_saves_logs_resets_and_swaps(fake_native_player, auto, s
 
     assert mac_prefs.read_prefs() == {"asked_default_video_app": True, PREF_KEY: "ffmpeg"}
     assert preferred_decoder() == "ffmpeg" and effective_decoder() == ("ffmpeg", SOURCE_PREFS)
-    assert events == [("reset",), ("swap", "ffmpeg", "ffmpeg")]
+    assert events == [("swap", "ffmpeg", "ffmpeg"), ("reset",)]
     assert capsys.readouterr().out.count(SET_LOG.format("ffmpeg") + "\n") == 1
     assert checked(player) == ["ffmpeg"]
     assert player.decoder_actions["ffmpeg"].toolTip() == player_base.DECODER_TIP
@@ -209,7 +226,7 @@ def test_choosing_ffmpeg_saves_logs_resets_and_swaps(fake_native_player, auto, s
 
     player.decoder_actions["videotoolbox"].trigger()  # 되돌리기도 같은 길
     assert mac_prefs.read_prefs()[PREF_KEY] == "videotoolbox" and preferred_decoder() == "videotoolbox"
-    assert events[2:] == [("reset",), ("swap", "videotoolbox", "videotoolbox")]
+    assert events[2:] == [("swap", "videotoolbox", "videotoolbox"), ("reset",)]
     assert checked(player) == ["videotoolbox"]
 
 
@@ -223,6 +240,50 @@ def test_choosing_with_pixmap_item_swaps_without_reset(fake_native_player, auto,
     player.set_playback_decoder("ffmpeg")
     assert events == [("swap", "ffmpeg", "ffmpeg")]
     assert checked(player) == ["ffmpeg"] and dialogs.messages == []
+
+
+@mac_only
+def test_swap_window_does_not_relatch_the_released_item(fake_native_player, auto, dialogs, monkeypatch):
+    """GL 그리기 실패로 걸쇠가 걸린 스트림 아이템: ffmpeg를 고르는 동안 바꿔 끼움이 창을 띄우고(열기·ffprobe 실패 — 모달의 중첩 이벤트 루프) 그 루프가
+    아직 옛(실패하는) 프레임을 그려도 걸쇠가 걸린 채라 다시 실패하지 않음 → 끝에 걸쇠가 풀려 있고 알린 실패는 처음 1번뿐 (Ruling 9 — 걸쇠는 바꿔 끼운 뒤 풂).
+
+    깨지는 변경: reset_failure를 swap 앞에서 부르면 창 안의 paint가 다시 실패해 걸쇠가 다시 걸리고(_failed True) 실패 창이 하나 더 뜸."""
+    rig = fake_native_player()
+    player = rig.player
+    item = player.videoWidget.video_item
+    paint_on_raster(item)  # 옛 프레임을 그리다 실패 → 걸쇠
+    player.timer.stop()
+    from PyQt5.QtWidgets import QApplication
+    QApplication.processEvents()
+    assert item._failed and item.failure_count == 1
+    dialogs.messages.clear()
+
+    def swap_with_window():
+        QMessageBox.critical(player, "재생 디코더를 바꾸지 못함", "가짜 열기 실패")  # 모달 — 그 루프가 아래 paint를 돌림
+        paint_on_raster(item)
+        return False
+
+    monkeypatch.setattr(player, "swap_movie_captures_for_decoder", swap_with_window)
+    player.set_playback_decoder("ffmpeg")
+    QApplication.processEvents()
+    assert item._failed is False and item.failure_count == 1
+    assert [m[:2] for m in dialogs.messages] == [("critical", "재생 디코더를 바꾸지 못함")]  # 실패 창이 다시 뜨지 않음
+    assert checked(player) == ["ffmpeg"]
+
+
+@mac_only
+def test_swap_exception_still_syncs_the_menu(make_player, auto, monkeypatch):
+    """바꿔 끼우다 예외가 나도(코드·빌드 쪽 — 잡지 않음) 메뉴는 맞춘 뒤 예외를 그대로 올림 — 두 항목이 함께 체크된 채 남지 않게."""
+    player = make_player()
+
+    def broken_swap():
+        raise RuntimeError("가짜 바꿔 끼움 오류")
+
+    monkeypatch.setattr(player, "swap_movie_captures_for_decoder", broken_swap)
+    with pytest.raises(RuntimeError, match="가짜 바꿔 끼움 오류"):
+        player.set_playback_decoder("ffmpeg")
+    assert checked(player) == ["ffmpeg"]  # 저장·캐시는 이미 ffmpeg — 맞춘 메뉴
+    assert effective_decoder() == ("ffmpeg", SOURCE_PREFS)
 
 
 @mac_only
@@ -246,8 +307,9 @@ def test_choosing_same_decoder_is_a_no_op(make_player, auto, spies, monkeypatch,
 
 
 @mac_only
-def test_choosing_ffmpeg_in_fallback_session_saves_it(make_player, auto, spies, dialogs, capsys):
-    """설정을 읽지 못해 이 세션만 ffmpeg인 창(파일은 그 뒤 고쳐짐 — 여기서는 지움)에서 ffmpeg를 고르면 no-op이 아님: 파일에 저장하고 출처가 prefs.json."""
+def test_choosing_ffmpeg_in_fallback_session_saves_without_reopen(make_player, auto, spies, dialogs, capsys):
+    """설정을 읽지 못해 이 세션만 ffmpeg인 창(파일은 그 뒤 고쳐짐 — 여기서는 지움)에서 ffmpeg를 고르면 no-op이 아님: 파일에 저장하고 출처가 prefs.json.
+    유효 디코더는 ffmpeg 그대로라 캡처를 다시 열지도 걸쇠를 풀지도 않음(파이프 → 파이프 재열기는 채운 전체 프레임 캐시와 [측정] 기록만 버림)."""
     path = write_prefs("not json")
     app.load_playback_decoder()
     os.remove(path)
@@ -256,9 +318,47 @@ def test_choosing_ffmpeg_in_fallback_session_saves_it(make_player, auto, spies, 
     player.decoder_actions["ffmpeg"].trigger()
     assert mac_prefs.read_prefs() == {PREF_KEY: "ffmpeg"}
     assert effective_decoder() == ("ffmpeg", SOURCE_PREFS)
-    assert events == [("swap", "ffmpeg", "ffmpeg")]  # raster 뷰포트(offscreen 기본) — 픽스맵 아이템이라 걸쇠 풀기 없음
+    assert events == []
+    assert checked(player) == ["ffmpeg"]
     assert player.decoder_actions["ffmpeg"].toolTip() == player_base.DECODER_TIP
-    assert SET_LOG.format("ffmpeg") in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert SET_LOG.format("ffmpeg") in out and SAME_LOG in out
+
+
+@mac_only
+def test_choosing_ffmpeg_after_runtime_fallback_saves_without_reopen(fake_native_player, auto, spies, dialogs, capsys):
+    """실행 중 폴백(Task 5 — 이 창만 ffmpeg, 파일은 그대로)으로 캐시가 ffmpeg인 창: 메뉴는 그 출처를 ffmpeg 툴팁에 보이고, ffmpeg를 고르면 저장만 —
+    이미 ffmpeg로 바꿔 끼운 캡처를 다시 열지 않음(바꿔 끼움·걸쇠 풀기 0회)."""
+    rig = fake_native_player()
+    player = rig.player
+    events = spies(player)
+    mac_native_gate.set_preferred_decoder("ffmpeg", source=RUNTIME_SOURCE)
+    player._sync_decoder_menu()
+    assert checked(player) == ["ffmpeg"] and player.decoder_actions["ffmpeg"].toolTip() == RUNTIME_SOURCE
+    capsys.readouterr()
+    player.decoder_actions["ffmpeg"].trigger()
+    assert mac_prefs.read_prefs() == {PREF_KEY: "ffmpeg"}
+    assert effective_decoder() == ("ffmpeg", SOURCE_PREFS)
+    assert events == []
+    assert checked(player) == ["ffmpeg"] and player.decoder_actions["ffmpeg"].toolTip() == player_base.DECODER_TIP
+    out = capsys.readouterr().out
+    assert SET_LOG.format("ffmpeg") in out and SAME_LOG in out
+    assert dialogs.messages == []
+
+
+@mac_only
+def test_saving_under_env_override_does_not_reopen(make_player, monkeypatch, spies, capsys):
+    """환경 변수가 덮는 동안(YESONCHECK_MAC_NATIVE=off — 항목은 비활성이라 부르는 쪽은 코드뿐) videotoolbox를 저장해도 유효 디코더는 ffmpeg 그대로라
+    다시 열지 않음 — 비교는 고른 이름이 아니라 유효 디코더 전후로. 저장한 값은 다음에 환경 변수 없이 켤 때 쓰임."""
+    monkeypatch.setenv(NATIVE_MODE_ENV, "off")
+    player = make_player()
+    events = spies(player)
+    capsys.readouterr()
+    player.set_playback_decoder("videotoolbox")
+    assert mac_prefs.read_prefs() == {PREF_KEY: "videotoolbox"} and preferred_decoder() == "videotoolbox"
+    assert events == []
+    assert checked(player) == ["ffmpeg"] and not any(a.isEnabled() for a in player.decoder_actions.values())
+    assert SAME_LOG in capsys.readouterr().out
 
 
 @mac_only
@@ -300,14 +400,16 @@ def test_prefs_write_failure_shows_window_and_reverts_check(make_player, auto, s
 
 
 @mac_only
-def test_choosing_videotoolbox_with_still_broken_prefs_fails_loudly(make_player, auto, spies, dialogs):
-    """깨진 파일로 켠 세션(ffmpeg 체크)에서 VideoToolbox를 고름 → 파일이 여전히 깨져 있으면 저장 실패 창 1회 + ffmpeg 체크로 되돌림, 캐시는 SOURCE_FALLBACK 그대로."""
+@pytest.mark.parametrize("name", ["videotoolbox", "ffmpeg"])
+def test_choosing_in_fallback_session_with_still_broken_prefs_fails_loudly(make_player, auto, spies, dialogs, name):
+    """깨진 파일로 켠 세션(ffmpeg 체크)에서 어느 항목을 고르든(ffmpeg도 — 출처가 SOURCE_FALLBACK이라 no-op이 아님) 파일이 여전히 깨져 있으면 저장 실패 창
+    1회 + ffmpeg 체크로 되돌림, 캐시는 SOURCE_FALLBACK 그대로, 바꿔 끼움 없음, 깨진 파일은 덮지 않음."""
     path = write_prefs("not json")
     app.load_playback_decoder()
     dialogs.messages.clear()
     player = make_player()
     events = spies(player)
-    player.decoder_actions["videotoolbox"].trigger()
+    player.decoder_actions[name].trigger()
     assert [m[:2] for m in dialogs.messages] == [("critical", "재생 디코더 설정")]
     assert checked(player) == ["ffmpeg"]
     assert effective_decoder() == ("ffmpeg", SOURCE_FALLBACK)
@@ -338,3 +440,12 @@ def test_set_playback_decoder_rejects_unknown_name_before_saving(make_player, au
         player.set_playback_decoder("hevc")
     assert checked(player) == ["videotoolbox"]
 
+
+def test_set_playback_decoder_refuses_off_macos(make_player, monkeypatch):
+    """macOS가 아니면 RuntimeError — 메뉴가 없는 설정이라 prefs.json(Mac 경로)에 쓰지 않음 (가짜 플랫폼은 부르는 동안만)."""
+    player = make_player()
+    forbid_save(monkeypatch)
+    with monkeypatch.context() as m:
+        m.setattr(sys, "platform", "win32")
+        with pytest.raises(RuntimeError, match="macOS 전용"):
+            player.set_playback_decoder("ffmpeg")

@@ -1441,16 +1441,20 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         ffmpeg인 창(SOURCE_FALLBACK)에서 ffmpeg를 고르는 것은 저장이다(파일을 고쳤으면 그 값이 남음, 아직 깨져 있으면 아래 ①의 창). 차례:
         ① prefs.json에 저장(mac_prefs.update_pref) — 실패(깨진 파일 UserFileError·잠금 시간 초과·쓰기 실패 OSError)면 기록(트레이스백) + 오류 창 1회 +
            체크를 지금 유효한 값으로 되돌리고 끝(캐시·캡처 그대로 — 저장하지 못한 설정을 이 창에만 몰래 적용하지 않음)
-        ② 게이트의 캐시를 그 값으로(출처 prefs.json) ③ 기록 한 줄 `[재생] 디코더 설정: <이름> (Setting 메뉴)`
-        ④ 스트림 아이템(VideoFrameItem)이면 GL 그리기 실패 걸쇠를 풂(reset_failure — 디코더를 바꾸는 것이 그 걸쇠의 탈출구)
-        ⑤ 열린 A·B의 캡처를 새 디코더로 바꿔 끼움(swap_movie_captures_for_decoder — open_file을 부르지 않음). False면 그 함수가 이미 창을 띄웠으므로
-           창을 더 띄우지 않고 기록 한 줄만 — 설정은 저장됐고 바꾸지 못한 쪽은 다음에 열 때부터 ⑥ 메뉴를 맞춤.
+        ② 게이트의 캐시를 그 값으로(출처 prefs.json) ③ 기록 한 줄 `[재생] 디코더 설정: <이름> (Setting 메뉴)` — 들어올 때와 유효 디코더(effective_decoder —
+           환경 변수가 덮으면 그 값)가 같으면(이 세션만 ffmpeg였던 창에서 ffmpeg를 저장, 환경 변수가 덮는 동안) 기록 한 줄을 더하고 메뉴만 맞춤: 같은 디코더로
+           다시 열면 파이프 → 파이프로 채운 전체 프레임 캐시와 [측정] 기록만 버림
+        ④ 열린 A·B의 캡처를 새 디코더로 바꿔 끼움(swap_movie_captures_for_decoder — open_file을 부르지 않음). False면 그 함수가 이미 창을 띄웠으므로
+           창을 더 띄우지 않고 기록 한 줄만 — 설정은 저장됐고 바꾸지 못한 쪽은 다음에 열 때부터
+        ⑤ 스트림 아이템(VideoFrameItem)이면 GL 그리기 실패 걸쇠를 풂(reset_failure — 디코더를 바꾸는 것이 그 걸쇠의 탈출구). 바꿔 끼운 **뒤**에(Ruling 9):
+           바꿔 끼우는 동안 뜬 창(모달)의 이벤트 루프가 아직 옛(실패하는) 프레임을 그려도 걸쇠가 걸린 채라 다시 실패하지 않고, 풀린 뒤의 paint는 새 프레임
+        ⑥ 메뉴를 맞춤 — ④⑤가 예외를 내도(finally; 예외는 그대로 올림) 두 항목이 함께 체크된 채 남지 않게.
         name이 DECODERS 밖이면 ValueError — 파일에 쓰기 전에(나쁜 값이 저장되면 다음 시작이 그 파일을 거부함). macOS가 아니면 RuntimeError(메뉴가 없는 설정)."""
         if sys.platform != "darwin":
             raise RuntimeError(f"재생 디코더 설정은 macOS 전용입니다 (이 시스템: {sys.platform})")
         if name not in mac_native_gate.DECODERS:
             raise ValueError(f"{mac_native_gate.PREF_KEY}는 {', '.join(mac_native_gate.DECODERS)} 중 하나여야 합니다: {name!r}")
-        _, source = mac_native_gate.effective_decoder()
+        before, source = mac_native_gate.effective_decoder()
         if name == mac_native_gate.preferred_decoder() and source in (mac_native_gate.SOURCE_PREFS, mac_native_gate.SOURCE_DEFAULT):
             self._sync_decoder_menu()
             return
@@ -1467,11 +1471,18 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
             return
         mac_native_gate.set_preferred_decoder(name, source=mac_native_gate.SOURCE_PREFS)
         print(f"[재생] 디코더 설정: {name} (Setting 메뉴)", flush=True)
-        if self.videoWidget.video_item_stream:
-            self.videoWidget.video_item.reset_failure()
-        if not self.swap_movie_captures_for_decoder():
-            print(f"[재생] 디코더 설정({name})은 저장했지만 지금 열린 영상 중 바꾸지 못한 쪽이 있음 — 그 쪽은 다음에 열 때부터", flush=True)
-        self._sync_decoder_menu()
+        after, _ = mac_native_gate.effective_decoder()
+        if after == before:
+            print(f"[재생] 유효 디코더가 그대로({after}) — 캡처를 다시 열지 않음", flush=True)
+            self._sync_decoder_menu()
+            return
+        try:
+            if not self.swap_movie_captures_for_decoder():
+                print(f"[재생] 디코더 설정({name})은 저장했지만 지금 열린 영상 중 바꾸지 못한 쪽이 있음 — 그 쪽은 다음에 열 때부터", flush=True)
+            if self.videoWidget.video_item_stream:
+                self.videoWidget.video_item.reset_failure()
+        finally:
+            self._sync_decoder_menu()
 
     def _sync_decoder_menu(self):
         """(Mac) Setting → 재생 디코더의 체크·활성·툴팁을 지금 유효한 디코더(mac_native_gate.effective_decoder)에 맞춤 — 메뉴를 만들 때, 고른 뒤(저장
