@@ -61,6 +61,12 @@ Apple Silicon Mac에서 직접 빌드해도 같은 결과(두 검사 `통과`, �
 - paddle 2.6.2는 쓰지 않습니다: 안에 정적으로 든 OpenBLAS(0.3.18 이전)의 `sgemm_itcopy`가 macOS가 예약한 x18 레지스터를
   반복 횟수로 써서, Apple Silicon에서는 OCR 추론 중에 프로세스가 죽습니다 (GitHub Actions 실행 시험에서 첫 OCR에서 끝남).
 
+**PyObjC (Apple Silicon 네이티브 재생)**: 4K ProRes 4444의 VideoToolbox 네이티브 재생(`yesoncheck/mac_native_source.py`)은 PyObjC 12.2.2
+(`pyobjc-core`·`pyobjc-framework-AVFoundation`·`pyobjc-framework-Quartz` — Cocoa·CoreAudio·CoreMedia는 함께 끌려옴)를 씁니다. `requirements-build.txt`의
+세 줄은 `sys_platform == "darwin" and platform_machine == "arm64"` 마커가 있어 **`requirements-build-arm64.lock`에만** 들어가고 Intel·Windows lock은
+그대로입니다(`tests/test_build_lock.py`가 지킴 — 하드웨어 디코드 여부 `hw=yes|no`는 VideoToolbox 래퍼 없이 ctypes). 고정 목록을 고친 뒤 arm64 lock은
+파일 맨 위 명령으로 다시 만듭니다: `MACOSX_DEPLOYMENT_TARGET=12.0 uv pip compile requirements-build.txt --python-version 3.10 --python-platform aarch64-apple-darwin --no-header -o requirements-build-arm64.lock`.
+
 ## 2. 빌드
 
 ```bash
