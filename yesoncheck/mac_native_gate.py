@@ -5,10 +5,16 @@
 movie_pipe_source(ineligible_reason·MovieProbe — Qt는 알릴 때만 불러옴)뿐.
 
 토글 YESONCHECK_MAC_NATIVE (YESONCHECK_MOVIE_SOURCE 선례 — 없거나 비면 auto, 대소문자 무시, 그 밖의 값은 ValueError):
-  auto  macOS(darwin)면 칩과 상관없이 켬 — Apple Silicon도 Intel Mac(Rosetta 아래 x86_64 빌드 포함)도. macOS가 아니면(Windows·Linux,
-        ARM이어도) 꺼짐 (VideoToolbox가 없음).
-  on    켬 강제. macOS가 아니면 조용히 끄지 않고 ValueError (조용한 폴백 금지).
-  off   끔 (킬 스위치).
+  auto  macOS(darwin)면 칩과 상관없이, 사용자의 재생 디코더 설정이 videotoolbox(기본)일 때 켬 — Apple Silicon도 Intel Mac(Rosetta 아래
+        x86_64 빌드 포함)도. 설정이 ffmpeg(예전 방식)면 꺼짐. macOS가 아니면(Windows·Linux, ARM이어도) 설정과 무관하게 꺼짐 (VideoToolbox가 없음).
+  on    켬 강제 (설정을 덮음). macOS가 아니면 조용히 끄지 않고 ValueError (조용한 폴백 금지).
+  off   끔 (킬 스위치 — 설정을 덮음).
+
+재생 디코더 설정 (prefs.json의 "playback_decoder": "videotoolbox" | "ffmpeg", 없으면 videotoolbox) — 우선순위 환경 변수(on·off) > 설정 > 기본:
+이 모듈은 파일을 읽지 않는다 (순수 유지 — 파일 I/O·Qt 없음). app.launch가 Mac에서 시작 때 한 번 mac_prefs로 읽어 검증한 값을 이 모듈의 프로세스
+캐시에 넣고(set_preferred_decoder), native_wanted는 그 캐시만 본다. 캐시는 (디코더, 출처)를 함께 기억해 effective_decoder가 지금 유효한
+디코더와 그 출처("환경 변수 YESONCHECK_MAC_NATIVE=on|off"·"prefs.json"·"기본값")를 돌려줌 — 시작 기록과 Setting 메뉴가 같은 판단을 씀.
+다른 창(프로세스)의 캐시는 건드리지 않는다: 설정을 바꾸면 다른 창은 다음에 켤 때 따라온다.
 "켬"은 후보일 뿐이고 파일마다 아래 게이트를 다시 통과해야 한다 — 양성 증거로만 켜지며 한 조건이라도 확인하지 못하면(값이 없거나
 맞지 않으면) 음성이라 파이프 경로로 간다 (movie_pipe_source.pipe_eligible과 같은 원칙).
 
@@ -40,6 +46,12 @@ from yesoncheck.movie_pipe_source import ineligible_reason
 NATIVE_MODE_ENV = "YESONCHECK_MAC_NATIVE"
 NATIVE_MODES = ("auto", "on", "off")  # 환경 변수가 받는 값 (없거나 비어 있으면 "auto")
 
+PREF_KEY = "playback_decoder"  # prefs.json의 키
+DECODERS = ("videotoolbox", "ffmpeg")  # 그 키가 받는 값 (videotoolbox = 네이티브, ffmpeg = 예전 방식)
+DEFAULT_DECODER = "videotoolbox"
+SOURCE_DEFAULT = "기본값"  # effective_decoder의 출처 — 설정을 읽지 않았거나 파일에 키가 없음
+SOURCE_PREFS = "prefs.json"  # 출처 — 설정 파일에서 읽은 값
+
 NATIVE_CODEC = "prores"  # ⑦
 HDR_TRANSFERS = ("smpte2084", "arib-std-b67")  # ⑨ PQ·HLG
 HDR_PRIMARIES = "bt2020"  # ⑨ HDR이 아닌 BT.2020 SDR도 원색이 다르므로 같이 거름
@@ -61,9 +73,38 @@ def is_apple_silicon(platform_mod=platform, sys_mod=sys):
     return sys_mod.platform == "darwin" and platform_mod.machine() == "arm64"
 
 
+_preferred = (DEFAULT_DECODER, SOURCE_DEFAULT)  # 프로세스 캐시: (디코더, 출처) — set_preferred_decoder가 바꿈
+
+
+def set_preferred_decoder(name, source=SOURCE_DEFAULT) -> None:
+    """프로세스 캐시의 선호 디코더를 name으로 (app.launch가 prefs.json에서 읽은 값을 source="prefs.json"으로, Setting 메뉴가 고른 값을). source는
+    effective_decoder가 돌려주는 출처 글. DECODERS 밖의 name은 ValueError(설정 키와 받은 값을 글에) — 조용히 기본으로 넘기지 않으며 캐시는 그대로."""
+    global _preferred
+    if name not in DECODERS:
+        raise ValueError(f"{PREF_KEY}는 {', '.join(DECODERS)} 중 하나여야 합니다: {name!r}")
+    _preferred = (name, source)
+
+
+def preferred_decoder() -> str:
+    """프로세스 캐시의 선호 디코더 (환경 변수는 보지 않음 — 지금 유효한 것은 effective_decoder). 읽기 전의 기본은 videotoolbox."""
+    return _preferred[0]
+
+
+def effective_decoder(env=os.environ):
+    """(지금 유효한 디코더, 출처) — 환경 변수 on은 ("videotoolbox", "환경 변수 YESONCHECK_MAC_NATIVE=on"), off는 ("ffmpeg", "환경 변수
+    YESONCHECK_MAC_NATIVE=off"), auto(없음·빈 값 포함)는 캐시의 (디코더, 출처: "prefs.json" 또는 "기본값"). 나쁜 환경 변수 값은
+    native_mode의 ValueError. 플랫폼은 보지 않는다 — Mac 전용 호출처(시작 기록·Setting 메뉴)가 쓰며, 실제로 네이티브를 고르는 길은 native_wanted."""
+    mode = native_mode(env)
+    if mode == "on":
+        return "videotoolbox", f"환경 변수 {NATIVE_MODE_ENV}=on"
+    if mode == "off":
+        return "ffmpeg", f"환경 변수 {NATIVE_MODE_ENV}=off"
+    return _preferred
+
+
 def native_wanted(env=os.environ, platform_mod=platform, sys_mod=sys):
-    """토글과 플랫폼이 네이티브 경로를 후보로 삼는가 (파일 게이트는 따로). off는 아니오, on은 예(macOS가 아니면 ValueError),
-    auto는 macOS(darwin)면 예 — 칩은 보지 않는다. platform_mod는 호출처·시험의 시그니처를 지키려고 받기만 한다."""
+    """토글·플랫폼·설정이 네이티브 경로를 후보로 삼는가 (파일 게이트는 따로). off는 아니오, on은 예(macOS가 아니면 ValueError),
+    auto는 macOS(darwin)이고 선호 디코더(캐시)가 videotoolbox면 예 — 칩은 보지 않는다. platform_mod는 호출처·시험의 시그니처를 지키려고 받기만 한다."""
     mode = native_mode(env)
     if mode == "off":
         return False
@@ -71,7 +112,7 @@ def native_wanted(env=os.environ, platform_mod=platform, sys_mod=sys):
         if sys_mod.platform != "darwin":
             raise ValueError(f"{NATIVE_MODE_ENV}=on은 macOS에서만 쓸 수 있습니다 (이 시스템: {sys_mod.platform}) — 끄거나 auto로 두세요")
         return True
-    return sys_mod.platform == "darwin"
+    return sys_mod.platform == "darwin" and preferred_decoder() == "videotoolbox"
 
 
 def _hdr_reason(probe):

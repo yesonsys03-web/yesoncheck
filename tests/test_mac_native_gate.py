@@ -15,10 +15,11 @@ from types import SimpleNamespace
 import pytest
 
 from tests.prores_clips import make_numbered_clip
-from yesoncheck import mac_native_gate, movie_pipe_source
+from yesoncheck import mac_native_gate, mac_prefs, movie_pipe_source
 from yesoncheck.mac_native_gate import (
-    HDR_PRIMARIES, HDR_TRANSFERS, NATIVE_CODEC, NATIVE_MODE_ENV, NATIVE_MODES, is_apple_silicon, native_eligible,
-    native_ineligible_reason, native_mode, native_wanted,
+    DECODERS, HDR_PRIMARIES, HDR_TRANSFERS, NATIVE_CODEC, NATIVE_MODE_ENV, NATIVE_MODES, PREF_KEY, effective_decoder,
+    is_apple_silicon, native_eligible, native_ineligible_reason, native_mode, native_wanted, preferred_decoder,
+    set_preferred_decoder,
 )
 from yesoncheck.movie_pipe_source import probe_movie
 
@@ -29,6 +30,24 @@ FRAMES = 3  # 4K 인코드가 느리므로 짧게 — 게이트 ④(프레임 �
 
 def mac(machine):
     return SimpleNamespace(machine=lambda: machine), SimpleNamespace(platform="darwin")
+
+
+@pytest.fixture(autouse=True)
+def _reset_preferred_decoder():
+    """게이트의 선호 디코더 캐시는 프로세스에 하나 — 시험이 바꾼 값(app.launch가 prefs를 읽어 정한 값 포함)이 다음 시험에 남지 않게 끝나고 기본으로."""
+    yield
+    set_preferred_decoder("videotoolbox")
+
+
+@pytest.fixture
+def home(monkeypatch, tmp_path):
+    """prefs.json은 시험마다 새 HOME 아래에 (사용자의 ~/Library/Application Support를 건드리지 않음). Windows의 expanduser는
+    USERPROFILE을 봄 — 둘 다. (tests/test_default_app.py의 home과 같은 모양)"""
+    path = tmp_path / "home"
+    path.mkdir()
+    monkeypatch.setenv("HOME", str(path))
+    monkeypatch.setenv("USERPROFILE", str(path))
+    return path
 
 
 # ---------------------------------------------------------------- 토글 값
@@ -124,6 +143,121 @@ def test_native_wanted_validates_the_toggle():
     """원함을 묻는 길도 나쁜 값을 삼키지 않음."""
     with pytest.raises(ValueError, match=re.escape(repr("yes"))):
         native_wanted({ENV: "yes"}, *mac("arm64"))
+
+
+# ---------------------------------------------------------------- 재생 디코더 설정 (프로세스 캐시 · 환경 변수 > prefs > 기본)
+
+def test_preference_constants_match_the_documented_values():
+    assert PREF_KEY == "playback_decoder"
+    assert DECODERS == ("videotoolbox", "ffmpeg")
+
+
+def test_preferred_decoder_defaults_to_videotoolbox():
+    """새 프로세스의 캐시는 videotoolbox·출처 "기본값" (prefs.json을 읽는 app.launch가 부르기 전의 모듈 기본). 시험 사이에는 autouse 픽스처가
+    되돌리므로 이 기본은 새 프로세스로 봄."""
+    code = (
+        "import yesoncheck.mac_native_gate as g\n"
+        "print(g.preferred_decoder(), g.effective_decoder({}))\n"
+    )
+    result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, f"stdout {result.stdout!r} stderr {result.stderr!r}"
+    assert result.stdout.strip() == "videotoolbox ('videotoolbox', '기본값')"
+
+
+@pytest.mark.parametrize("bad", ["quicktime", "", "VideoToolbox", "FFMPEG", None, 3])
+def test_set_preferred_decoder_rejects_unknown_value(bad):
+    """DECODERS 밖의 값은 조용히 기본으로 넘기지 않고 설정 키와 받은 값을 든 ValueError — 캐시는 그대로."""
+    set_preferred_decoder("ffmpeg", source="prefs.json")
+    with pytest.raises(ValueError, match=PREF_KEY) as excinfo:
+        set_preferred_decoder(bad)
+    assert repr(bad) in str(excinfo.value)
+    assert (preferred_decoder(), effective_decoder({})) == ("ffmpeg", ("ffmpeg", "prefs.json"))
+
+
+def test_set_preferred_decoder_without_source_means_default():
+    set_preferred_decoder("ffmpeg", source="prefs.json")
+    set_preferred_decoder("ffmpeg")
+    assert effective_decoder({}) == ("ffmpeg", "기본값")
+
+
+def test_auto_follows_the_preferred_decoder():
+    """auto = darwin이고 선호가 videotoolbox일 때만 켬 — ffmpeg를 고른 Mac은 꺼짐. macOS 밖은 선호와 무관하게 꺼짐 (Windows에는 이 설정이 없음)."""
+    set_preferred_decoder("ffmpeg", source="prefs.json")
+    assert native_wanted({}, *mac("arm64")) is False
+    assert native_wanted({}, *mac("x86_64")) is False
+    set_preferred_decoder("videotoolbox", source="prefs.json")
+    assert native_wanted({}, *mac("arm64")) is True
+    assert native_wanted({}, *mac("x86_64")) is True
+    assert native_wanted({}, SimpleNamespace(machine=lambda: "AMD64"), SimpleNamespace(platform="win32")) is False
+
+
+def test_auto_reads_the_process_environment_and_cache_by_default(monkeypatch):
+    """인자 없이 부르는 쪽(player_playback·app.launch)이 보는 것 — 환경 변수가 없으면 캐시를 따름."""
+    monkeypatch.delenv(ENV, raising=False)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    set_preferred_decoder("ffmpeg", source="prefs.json")
+    assert native_wanted() is False
+    set_preferred_decoder("videotoolbox", source="prefs.json")
+    assert native_wanted() is True
+
+
+def test_env_on_off_override_the_preference():
+    """on은 선호가 ffmpeg여도 켜고 off는 선호가 videotoolbox여도 끔 (진단·킬 스위치)."""
+    set_preferred_decoder("ffmpeg", source="prefs.json")
+    assert native_wanted({ENV: "on"}, *mac("arm64")) is True
+    assert native_wanted({ENV: "ON"}, *mac("x86_64")) is True
+    set_preferred_decoder("videotoolbox", source="prefs.json")
+    assert native_wanted({ENV: "off"}, *mac("arm64")) is False
+    assert native_wanted({ENV: "Off"}, *mac("x86_64")) is False
+
+
+def test_env_on_outside_darwin_still_raises_with_a_preference():
+    """선호가 videotoolbox여도 macOS 밖의 on은 ValueError 그대로 (조용히 끄지 않음)."""
+    set_preferred_decoder("videotoolbox", source="prefs.json")
+    with pytest.raises(ValueError, match="macOS"):
+        native_wanted({ENV: "on"}, SimpleNamespace(machine=lambda: "AMD64"), SimpleNamespace(platform="win32"))
+
+
+def test_effective_decoder_reports_the_source():
+    """(디코더, 출처) — 출처는 환경 변수(on·off) > prefs.json > 기본값 (메뉴가 체크·비활성을 정하고 시작 기록이 찍음)."""
+    assert effective_decoder({}) == ("videotoolbox", "기본값")
+    set_preferred_decoder("ffmpeg", source="prefs.json")
+    assert effective_decoder({}) == ("ffmpeg", "prefs.json")
+    assert effective_decoder({ENV: ""}) == ("ffmpeg", "prefs.json")
+    assert effective_decoder({ENV: "AUTO"}) == ("ffmpeg", "prefs.json")  # auto는 선호를 따름
+    assert effective_decoder({ENV: "off"}) == ("ffmpeg", "환경 변수 YESONCHECK_MAC_NATIVE=off")
+    assert effective_decoder({ENV: "on"}) == ("videotoolbox", "환경 변수 YESONCHECK_MAC_NATIVE=on")
+    set_preferred_decoder("videotoolbox", source="prefs.json")
+    assert effective_decoder({}) == ("videotoolbox", "prefs.json")
+    assert effective_decoder({ENV: "off"}) == ("ffmpeg", "환경 변수 YESONCHECK_MAC_NATIVE=off")
+    set_preferred_decoder("ffmpeg")
+    assert effective_decoder({ENV: "On"}) == ("videotoolbox", "환경 변수 YESONCHECK_MAC_NATIVE=on")
+
+
+def test_effective_decoder_rejects_a_bad_toggle():
+    with pytest.raises(ValueError, match=re.escape(repr("yes"))):
+        effective_decoder({ENV: "yes"})
+
+
+@pytest.mark.parametrize("preferred", DECODERS)
+@pytest.mark.parametrize("env", [{}, {ENV: ""}, {ENV: "auto"}, {ENV: "on"}, {ENV: "off"}])
+def test_effective_decoder_agrees_with_native_wanted_on_darwin(preferred, env):
+    """기록하는 디코더와 실제로 고르는 길이 어긋나지 않음 — 한쪽만 고치면 로그가 거짓말을 함."""
+    set_preferred_decoder(preferred, source="prefs.json")
+    decoder, _source = effective_decoder(env)
+    assert (decoder == "videotoolbox") is native_wanted(env, *mac("arm64"))
+
+
+def test_module_does_no_file_io_for_the_preference():
+    """게이트는 순수 — 설정 파일을 읽는 쪽은 app.launch(mac_prefs). 이 모듈이 mac_prefs·user_files를 불러오지 않음."""
+    code = (
+        "import sys, yesoncheck.mac_native_gate\n"
+        "bad = sorted(m for m in sys.modules if m in ('yesoncheck.mac_prefs', 'yesoncheck.user_files', 'yesoncheck.default_app'))\n"
+        "print(bad)\n"
+        "sys.exit(1 if bad else 0)\n"
+    )
+    result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, f"stdout {result.stdout!r} stderr {result.stderr!r}"
 
 
 # ---------------------------------------------------------------- 파일 게이트 (실제 ffprobe)
@@ -311,7 +445,7 @@ def test_module_imports_without_qt_or_pyobjc():
 
 # ---------------------------------------------------------------- app.launch: 토글 검증
 
-def test_launch_validates_native_toggle(qapp, monkeypatch):
+def test_launch_validates_native_toggle(qapp, monkeypatch, home):
     """YESONCHECK_MAC_NATIVE가 나쁜 값이면 시작 때 ValueError — 창을 만들기 전에 (다른 세 토글과 같은 자리).
     app.py의 검증 줄을 지우면 창 대역이 불려 AssertionError로 실패."""
     from yesoncheck import app as app_module
@@ -325,7 +459,7 @@ def test_launch_validates_native_toggle(qapp, monkeypatch):
         app_module.launch(["yesoncheck"])
 
 
-def test_launch_rejects_on_outside_macos(qapp, monkeypatch):
+def test_launch_rejects_on_outside_macos(qapp, monkeypatch, home):
     """YESONCHECK_MAC_NATIVE=on은 macOS 밖에서 시작 때 ValueError — 창을 만들기 전에 (값만 맞으면 시작을 통과한 뒤 영상을 열 때마다
     native_wanted()가 늦게 실패하지 않게 — 스펙 §5.8 "Windows에서 on은 ValueError", "app.launch가 시작 때 검증"). app이 읽는
     mac_native_gate.native_wanted를 진짜 함수를 Windows 대역(env on·machine AMD64·platform win32)으로 부르는 스파이로 바꿔 봄.
@@ -347,6 +481,132 @@ def test_launch_rejects_on_outside_macos(qapp, monkeypatch):
     with pytest.raises(ValueError, match="macOS"):
         app_module.launch(["yesoncheck"])
     assert calls == [((), {})]  # 시작 때 한 번, 기본 인자(이 프로세스의 환경·플랫폼)로
+
+
+# ---------------------------------------------------------------- app.launch: 재생 디코더 설정(prefs.json) 읽기
+
+FALLBACK_NOTE = "이 세션은 예전 방식(ffmpeg)으로 재생합니다 — Setting → 재생 디코더에서 바꿀 수 있습니다"
+
+
+class _StopLaunch(Exception):
+    """창 대역이 던져 launch를 거기서 멈춤 — 설정을 읽는 단계는 그 앞이다."""
+
+
+def launch_until_window(monkeypatch):
+    """app.launch를 창을 만드는 줄에서 멈춰 돌리고, 그 사이 mac_native_gate.native_wanted()가 돌려준 값들을 돌려줌."""
+    from yesoncheck import app as app_module
+
+    def stop_at_window(**kwargs):
+        raise _StopLaunch
+
+    real_wanted = mac_native_gate.native_wanted
+    wanted = []
+
+    def recording_wanted(*args, **kwargs):
+        wanted.append(real_wanted(*args, **kwargs))
+        return wanted[-1]
+
+    monkeypatch.setattr(app_module, "VideoPlayer", stop_at_window)
+    monkeypatch.setattr(mac_native_gate, "native_wanted", recording_wanted)
+    with pytest.raises(_StopLaunch):
+        app_module.launch(["yesoncheck"])
+    return wanted
+
+
+def write_prefs(text):
+    path = mac_prefs.prefs_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    return path
+
+
+@pytest.fixture
+def mac_platform(monkeypatch):
+    """이 시험은 macOS에서 켠 것으로 (Windows CI에서도 prefs를 읽는 갈래를 시험), 토글은 auto — conftest의 off 고정을 풂."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.delenv(ENV, raising=False)
+
+
+def test_launch_reads_prefs_and_sets_cache(qapp, monkeypatch, home, capsys, mac_platform):
+    """prefs.json의 playback_decoder를 시작 때 한 번 읽어 캐시에 두고 한 줄 기록 — native_wanted가 그 캐시를 따라 꺼짐 (파일은 읽지 않음)."""
+    write_prefs('{"asked_default_video_app": true, "playback_decoder": "ffmpeg"}')
+    wanted = launch_until_window(monkeypatch)
+    assert preferred_decoder() == "ffmpeg"
+    assert wanted == [False]
+    assert "[재생] 디코더: ffmpeg (prefs.json)\n" in capsys.readouterr().out
+
+
+def test_launch_reads_videotoolbox_from_prefs(qapp, monkeypatch, home, capsys, mac_platform):
+    write_prefs('{"playback_decoder": "videotoolbox"}')
+    wanted = launch_until_window(monkeypatch)
+    assert wanted == [True]
+    assert "[재생] 디코더: videotoolbox (prefs.json)\n" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("content", [None, "{}", '{"asked_default_video_app": true}'])
+def test_launch_without_the_pref_uses_the_default_silently(qapp, monkeypatch, home, dialogs, capsys, mac_platform, content):
+    """파일이 없거나 이 키가 없는 것은 오류가 아님 — 기본 videotoolbox, 출처 "기본값", 창 없음."""
+    if content is not None:
+        write_prefs(content)
+    wanted = launch_until_window(monkeypatch)
+    assert wanted == [True] and dialogs.messages == []
+    assert "[재생] 디코더: videotoolbox (기본값)\n" in capsys.readouterr().out
+    if content is None:
+        assert not os.path.exists(mac_prefs.prefs_path())  # 읽기만 함 — 파일을 만들지 않음
+
+
+def test_launch_logs_the_env_override(qapp, monkeypatch, home, capsys, mac_platform):
+    """환경 변수가 설정을 덮으면 기록의 출처가 환경 변수 (캐시는 설정값 그대로 — 메뉴가 둘 다 보여 줌)."""
+    write_prefs('{"playback_decoder": "ffmpeg"}')
+    monkeypatch.setenv(ENV, "on")
+    wanted = launch_until_window(monkeypatch)
+    assert wanted == [True] and preferred_decoder() == "ffmpeg"
+    assert "[재생] 디코더: videotoolbox (환경 변수 YESONCHECK_MAC_NATIVE=on)\n" in capsys.readouterr().out
+
+
+def test_launch_broken_prefs_warns_once_and_uses_ffmpeg(qapp, monkeypatch, home, dialogs, capsys, mac_platform):
+    """깨진 prefs.json은 빈 값으로 치지 않음 — 트레이스백을 기록하고 창 1회, 이 세션은 ffmpeg (설정을 읽지 못한 채 새 경로를 켜지 않음). 파일은 그대로."""
+    path = write_prefs("not json")
+    wanted = launch_until_window(monkeypatch)
+    assert wanted == [False] and preferred_decoder() == "ffmpeg"
+    [text] = dialogs.warnings
+    assert dialogs.messages[0][:2] == ("warning", "재생 디코더 설정")
+    assert "prefs.json" in text and text.endswith(FALLBACK_NOTE)
+    captured = capsys.readouterr()
+    assert "Traceback" in captured.err and "UserFileError" in captured.err
+    assert "[재생] 디코더: ffmpeg (기본값)\n" in captured.out
+    with open(path, encoding="utf-8") as fh:
+        assert fh.read() == "not json"
+
+
+def test_launch_bad_pref_value_warns_once_and_uses_ffmpeg(qapp, monkeypatch, home, dialogs, capsys, mac_platform):
+    """손으로 고친 나쁜 값("quicktime")도 같은 길 — 창 글에 키와 값, 이 세션은 ffmpeg."""
+    write_prefs('{"playback_decoder": "quicktime"}')
+    wanted = launch_until_window(monkeypatch)
+    assert wanted == [False] and preferred_decoder() == "ffmpeg"
+    [text] = dialogs.warnings
+    assert PREF_KEY in text and repr("quicktime") in text and text.endswith(FALLBACK_NOTE)
+    captured = capsys.readouterr()
+    assert "Traceback" in captured.err and "ValueError" in captured.err
+    assert "[재생] 디코더: ffmpeg (기본값)\n" in captured.out
+
+
+def test_launch_on_windows_ignores_prefs(qapp, monkeypatch, home, dialogs, capsys):
+    """macOS가 아니면 prefs.json을 읽지도 기록하지도 않음 (이 설정은 Mac 전용) — native_wanted는 선호와 무관하게 False."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delenv(ENV, raising=False)
+    write_prefs('{"playback_decoder": "videotoolbox"}')
+    reads = []
+
+    def spy_read_prefs():
+        reads.append(1)
+        raise AssertionError("macOS가 아닌데 prefs.json을 읽었습니다")
+
+    monkeypatch.setattr(mac_prefs, "read_prefs", spy_read_prefs)
+    wanted = launch_until_window(monkeypatch)
+    assert reads == [] and wanted == [False] and dialogs.messages == []
+    assert "[재생]" not in capsys.readouterr().out
 
 
 def test_conftest_pins_the_toggle_off():

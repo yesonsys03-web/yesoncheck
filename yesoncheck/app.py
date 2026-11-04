@@ -17,7 +17,7 @@ if __package__ in (None, ""):
     from yesoncheck.main_window import VideoPlayer  # type: ignore  # pylint: disable=import-error
     from yesoncheck import (  # type: ignore  # pylint: disable=import-error
         build_info, default_app, error_window, file_associations, gl_video_item, launch_args, mac_app_events, mac_mounts,
-        mac_native_gate, movie_pipe_source, new_window, paths, timing_log, update_install,
+        mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, timing_log, update_install, user_files,
     )
     from yesoncheck.player_base import EXIT_WAIT_S, wait_for_released_workers  # type: ignore  # pylint: disable=import-error
     from yesoncheck.player_update import BOX_TITLE_PROPERTY  # type: ignore  # pylint: disable=import-error
@@ -25,7 +25,7 @@ else:
     from .main_window import VideoPlayer
     from . import (
         build_info, default_app, error_window, file_associations, gl_video_item, launch_args, mac_app_events, mac_mounts,
-        mac_native_gate, movie_pipe_source, new_window, paths, timing_log, update_install,
+        mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, timing_log, update_install, user_files,
     )
     from .player_base import EXIT_WAIT_S, wait_for_released_workers
     from .player_update import BOX_TITLE_PROPERTY
@@ -198,6 +198,34 @@ def load_mount_map():
     return mount_map
 
 
+PLAYBACK_DECODER_TITLE = "재생 디코더 설정"
+PLAYBACK_DECODER_FALLBACK_NOTE = "이 세션은 예전 방식(ffmpeg)으로 재생합니다 — Setting → 재생 디코더에서 바꿀 수 있습니다"
+
+
+def load_playback_decoder():
+    """(Mac) 재생 디코더 설정(prefs.json의 "playback_decoder")을 시작 때 한 번 읽어 mac_native_gate의 캐시에 둠 — native_wanted가 열 때마다 파일을
+    읽지 않게. 키가 없으면(파일이 없는 것 포함) 기본 videotoolbox(출처 "기본값"), 있으면 그 값(출처 "prefs.json"). 끝에 한 줄:
+    `[재생] 디코더: videotoolbox|ffmpeg (환경 변수 …|prefs.json|기본값)` — 환경 변수(YESONCHECK_MAC_NATIVE=on|off)가 설정을 덮으면 그 출처.
+
+    깨진 prefs.json(UserFileError)이나 나쁜 값(ValueError — 손으로 고친 파일만)은 빈 값·기본값으로 치지 않음: 트레이스백을 기록하고 창을 한 번 띄운 뒤
+    이 세션은 ffmpeg(예전 방식)로 — 설정을 읽지 못한 채 새 경로를 켜지 않음. 파일은 건드리지 않는다 (고치면 다음에 켤 때 따라옴).
+    macOS가 아니면 아무것도 읽지 않는다 (이 설정은 Mac 전용 — Windows는 native_wanted가 늘 False). 나쁜 환경 변수 값은 ValueError 그대로."""
+    if sys.platform != "darwin":
+        return
+    try:
+        prefs = mac_prefs.read_prefs()
+        mac_native_gate.set_preferred_decoder(
+            prefs.get(mac_native_gate.PREF_KEY, mac_native_gate.DEFAULT_DECODER),
+            source=mac_native_gate.SOURCE_PREFS if mac_native_gate.PREF_KEY in prefs else mac_native_gate.SOURCE_DEFAULT,
+        )
+    except (user_files.UserFileError, ValueError) as exc:
+        traceback.print_exc()
+        QMessageBox.warning(None, PLAYBACK_DECODER_TITLE, f"{exc}\n\n{PLAYBACK_DECODER_FALLBACK_NOTE}")
+        mac_native_gate.set_preferred_decoder("ffmpeg", source=mac_native_gate.SOURCE_DEFAULT)
+    decoder, source = mac_native_gate.effective_decoder()
+    print(f"[재생] 디코더: {decoder} ({source})", flush=True)
+
+
 def screen_report(screen):
     """시작 로그용 한 줄: 화면의 논리 크기·작업 영역·devicePixelRatio·논리 DPI·Qt 배율 반올림 정책
     (Windows 150%가 2배로 반올림되는지 등을 사용자 로그로 알 수 있게)."""
@@ -327,6 +355,8 @@ def launch(argv=None):
     movie_pipe_source.movie_source_mode()
     movie_pipe_source.frame_cache_mode()  # 프레임 캐시 토글(YESONCHECK_FRAME_CACHE)도 같은 이유로 시작 때 검증
     gl_video_item.video_item_mode(os.environ)  # 영상 아이템 토글(YESONCHECK_VIDEO_ITEM)의 나쁜 값도 같은 이유로 여기서
+    # (Mac) 재생 디코더 설정(prefs.json)도 시작 때 한 번 읽어 게이트의 캐시에 — native_wanted는 그 캐시만 봄 (깨졌으면 알리고 이 세션은 ffmpeg)
+    load_playback_decoder()
     # 네이티브 재생 토글(YESONCHECK_MAC_NATIVE)도 같은 이유로 여기서 — 값(native_mode)과 함께 on이 macOS 밖이면 ValueError (native_wanted가
     # 열 때마다 늦게 실패하지 않게)
     mac_native_gate.native_wanted()

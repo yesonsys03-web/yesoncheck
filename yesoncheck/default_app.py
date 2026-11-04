@@ -61,13 +61,13 @@ from ctypes import POINTER, byref, c_bool, c_char_p, c_int32, c_long, c_uint32, 
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import QMessageBox
 
-from yesoncheck import error_window, instances, update_install, user_files
+from yesoncheck import error_window, instances, mac_prefs, update_install
+from yesoncheck.mac_prefs import prefs_path, read_prefs  # prefs.json 읽기는 mac_prefs로 옮김 — 이 모듈의 이름으로도 그대로 씀 (시험·ci가 default_app.prefs_path()를 부름)
 from yesoncheck.user_files import UserFileError
 
 IS_MAC = sys.platform == "darwin"  # Help 메뉴 항목·처음 켤 때 묻기 (시험이 바꿔 끼움)
 VIDEO_UTIS = ("com.apple.quicktime-movie", "public.mpeg-4")  # .mov · .mp4 (file_names.LISTED_VIDEO_EXTENSIONS)
 ASKED_KEY = "asked_default_video_app"  # prefs.json: [예]·[아니요]로 답했으면 true
-PREFS_FILE_NAME = "prefs.json"
 
 TITLE = "동영상 기본 앱"
 LOG_PREFIX = "[기본 앱]"  # 기록 줄의 머리 (_log·오류 창 — error_window)
@@ -101,37 +101,13 @@ class DefaultAppError(Exception):
 
 
 # ---- 설정 파일 (prefs.json) ----
-
-
-def prefs_path() -> str:
-    """(Mac) ~/Library/Application Support/YesonCheck/prefs.json — HOME을 부를 때마다 읽음 (시험·업데이트 끝까지 시험은 HOME을
-    바꿈)."""
-    return os.path.join(os.path.expanduser("~"), "Library", "Application Support", "YesonCheck", PREFS_FILE_NAME)
-
-
-def _as_prefs(value, path):
-    if not isinstance(value, dict):
-        raise UserFileError(f"설정 파일이 JSON 객체가 아닙니다: {path} ({type(value).__name__})")
-    return value
-
-
-def read_prefs() -> dict:
-    """prefs.json의 값 (없으면 {}). 깨졌거나 객체가 아니면 UserFileError — 빈 값으로 치지 않음."""
-    path = prefs_path()
-    return _as_prefs(user_files.read_json(path, {}), path)
+# 경로(prefs_path)·읽기(read_prefs)·한 키 고치기는 mac_prefs — 재생 디코더 설정과 함께 씀.
 
 
 def record_asked() -> None:
     """prefs.json에 "asked_default_video_app": true (잠금 안에서 다시 읽고 고침 — 다른 키는 그대로). 깨진 파일은 덮지 않고
     UserFileError, 잠금 시간 초과는 TimeoutError, 쓰기 실패는 OSError."""
-    path = prefs_path()
-
-    def mutate(prefs):
-        prefs = _as_prefs(prefs, path)
-        prefs[ASKED_KEY] = True
-        return prefs
-
-    user_files.update_json(path, mutate, {})
+    mac_prefs.update_pref(ASKED_KEY, True)
 
 
 def should_ask(prefs: dict, handlers: dict, bundle_id: str) -> bool:
