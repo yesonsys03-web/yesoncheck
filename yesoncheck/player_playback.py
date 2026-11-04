@@ -28,7 +28,7 @@ from PyQt5.QtWidgets import (
 
 from yesoncheck.frame_handles import native_surface_of
 from yesoncheck.frame_utils import FrameCalculator
-from yesoncheck.mac_native_gate import NATIVE_CODEC, native_ineligible_reason, native_wanted
+from yesoncheck.mac_native_gate import native_ineligible_reason, native_wanted
 from yesoncheck.movie_pipe_source import PipeCaptureError, maybe_pipe_capture, movie_source_mode, probe_for_open, probe_movie
 from yesoncheck.overlay_text_layout import (  # noqa: F401 (overlay_metrics: 옛 import 경로 — tests/test_overlay_text_size.py가 여기서 부름)
     OVERLAY_FONT,
@@ -535,8 +535,8 @@ class PlayerPlaybackMixin:
             media_player.setMedia(QMediaContent())
 
     def swap_movie_captures_for_decoder(self):
-        """재생 디코더 설정이 바뀐 뒤(Setting 메뉴·네이티브 그리기 실패 폴백) 열린 A·B 중 ProRes 영상 파일의 캡처만 지금 유효한 디코더로 다시 열어
-        바꿔 끼움 → 다 바꿨거나 바꿀 것이 없으면 True, 한 쪽이라도 못 바꿨으면 False (스펙 2026-11-04 §5.4 ③·§7-4).
+        """재생 디코더 설정이 바뀐 뒤(Setting 메뉴·네이티브 그리기 실패 폴백) 열린 A·B 중 **디코더가 실제로 바뀌는 영상 파일**의 캡처만 지금 유효한
+        디코더로 다시 열어 바꿔 끼움 → 다 바꿨거나 바꿀 것이 없으면 True, 한 쪽이라도 못 바꿨으면 False (스펙 2026-11-04 §5.4 ③·§7-4).
 
         왜 open_file을 쓰지 않나(builder check): open_file은 새 미디어를 여는 길이라 OCR 상태를 지우고(reset_ocr_state — 돌아가는 분석을 멈추고
         검토 창을 닫고 저장 안 한 결과를 버림), 주석을 다시 읽고, 소리를 다시 setMedia하고, 줌을 처음 맞춤으로(initial_fit) 되돌리고, 재생을
@@ -544,23 +544,33 @@ class PlayerPlaybackMixin:
         캡처만 바꾸고 filename_*·mediaPlayer·annotation_store·OCR 상태·videoWidget.initial_fit·와이프 체크/축/위치·is_playlist_playing은 건드리지 않는다.
 
         차례:
-        1. 쪽마다(A, B — 캡처와 파일 이름이 있는 쪽): 시퀀스(ImageSequenceCapture)는 건너뜀, 영상이면 ffprobe 한 번(probe_movie — 전환은 드문
-           일이라 열 때의 probe를 쥐고 있지 않고 다시 읽음)으로 코덱이 prores(NATIVE_CODEC)인 쪽만 고름. h264 등은 디코더 설정과 무관(그대로 — 성공).
+        1. YESONCHECK_MOVIE_SOURCE=cv2(킬 스위치 — 디코더 설정이 쓰이지 않고 ffprobe도 하지 않기로 한 모드)면 아무것도 하지 않고 True.
+        2. 쪽마다(A, B — 캡처와 파일 이름이 있는 쪽): 시퀀스(ImageSequenceCapture)는 건너뜀, 영상이면 ffprobe 한 번(probe_movie — 전환은 드문
+           일이라 열 때의 probe를 쥐고 있지 않고 다시 읽음)으로 네이티브 게이트(native_ineligible_reason — _native_or_pipe_capture와 같은 함수)를
+           통과하는 쪽만 고름: 그런 파일만 설정에 따라 네이티브 ↔ 파이프가 갈리고, 게이트 밖(h264·HDR·VFR ProRes 등)은 어느 설정에서나 같은 길이라
+           다시 열지 않음(파이프 → 파이프로 다시 열면 채운 전체 프레임 캐시만 버림) — 그대로, 성공으로 셈.
            ffprobe가 파일을 못 읽으면(RuntimeError — NAS 끊김·깨진 파일) 열기 실패와 같게: 기록(트레이스백)·오류 창 1회, 그 쪽은 옛 캡처 그대로, False.
            그 밖의 예외(ToolNotFoundError·probe 해석 오류 — 코드·빌드 쪽)는 잡지 않음.
-        2. 고른 쪽이 없으면 끝 — 재생·캐시·프레임 무엇도 건드리지 않음.
-        3. 지금 번호를 한 번 기억(get_current_frame_index — A의 자리가 플레이어의 자리, B는 탐색이 A를 따라 맞춤)하고, 재생 중이었으면 pause_video로
-           멈춤: 새 캡처를 여는 동안 뜰 수 있는 창(네이티브 실패 → 파이프로 계속, 열기 실패)의 이벤트 루프에서 재생 틱이 진행하지 않게, 그리고 끝의
-           play_video가 다시 켤 수 있게(play_video는 타이머가 돌고 있으면 아무것도 안 함). 소리도 함께 멈췄다가 play_video가 그 번호에 맞춰 이어 줌.
-        4. 쪽마다 _open_movie_capture(path) — 지금 유효한 디코더로(_native_or_pipe_capture의 native_wanted()가 바뀐 캐시를 봄; 열기 규칙은 그대로).
-           None이면(창은 _open_movie_capture가 띄웠음) 그 쪽은 옛 캡처·프레임 그대로, False. 열렸으면 B는 옛 B의 자리로 옮겨 둠(와이프가 꺼져 있으면
-           탐색이 B를 맞추지 않는데 새 캡처는 0번에서 시작하므로), 캡처를 바꾸고 옛 캡처는 release, 프레임은 None(옛 캡처의 것).
-        5. 한 쪽이라도 바꿨으면: 드래그 미리보기 캐시를 비움(clear_cache — 옛 디코더가 준 RGB 사본; 디코더마다 픽셀이 조금 다르므로 섞지 않음),
+        3. 고른 쪽이 없으면 끝 — 재생·캐시·프레임 무엇도 건드리지 않음.
+        4. 지금 번호(get_current_frame_index — A의 자리가 플레이어의 자리)와 B의 자리(다음에 읽을 번호, 그리고 B가 읽어 둔 프레임이 있는지)를 한 번
+           기억: 와이프가 켜져 있어도 화살표·휠 이동(_seek_direct_fast·_seek_sequential_fast)은 A만 움직이므로 B는 A와 몇 장 어긋나 있을 수 있음.
+           재생 중이었으면 pause_video로 멈춤: 새 캡처를 여는 동안 뜰 수 있는 창(네이티브 실패 → 파이프로 계속, 열기 실패)의 이벤트 루프에서 재생
+           틱이 진행하지 않게, 그리고 끝의 play_video가 다시 켤 수 있게(play_video는 타이머가 돌고 있으면 아무것도 안 함). 소리도 함께 멈췄다가
+           play_video가 그 번호에 맞춰 이어 줌.
+        5. 쪽마다 _open_movie_capture(path) — 지금 유효한 디코더로(_native_or_pipe_capture의 native_wanted()가 바뀐 캐시를 봄; 열기 규칙은 그대로).
+           None이면(창은 _open_movie_capture가 띄웠음) 그 쪽은 옛 캡처·프레임 그대로, False. 열렸으면 캡처를 바꾸고(새 B는 옛 B의 자리로 옮겨 둠 —
+           새 캡처는 0번에서 시작) 옛 캡처는 release, 프레임은 None — 옛 프레임은 다시 쓰지 않음(실패한 GL 길을 가리키는 네이티브 프레임일 수 있음).
+        6. 한 쪽이라도 바꿨으면: 드래그 미리보기 캐시를 비움(clear_cache — 옛 디코더가 준 RGB 사본; 디코더마다 픽셀이 조금 다르므로 섞지 않음),
            [측정] 기록을 줄 없이 닫음(_measure_run = None — 도중에 멈춘 Play처럼; 한 줄이 두 디코더에 걸치지 않게), seek_to_frame(번호 + 1) 한 번
-           (seek_to_frame은 1부터 셈 — 같은 프레임을 새 캡처에서 다시 읽고, 와이프면 B도 같은 번호로).
-        6. 재생 중이었으면 play_video로 이어 재생(새 [측정] 기록은 여기서) — 바꾸지 못한 쪽이 있어도 보던 영상은 이어 감.
+           (seek_to_frame은 1부터 셈 — 같은 A 프레임을 새 캡처에서 다시 읽음; 와이프면 B도 그 번호로 맞춤). 그 뒤 B를 원래 자리로: B가 읽어 둔 프레임이
+           있었고 (와이프인데 그 번호가 A와 달랐거나 — 탐색이 B를 A에 맞춰 버림 — 와이프가 아닌데 B를 바꿔 끼웠으면 — 새 B에는 프레임이 없음)
+           B의 그 번호를 한 번 읽어(set + read → process_frame — 플레이어가 B를 읽는 길) frame_b로 두고, 와이프면 update_frame으로 그 쌍을 다시 그림.
+           그래서 A·B의 어긋남·다음 재생 틱의 B 번호가 바꾸기 전과 같음(B를 바꾸지 않은 h264여도).
+        7. 재생 중이었으면 play_video로 이어 재생(새 [측정] 기록은 여기서) — 바꾸지 못한 쪽이 있어도 보던 영상은 이어 감.
         스크롤 범위(positionScroll)는 다시 정하지 않음: 네이티브 게이트가 파이프 게이트 ①~⑥을 포함하므로 같은 파일의 네이티브·파이프 캡처는 같은
         probe의 nb_frames를 알림."""
+        if movie_source_mode() == "cv2":
+            return True
         sides = []
         ok = True
         for side in ("A", "B"):
@@ -568,7 +578,7 @@ class PlayerPlaybackMixin:
             if cap is None or not path or isinstance(cap, ImageSequenceCapture):
                 continue
             try:
-                codec = probe_movie(path).codec
+                probe = probe_movie(path)
             except RuntimeError as e:  # ffprobe 종료 코드 ≠ 0 — 파일 쪽 문제 (probe_for_open과 같은 경계)
                 details = traceback.format_exc()
                 print(f"[재생] 디코더 전환: ffprobe가 {side}를 읽지 못해 지금 캡처 그대로 둠: {path}")
@@ -578,15 +588,17 @@ class PlayerPlaybackMixin:
                                      f"(새 설정은 다음에 열 때부터): {path}\n이유: {type(e).__name__}: {e}\n\n{details}")
                 ok = False
                 continue
-            if codec == NATIVE_CODEC:
+            if native_ineligible_reason(probe) is None:
                 sides.append(side)
         if not sides:
             return ok
         index = self.get_current_frame_index()
+        b_next = int(self.cap_b.get(cv2.CAP_PROP_POS_FRAMES)) if self.cap_b is not None else 0
+        b_shown = self.frame_b is not None and b_next >= 1  # B가 읽어 둔 프레임 — 그 번호는 b_next - 1
         was_playing = self.timer.isActive()
         if was_playing:
             self.pause_video()
-        changed = False
+        swapped = []
         for side in sides:
             path = self.filename_a if side == "A" else self.filename_b
             new_cap = self._open_movie_capture(path)
@@ -596,15 +608,22 @@ class PlayerPlaybackMixin:
             if side == "A":
                 old_cap, self.cap_a, self.frame_a = self.cap_a, new_cap, None
             else:
-                new_cap.set(cv2.CAP_PROP_POS_FRAMES, self.cap_b.get(cv2.CAP_PROP_POS_FRAMES))
+                new_cap.set(cv2.CAP_PROP_POS_FRAMES, b_next)
                 old_cap, self.cap_b, self.frame_b = self.cap_b, new_cap, None
             old_cap.release()
-            changed = True
+            swapped.append(side)
             print(f"[재생] 디코더 전환: {side} 캡처 바꿔 끼움 — {os.path.basename(path)} ({index}번)")
-        if changed:
+        if swapped:
             self.clear_cache()
             self._measure_run = None
             self.seek_to_frame(index + 1)
+            wipe = self.videoWidget.wipeEnabled
+            if self.cap_b is not None and b_shown and ((wipe and b_next - 1 != index) or (not wipe and "B" in swapped)):
+                self.cap_b.set(cv2.CAP_PROP_POS_FRAMES, b_next - 1)
+                ret_b, frame_b = self.cap_b.read()
+                self.frame_b = self.process_frame(frame_b) if ret_b else None
+                if wipe:
+                    self.update_frame()
         if was_playing:
             self.play_video()
         return ok

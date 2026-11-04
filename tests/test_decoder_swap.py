@@ -10,6 +10,7 @@ ffprobe(player_playback.probe_movie)는 바꿔치기해 경로를 기록한다(�
 진짜 캡처와 진짜 ffprobe로 본다. 창은 conftest의 dialogs가 가로챈다.
 """
 
+import dataclasses
 import os
 import re
 from fractions import Fraction
@@ -32,7 +33,8 @@ from tests.native_fakes import (  # noqa: F401 (픽스처 — new_player는 nati
 from tests.test_sequence_capture import make_seq
 from tests.test_work_paths_ui import make_config
 from yesoncheck import player_playback
-from yesoncheck.movie_pipe_source import MovieProbe, PipeCaptureError
+from yesoncheck.frame_handles import native_surface_of
+from yesoncheck.movie_pipe_source import SOURCE_MODE_ENV, MovieProbe, PipeCaptureError
 from yesoncheck.movie_pipe_source import probe_movie as real_probe_movie
 from yesoncheck.sequence_source import ImageSequenceCapture
 
@@ -49,9 +51,9 @@ def fake_probe(codec):
 @pytest.fixture
 def probes(monkeypatch):
     """player_playback.probe_movie(바꿔 끼움이 ProRes를 가르는 ffprobe)를 바꿔치기 → 기록 SimpleNamespace:
-    calls(받은 경로 차례), codecs(파일 이름 → 돌려줄 codec, 없으면 "prores"), fail(파일 이름 — RuntimeError: ffprobe가 못 읽음),
-    real(True면 진짜 ffprobe를 부르고 기록만)."""
-    rec = SimpleNamespace(calls=[], codecs={}, fail=set(), real=False)
+    calls(받은 경로 차례), codecs(파일 이름 → 돌려줄 codec, 없으면 "prores"), fields(파일 이름 → 바꿀 MovieProbe 필드 — HDR 태그·VFR 등),
+    fail(파일 이름 — RuntimeError: ffprobe가 못 읽음), real(True면 진짜 ffprobe를 부르고 기록만)."""
+    rec = SimpleNamespace(calls=[], codecs={}, fields={}, fail=set(), real=False)
 
     def spy(path):
         rec.calls.append(path)
@@ -60,7 +62,7 @@ def probes(monkeypatch):
             raise RuntimeError(f"ffprobe가 파일을 읽지 못함 (종료 코드 1): {path}")
         if rec.real:
             return real_probe_movie(path)
-        return fake_probe(rec.codecs.get(name, "prores"))
+        return dataclasses.replace(fake_probe(rec.codecs.get(name, "prores")), **rec.fields.get(name, {}))
 
     monkeypatch.setattr(player_playback, "probe_movie", spy)
     return rec
@@ -306,23 +308,149 @@ def test_swap_handles_b_side_with_wipe(player_with_fake_native_ab, probes):
 
 
 def test_swap_keeps_b_position_when_wipe_is_off(player_with_fake_native_ab, probes):
-    """와이프를 끈 동안 B는 탐색을 따라가지 않음(seek_to_frame은 와이프일 때만 B를 맞춤) — 바꿔 끼운 새 B는 옛 B가 있던 자리(10번을 읽은 뒤 11)에
-    놓이고(새 캡처는 0번에서 시작하므로 옮겨 둠) 프레임은 비움, A는 30번. 와이프를 다시 켜면 예전처럼 그 자리에서 이어짐.
+    """와이프를 끈 동안 B는 탐색을 따라가지 않음(seek_to_frame은 와이프일 때만 B를 맞춤) — 바꿔 끼운 새 B는 옛 B가 읽어 둔 번호(10)를 한 번 읽어
+    frame_b로 두고(새 캡처는 0번에서 시작하고 프레임이 없으므로) 다음 자리 11에 섬, A는 30번. 옛 frame_b 객체는 다시 쓰지 않음(실패한 GL 길의 네이티브
+    프레임일 수 있음 — Task 5). 와이프를 다시 켜면 예전처럼 그 자리에서 이어짐.
 
-    깨지는 변경: B의 자리를 옮겨 두지 않으면 새 B는 0번."""
+    깨지는 변경: B의 자리를 옮겨 두지 않으면 새 B는 0번; 와이프가 꺼진 채 바꾼 B를 읽지 않으면 frame_b가 None; 옛 frame_b를 그대로 두면 객체 단언."""
     rig = player_with_fake_native_ab
     player = rig.player
     player.seek_to_frame(11)  # 와이프 켬 — B도 10번을 읽어 다음 자리 11
     player.wipeCheckBox.setChecked(False)
     player.seek_to_frame(31)  # 와이프 끔 — A만 30번
     assert int(player.cap_b.get(cv2.CAP_PROP_POS_FRAMES)) == 11
+    old_frame_b = player.frame_b
 
     assert player.swap_movie_captures_for_decoder() is True
 
     assert int(player.cap_b.get(cv2.CAP_PROP_POS_FRAMES)) == 11
-    assert player.frame_b is None
+    assert player.frame_b is player.cap_b.frames[10] and player.frame_b is not old_frame_b
     assert player.get_current_frame_index() == 30
     assert not player.wipeCheckBox.isChecked()
+
+
+@pytest.mark.parametrize("b_native", [True, False], ids=["b-prores", "b-h264"])
+def test_swap_keeps_wipe_b_offset(fake_native_player, probes, b_native):
+    """와이프(X축)인데 화살표 이동은 A만 움직이므로(_seek_direct_fast — 기존 동작) A 23 / B 20으로 어긋난 채 바꿔 끼움: 바꾼 뒤에도 A 23 / B 20 —
+    화면(set_sides의 마지막 그림)도 그 쌍, 다음 재생 틱은 A 24 / B 21. B가 ProRes면 B도 새 캡처, h264(진짜 cv2 — 바꾸지 않음)여도 같은 어긋남.
+
+    깨지는 변경: 끝의 seek_to_frame 뒤에 B를 원래 번호로 되돌리지 않으면 B가 23(어긋남을 잃음); 되돌린 뒤 update_frame을 부르지 않으면 화면의
+    마지막 그림이 B 23; B의 자리를 A를 바꾼 뒤에 읽으면(탐색이 B를 맞춘 뒤) 되돌릴 번호를 잃음."""
+    rig = fake_native_player(ab=True, native="AB" if b_native else "A")
+    player = rig.player
+    if not b_native:
+        probes.codecs["clip_b.mov"] = "mpeg4"
+    player.wipeXButton.setChecked(True)
+    player.seek_to_frame(21)  # A·B 20
+    for _ in range(3):
+        player.next_frame()  # A만 23
+    assert player.get_current_frame_index() == 23 and int(player.cap_b.get(cv2.CAP_PROP_POS_FRAMES)) == 21
+    old_b, before_b = player.cap_b, player.frame_b.copy() if not b_native else None
+    rig.sides.clear()
+
+    assert player.swap_movie_captures_for_decoder() is True
+
+    assert player.get_current_frame_index() == 23 and int(player.cap_b.get(cv2.CAP_PROP_POS_FRAMES)) == 21
+    assert native_surface_of(player.frame_a).index == 23
+    if b_native:
+        assert player.cap_b is not old_b and player.frame_b is player.cap_b.frames[20]
+    else:
+        assert player.cap_b is old_b and np.array_equal(player.frame_b, before_b)
+    last = rig.sides[-1]
+    assert last.a is player.frame_a and last.b is player.frame_b and last.axis == "x"
+    assert player.timer.isActive()
+
+    player.next_frame_playback()
+
+    assert player.frame_a is player.cap_a.frames[24]
+    assert int(player.cap_b.get(cv2.CAP_PROP_POS_FRAMES)) == 22
+    if b_native:
+        assert player.frame_b is player.cap_b.frames[21]
+
+
+def test_swap_b_not_yet_read_follows_a(player_with_fake_native_ab, probes):
+    """B를 열었지만 아직 한 장도 읽지 않음(와이프를 끈 채 B를 열고 와이프를 켠 뒤 탐색 전 — frame_b 없음, 자리 0): 되돌릴 B 프레임이 없으므로
+    탐색이 맞춘 대로 B도 A의 번호(12)를 보임 — 어떤 탐색이든 하는 일과 같음.
+
+    깨지는 변경: B가 읽어 둔 프레임이 있는지 보지 않고 자리 − 1로 되돌리면 B는 0번(−1을 0으로 자름)."""
+    player = player_with_fake_native_ab.player
+    player.seek_to_frame(13)
+    player.cap_b.set(cv2.CAP_PROP_POS_FRAMES, 0)  # B를 연 직후처럼: 읽은 프레임 없음
+    player.frame_b = None
+
+    assert player.swap_movie_captures_for_decoder() is True
+
+    assert player.get_current_frame_index() == 12
+    assert player.frame_b is player.cap_b.frames[12]
+
+
+def test_swap_partial_failure_keeps_old_b(fake_native_player, probes, dialogs, monkeypatch):
+    """A는 바꿔 끼우고 B는 새 캡처를 열지 못함(진짜 _open_movie_capture — 파이프 열기 실패): False, 창은 한 번(B의 열기 실패), A는 새 캡처·
+    B는 옛 캡처 그대로(놓지 않음), 둘 다 같은 번호(와이프 — 탐색이 옛 B를 A에 맞춤), 재생은 이어 감, 프레임 캐시는 비움(A가 바뀌었으므로).
+
+    깨지는 변경: 한 쪽이 실패하면 전부 되돌리거나 멈추면 cap_a·timer 단언; 실패를 삼키면 반환 단언; 실패한 B를 놓으면 isOpened."""
+    rig = fake_native_player(ab=True)
+    player = rig.player
+    player.seek_to_frame(16)  # A·B 15
+    old_a, old_b = player.cap_a, player.cap_b
+    player.frame_cache[4] = np.zeros((FAKE_HEIGHT, FAKE_WIDTH, 3), np.uint8)
+    rig_open = player._open_movie_capture
+    real_open = type(player)._open_movie_capture.__get__(player)
+    monkeypatch.setattr(player, "_open_movie_capture",
+                        lambda path: real_open(path) if os.path.basename(path) == "clip_b.mov" else rig_open(path))
+
+    def pipe_fails(path):
+        raise PipeCaptureError(f"ffmpeg가 첫 프레임 전에 끝남: {path}", ["ffmpeg"], "stderr 전문")
+
+    monkeypatch.setattr(player, "_native_or_pipe_capture", pipe_fails)
+    dialogs.criticals.clear()
+
+    assert player.swap_movie_captures_for_decoder() is False
+
+    assert len(dialogs.criticals) == 1 and "clip_b.mov" in dialogs.criticals[0]
+    assert player.cap_a is not old_a and not old_a.isOpened()
+    assert player.cap_b is old_b and old_b.isOpened()
+    assert player.get_current_frame_index() == 15
+    assert player.frame_a is player.cap_a.frames[15] and player.frame_b is old_b.frames[15]
+    assert player.timer.isActive()
+    assert player.frame_cache == {}
+
+
+@pytest.mark.parametrize("fields", [{"color_transfer": "smpte2084"}, {"color_primaries": "bt2020"},
+                                    {"avg": Fraction(24000, 1001)}], ids=["hdr-pq", "bt2020", "vfr"])
+def test_swap_skips_prores_outside_native_gate(player_with_fake_native, probes, monkeypatch, fields):
+    """네이티브 게이트 밖의 ProRes(HDR·BT.2020·VFR)는 어느 디코더 설정에서나 같은 길(파이프·cv2)이라 다시 열지 않음 — 캡처 그대로, True, ffprobe 1회.
+    (파이프 → 파이프로 다시 열면 채운 4K 전체 프레임 캐시만 버림.)
+
+    깨지는 변경: 코덱만 보고 고르면(prores면 다시 엶) _open_movie_capture 금지에 걸림."""
+    player = player_with_fake_native.player
+    probes.fields[os.path.basename(player.filename_a)] = fields
+    old = player.cap_a
+    forbid(monkeypatch, player, "_open_movie_capture")
+    forbid(monkeypatch, player, "seek_to_frame")
+
+    assert player.swap_movie_captures_for_decoder() is True
+
+    assert player.cap_a is old and old.isOpened()
+    assert probes.calls == [player.filename_a]
+
+
+def test_swap_does_nothing_in_cv2_mode(player_with_fake_native_ab, probes, monkeypatch):
+    """YESONCHECK_MOVIE_SOURCE=cv2(킬 스위치 — ffprobe도 하지 않는 모드)면 디코더 설정이 쓰이지 않으므로 아무것도 하지 않음: ffprobe 0회, 열기·탐색 0회,
+    재생 그대로(멈췄다 켜지도 않음), True.
+
+    깨지는 변경: 모드를 보지 않으면 ffprobe가 불려 calls가 늘고 _open_movie_capture 금지에 걸림."""
+    player = player_with_fake_native_ab.player
+    monkeypatch.setenv(SOURCE_MODE_ENV, "cv2")
+    old_a, old_b = player.cap_a, player.cap_b
+    forbid(monkeypatch, player, "_open_movie_capture")
+    forbid(monkeypatch, player, "seek_to_frame")
+    forbid(monkeypatch, player, "pause_video")
+
+    assert player.swap_movie_captures_for_decoder() is True
+
+    assert probes.calls == []
+    assert player.cap_a is old_a and player.cap_b is old_b and player.timer.isActive()
 
 
 def test_swap_only_touches_the_prores_side(fake_native_player, probes):
