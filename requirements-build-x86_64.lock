@@ -263,7 +263,9 @@ protobuf==4.25.9
     #   tensorflow
     #   visualdl
 psutil==7.2.2
-    # via visualdl
+    # via
+    #   -r requirements-build.txt
+    #   visualdl
 pyasn1==0.6.4
     # via pyasn1-modules
 pyasn1-modules==0.4.2
@@ -280,6 +282,30 @@ pyinstaller-hooks-contrib==2026.8
     # via pyinstaller
 pymupdf==1.28.2
     # via pdf2docx
+pyobjc-core==12.2.2
+    # via
+    #   -r requirements-build.txt
+    #   pyobjc-framework-avfoundation
+    #   pyobjc-framework-cocoa
+    #   pyobjc-framework-coreaudio
+    #   pyobjc-framework-coremedia
+    #   pyobjc-framework-quartz
+pyobjc-framework-avfoundation==12.2.2
+    # via -r requirements-build.txt
+pyobjc-framework-cocoa==12.2.2
+    # via
+    #   pyobjc-framework-avfoundation
+    #   pyobjc-framework-coreaudio
+    #   pyobjc-framework-coremedia
+    #   pyobjc-framework-quartz
+pyobjc-framework-coreaudio==12.2.2
+    # via pyobjc-framework-avfoundation
+pyobjc-framework-coremedia==12.2.2
+    # via pyobjc-framework-avfoundation
+pyobjc-framework-quartz==12.2.2
+    # via
+    #   -r requirements-build.txt
+    #   pyobjc-framework-avfoundation
 pyparsing==3.3.3
     # via matplotlib
 pyqt5==5.15.11

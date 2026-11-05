@@ -1,5 +1,5 @@
 """네이티브(VideoToolbox) 캡처 (yesoncheck/mac_native_source.py): 실제 AVAssetReader로 클립 공장(tests/prores_clips.py)의 320×180
-클립을 읽는다 (mock 없음 — 오류 창 호출과 멈춤 시험의 copyNextSampleBuffer 자리만 바꿔치기). 게이트(4K·색 태그)는 거치지 않는다 —
+클립을 읽는다 (mock 없음 — 오류 창 호출과 멈춤 시험의 copyNextSampleBuffer 자리만 바꿔치기). 게이트(ProRes·HDR 등 — mac_native_gate)는 거치지 않는다 —
 게이트는 플레이어가 보고(Task 14), 캡처는 받은 파일을 그대로 읽는다.
 
 정답은 늘 프레임에 그려 넣은 번호(frame_number)와 ffmpeg 파이프 명령의 bgr24(prores_clips.pipe_frames — 색 기준; cv2는 색 태그를
@@ -8,7 +8,7 @@
 들여다본다. 오류 창은 `error_window.show_window`를 바꿔치기해 기록한다 (mac_native_source가 movie_pipe_source의 전달자를 거쳐 그
 모듈에서 이 이름을 읽으므로 그 모듈에서 바꾼다 — CLAUDE.md 바꿔치기 규칙).
 
-PyObjC(AVFoundation)가 없는 환경(p310_tf·Intel/Windows CI)에서는 모듈 전체를 건너뛴다.
+PyObjC(AVFoundation)가 없는 환경(Windows CI·Mac lock을 설치하지 않은 환경)에서는 모듈 전체를 건너뛴다.
 """
 
 import ctypes
@@ -24,7 +24,7 @@ from types import SimpleNamespace
 
 import pytest
 
-AVFoundation = pytest.importorskip("AVFoundation", reason="PyObjC 없음 — 네이티브 캡처 시험은 p310_native·arm64 CI에서")
+AVFoundation = pytest.importorskip("AVFoundation", reason="PyObjC 없음 — 네이티브 캡처 시험은 Mac lock을 설치한 환경(두 Mac CI job)에서")
 
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
@@ -32,9 +32,9 @@ import numpy as np  # noqa: E402
 from tests import prores_clips  # noqa: E402
 from yesoncheck import error_window, mac_native_source  # noqa: E402
 from yesoncheck.frame_handles import native_surface_of, whole_surface_handle  # noqa: E402
-from yesoncheck.mac_native_gate import NATIVE_PIX_FMTS, native_ineligible_reason  # noqa: E402
+from yesoncheck.mac_native_gate import native_ineligible_reason  # noqa: E402
 from yesoncheck.mac_native_source import (  # noqa: E402
-    NATIVE_FAILURE_HEADLINE, NATIVE_KEEP_BEHIND, NATIVE_LOG_PREFIX, NATIVE_READ_TIMEOUT_S, NATIVE_READAHEAD,
+    NATIVE_ESCAPE_HINT, NATIVE_FAILURE_HEADLINE, NATIVE_KEEP_BEHIND, NATIVE_LOG_PREFIX, NATIVE_READ_TIMEOUT_S, NATIVE_READAHEAD,
     NATIVE_READER_THREAD, NATIVE_SEEK_FORWARD_MAX, NativeCaptureError, NativeVTCapture, open_native_capture,
 )
 from yesoncheck.movie_pipe_source import probe_movie  # noqa: E402
@@ -77,7 +77,8 @@ def clip200(tmp_path_factory):
 
 @pytest.fixture(scope="session")
 def chroma444(tmp_path_factory):
-    """유채색 4444(ap4h) bt709 24장 — 게이트가 통과시키는 4:4:4의 색 경로 (4:2:2는 게이트 밖이라 색 시험 없음)."""
+    """유채색 4444(ap4h) bt709 24장 — 4:4:4의 색 경로 (4:2:2도 게이트를 통과하지만 VideoToolbox는 빠진 색차를 보간하고 파이프는
+    복사해 색 가장자리가 달라지므로 파이프 bgr24 기준의 색 시험은 4:4:4만)."""
     path = str(tmp_path_factory.mktemp("native_chroma") / "chroma_4444.mov")
     prores_clips.make_chroma_clip(path, count=24, profile="4", pix_fmt="yuv444p10le", color="bt709")
     return path
@@ -206,11 +207,11 @@ def test_colors_within_4_of_pipe(clip_name, request):
 
 def test_alpha_clip_draws_opaque_or_is_ineligible(alpha_clip):
     """알파 클립(왼쪽 절반 알파 0): VideoToolbox BGRA가 straight(Stage 0)라 알파를 무시하고 불투명하게 그리면 파이프와 같은 그림 —
-    그래서 게이트는 알파 4:4:4를 받는다(NATIVE_PIX_FMTS에 yuva). 깨지는 변경: 출력이 premultiplied로 바뀜(알파 0 아래 BGR이 0) —
+    그래서 게이트는 알파 4:4:4를 받는다(크기·크로마 조건이 없고 HDR만 거름). 깨지는 변경: 출력이 premultiplied로 바뀜(알파 0 아래 BGR이 0) —
     그때는 이 시험이 실패하고 게이트가 알파를 음성으로 돌려야 한다."""
     probe = probe_movie(alpha_clip)
-    assert probe.pix_fmt in NATIVE_PIX_FMTS
-    assert "알파" not in (native_ineligible_reason(probe) or "")  # (이 클립은 4K가 아니라 ⑥½로 음성 — 알파 때문이 아님)
+    assert probe.pix_fmt.startswith("yuva444p")
+    assert native_ineligible_reason(probe) is None  # (이 클립은 4K가 아니어도 통과 — 알파 클립이 게이트 밖으로 밀리지 않음)
     cap = NativeVTCapture(alpha_clip, probe)
     try:
         frames = read_until_false(cap)
@@ -457,7 +458,7 @@ def test_short_file_is_failure_not_eof(clip30, claimed, delivered, qapp, windows
         assert windows == []  # 창은 Qt 루프로 미룸
         qapp.processEvents()
         assert len(windows) == 1 and f"프레임 수 {claimed}" in windows[0]
-        assert windows[0].rstrip().endswith("YESONCHECK_MAC_NATIVE=off")
+        assert windows[0].rstrip().endswith("\n" + NATIVE_ESCAPE_HINT)
     finally:
         cap.release()
 
@@ -490,7 +491,7 @@ def test_reader_stall_dies_with_one_window(clip30, monkeypatch, qapp, windows, c
         assert windows == []
         qapp.processEvents()
         assert len(windows) == 1 and NATIVE_FAILURE_HEADLINE in windows[0] and clip30 in windows[0]
-        assert windows[0].rstrip().endswith("YESONCHECK_MAC_NATIVE=off")
+        assert windows[0].rstrip().endswith("\n" + NATIVE_ESCAPE_HINT)
         for _ in range(3):
             assert cap.read() == (False, None)
         qapp.processEvents()

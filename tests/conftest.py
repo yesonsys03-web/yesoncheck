@@ -17,7 +17,10 @@ os.environ.pop("YESONCHECK_MOVIE_SOURCE", None)
 # 전체 보관을 시험하는 쪽이 YESONCHECK_FRAME_CACHE=auto를 명시해 켠다
 os.environ["YESONCHECK_FRAME_CACHE"] = "ring"
 os.environ.pop("YESONCHECK_VIDEO_ITEM", None)
-os.environ.pop("YESONCHECK_MAC_NATIVE", None)
+# 네이티브 재생 토글도 pop이 아니라 off로 고정: 게이트가 HDR이 아닌 모든 ProRes·모든 Mac으로 넓어져(auto = darwin이면 켬) 지우기만 하면
+# Mac에서 기존 플레이어 시험의 작은(320×180) ProRes 클립이 VideoToolbox로 열려 파이프·cv2 단언이 깨진다. 네이티브를 겨누는 시험이
+# YESONCHECK_MAC_NATIVE=on을 명시하거나 native_wanted를 바꿔치기해 켠다
+os.environ["YESONCHECK_MAC_NATIVE"] = "off"
 
 # fetch_ffmpeg.sh / fetch_ffmpeg_windows.ps1로 받은 정적 ffmpeg를 PATH 맨 앞에 둠
 _FFMPEG_DIR = os.path.join(
@@ -185,6 +188,23 @@ def _instances_in_tmp(monkeypatch, tmp_path_factory):
     monkeypatch.setenv(instances.REGISTRY_DIR_ENV, str(tmp_path_factory.mktemp("instances") / "instances"))
     yield
     instances.unregister()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_prefs_and_decoder_cache(monkeypatch, tmp_path_factory):
+    """HOME·USERPROFILE을 시험마다 새 빈 폴더로 — app.launch가 Mac에서 읽는 ~/Library/Application Support/YesonCheck/prefs.json이 개발자의
+    진짜 설정이 아니라 없는 파일이 되게 (깨진 파일이면 launch 시험이 대역 없는 창에서 멈추고, playback_decoder가 있으면 시험 결과가 사람마다 달라짐).
+    Windows의 expanduser는 USERPROFILE을 봄 — 둘 다. 게이트의 선호 디코더 캐시(프로세스에 하나)도 시험 앞뒤로 기본 videotoolbox로: app.launch가
+    prefs를 읽어 정한 값·시험이 set_preferred_decoder로 바꾼 값이 다른 시험(다른 파일)에 남지 않게. 파일마다의 home 픽스처는 이 뒤에 돌아 HOME을 다시 바꿀 뿐 —
+    무해. (mac_prefs.prefs_path를 바꿔치지 않는 이유: default_app이 from-import로 묶고 test_default_app이 default_app.prefs_path()를 직접 부름)"""
+    from yesoncheck import mac_native_gate
+
+    home = str(tmp_path_factory.mktemp("home"))
+    monkeypatch.setenv("HOME", home)
+    monkeypatch.setenv("USERPROFILE", home)
+    mac_native_gate.set_preferred_decoder("videotoolbox")
+    yield
+    mac_native_gate.set_preferred_decoder("videotoolbox")
 
 
 @pytest.fixture(autouse=True)

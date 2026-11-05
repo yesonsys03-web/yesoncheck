@@ -197,11 +197,11 @@ Windows lock에만 있는 배포본 (Windows 앱에 들어감 또는 들어갈 �
 | pefile | 2023.2.7 | MIT | PyInstaller의 Windows 의존성 (PyInstaller 모듈과 함께 들어갈 수 있음) | https://pypi.org/project/pefile/2023.2.7/ |
 | pywin32-ctypes | 0.2.3 | BSD-3-Clause | PyInstaller의 Windows 의존성 (PyInstaller 모듈과 함께 들어갈 수 있음) | https://pypi.org/project/pywin32-ctypes/0.2.3/ |
 
-Apple Silicon lock에만 있는 배포본 (Apple Silicon 앱에 들어감 또는 들어갈 수 있음 — `requirements-build-arm64.lock` 기준, Apple Silicon 빌드 기록과는 대조하지 않음):
+Mac lock(Intel·Apple Silicon)에 있는 배포본 (Mac 앱에 들어감 또는 들어갈 수 있음 — `requirements-build-x86_64.lock`·`requirements-build-arm64.lock` 기준, 빌드 기록과는 대조하지 않음):
 
 | 배포본 | 버전 | 라이선스 | 이유 | PyPI |
 |---|---|---|---|---|
-| pyobjc-core | 12.2.2 | MIT | 4K ProRes 네이티브 재생(VideoToolbox — `yesoncheck/mac_native_source.py`) | https://pypi.org/project/pyobjc-core/12.2.2/ |
+| pyobjc-core | 12.2.2 | MIT | ProRes 네이티브 재생(VideoToolbox — `yesoncheck/mac_native_source.py`) | https://pypi.org/project/pyobjc-core/12.2.2/ |
 | pyobjc-framework-AVFoundation | 12.2.2 | MIT | 같은 이유 (AVAssetReader) | https://pypi.org/project/pyobjc-framework-AVFoundation/12.2.2/ |
 | pyobjc-framework-Cocoa | 12.2.2 | MIT | pyobjc-framework-AVFoundation이 끌어옴 (Foundation) | https://pypi.org/project/pyobjc-framework-Cocoa/12.2.2/ |
 | pyobjc-framework-CoreAudio | 12.2.2 | MIT | pyobjc-framework-AVFoundation이 끌어옴 | https://pypi.org/project/pyobjc-framework-CoreAudio/12.2.2/ |

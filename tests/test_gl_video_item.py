@@ -449,6 +449,107 @@ def test_paint_stream_prepares_once_per_context_and_drops_old_context_signal(qap
     assert item.failure_count == 0 and shown == []
 
 
+# ---------------------------------------------------------------- 걸쇠 풀기 reset_failure (Settings → 재생 디코더 (Mac) — 스펙 2026-11-04 §5.4 ④)
+
+MENU_HINT = "Settings → 재생 디코더 (Mac) → ffmpeg (예전 방식) 으로 바꾸면 예전 방식으로 재생합니다"
+ENV_HINT = f"{VIDEO_ITEM_ENV}=pixmap 으로 켜면 예전 방식으로 그립니다"
+
+
+def test_reset_failure_lets_paint_run_again(qapp, recording_gl, gl_contexts, shown):
+    """첫 실패 뒤에는 걸쇠가 걸려 paint가 GL을 부르지 않음 → reset_failure() 뒤 다음 paint가 실패한 단계(업로드)부터 다시 그림(같은 컨텍스트라 준비는
+    다시 하지 않음). failure_count(알린 수)는 그대로이고, 풀린 뒤 다시 실패하면 다시 알림(기록·창 1회 더).
+
+    깨지는 변경: _failed를 풀지 않으면 GL 호출이 없음; failure_count를 0으로 되돌리면 1 단언."""
+    recording_gl.fail_on = "glTexSubImage2D"
+    item = VideoFrameItem(stream=True)
+    frame = rgb()
+    item.set_frame(frame)
+    painter = FakeGLPainter(recording_gl, QTransform())
+    paint_gl(item, painter)
+    qapp.processEvents()
+    assert item.failure_count == 1 and len(shown) == 1
+    recording_gl.calls.clear()
+    paint_gl(item, painter)
+    assert recording_gl.calls == []  # 걸쇠 — 그리지 않음
+
+    recording_gl.fail_on = None
+    item.reset_failure()
+    paint_gl(item, painter)
+    qapp.processEvents()
+    names = recording_gl.names()
+    assert "glGenTextures" not in names and "glTexImage2D" not in names  # 준비·저장소는 실패 전에 끝났음 — 그대로 씀
+    assert ("glTexSubImage2D", (GL_TEXTURE_2D, 0, 0, 0, 8, 6, GL_RGB, GL_UNSIGNED_BYTE, frame.ctypes.data)) in recording_gl.calls
+    assert recording_gl.calls[-2:] == [("check_error", ("draw",)), ("endNativePainting", ())]
+    assert item.failure_count == 1 and len(shown) == 1
+
+    recording_gl.fail_on = "glTexSubImage2D"
+    item.set_frame(rgb(value=9))
+    paint_gl(item, painter)
+    qapp.processEvents()
+    assert item.failure_count == 2 and len(shown) == 2  # 풀린 걸쇠는 다음 실패에서 다시 걸리고 다시 알림
+
+
+def test_reset_failure_after_a_failed_context_switch_prepares_again(qapp, recording_gl, gl_contexts, shown, monkeypatch):
+    """새 컨텍스트에서 준비하다(GL 함수 묶기) 실패한 뒤 걸쇠를 풀면 다음 paint가 그 컨텍스트에서 처음부터 준비 — 옛 컨텍스트의 신호는 실패 전에 이미
+    끊었으므로 다시 끊으려다(TypeError) 또 실패하지 않음(_prepare가 끊자마자 _context를 비움). 그 뒤 옛 컨텍스트가 죽어도 새 텍스처는 그대로."""
+    item = VideoFrameItem(stream=True)
+    item.set_frame(rgb())
+    painter = FakeGLPainter(recording_gl, QTransform())
+    first = gl_contexts.current
+    paint_gl(item, painter)
+    second = gl_contexts.current = QOpenGLContext()
+
+    def broken_bind(context):
+        raise gl_bindings.GLBindingError("가짜 묶기 실패")
+
+    monkeypatch.setattr(gl_bindings, "bind", broken_bind)
+    paint_gl(item, painter)
+    qapp.processEvents()
+    assert item.failure_count == 1 and len(shown) == 1 and "가짜 묶기 실패" in shown[0]
+
+    monkeypatch.setattr(gl_bindings, "bind", lambda context: recording_gl)
+    item.reset_failure()
+    recording_gl.calls.clear()
+    paint_gl(item, painter)
+    qapp.processEvents()
+    assert item.failure_count == 1 and len(shown) == 1
+    names = recording_gl.names()
+    assert names.count("glGenTextures") == 1 and names.count("glTexSubImage2D") == 1  # 새 컨텍스트에서 준비·업로드
+    assert item._context is second
+    first.aboutToBeDestroyed.emit()
+    assert item._context is second and item._texture is not None
+    second.aboutToBeDestroyed.emit()
+    assert item._context is None and item._texture is None
+
+
+def test_reset_failure_schedules_a_repaint(qapp, shown, monkeypatch):
+    """걸쇠를 풀면 다시 그리기를 예약 — 프레임이 바뀌지 않아도(바꿔 끼울 캡처가 없는 h264 등) 비어 있던 영상 영역이 지금 프레임으로 다시 그려짐."""
+    item = VideoFrameItem(stream=True)
+    item.set_frame(rgb())
+    item._fail(gl_bindings.GLBindingError("x"))
+    qapp.processEvents()  # 예약된 실패 창을 이 시험 안에서 (다음 시험의 shown에 새지 않게)
+    assert len(shown) == 1
+    updates = []
+    monkeypatch.setattr(item, "update", lambda *args: updates.append(args))
+    item.reset_failure()
+    assert updates == [()] and item.failure_count == 1
+
+
+@pytest.mark.parametrize("platform, menu", [("darwin", True), ("win32", False), ("linux", False)])
+def test_failure_window_names_the_decoder_menu_on_mac(qapp, shown, monkeypatch, platform, menu):
+    """Mac의 실패 창은 킬 스위치 안내 앞에 Settings → 재생 디코더 (Mac) → ffmpeg 안내 한 줄(그 선택이 걸쇠를 풂) — 다른 플랫폼에는 그 메뉴가 없으므로 예전 글 그대로."""
+    monkeypatch.setattr(sys, "platform", platform)
+    item = VideoFrameItem(stream=True)
+    item._fail(gl_bindings.GLBindingError("x"))
+    qapp.processEvents()
+    [text] = shown
+    assert text.endswith(ENV_HINT)
+    if menu:
+        assert text.endswith(f"\n\n{MENU_HINT}\n{ENV_HINT}")
+    else:
+        assert "재생 디코더" not in text and text.endswith(f"x\n\n{ENV_HINT}")
+
+
 # ---------------------------------------------------------------- CustomVideoWidget 연결
 
 from PyQt5.QtWidgets import QGraphicsPixmapItem, QOpenGLWidget

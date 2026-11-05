@@ -15,7 +15,7 @@ import pytest
 from yesoncheck import mac_native_source
 from yesoncheck.mac_native_source import NATIVE_LOG_PREFIX, VIDEOTOOLBOX_FRAMEWORK
 
-NO_WRAPPER = SimpleNamespace(VideoToolbox=None)  # _pyobjc()의 묶음 중 이 함수가 보는 것 — 래퍼 없음 (빌드·p310_native와 같음)
+NO_WRAPPER = SimpleNamespace(VideoToolbox=None)  # _pyobjc()의 묶음 중 이 함수가 보는 것 — 래퍼 없음 (빌드 환경과 같음)
 
 
 def fourcc(text):

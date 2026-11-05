@@ -1,6 +1,6 @@
 """IOSurface → GL 텍스처: OpenGL.framework의 CGL 함수 둘(CGLGetCurrentContext·CGLTexImageIOSurface2D)을 ctypes로 묶고 사각형 텍스처 상수를 둔다.
 
-왜: 네이티브 재생 경로(Apple Silicon, mac_native_source)의 프레임은 VideoToolbox가 디코드한 IOSurface 안에 있다. 이것을 CPU로 읽어
+왜: 네이티브 재생 경로(Mac — Intel·Apple Silicon, mac_native_source)의 프레임은 VideoToolbox가 디코드한 IOSurface 안에 있다. 이것을 CPU로 읽어
 glTexSubImage2D로 올리지 않고 CGLTexImageIOSurface2D로 GL_TEXTURE_RECTANGLE_ARB 텍스처에 그대로 묶으면 CPU 복사가 0이다
 (VideoFrameItem.set_sides — gl_video_item). 인자는 Stage 0 스파이크 A3(내부 저장소 docs/superpowers/records/2026-11-03-mac-native-playback/
 yc_iosurface_gl_spike.py)에서 Intel Mac으로 순서·색을 확인한 것 그대로다:

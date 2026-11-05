@@ -198,7 +198,7 @@ def fake_native_player(new_player, dialogs, tmp_path, qapp, monkeypatch):  # noq
 
     make(ab=False, viewport="gl", video_item=None, count=FAKE_FRAME_COUNT, reported_count=None, size=(FAKE_WIDTH, FAKE_HEIGHT), native="AB"):
     - viewport·video_item: YESONCHECK_VIEWPORT·YESONCHECK_VIDEO_ITEM (None이면 지움). 기본은 GL 뷰포트 + 스트림 아이템(VideoFrameItem) —
-      Apple Silicon 네이티브 재생의 기본 길(offscreen은 GL 컨텍스트가 없지만 창을 띄우지 않으므로 paint는 일어나지 않음).
+      Mac 네이티브 재생의 기본 길(offscreen은 GL 컨텍스트가 없지만 창을 띄우지 않으므로 paint는 일어나지 않음).
       ("gl", "pixmap") = 킬 스위치(GL 뷰포트 + 픽스맵 아이템), ("raster", None) = raster 뷰포트(픽스맵 아이템).
     - 플레이어의 영상 캡처 열기 자리(_open_movie_capture)를 가짜 캡처로 바꿔 open_file로 엶 — 열기 뒤 첫 프레임 표시(display_first_frame →
       seek_to_frame(1))까지 진짜 길 그대로라 frame_a는 첫 read()의 프레임. 소리 재생기가 열 진짜 영상 파일을 하나 만들어 그 경로로 연다(프레임은 가짜).
