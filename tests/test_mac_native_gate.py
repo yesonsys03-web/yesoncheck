@@ -91,7 +91,7 @@ def test_native_mode_reads_the_process_environment_by_default(monkeypatch):
 # ---------------------------------------------------------------- 플랫폼(darwin 전체)·원함
 
 def test_auto_is_on_for_any_darwin():
-    """auto는 macOS면 어느 칩이든 켬 (Intel Mac·Rosetta 아래 x86_64 빌드도) — 2026-11-04 사용자 결정: 모든 Mac이 QuickTime과 같은 화면.
+    """auto는 macOS면 어느 칩이든 켬 (Intel Mac·Rosetta 아래 x86_64 빌드도) — 2026-11-04 사용자 결정: 모든 Mac이 같은 디코더.
     platform.machine()을 다시 보는 쪽으로 되돌아가면 x86_64 줄이 실패."""
     assert native_wanted({}, *mac("x86_64")) is True
     assert native_wanted({}, *mac("arm64")) is True
@@ -328,7 +328,7 @@ def test_pipe_conditions_are_reused_not_reimplemented(good_4k_probe, monkeypatch
 @pytest.mark.parametrize("width,height", [(3840, 2160), (4096, 2160), (1920, 1080), (1280, 720), (320, 180), (3840, 1080), (1920, 2160)])
 @pytest.mark.parametrize("pix_fmt", ["yuv422p10le", "yuv422p12le", "yuv444p10le", "yuv444p12le", "yuva444p10le", "yuva444p12le"])
 def test_gate_accepts_any_prores_size_and_chroma(good_4k_probe, width, height, pix_fmt):
-    """크기(HD·SD·세로·4K)와 크로마(4:2:2·4:4:4·알파, 10·12비트)는 조건이 아님 — 2026-11-04 사용자 결정(모든 ProRes를 QuickTime과 같은
+    """크기(HD·SD·세로·4K)와 크로마(4:2:2·4:4:4·알파, 10·12비트)는 조건이 아님 — 2026-11-04 사용자 결정(모든 ProRes를
     VideoToolbox로). 4K나 4:4:4 조건이 되살아나면 해당 줄이 실패."""
     probe = dataclasses.replace(good_4k_probe, width=width, height=height, pix_fmt=pix_fmt)
     assert native_ineligible_reason(probe) is None
@@ -351,16 +351,15 @@ def test_real_alpha_clip_passes(alpha_4k_probe):
 
 def test_real_422_clip_passes(hq_422_4k_probe):
     """공장의 4K ProRes HQ 4:2:2 클립도 통과 (옛 test_real_422_clip_is_negative_at_condition_8를 뒤집음). 근거: 실파일 1080p 4:2:2 HQ에서
-    VideoToolbox 대 ffmpeg 파이프는 평균 1.4·최대 73이고 다른 픽셀은 전부 홀수 열 — 색차(4:2:2 → 4:4:4) 수평 보간 필터 하나의 차이이며
-    VideoToolbox 쪽이 QuickTime과 같음."""
+    VideoToolbox 대 ffmpeg 파이프는 평균 1.4·최대 73이고 다른 픽셀은 전부 홀수 열 — 색차(4:2:2 → 4:4:4) 수평 보간 필터 하나의 차이."""
     assert hq_422_4k_probe.pix_fmt == "yuv422p10le"
     assert native_ineligible_reason(hq_422_4k_probe) is None
     assert native_eligible(hq_422_4k_probe) is True
 
 
 def test_real_untagged_clip_passes(untagged_4k_probe):
-    """색 태그 없는 4K 4:4:4 클립도 통과 (옛 test_real_untagged_clip_is_negative_at_condition_9를 뒤집음). 근거: VideoToolbox는 QuickTime처럼
-    태그 없는 HD를 709, SD를 601로 읽음 — 앱 화면이 QuickTime과 같아짐."""
+    """색 태그 없는 4K 4:4:4 클립도 통과 (옛 test_real_untagged_clip_is_negative_at_condition_9를 뒤집음). 근거: VideoToolbox는
+    태그 없는 HD를 709, SD를 601로 읽음."""
     assert untagged_4k_probe.pix_fmt == "yuv444p12le"
     assert untagged_4k_probe.color_space in ("", "unknown")
     assert native_ineligible_reason(untagged_4k_probe) is None
