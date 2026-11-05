@@ -265,6 +265,7 @@ def test_conservative_seek_from_close_by_reads_forward_on_b_too(rig, tmp_path):
 def test_release_moves_the_sound_with_the_picture(rig):
     """소리 위치는 놓은 뒤의 캡처 위치에서 계산함 — 캡처를 옮기지 않거나 소리 맞춤을 빼면 NEAR 쪽 소리가 남음."""
     player, _cap, bar = rig
+    QTest.qWait(30)  # 파일을 열 때 예약된 소리 위치(0ms) 타이머를 먼저 보냄 — 이벤트를 안 돌리면 놓기 뒤에 함께 터져 순서가 플랫폼마다 다름(Windows CI에서 [4137, 0])
     drag_through(bar, FAR, NEAR, FAR)
     heard = []
     player.set_media_position = heard.append
