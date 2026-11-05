@@ -1,15 +1,16 @@
-"""영상 열기 경로의 네이티브(VideoToolbox) 분기 (Apple Silicon 네이티브 재생 — 계획 Task 14·B9, 스펙 §5.3·§5.8).
+"""영상 열기 경로의 네이티브(VideoToolbox) 분기 (Mac 네이티브 재생 — 2026-11-03 계획 Task 14·B9, 스펙 §5.3·§5.8; 2026-11-04에 Mac 전체 ProRes로 넓힘).
 
 VideoPlayer._open_movie_capture는 os.stat 확인 뒤 _native_or_pipe_capture로 캡처를 고른다: YESONCHECK_MOVIE_SOURCE=cv2면 네이티브 토글도 보지
-않고 probe도 없이 기존 cv2 줄, native_wanted()가 아니면(Intel·Windows·YESONCHECK_MAC_NATIVE=off) 예전 파이프 게이트 줄 그대로, 원하면 ffprobe
+않고 probe도 없이 기존 cv2 줄, native_wanted()가 아니면(Windows·재생 디코더 ffmpeg·YESONCHECK_MAC_NATIVE=off) 예전 파이프 게이트 줄 그대로, 원하면 ffprobe
 한 번(movie_pipe_source.probe_for_open — ffprobe가 못 읽을 때의 규칙은 파이프와 같음)으로 네이티브 게이트(mac_native_gate.native_ineligible_reason)를
 보고 — 양성이면 네이티브 캡처, 못 열면 기록·오류 창(끝 줄 NATIVE_ESCAPE_HINT) 뒤 같은 probe로 파이프, 음성이면 사유 한 줄 뒤 같은 probe로 파이프.
 
-이 Intel Mac(p310_tf)에는 PyObjC가 없고 is_apple_silicon()이 거짓이라 하드웨어에 기대지 않는다: native_wanted·maybe_pipe_capture는 그 이름을 읽는
+PyObjC·VideoToolbox·플랫폼(sys.platform)이 어떻든 어느 OS에서나 돌도록 하드웨어에 기대지 않는다: native_wanted·maybe_pipe_capture는 그 이름을 읽는
 player_playback에서, probe_movie는 probe_for_open·maybe_pipe_capture가 읽는 movie_pipe_source에서, open_native_capture·_pyobjc는 플레이어가
 지연 import하는 mac_native_source에서 바꿔치기한다 (CLAUDE.md 규칙 — 다른 모듈에 다시 내보낸 이름을 바꾸면 닿지 않음). 4K probe는 실제
-ffprobe로 읽은 1080p ProRes 4444(bt709) 공장 클립의 probe를 dataclasses.replace로 3840×2160으로 바꾼 것(게이트는 probe 값만 봄). 창은 conftest의
-dialogs. 예전 파이프·cv2 줄 자체의 무회귀는 tests/test_movie_pipe_integration.py·test_pipe_player.py의 무수정 통과가 지킨다.
+ffprobe로 읽은 1080p ProRes 4444(bt709) 공장 클립의 probe를 dataclasses.replace로 3840×2160으로 바꾼 것(게이트는 probe 값만 보고
+크기는 조건이 아님 — 옛 4K 게이트 때의 픽스처, 1080p 그대로도 양성). 창은 conftest의 dialogs. 예전 파이프·cv2 줄 자체의
+무회귀는 tests/test_movie_pipe_integration.py·test_pipe_player.py의 무수정 통과가 지킨다.
 """
 
 import dataclasses
@@ -44,7 +45,8 @@ REAL_OPEN_NATIVE = mac_native_source.open_native_capture  # 바꿔치기 전의 
 
 @pytest.fixture(scope="module")
 def clip_1080(tmp_path_factory):
-    """1920×1080 ProRes 4444(bt709) 12장 — 파이프 게이트 양성, 네이티브 게이트는 ⑥½(4K 아님)에서 음성."""
+    """1920×1080 ProRes 4444(bt709) 12장 — 파이프 게이트·네이티브 게이트 둘 다 양성 (크기 조건 없음). 네이티브 음성을 겨누는 시험은 이
+    probe에 HDR 태그를 붙여 쓴다 (파이프 게이트는 색 태그를 보지 않으므로 진짜 파이프가 그대로 열림)."""
     path = str(tmp_path_factory.mktemp("native_open_1080") / "clip_1080.mov")
     make_numbered_clip(path, count=12, fps="24", profile="4", pix_fmt="yuv444p10le", width=1920, height=1080, color="bt709")
     return path
@@ -225,7 +227,7 @@ def test_open_file_shows_the_native_capture(new_player, dialogs, rig, tmp_path, 
 # ---------------------------------------------------------------- 네이티브 실패: 알린 뒤 파이프로
 
 def test_native_failure_shows_window_then_pipe(player, dialogs, rig, clip_1080, probe_4k, capsys):
-    """open_native_capture가 NativeCaptureError → 오류 창 한 번(경로·예외 이름·트레이스백, 끝 줄 YESONCHECK_MAC_NATIVE=off 안내) 뒤 같은 probe로
+    """open_native_capture가 NativeCaptureError → 오류 창 한 번(경로·예외 이름·트레이스백, 끝 줄 NATIVE_ESCAPE_HINT(메뉴·환경 변수 안내)) 뒤 같은 probe로
     파이프 — 그 캡처가 결과. 기록: 트레이스백(stderr) + 한 줄 '열지 못해 ffmpeg 파이프로 계속'.
 
     깨지는 변경: 창을 빼면 criticals 0; 창 뒤 return None이면 결과·pipes; probe를 넘기지 않으면(두 번 probe) kwargs의 probe;
@@ -253,9 +255,9 @@ def test_native_failure_shows_window_then_pipe(player, dialogs, rig, clip_1080, 
 
 
 def test_pyobjc_missing_is_a_failure_window_not_a_crash(player, dialogs, rig, clip_1080, probe_4k, monkeypatch):
-    """PyObjC가 없음(ModuleNotFoundError — Intel Mac의 YESONCHECK_MAC_NATIVE=on, 빠진 번들): 진짜 open_native_capture·NativeVTCapture가
+    """PyObjC가 없음(ModuleNotFoundError — Mac lock을 설치하지 않은 소스 환경, 빠진 번들): 진짜 open_native_capture·NativeVTCapture가
     NativeCaptureError로 감싸 올리므로(_pyobjc의 ModuleNotFoundError는 생성자의 except가 받음 — 밖으로 새지 않음) 같은 창 + 파이프로 계속.
-    어느 기계에서나 같게 _pyobjc를 'objc 없음'으로 바꿔치기 (p310_native·arm64에는 PyObjC가 있음).
+    어느 기계에서나 같게 _pyobjc를 'objc 없음'으로 바꿔치기 (Mac lock을 설치한 환경에는 PyObjC가 있음).
 
     깨지는 변경: 생성자가 ModuleNotFoundError를 감싸지 않으면(또는 분기가 NativeCaptureError만 받는데 다른 것이 새면) 예외가 열기 밖으로 —
     앱이 그 파일을 못 엶; 창을 빼면 창 단언."""
@@ -273,7 +275,7 @@ def test_pyobjc_missing_is_a_failure_window_not_a_crash(player, dialogs, rig, cl
 
 
 def test_native_then_pipe_failure_shows_both_windows(player, dialogs, rig, clip_1080, probe_4k):
-    """네이티브도 파이프도 못 열면 창 둘이 차례로 — 네이티브 실패 창(끝 줄 YESONCHECK_MAC_NATIVE=off), 그다음 기존 파이프 오류 창(끝 줄
+    """네이티브도 파이프도 못 열면 창 둘이 차례로 — 네이티브 실패 창(끝 줄 NATIVE_ESCAPE_HINT(메뉴·환경 변수 안내)), 그다음 기존 파이프 오류 창(끝 줄
     YESONCHECK_MOVIE_SOURCE=cv2) — 결과 None(보던 영상은 그대로), ffprobe 한 번(같은 probe가 파이프로).
 
     깨지는 변경: 파이프 호출을 네이티브 except 안으로 옮기거나 그 PipeCaptureError를 다른 길로 보내면 둘째 창이 없거나 다름;
@@ -304,12 +306,30 @@ def test_unexpected_native_error_propagates(player, dialogs, rig, clip_1080, pro
 
 # ---------------------------------------------------------------- 음성: 사유 한 줄 뒤 파이프
 
+def test_small_hd_prores_opens_native_now(player, dialogs, rig, clip_1080, probe_1080, capsys):
+    """1080p ProRes 4444(실제 ffprobe, 크기를 키우지 않음)도 네이티브 양성 — 4K 조건이 없어진 뒤 (옛 ⑥½ 음성 시험을 뒤집음): open_native_capture가
+    준 캡처가 그대로 돌아오고 파이프는 부르지 않음, ffprobe 한 번, 그 probe 그대로 넘김.
+
+    깨지는 변경: 크기 조건이 되살아나면 파이프 대역의 AssertionError."""
+    native_cap = SentinelCapture("native")
+    rig.probe, rig.native, rig.pipe = probe_1080, native_cap, AssertionError("파이프가 불렸다")
+    capsys.readouterr()
+
+    assert player._open_movie_capture(clip_1080) is native_cap
+
+    assert rig.probes == [clip_1080]
+    assert len(rig.opens) == 1 and rig.opens[0][1] is probe_1080
+    assert rig.pipes == [] and dialogs.messages == []
+    assert play_lines(capsys.readouterr().out) == []
+
+
 def test_ineligible_logs_and_uses_pipe(player, dialogs, rig, clip_1080, capsys):
-    """1080p ProRes 4444(실제 ffprobe) → 네이티브 음성 사유 한 줄 `… 아님 — ⑥½ 4K가 아님(1920×1080): <이름>` 뒤 진짜 파이프가 같은 probe로 열림 —
-    ffprobe 한 번, 창 없음, open_native_capture는 불리지 않음.
+    """HDR 태그(전달 함수 smpte2084)를 단 1080p ProRes 4444(실제 ffprobe + 태그만 바꾼 probe) → 네이티브 음성 사유 한 줄
+    `… 아님 — ⑨ HDR(smpte2084): <이름>` 뒤 진짜 파이프가 같은 probe로 열림 — ffprobe 한 번, 창 없음, open_native_capture는 불리지 않음.
 
     깨지는 변경: 음성 기록 줄을 빼면 줄 단언; probe를 파이프에 넘기지 않으면 maybe_pipe_capture가 다시 probe해 probes가 둘;
     게이트를 보지 않고 늘 네이티브를 열면 _refuse_native."""
+    rig.probe = lambda path: dataclasses.replace(probe_movie(path), color_transfer="smpte2084")
     capsys.readouterr()
 
     cap = player._open_movie_capture(clip_1080)
@@ -321,7 +341,7 @@ def test_ineligible_logs_and_uses_pipe(player, dialogs, rig, clip_1080, capsys):
     assert rig.probes == [clip_1080] and rig.opens == []
     assert len(rig.pipes) == 1 and rig.pipes[0][1]["probe"] is rig.probed[0]
     assert play_lines(capsys.readouterr().out) == [
-        "[재생] 네이티브(VideoToolbox): 아님 — ⑥½ 4K가 아님(1920×1080): clip_1080.mov",
+        "[재생] 네이티브(VideoToolbox): 아님 — ⑨ HDR(smpte2084): clip_1080.mov",
         "[재생] ffmpeg 파이프: clip_1080.mov (prores 1920×1080 24fps, 프레임 12)",
     ]
     assert dialogs.messages == []
@@ -350,7 +370,7 @@ def test_cv2_kill_switch_skips_native(player, dialogs, rig, clip_1080, monkeypat
 
 
 def test_not_wanted_leaves_existing_path_untouched(player, dialogs, rig, mp4v_clip, capsys):
-    """native_wanted()가 거짓(Intel·Windows·YESONCHECK_MAC_NATIVE=off) → 이 분기는 probe하지 않고 예전 줄 `maybe_pipe_capture(path, full_cache=True)`
+    """native_wanted()가 거짓(Windows·재생 디코더 ffmpeg·YESONCHECK_MAC_NATIVE=off) → 이 분기는 probe하지 않고 예전 줄 `maybe_pipe_capture(path, full_cache=True)`
     (probe 인자 없음) 하나만 — 여기서는 대역이 None을 줘서 기존 cv2.VideoCapture까지. 네이티브 기록 줄 없음.
     (진짜 파이프·cv2 줄의 무회귀는 test_movie_pipe_integration·test_pipe_player의 무수정 통과)
 
@@ -372,7 +392,7 @@ def test_not_wanted_leaves_existing_path_untouched(player, dialogs, rig, mp4v_cl
 
 def test_player_does_not_import_native_source_unless_wanted():
     """플레이어는 mac_native_source를 맨 위에서 불러오지 않고, 원하지 않을 때(native_wanted 거짓) 영상 열기 전체(_open_movie_capture — os.stat
-    확인부터 캡처를 돌려줄 때까지)에서도 불러오지 않음 — 원할 때만 분기 안에서 지연 import (스펙 §5.8·§5.9: Intel·Windows 앱은 이 모듈을 import하지
+    확인부터 캡처를 돌려줄 때까지)에서도 불러오지 않음 — 원할 때만 분기 안에서 지연 import (스펙 §5.8·§5.9: Windows 앱·재생 디코더 ffmpeg·off인 실행은 이 모듈을 import하지
     않음). 새 프로세스에서 player_playback을 불러 sys.modules를 보고(이 프로세스는 다른 시험이 이미 불러옴), 원하지 않음·표지를 주는 파이프 대역으로
     진짜 _open_movie_capture를 있는 파일(그 모듈 파일 자체)에 한 번 돌린 뒤 다시 봄 — 창·QApplication 없이(os.stat이 되고 대역이 cv2 앞에서 돌려줌).
     자식 출력은 utf-8로 (tests/test_workers_split 선례).

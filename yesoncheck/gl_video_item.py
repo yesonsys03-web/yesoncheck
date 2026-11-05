@@ -22,9 +22,13 @@ glOrtho(0, pw, ph, 0, -1, 1)(y 아래 방향 — Qt와 같음), 정점은 매핑
 
 paint 가드: PyQt5 가상 함수(paint)에서 빠져나간 예외는 qFatal(프로세스 종료, 오류 창 없음 — CLAUDE.md 함정)이다. 그래서 스트림 모드의
 paint 본문 전체를 except BaseException으로 받아 첫 실패만 기록(트레이스백 전문, [표시]) + 오류 창(Qt 루프에서 1회 — paint 안에서 모달 금지)으로
-알리고, 그 뒤 paint는 아무것도 그리지 않는다(빈 영상 영역). 재생·UI는 계속되고 탈출구는 YESONCHECK_VIDEO_ITEM=pixmap(예전 QPixmap 경로).
+알리고, 그 뒤 paint는 아무것도 그리지 않는다(빈 영상 영역). 재생·UI는 계속되고 탈출구는 YESONCHECK_VIDEO_ITEM=pixmap(예전 QPixmap 경로),
+Mac은 Settings → 재생 디코더 (Mac) → ffmpeg (예전 방식)도(그 선택이 reset_failure로 걸쇠를 풀어 다음 paint가 다시 그림 — 창 글에 그 안내 한 줄).
+실패를 알릴 때마다 창 예약 바로 뒤에 실패 콜백(set_failure_callback — 위젯이 등록해 streamPaintFailed 신호로 플레이어에)도 Qt 루프로 미뤄 부른다 —
+값은 그리던 그림에 IOSurface 면이 있었는가(has_native_side). Mac의 플레이어는 네이티브 면 실패면 이 창만 ffmpeg로 바꿔(바꿔 끼움 + 걸쇠 풀기) 계속하므로
+(스펙 2026-11-04 §5.8 — 큰 소리 폴백) 그때 창의 첫 줄은 NATIVE_FALLBACK_LINE(나머지 줄은 같음). RGB 면 실패는 위 규칙 그대로.
 
-IOSurface 면 그리기(set_sides·set_surface — Apple Silicon 네이티브 재생 경로): 네이티브 프레임(frame_handles — IOSurface 위의 BGRX 뷰)은 CPU로
+IOSurface 면 그리기(set_sides·set_surface — Mac 네이티브 재생 경로): 네이티브 프레임(frame_handles — IOSurface 위의 BGRX 뷰)은 CPU로
 읽거나 올리지 않고 gl_surface.CGLTexImageIOSurface2D로 GL_TEXTURE_RECTANGLE_ARB 텍스처에 그대로 묶어 그린다(복사 0, 텍스처 좌표는 픽셀 단위).
 A/B 와이프는 numpy 합성 대신 A를 전체에, B를 glScissor(wipe_scissor — 물리 픽셀, GL 창 좌표라 원점이 왼쪽 아래) 안에 그린다(X·Y 와이프가 함께면
 상자 둘 — 오른쪽과 아래쪽 — 에 그려 합집합, Ruling 17). 면은 네이티브(표면
@@ -82,6 +86,11 @@ from yesoncheck.gl_surface import GL_BGRA, GL_RGBA, GL_SCISSOR_TEST, GL_TEXTURE_
 VIDEO_ITEM_ENV = "YESONCHECK_VIDEO_ITEM"
 VIDEO_ITEM_MODES = ("auto", "gl", "pixmap")
 LOG_PREFIX = "[표시]"
+# (Mac) 실패 창의 킬 스위치 안내 앞에 붙는 줄 — player_base의 Settings 메뉴 '재생 디코더 (Mac)'가 그 걸쇠를 풂 (스펙 2026-11-04 §5.4 ④)
+DECODER_MENU_HINT = "Settings → 재생 디코더 (Mac) → ffmpeg (예전 방식) 으로 바꾸면 예전 방식으로 재생합니다"
+# (Mac) 네이티브 면을 그리다 실패했고 받을 쪽(실패 콜백)이 있을 때 실패 창의 첫 줄 — 플레이어가 이 창만 ffmpeg로 바꿈 (스펙 2026-11-04 §5.8)
+NATIVE_FALLBACK_LINE = "네이티브 화면 그리기에 실패해 이 창은 ffmpeg 방식으로 바꿉니다(설정 파일은 그대로 — 다음 창은 다시 시도)"
+FAILURE_LINE = "영상 화면(GL 텍스처 스트리밍)을 그리지 못했습니다 — 영상 영역을 비워 둡니다 (재생·다른 기능은 그대로)."  # 그 밖의 실패 창 첫 줄
 
 GL_DEFAULT_UNPACK_ALIGNMENT = 4  # GL 기본값 — 업로드 뒤 되돌림 (endNativePainting은 픽셀 저장 상태를 되돌리지 않음)
 QUAD_TEX_COORDS = ((0, 0), (1, 0), (1, 1), (0, 1))  # 모서리 (0,0)(w,0)(w,h)(0,h)와 짝 — 텍스처 행 0 = 배열 행 0 = 위
@@ -211,7 +220,7 @@ def _side(label, frame):
 class VideoFrameItem(QGraphicsPixmapItem):
     """픽스맵 아이템 자리에 들어가는 영상 프레임 아이템 (모듈 설명). stream: 스트림(GL 텍스처) 모드인지 — 만든 뒤 바꾸지 않음.
 
-    시험 훅: failure_count(_fail이 실패를 알린 수 — 첫 실패만 알리므로 0 또는 1)."""
+    시험 훅: failure_count(_fail이 실패를 알린 수 — 걸쇠가 걸린 동안은 첫 실패만 알리므로 reset_failure 사이마다 많아야 1씩 늚 — 실패 콜백도 그만큼)."""
 
     def __init__(self, stream: bool):
         super().__init__()
@@ -229,6 +238,7 @@ class VideoFrameItem(QGraphicsPixmapItem):
         self._sides = None  # 면 그리기(set_sides·set_surface)의 _Sides — 있으면 paint가 _draw_sides, 없으면 _draw_native
         self._side_textures = {}  # (면, 대상) → _SideTexture — 이 컨텍스트의 면 텍스처
         self._cgl = None  # gl_surface.CGLFunctions — 처음 IOSurface를 묶을 때 (프로세스에 하나인 C API라 컨텍스트와 무관)
+        self._failure_callback = None  # 실패 콜백 (native: bool) -> None — set_failure_callback, _fail이 Qt 루프로 미뤄 부름
 
     # ------------------------------------------------------------ 프레임
 
@@ -307,6 +317,28 @@ class VideoFrameItem(QGraphicsPixmapItem):
         """(시험용) 마지막 set_sides·set_surface의 A 면 손잡이(NativeHandle) — A가 RGB이거나 면 그리기가 아니면 None."""
         return self._sides.a.handle if self._sides is not None else None
 
+    @property
+    def latched(self) -> bool:
+        """그리기 실패 걸쇠가 걸려 있는가 — _fail 뒤 reset_failure 전(그동안 paint는 아무것도 그리지 않음)."""
+        return self._failed
+
+    def has_native_side(self) -> bool:
+        """지금 그림에 IOSurface 면이 있는가 — 면 그리기(set_sides·set_surface)의 _Sides 중 그릴 면(A, 와이프일 때만 B — 와이프가 아니거나 크기가 다른
+        B는 set_sides가 이미 뺌)의 _Side.handle(whole_surface_handle이 준 손잡이)이 있으면 True. set_frame(RGB 길)·빈 그림이면 False.
+        paint가 그리는 것과 같은 판단이다(_sides가 있으면 _draw_sides) — 텍스처에 예전에 묶인 손잡이(_SideTexture.content)는 보지 않음.
+        _fail이 실패 콜백에 넘기는 native이고, 플레이어가 폴백 뒤 걸쇠를 풀어도 되는지(네이티브 면이 다 빠졌는지) 볼 때 씀."""
+        sides = self._sides
+        return sides is not None and any(side is not None and side.handle is not None for side in (sides.a, sides.b))
+
+    def set_failure_callback(self, callback) -> None:
+        """실패 콜백 callback(native: bool) 등록 — None이면 끔. _fail이 실패를 알릴 때마다(걸쇠 사이마다 첫 실패) 오류 창 예약 바로 뒤에 Qt 루프로 미뤄
+        (QTimer.singleShot(0) — paint 안에서 플레이어 일을 하지 않게) 부른다. native: 그때 그리던 그림에 IOSurface 면이 있었는가(has_native_side).
+        콜백이 예외를 내면 _last_resort(Qt 루프로 내보내지 않음 — PyQt5 qFatal). CustomVideoWidget이 스트림 아이템을 만들 때 등록해 streamPaintFailed
+        신호로 넘김. 부를 수 없는 값은 TypeError."""
+        if callback is not None and not callable(callback):
+            raise TypeError(f"GL 그리기 실패 콜백은 호출할 수 있어야 합니다(끄려면 None): {callback!r}")
+        self._failure_callback = callback
+
     def setPixmap(self, pixmap):
         """stream=False면 부모 그대로. 스트림 모드: 빈 픽스맵은 배열까지 비우고, 비지 않은 픽스맵은 RGB 배열로 복사해 set_frame
         (느려도 됨 — 시험·레거시 경로뿐; 재생은 set_frame)."""
@@ -339,6 +371,18 @@ class VideoFrameItem(QGraphicsPixmapItem):
             self._paint_stream(painter)
         except BaseException as exc:  # paint 밖으로 나가면 PyQt5가 프로세스를 끝냄(qFatal) — 첫 실패만 크게 알리고 비워 둠
             self._fail(exc)
+
+    def reset_failure(self) -> None:
+        """그리기 실패 걸쇠(_failed)를 풀고 다시 그리기를 예약 — 다음 paint가 지금 프레임을 다시 그린다(다시 실패하면 _fail이 다시 기록 + 창 1회).
+        Settings → 재생 디코더 (Mac)에서 고를 때 플레이어가 캡처를 바꿔 끼운 뒤 부름(디코더를 바꾸는 것이 걸쇠의 탈출구 — 스펙 2026-11-04 §5.4 ④; 바꿔 끼우는 동안의
+        창이 옛 프레임을 그려도 다시 실패하지 않게 그 뒤에). failure_count(알린 수)는 그대로.
+
+        GL 상태는 비우지 않는다 — 다음 paint는 실패한 단계부터 다시 한다: 단계마다 성공한 뒤에만 기록하기 때문(준비 — _context는 _prepare 끝에서·
+        옛 컨텍스트 신호를 끊으면 바로 None, 저장소 — _storage는 잡은 뒤, 업로드 — _dirty는 올린 뒤에 False, 면 — 텍스처의 storage·content는 잡고
+        묶고 올린 뒤). 텍스처를 버리고 새로 만들게 하지 않는 이유: 여기(paint 밖)에는 current 컨텍스트가 없어 glDeleteTextures를 못 부르고,
+        IOSurface에 묶인 면 텍스처를 놓아 버리면 그 표면이 창을 닫을 때까지 GPU에 남음 — 메뉴로 디코더를 바꿀 때마다 부르므로 쌓임."""
+        self._failed = False
+        self.update()
 
     def _paint_stream(self, painter):
         engine = painter.paintEngine()
@@ -411,6 +455,7 @@ class VideoFrameItem(QGraphicsPixmapItem):
         면 텍스처(set_sides)는 여기서 만들지 않는다 — 처음 그릴 때(_side_texture)."""
         if self._context is not None:  # 죽지 않은 다른 컨텍스트에서 넘어옴 — 옛 신호가 새 텍스처를 지우지 않게 끊음(옛 텍스처는 그 컨텍스트와 함께 해제)
             self._context.aboutToBeDestroyed.disconnect(self._release_texture)
+            self._context = None  # 끊었음 — 아래에서 실패해도(걸쇠를 푼 뒤의) 다음 준비가 다시 끊으려다 TypeError로 또 실패하지 않게
         self._gl = gl_bindings.bind(context)
         filt = self._wanted_filter()
         self._texture = self._new_texture(GL_TEXTURE_2D, filt, "prepare")
@@ -614,15 +659,20 @@ class VideoFrameItem(QGraphicsPixmapItem):
             _last_resort("페인트 엔진 없음을 기록하지 못했습니다")
 
     def _fail(self, exc):
-        """첫 실패만: 기록(트레이스백 전문)과 오류 창(Qt 루프에서 — paint 안에서 모달 금지)으로 알리고 그 뒤 그리지 않게 표시한다.
-        두 번째부터는 아무것도 하지 않음.
+        """첫 실패만: 기록(트레이스백 전문)과 오류 창(Qt 루프에서 — paint 안에서 모달 금지)으로 알리고 그 뒤 그리지 않게 표시한다. 창 예약 바로 뒤에
+        실패 콜백(있으면)도 Qt 루프로 — 값 native = has_native_side()(그리던 그림에 IOSurface 면이 있었는가). 두 번째부터는 아무것도 하지 않음.
 
-        paint의 except 안에서 불리므로 예외를 내보내지 않는다(내보내면 qFatal): 기록과 창 예약을 따로 감싸(기록이 실패해도 창은 뜸),
-        알리다 또 실패하면 _last_resort."""
+        창의 첫 줄: 네이티브 면 실패이고 macOS이고 콜백이 있으면(플레이어가 이 창만 ffmpeg로 바꿈 — 스펙 2026-11-04 §5.8) NATIVE_FALLBACK_LINE,
+        아니면 FAILURE_LINE. 나머지(예외 줄·Mac 메뉴 안내·킬 스위치 안내)와 기록 줄은 같음. 콜백 쪽이 바꾸지 않기로 하는 경우(환경 변수가 덮음)는
+        여기서 모름 — 플레이어가 기록 줄로 알림.
+
+        paint의 except 안에서 불리므로 예외를 내보내지 않는다(내보내면 qFatal): 기록·창 예약·콜백 예약을 따로 감싸(기록이 실패해도 창은 뜨고 창 글을
+        만들지 못해도 콜백은 감), 알리다 또 실패하면 _last_resort."""
         if self._failed:
             return
         self._failed = True
         self.failure_count += 1
+        native = self.has_native_side()
         try:
             details = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
             print(
@@ -632,15 +682,26 @@ class VideoFrameItem(QGraphicsPixmapItem):
             )
         except BaseException:  # 기록 파일이 닫힘·꽉 참 등
             _last_resort("GL 텍스처 스트리밍 실패를 기록하지 못했습니다")
+        callback = self._failure_callback
         try:
+            mac = sys.platform == "darwin"
+            menu_hint = f"{DECODER_MENU_HINT}\n" if mac else ""  # 그 메뉴는 Mac에만 있음
+            first = NATIVE_FALLBACK_LINE if native and mac and callback is not None else FAILURE_LINE
             text = (
-                "영상 화면(GL 텍스처 스트리밍)을 그리지 못했습니다 — 영상 영역을 비워 둡니다 (재생·다른 기능은 그대로).\n\n"
+                f"{first}\n\n"
                 f"{type(exc).__name__}: {exc}\n\n"
+                f"{menu_hint}"
                 f"{VIDEO_ITEM_ENV}=pixmap 으로 켜면 예전 방식으로 그립니다"
             )
             QTimer.singleShot(0, lambda: _show_failure_window(text))
         except BaseException:  # str(exc)가 실패하는 예외 등
             _last_resort("GL 텍스처 스트리밍 실패 창을 띄우지 못했습니다")
+        if callback is None:
+            return
+        try:
+            QTimer.singleShot(0, lambda: _run_failure_callback(callback, native))
+        except BaseException:
+            _last_resort(f"GL 그리기 실패 콜백을 예약하지 못했습니다 (native={native})")
 
 
 def _show_failure_window(text):
@@ -649,6 +710,15 @@ def _show_failure_window(text):
         error_window.show_window(text)
     except BaseException:
         _last_resort(f"오류 창을 띄우지 못했습니다: {text}")
+
+
+def _run_failure_callback(callback, native):
+    """(Qt 루프에서) 실패 콜백 callback(native) — 예외를 Qt 루프로 내보내지 않음(_last_resort; 콜백이 Qt 신호를 내면 그 슬롯의 예외는 PyQt가 sys.excepthook으로
+    보내므로 여기 오는 것은 콜백 자체의 예외)."""
+    try:
+        callback(native)
+    except BaseException:
+        _last_resort(f"GL 그리기 실패 콜백이 실패했습니다 (native={native}) — 플레이어에 넘기지 못함")
 
 
 def _last_resort(message):

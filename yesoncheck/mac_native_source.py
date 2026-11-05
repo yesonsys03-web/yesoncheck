@@ -5,9 +5,9 @@
 알파로 읽지 말 것), .native가 NativeHandle(IOSurface 포인터·크기·프레임 번호·keepalive)이고 whole_surface_handle(frame)이 그 손잡이를
 돌려준다(GPU 쪽이 표면을 복사 없이 질감으로 씀).
 
-판정은 하지 않는다: 어느 파일을 이 캡처로 열지는 mac_native_gate(토글·Apple Silicon·4K ProRes 4:4:4·색 태그)를 본 플레이어가 정한다
+판정은 하지 않는다: 어느 파일을 이 캡처로 열지는 mac_native_gate(토글·재생 디코더 설정·macOS·HDR이 아닌 ProRes)를 본 플레이어가 정한다
 (시험은 게이트 없이 아무 크기의 클립이나 직접 연다). PyObjC는 함수 안(_pyobjc — 잠금 아래 한 번)에서만 불러온다: 이 모듈은 PyObjC가
-없는 Intel Mac·Windows에서도 import된다(빌드의 모듈 검사·플레이어의 지연 분기). 두 스레드가 처음으로 동시에 PyObjC 프레임워크를
+없는 Windows(와 Mac lock을 설치하지 않은 소스 환경)에서도 import된다(빌드의 모듈 검사·플레이어의 지연 분기). 두 스레드가 처음으로 동시에 PyObjC 프레임워크를
 import하면 멈춘 일이 있어(Stage 0 디코드만 측정의 두 리더) 잠금 아래에서 부른다.
 
 계약 (cv2와 같음 — FFmpegPipeCapture 설명과 같은 낱말): read()는 다음 프레임을 주고 pos를 1 올림. 끝에서는 (False, None)이고 pos는
@@ -64,7 +64,7 @@ NATIVE_READAHEAD 4장 + 링 8장 + 읽기 스레드가 손에 든 1장 ≈ 13장
 (죽은 cv2 캡처의 겉모습 — read (False, None)·isOpened False·get 0.0·set False, is_dead True) 링·큐를 비우고 리더를 멈춤(읽기 스레드가 cancelReading) →
 기록(stderr)에 즉시 한 번(원인 — 읽기 스레드의 트레이스백이 있으면 그 전문 — 과 읽던 곳의 호출 스택) → 오류 창은 Qt 루프에서 한 번
 (movie_pipe_source의 전달자 _window_relay를 같이 씀 — 큐드 연결이라 재생 타이머 슬롯 안에서 모달을 열지 않음; QApplication이 없으면
-기록만). 창 글의 끝 줄은 탈출구 안내(NATIVE_ESCAPE_HINT — YESONCHECK_MAC_NATIVE=off). 죽은 뒤의 read는 다시 알리지 않는다.
+기록만). 창 글의 끝 줄은 탈출구 안내(NATIVE_ESCAPE_HINT — Settings → 재생 디코더 (Mac) 또는 YESONCHECK_MAC_NATIVE=off). 죽은 뒤의 read는 다시 알리지 않는다.
 
 스레드: read()는 한 번에 한 스레드만 부른다(GUI — 파이프와 같은 계약). get·set·release는 다른 스레드에서 불러도 된다: 캡처의 상태
 (_session·_finalizer·_pos·_stream_pos·_ring·_target)는 _lock이 지키고, read()는 프레임을 기다리는 동안과 리더를 띄우는 동안 _lock을
@@ -96,7 +96,7 @@ NATIVE_SEEK_FORWARD_MAX = 24  # 앞으로 이만큼까지는 큐·리더에서 �
 NATIVE_READ_TIMEOUT_S = 30.0  # read()·생성자가 빈 큐를 기다리는 한도: 넘으면 멈춘 리더(NAS hard mount 등)로 보고 실패 처리
 NATIVE_LOG_PREFIX = f"{PLAY_LOG_PREFIX} 네이티브(VideoToolbox):"  # 열기 기록 줄·도중 실패 기록의 머리 — 기록에 이 줄이 있으면 네이티브 경로
 NATIVE_FAILURE_HEADLINE = "VideoToolbox로 영상을 읽다가 도중에 실패해 이 영상을 더 읽을 수 없습니다"  # 도중 실패의 기록·오류 창 첫 줄
-NATIVE_ESCAPE_HINT = f"탈출구(네이티브 재생을 끄고 ffmpeg 파이프로 엶): {NATIVE_MODE_ENV}=off"  # 오류 창 글의 끝 줄
+NATIVE_ESCAPE_HINT = f"탈출구(네이티브 재생을 끄고 ffmpeg 파이프로 엶): Settings → 재생 디코더 (Mac) → ffmpeg (예전 방식) — 또는 환경 변수 {NATIVE_MODE_ENV}=off (그 실행만)"  # 오류 창 글의 끝 줄
 NATIVE_READER_THREAD = "native-vt-reader"  # 읽기 스레드 이름의 머리 (뒤에 리더 시작 번호)
 READER_STATUS = {0: "unknown", 1: "reading", 2: "completed", 3: "failed", 4: "cancelled"}  # AVAssetReaderStatus
 _STACK_HEADER = "읽던 곳 (가장 최근 호출이 마지막):\n"

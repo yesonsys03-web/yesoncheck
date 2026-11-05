@@ -3,10 +3,10 @@
 이미지 시퀀스 프레임 디코딩 실행(exercise_sequence_decode): PIL의 지연 import 플러그인이 '실행에 쓰인 모듈'에 잡히는지.
 cv2에 OpenEXR 코덱이 꺼진 환경(Windows 휠의 기본)에서는 EXR을 건너뛰고 TGA만 확인하며 그 사실을 결과에 적음.
 소스 import 모음(source_imports): `from yesoncheck import X`의 X 모듈도 모아 함수 안에서만 부르는 모듈(mac_native_source)도 대조됨.
-네이티브 디코드 실행(exercise_native_decode): Apple Silicon에서만 번들 ffmpeg로 만든 4K 4444 클립을 NativeVTCapture로 3장 읽어 네이티브
-재생 길을 실제로 돌리고(그 밖의 플랫폼은 NATIVE_SKIPPED 한 줄), 틀린 프레임·게이트 음성·번들 ffmpeg 없음은 SystemExit. 가짜
-arm64(platform.machine·sys.platform 바꿔치기) + 가짜 캡처·클립·probe로 PyObjC 없이 어느 플랫폼에서나 돌고, 진짜 디코드는 PyObjC가 있는
-환경(p310_native·arm64 CI)에서."""
+네이티브 디코드 실행(exercise_native_decode): macOS(Apple Silicon·Intel 모두)에서 번들 ffmpeg로 만든 4K 4444 클립을 NativeVTCapture로 3장
+읽어 네이티브 재생 길을 실제로 돌리고(macOS가 아니면 NATIVE_SKIPPED 한 줄), 틀린 프레임·게이트 음성·번들 ffmpeg 없음은 SystemExit. 가짜
+Mac(platform.machine·sys.platform 바꿔치기) + 가짜 캡처·클립·probe로 PyObjC 없이 어느 플랫폼에서나 돌고, 진짜 디코드는 PyObjC가 있는
+Mac 환경(두 Mac lock을 설치한 빌드 환경·CI의 두 Mac job)에서."""
 
 import glob
 import os
@@ -156,7 +156,7 @@ def test_sequence_decode_exercise_lets_a_decoder_error_through(monkeypatch):
 # ---------------------------------------------------------------- 네이티브 디코드 (exercise_native_decode)
 
 NATIVE_WIDTH, NATIVE_HEIGHT = cfi.NATIVE_CLIP_SIZE
-REAL_FFMPEG_DIR = cfi.vendored_ffmpeg_dir()  # 이 기계의 번들 ffmpeg 폴더 — platform.machine()을 바꿔치기하기 전에 구함
+REAL_FFMPEG_DIR = cfi.vendored_ffmpeg_dir()  # 이 기계의 번들 ffmpeg 폴더 — 가짜 Mac 시험이 platform.machine()을 바꿔치기하기 전에 구함
 
 
 def eligible_probe(**changes):
@@ -202,9 +202,10 @@ class FakeVTCapture:
 
 
 @pytest.fixture
-def fake_arm64(monkeypatch, tmp_path):
-    """가짜 Apple Silicon: sys.platform darwin·platform.machine arm64, 번들 ffmpeg 폴더는 빈 가짜 파일 둘, 클립 공장·ffprobe·캡처는 기록하는 가짜.
-    rig.results(캡처의 read 결과 목록)·rig.hw·rig.probe를 바꾼 뒤 cfi.exercise_native_decode()를 부르면 됨."""
+def fake_mac(monkeypatch, tmp_path):
+    """가짜 Mac(기본 Apple Silicon — 검사는 칩과 상관없이 macOS면 돎): sys.platform darwin·platform.machine arm64, 번들 ffmpeg 폴더는 빈 가짜 파일 둘,
+    클립 공장·ffprobe·캡처는 기록하는 가짜. rig.results(캡처의 read 결과 목록)·rig.hw·rig.probe를 바꾼 뒤 cfi.exercise_native_decode()를 부르면 됨.
+    Intel Mac은 platform.machine만 x86_64로 되돌리면 됨 (test_frozen_check_runs_native_decode_on_intel_mac)."""
     folder = tmp_path / "vendor_ffmpeg"
     folder.mkdir()
     for name in ("ffmpeg", "ffprobe"):
@@ -241,38 +242,50 @@ def fake_arm64(monkeypatch, tmp_path):
     return rig
 
 
-@pytest.mark.parametrize("system, machine", [("darwin", "x86_64"), ("win32", "AMD64"), ("win32", "ARM64"), ("linux", "aarch64")])
-def test_frozen_check_skips_native_outside_arm64(monkeypatch, system, machine):
-    """Apple Silicon Mac이 아니면(Intel Mac·Windows·Windows ARM·Linux ARM) 클립도 캡처도 만들지 않고 NATIVE_SKIPPED 한 줄을 돌려줌
-    (main()이 결과 줄에 그대로 적음 — 건너뛴 사실이 보이게)."""
+@pytest.mark.parametrize("system, machine", [("win32", "AMD64"), ("win32", "ARM64"), ("linux", "x86_64"), ("linux", "aarch64")])
+def test_frozen_check_skips_native_outside_darwin(monkeypatch, system, machine):
+    """macOS가 아니면(Windows·Windows ARM·Linux) 클립도 캡처도 만들지 않고 NATIVE_SKIPPED 한 줄을 돌려줌 (main()이 결과 줄에 그대로 적음 —
+    건너뛴 사실이 보이게). Mac은 칩과 상관없이 돌림 — Intel Mac도 VideoToolbox로 디코드하고 빌드에 PyObjC가 있음."""
     def must_not_run(*args, **kwargs):
-        raise AssertionError("Apple Silicon이 아닌데 네이티브 디코드를 시작했다")
+        raise AssertionError("macOS가 아닌데 네이티브 디코드를 시작했다")
 
     monkeypatch.setattr(sys, "platform", system)
     monkeypatch.setattr(platform, "machine", lambda: machine)
     monkeypatch.setattr(cfi, "make_native_clip", must_not_run)
     monkeypatch.setattr(mac_native_source, "NativeVTCapture", must_not_run)
     assert cfi.exercise_native_decode() == cfi.NATIVE_SKIPPED
-    assert cfi.NATIVE_SKIPPED == "네이티브 디코드 건너뜀 (Apple Silicon 아님)"
+    assert cfi.NATIVE_SKIPPED == "네이티브 디코드 건너뜀 (macOS 아님)"
+
+
+def test_frozen_check_runs_native_decode_on_intel_mac(fake_mac, monkeypatch):
+    """Intel Mac(darwin + x86_64)도 건너뛰지 않음: 같은 가짜 클립·probe·캡처로 3장을 읽고 release한 뒤 결과 줄을 돌려줌 (하드웨어 디코드는 보통
+    hw=no)."""
+    monkeypatch.setattr(platform, "machine", lambda: "x86_64")
+    result = cfi.exercise_native_decode()
+    assert result == f"네이티브 디코드: VideoToolbox 3장 {NATIVE_WIDTH}×{NATIVE_HEIGHT} 32BGRA (hw=no)"
+    [(ffmpeg, clip, path_head)] = fake_mac.clips
+    assert (ffmpeg, path_head) == (os.path.join(fake_mac.folder, "ffmpeg"), fake_mac.folder)
+    [cap] = fake_mac.captures
+    assert (cap.path, cap.reads, cap.released) == (clip, cfi.NATIVE_READ_FRAMES, True)
 
 
 @pytest.mark.parametrize("hw, label", [(True, "yes"), (False, "no"), (None, "?")])
-def test_frozen_check_runs_native_decode_on_arm64(fake_arm64, hw, label):
+def test_frozen_check_runs_native_decode_on_apple_silicon(fake_mac, hw, label):
     """Apple Silicon: 번들 ffmpeg(PATH 맨 앞)로 임시 폴더에 클립 → 그 클립의 probe → 같은 probe 객체로 NativeVTCapture → 3장 읽고 release →
     결과 줄. PATH는 끝나면 되돌림."""
-    fake_arm64.hw = hw
+    fake_mac.hw = hw
     path_before = os.environ["PATH"]
     result = cfi.exercise_native_decode()
     assert result == f"네이티브 디코드: VideoToolbox 3장 {NATIVE_WIDTH}×{NATIVE_HEIGHT} 32BGRA (hw={label})"
     assert os.environ["PATH"] == path_before
-    [(ffmpeg, clip, path_head)] = fake_arm64.clips
-    assert ffmpeg == os.path.join(fake_arm64.folder, "ffmpeg")
-    assert path_head == fake_arm64.folder  # 클립을 만들고 probe하는 동안 번들 폴더가 PATH 맨 앞
+    [(ffmpeg, clip, path_head)] = fake_mac.clips
+    assert ffmpeg == os.path.join(fake_mac.folder, "ffmpeg")
+    assert path_head == fake_mac.folder  # 클립을 만들고 probe하는 동안 번들 폴더가 PATH 맨 앞
     assert clip.endswith(".mov") and not os.path.exists(clip)  # 임시 폴더는 끝나면 지움
-    assert fake_arm64.probed == [clip]
-    [cap] = fake_arm64.captures
+    assert fake_mac.probed == [clip]
+    [cap] = fake_mac.captures
     assert (cap.path, cap.reads, cap.released) == (clip, cfi.NATIVE_READ_FRAMES, True)
-    assert cap.probe is fake_arm64.probe
+    assert cap.probe is fake_mac.probe
 
 
 def wrong_frames():
@@ -288,15 +301,15 @@ def wrong_frames():
 
 
 @pytest.mark.parametrize("case", sorted(wrong_frames()))
-def test_frozen_check_native_decode_fails_loudly_on_a_wrong_frame(fake_arm64, case):
+def test_frozen_check_native_decode_fails_loudly_on_a_wrong_frame(fake_mac, case):
     """프레임이 기대(4K (높이, 너비, 4) uint8 · 표면 전체의 IOSurface 손잡이 · 번호 0, 1, 2 · 한 색이 아님)와 다르면 검사 실패 (SystemExit —
     조용히 넘기지 않음). 실패해도 캡처는 release하고 PATH는 되돌림."""
-    fake_arm64.results = wrong_frames()[case]
+    fake_mac.results = wrong_frames()[case]
     path_before = os.environ["PATH"]
     with pytest.raises(SystemExit) as exc:
         cfi.exercise_native_decode()
     assert "네이티브 디코드" in str(exc.value)
-    [cap] = fake_arm64.captures
+    [cap] = fake_mac.captures
     assert cap.released
     assert os.environ["PATH"] == path_before
 
@@ -309,15 +322,15 @@ def test_native_frame_problem_names_a_wrong_dtype():
     assert problem == (f"0번째 프레임의 모양·형이 {frame.shape} uint16입니다 (기대 ({NATIVE_HEIGHT}, {NATIVE_WIDTH}, 4) uint8)")
 
 
-def test_frozen_check_native_decode_fails_when_the_gate_rejects_the_clip(fake_arm64):
-    """번들 ffmpeg가 만든 클립이 네이티브 게이트를 통과하지 못하면(예: 4:2:2) 캡처를 열지 않고 사유째 실패."""
-    fake_arm64.probe = eligible_probe(pix_fmt="yuv422p10le")
-    with pytest.raises(SystemExit, match="⑧ 4:4:4가 아님"):
+def test_frozen_check_native_decode_fails_when_the_gate_rejects_the_clip(fake_mac):
+    """번들 ffmpeg가 만든 클립이 네이티브 게이트를 통과하지 못하면(예: HDR 태그) 캡처를 열지 않고 사유째 실패."""
+    fake_mac.probe = eligible_probe(color_transfer="smpte2084")
+    with pytest.raises(SystemExit, match=r"⑨ HDR\(smpte2084\)"):
         cfi.exercise_native_decode()
-    assert fake_arm64.captures == []
+    assert fake_mac.captures == []
 
 
-def test_frozen_check_native_decode_lets_a_capture_error_through(fake_arm64, monkeypatch):
+def test_frozen_check_native_decode_lets_a_capture_error_through(fake_mac, monkeypatch):
     """NativeVTCapture가 못 열면(NativeCaptureError — PyObjC 없음 등) 그 오류가 스택 트레이스째 그대로 올라옴 (검사 실패)."""
     def refuse(path, probe):
         raise mac_native_source.NativeCaptureError("AVFoundation으로 영상을 열지 못했습니다 — ModuleNotFoundError", path)
@@ -328,23 +341,23 @@ def test_frozen_check_native_decode_lets_a_capture_error_through(fake_arm64, mon
 
 
 @pytest.mark.parametrize("missing", ["ffmpeg", "ffprobe"])
-def test_vendored_ffmpeg_missing_fails_loudly(fake_arm64, missing):
+def test_vendored_ffmpeg_missing_fails_loudly(fake_mac, missing):
     """번들 ffmpeg·ffprobe가 없으면 그 경로를 든 SystemExit — PATH의 다른 ffmpeg로 조용히 대신하지 않음, PATH는 그대로."""
-    os.remove(os.path.join(fake_arm64.folder, missing))
+    os.remove(os.path.join(fake_mac.folder, missing))
     path_before = os.environ["PATH"]
     with pytest.raises(SystemExit) as exc:
         cfi.exercise_native_decode()
-    assert os.path.join(fake_arm64.folder, missing) in str(exc.value)
-    assert fake_arm64.clips == [] and os.environ["PATH"] == path_before
+    assert os.path.join(fake_mac.folder, missing) in str(exc.value)
+    assert fake_mac.clips == [] and os.environ["PATH"] == path_before
 
 
-def test_vendored_ffmpeg_must_be_the_one_the_app_finds(fake_arm64, monkeypatch):
+def test_vendored_ffmpeg_must_be_the_one_the_app_finds(fake_mac, monkeypatch):
     """PATH 맨 앞에 번들 폴더를 뒀는데도 앱 코드(movie_pipe_source.ffprobe_path)가 다른 ffprobe를 고르면 실패 (그 ffprobe로 probe하지 않음)."""
     monkeypatch.setattr(movie_pipe_source, "ffprobe_path", lambda: "/usr/local/bin/ffprobe")
     path_before = os.environ["PATH"]
     with pytest.raises(SystemExit, match="/usr/local/bin/ffprobe"):
         cfi.exercise_native_decode()
-    assert fake_arm64.clips == [] and os.environ["PATH"] == path_before
+    assert fake_mac.clips == [] and os.environ["PATH"] == path_before
 
 
 def test_main_prints_the_native_result_in_the_summary_line(monkeypatch, capsys):
@@ -360,7 +373,7 @@ def test_main_prints_the_native_result_in_the_summary_line(monkeypatch, capsys):
 @pytest.mark.skipif(sys.platform != "darwin", reason="번들 ffmpeg 폴더 vendor/ffmpeg/<machine>은 Mac 규칙 (Windows는 vendor/ffmpeg/windows)")
 def test_native_clip_from_the_vendored_ffmpeg_passes_the_gate(tmp_path):
     """이 Mac의 진짜 번들 ffmpeg·ffprobe로: make_native_clip의 명령이 네이티브 게이트를 통과하는 4K 4444 6장 클립을 만들고, PATH를 바꾼 동안
-    앱 코드가 그 ffprobe를 고름 (arm64 CI의 빌드 검사가 같은 명령을 씀)."""
+    앱 코드가 그 ffprobe를 고름 (두 Mac CI job의 빌드 검사가 같은 명령을 씀)."""
     path = str(tmp_path / "native_4k_4444.mov")
     path_before = os.environ["PATH"]
     with cfi.vendored_ffmpeg_on_path() as ffmpeg:
@@ -373,11 +386,9 @@ def test_native_clip_from_the_vendored_ffmpeg_passes_the_gate(tmp_path):
     assert (probe.width, probe.height, probe.nb_frames, probe.codec_tag) == (NATIVE_WIDTH, NATIVE_HEIGHT, cfi.NATIVE_CLIP_FRAMES, "ap4h")
 
 
-def test_native_decode_exercise_really_decodes(monkeypatch):
-    """진짜 VideoToolbox(AVAssetReader) 디코드: 번들 ffmpeg 클립을 NativeVTCapture로 3장 — PyObjC가 있는 환경에서만(p310_native·arm64 CI).
-    Intel Mac(p310_native)에서는 platform.machine만 arm64로 바꾸고 번들 폴더는 이 기계의 것을 씀 (VideoToolbox는 Intel에서도 ProRes를 디코드)."""
-    pytest.importorskip("AVFoundation", reason="PyObjC 없음 — 진짜 네이티브 디코드는 p310_native·arm64 CI에서")
-    monkeypatch.setattr(platform, "machine", lambda: "arm64")
-    monkeypatch.setattr(cfi, "vendored_ffmpeg_dir", lambda: REAL_FFMPEG_DIR)
+def test_native_decode_exercise_really_decodes():
+    """진짜 VideoToolbox(AVAssetReader) 디코드: 이 기계의 번들 ffmpeg 클립을 NativeVTCapture로 3장 — 바꿔치기 없음. PyObjC가 있는 환경에서만
+    (두 Mac lock을 설치한 빌드 환경·CI의 두 Mac job — Intel Mac에서도 VideoToolbox가 ProRes를 디코드, hw=no); Windows는 PyObjC가 없어 건너뜀."""
+    pytest.importorskip("AVFoundation", reason="PyObjC 없음 — 진짜 네이티브 디코드는 Mac lock을 설치한 환경(두 Mac CI job)에서")
     result = cfi.exercise_native_decode()
     assert re.fullmatch(rf"네이티브 디코드: VideoToolbox 3장 {NATIVE_WIDTH}×{NATIVE_HEIGHT} 32BGRA \(hw=(yes|no|\?)\)", result), result

@@ -1,4 +1,4 @@
-"""플레이어의 네이티브 분기 (Apple Silicon 네이티브 재생 — 계획 Task 11·B6).
+"""플레이어의 네이티브 분기 (Mac 네이티브 재생 — 계획 Task 11·B6).
 
 네이티브 프레임(IOSurface 위 BGRX 뷰 — frame_handles.NativeFrameArray)은 재생 틱·탐색에서 CPU가 픽셀을 만지지 않는다: process_frame·
 optimize_for_4k·드래그 미리보기의 색 변환을 건너뛰고(cv2.cvtColor는 4채널 strided 배열도 받아 3채널 복사본을 만들어 손잡이를 조용히 잃음),
@@ -7,7 +7,7 @@ X·Y가 함께면 "xy"와 (rx, ry)). 픽스맵 아이템(킬 스위치·raster)�
 재생이 마지막 프레임에 닿으면 [측정] 줄 하나(Play마다 — 모든 캡처).
 
 가짜 네이티브 캡처(tests/native_fakes — VideoToolbox·PyObjC 없음)를 플레이어의 캡처 열기 자리에 꽂은 진짜 VideoPlayer(offscreen)를 쓴다.
-화면은 GL 뷰포트 + 스트림 아이템(YESONCHECK_VIEWPORT=gl 강제 — Apple Silicon의 기본 길; offscreen엔 GL 컨텍스트가 없지만 창을 띄우지 않아
+화면은 GL 뷰포트 + 스트림 아이템(YESONCHECK_VIEWPORT=gl 강제 — Mac의 기본 길; offscreen엔 GL 컨텍스트가 없지만 창을 띄우지 않아
 paint는 일어나지 않음)이고 set_sides는 기록하며 진짜로 부른다(인자가 틀리면 진짜 set_sides의 ValueError로 드러남). 픽셀 접근은 둘로 센다:
 rig.reads(SpyNativeArray가 본 파이썬 쪽 접근 — 인덱싱·ufunc·numpy 함수·tobytes·.data …)와 rig.cvt_calls(네이티브 프레임을 받은 cv2.cvtColor —
 C 확장의 버퍼 읽기는 파이썬에서 못 보므로 함수를 바꿔치기). 비네이티브 길이 그대로인지는 기존 시험 파일(test_display_single_draw·test_pipe_player·
