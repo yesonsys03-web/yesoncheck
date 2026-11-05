@@ -30,16 +30,16 @@ def _as_prefs(value, path):
     return value
 
 
-def read_prefs() -> dict:
-    """prefs.json의 값 (없으면 {}). 깨졌거나 객체가 아니면 UserFileError — 빈 값으로 치지 않음."""
-    path = prefs_path()
+def read_prefs(path=None) -> dict:
+    """prefs.json의 값 (없으면 {}). 깨졌거나 객체가 아니면 UserFileError — 빈 값으로 치지 않음. path: 다른 위치(Windows — windows_display)."""
+    path = path or prefs_path()
     return _as_prefs(user_files.read_json(path, {}), path)
 
 
-def update_pref(key: str, value) -> None:
+def update_pref(key: str, value, path=None) -> None:
     """prefs.json의 key를 value로 (잠금 안에서 다시 읽고 그 키만 고침 — 다른 키는 그대로, 파일이 없으면 새로 만듦). 깨진 파일은 덮지 않고
-    UserFileError, 잠금 시간 초과는 TimeoutError, 쓰기 실패는 OSError."""
-    path = prefs_path()
+    UserFileError, 잠금 시간 초과는 TimeoutError, 쓰기 실패는 OSError. path: 다른 위치(Windows — windows_display)."""
+    path = path or prefs_path()
 
     def mutate(prefs):
         prefs = _as_prefs(prefs, path)

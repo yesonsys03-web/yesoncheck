@@ -2,6 +2,7 @@
 
 import math
 import os
+import traceback
 
 import cv2
 import numpy as np
@@ -38,7 +39,7 @@ from PyQt5.QtWidgets import (
     QOpenGLWidget,
 )
 
-from yesoncheck import paths
+from yesoncheck import gl_bindings, paths, windows_display
 from yesoncheck.annotation_overlay import AnnotationOverlay
 from yesoncheck.frame_handles import native_surface_of, whole_surface_handle
 from yesoncheck.gl_video_item import LOG_PREFIX, VIDEO_ITEM_ENV, VideoFrameItem, use_stream_item, video_item_mode
@@ -59,13 +60,13 @@ ANNOTATION_OVERLAY_Z = 13.5
 OVERLAY_FONT_REF_PX = 100  # 글꼴 크기를 정할 때 대문자 높이를 재는 기준 픽셀 크기 (overlay_font)
 
 
-def viewport_mode(platform_name, env):
+def viewport_mode(platform_name, env, windows_renderer=windows_display.DEFAULT_RENDERER):
     """뷰포트 종류를 정함 — "gl" 또는 "raster".
 
     풀스크린 재생 FPS 저하는 Mac 레티나의 CPU 확대 블릿이 원인이라 cocoa에서만 GL이 기본
-    (풀스크린 13.5→24.8fps, 창 모드는 동일 — 2026-10-28 실측). Windows는 풀스크린 저하가 없고(사용자 실측),
-    offscreen(시험·CI)은 QOpenGLWidget을 지원하지 않음(컨텍스트 생성 실패). YESONCHECK_VIEWPORT=gl|raster로
-    명시해서 바꿀 수 있고, 그 밖의 값은 ValueError — 조용한 폴백 금지.
+    (풀스크린 13.5→24.8fps, 창 모드는 동일 — 2026-10-28 실측). Windows는 기본 raster이고 Settings 메뉴에서 GPU를 고르면(windows_renderer —
+    windows_display) GL — 4K 끊김이 줄어듦(사용자 확인 2026-11-05). offscreen(시험·CI)은 QOpenGLWidget을 지원하지 않음(컨텍스트 생성 실패).
+    YESONCHECK_VIEWPORT=gl|raster로 명시해서 바꿀 수 있고(메뉴보다 우선), 그 밖의 값은 ValueError — 조용한 폴백 금지.
     """
     forced = env.get(VIEWPORT_ENV)
     if forced is not None:
@@ -74,7 +75,9 @@ def viewport_mode(platform_name, env):
                 f"{VIEWPORT_ENV}는 {' 또는 '.join(VIEWPORT_MODES)}여야 합니다: {forced!r}"
             )
         return forced
-    return "gl" if platform_name == "cocoa" else "raster"
+    if platform_name == "cocoa" or (platform_name == "windows" and windows_renderer == "gpu"):
+        return "gl"
+    return "raster"
 
 
 def viewport_forced(env):
@@ -85,6 +88,16 @@ def viewport_forced(env):
 def gl_context_available():
     """OpenGL 컨텍스트를 실제로 만들 수 있는지 — cocoa에서도 드물게 실패할 수 있음(원격 세션·드라이버 문제)."""
     return QOpenGLContext().create()
+
+
+def windows_gl_problem():
+    """(Windows) 이 PC의 GL을 그리기 코드가 쓸 수 없는 이유, 쓸 수 있으면 None. 확인이 실패해도 창은 열려야 함 — GPU를 고른 PC가 앱을 못 켜면 메뉴로 되돌릴 수도
+    없으므로 트레이스백을 기록하고 '쓸 수 없음'으로 돌려줌 (부른 쪽이 창으로 알림)."""
+    try:
+        return windows_display.gl_problem(gl_bindings.context_info())
+    except Exception as exc:
+        traceback.print_exc()
+        return f"OpenGL을 확인하지 못했습니다: {exc}"
 
 
 def overlay_font(text, layout):
@@ -133,17 +146,27 @@ class CustomVideoWidget(QGraphicsView):
         # 아이템 선택(use_stream_item)이 토글을 검사하므로 YESONCHECK_VIDEO_ITEM=gl을 raster 뷰포트에 주면 여기서 ValueError.
         # setViewport 등 GL 적용 자체는 자리 조건(아래 주석) 때문에 그 자리에 그대로 둠.
         self.viewport_fallback_reason = None  # GL을 쓰려다 못 쓴 사유 — show_viewport_fallback(스플래시 뒤)이 창으로 알림
-        mode = viewport_mode(QApplication.platformName(), os.environ)
+        platform_name = QApplication.platformName()
+        mode = viewport_mode(platform_name, os.environ, windows_display.preferred())
         forced = viewport_forced(os.environ)
         gl_ok = mode == "gl" and (forced or gl_context_available())
+        windows_problem = None
+        if gl_ok and not forced and platform_name == "windows":  # 고른 GPU가 그리기 코드와 맞는가 — 맞지 않으면 그릴 때 실패하거나 오류 없이 느림 (windows_display)
+            windows_problem = windows_gl_problem()
+            gl_ok = windows_problem is None
         if mode == "gl" and not gl_ok:
             # 조용한 폴백 금지: 기록에 바로 남기고, 창은 여기서 띄우지 않음 — 위젯 생성 중 모달은
             # splash.finish의 processEvents 안에서 열려 시작 순서를 멈춤(업데이트 '잘 켜짐' 표시까지 늦어짐 — 검토 실측).
             # 사유를 남겨 두면 app.launch가 스플래시를 닫은 뒤 show_viewport_fallback으로 알림.
-            print("[뷰포트] OpenGL 컨텍스트 생성 실패 — raster로 계속 (풀스크린 재생이 느릴 수 있음)")
-            self.viewport_fallback_reason = (
-                "OpenGL을 쓸 수 없어 기본 화면 그리기로 계속합니다 — 풀스크린 재생이 느릴 수 있습니다."
-            )
+            if platform_name == "windows":
+                windows_problem = windows_problem or windows_display.gl_problem(None)
+                print(f"[뷰포트] GPU 화면 그리기를 쓸 수 없음 — raster로 계속: {windows_problem}")
+                self.viewport_fallback_reason = windows_display.fallback_text(windows_problem)
+            else:
+                print("[뷰포트] OpenGL 컨텍스트 생성 실패 — raster로 계속 (풀스크린 재생이 느릴 수 있음)")
+                self.viewport_fallback_reason = (
+                    "OpenGL을 쓸 수 없어 기본 화면 그리기로 계속합니다 — 풀스크린 재생이 느릴 수 있습니다."
+                )
         self.video_item_stream = use_stream_item(gl_ok, video_item_mode(os.environ))
         if self.video_item_stream:
             self.video_item = VideoFrameItem(stream=True)

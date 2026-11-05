@@ -542,7 +542,7 @@ def test_native_failure_window_announces_the_switch(qapp, dialogs, monkeypatch, 
         item._fail(gl_bindings.GLBindingError("x"))
         qapp.processEvents()
     [(_, _, text)] = dialogs.messages
-    menu = f"{MENU_HINT}\n" if platform == "darwin" else ""
+    menu = f"{gl_video_item.failure_menu_hint(platform)}\n"
     assert text == f"{NATIVE_FIRST_LINE if announces else OLD_FIRST_LINE}\n\nGLBindingError: x\n\n{menu}{ENV_HINT}"
 
 

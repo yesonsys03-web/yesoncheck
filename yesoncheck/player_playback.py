@@ -43,21 +43,36 @@ from yesoncheck import external_tools, file_names, media_info, paths, thumbnails
 from yesoncheck.player_sidebar import ThumbnailContext
 
 
-def measurement_line(frames, elapsed, native, wipe, display, name):
-    """재생 한 바퀴의 [측정] 줄 — `[측정] <장>장 <초>초 (<fps>fps) 네이티브=yes|no 와이프=on|off 표시=gl|pixmap|raster — <파일 이름>`.
-    frames: Play 뒤 진행한 장 수, elapsed: Play 직후부터 마지막 틱의 그리기가 끝난 때까지(초). M1 측정 기록이 이 줄을 읽음(Ruling 3)."""
+def measurement_line(frames, elapsed, native, wipe, display, name, max_gap=0.0, stalls=0):
+    """재생 한 바퀴의 [측정] 줄 — `[측정] <장>장 <초>초 (<fps>fps) 최대간격 <ms>ms 끊김 <n>번 네이티브=yes|no 와이프=on|off 표시=gl|pixmap|raster — <파일 이름>`.
+    frames: Play 뒤 진행한 장 수, elapsed: Play 직후부터 마지막 틱의 그리기가 끝난 때까지(초). 평균만으로는 일정한지 알 수 없어 가장 긴 프레임 간격과 끊긴 횟수(_MeasureRun)를 함께.
+    M1 측정 기록이 이 줄을 읽음(Ruling 3)."""
     fps = frames / elapsed if elapsed > 0 else 0.0
-    return (f"[측정] {frames}장 {elapsed:.2f}초 ({fps:.1f}fps) 네이티브={'yes' if native else 'no'} "
+    return (f"[측정] {frames}장 {elapsed:.2f}초 ({fps:.1f}fps) 최대간격 {max_gap * 1000:.0f}ms 끊김 {stalls}번 네이티브={'yes' if native else 'no'} "
             f"와이프={'on' if wipe else 'off'} 표시={display} — {name}")
 
 
 class _MeasureRun:
-    """[측정] Play 한 번의 기록 — t0: Play 직후 시각, frames: 그 뒤 진행한 장 수, last: 마지막 틱의 update_frame이 끝난 시각 (time.perf_counter)."""
+    """[측정] Play 한 번의 기록 — t0: Play 직후 시각, frames: 그 뒤 진행한 장 수, last: 마지막 틱의 update_frame이 끝난 시각 (time.perf_counter), max_gap: 가장 긴 틱 간격(초), stalls: 틱 간격이 프레임 시간의 STALL_FACTOR배를 넘은 횟수 — 첫 틱(한 프레임을 기다리고 재생 시작 일까지 더해져 늘 김)과 번호가 건너뛴 틱(재생 중 탐색 — 사용자가 한 일)은 세지 않음. 처리가 늘 프레임 시간의 1.5배를 넘으면 거의 모든 틱이 세짐(끊김이 아니라 느린 것)."""
 
-    __slots__ = ("t0", "frames", "last")
+    __slots__ = ("t0", "frames", "last", "frame_s", "max_gap", "stalls", "position")
+    STALL_FACTOR = 1.5
 
-    def __init__(self, t0):
+    def __init__(self, t0, frame_s):
         self.t0, self.frames, self.last = t0, 0, t0
+        self.frame_s, self.max_gap, self.stalls = frame_s, 0.0, 0
+        self.position = None
+
+    def note_tick(self, now, position):
+        """틱 하나가 프레임을 진행해 그린 시각과 캡처 위치."""
+        if self.position is not None and position == self.position + 1:
+            gap = now - self.last
+            self.max_gap = max(self.max_gap, gap)
+            if gap > self.frame_s * self.STALL_FACTOR:
+                self.stalls += 1
+        self.position = position
+        self.frames += 1
+        self.last = now
 
 
 class PlayerPlaybackMixin:
@@ -1752,9 +1767,9 @@ class PlayerPlaybackMixin:
         run = self._measure_run
         if run is None:
             return
-        run.frames += 1
-        run.last = time.perf_counter()
-        if int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES)) >= int(self.cap_a.get(cv2.CAP_PROP_FRAME_COUNT)):
+        position = int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES))
+        run.note_tick(time.perf_counter(), position)
+        if position >= int(self.cap_a.get(cv2.CAP_PROP_FRAME_COUNT)):
             self._print_measurement()
 
     def _print_measurement(self):
@@ -1766,7 +1781,7 @@ class PlayerPlaybackMixin:
         widget = self.videoWidget
         wipe = bool(self.cap_b) and widget.wipeEnabled and (widget.wipe_enabled_x or widget.wipe_enabled_y)
         print(measurement_line(run.frames, run.last - run.t0, native_surface_of(self.frame_a) is not None, wipe,
-                               widget.display_path(), os.path.basename(self.filename_a)), flush=True)
+                               widget.display_path(), os.path.basename(self.filename_a), max_gap=run.max_gap, stalls=run.stalls), flush=True)
 
     def next_frame(self):
         if not self.cap_a: 
@@ -2380,7 +2395,7 @@ class PlayerPlaybackMixin:
             if original_fps > 0: 
                 self._playback_clock = PlaybackClock(original_fps, time.perf_counter())  # Play마다 새 시각표 — 멈춘 시간을 밀린 것으로 치지 않게
                 self.timer.start(self._playback_clock.first_delay_ms())
-                self._measure_run = _MeasureRun(time.perf_counter())  # [측정] 이 Play부터 (Play마다 새로)
+                self._measure_run = _MeasureRun(time.perf_counter(), 1 / original_fps)  # [측정] 이 Play부터 (Play마다 새로)
                 
                 # 현재 프레임 위치를 비디오의 원래 FPS로 계산하여 오디오 동기화
                 current_frame = int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES)) - 1

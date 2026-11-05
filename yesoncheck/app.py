@@ -17,7 +17,7 @@ if __package__ in (None, ""):
     from yesoncheck.main_window import VideoPlayer  # type: ignore  # pylint: disable=import-error
     from yesoncheck import (  # type: ignore  # pylint: disable=import-error
         build_info, default_app, error_window, file_associations, gl_video_item, launch_args, mac_app_events, mac_mounts,
-        mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, timing_log, update_install, user_files,
+        mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, timing_log, update_install, user_files, windows_display,
     )
     from yesoncheck.player_base import EXIT_WAIT_S, wait_for_released_workers  # type: ignore  # pylint: disable=import-error
     from yesoncheck.player_update import BOX_TITLE_PROPERTY  # type: ignore  # pylint: disable=import-error
@@ -25,7 +25,7 @@ else:
     from .main_window import VideoPlayer
     from . import (
         build_info, default_app, error_window, file_associations, gl_video_item, launch_args, mac_app_events, mac_mounts,
-        mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, timing_log, update_install, user_files,
+        mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, timing_log, update_install, user_files, windows_display,
     )
     from .player_base import EXIT_WAIT_S, wait_for_released_workers
     from .player_update import BOX_TITLE_PROPERTY
@@ -228,6 +228,23 @@ def load_playback_decoder():
     print(f"[재생] 디코더: {decoder} ({source})", flush=True)
 
 
+DISPLAY_RENDERER_TITLE = "화면 그리기 설정"
+
+
+def load_display_renderer():
+    """(Windows) 화면 그리기 설정을 시작 때 한 번 읽어 windows_display의 캐시에 둠 — 뷰포트는 창을 만들 때 그 캐시를 봄. 깨진 파일·나쁜 값은 기본으로 치지 않고 트레이스백·창을
+    보인 뒤 이 세션은 CPU(예전 방식) — 읽지 못한 채 GPU를 켜지 않음. 파일은 건드리지 않는다. Windows가 아니면 아무것도 읽지 않는다."""
+    if sys.platform != "win32":
+        return
+    try:
+        windows_display.set_preferred(windows_display.read())
+    except (user_files.UserFileError, ValueError) as exc:
+        traceback.print_exc()
+        windows_display.set_preferred(windows_display.DEFAULT_RENDERER)
+        QMessageBox.warning(None, DISPLAY_RENDERER_TITLE, f"{exc}\n\n이 세션은 CPU로 그립니다 — Settings → {windows_display.MENU_TEXT}에서 바꿀 수 있습니다")
+    print(f"[뷰포트] 화면 그리기 설정: {windows_display.preferred()}", flush=True)  # '[표시]'는 GL 그리기 줄 전용 (CLAUDE.md)
+
+
 def screen_report(screen):
     """시작 로그용 한 줄: 화면의 논리 크기·작업 영역·devicePixelRatio·논리 DPI·Qt 배율 반올림 정책
     (Windows 150%가 2배로 반올림되는지 등을 사용자 로그로 알 수 있게)."""
@@ -359,6 +376,7 @@ def launch(argv=None):
     gl_video_item.video_item_mode(os.environ)  # 영상 아이템 토글(YESONCHECK_VIDEO_ITEM)의 나쁜 값도 같은 이유로 여기서
     # (Mac) 재생 디코더 설정(prefs.json)도 시작 때 한 번 읽어 게이트의 캐시에 — native_wanted는 그 캐시만 봄 (깨졌으면 알리고 이 세션은 ffmpeg)
     load_playback_decoder()
+    load_display_renderer()  # (Windows) 화면 그리기 설정 — 창(뷰포트)을 만들기 전에
     # 네이티브 재생 토글(YESONCHECK_MAC_NATIVE)도 같은 이유로 여기서 — 값(native_mode)과 함께 on이 macOS 밖이면 ValueError (native_wanted가
     # 열 때마다 늦게 실패하지 않게)
     mac_native_gate.native_wanted()

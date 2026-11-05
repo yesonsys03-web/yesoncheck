@@ -59,7 +59,7 @@ from PyQt5.QtCore import QPointF, Qt, QTimer
 from PyQt5.QtGui import QImage, QOpenGLContext, QPaintEngine, QPixmap
 from PyQt5.QtWidgets import QGraphicsPixmapItem
 
-from yesoncheck import error_window, gl_bindings, gl_surface
+from yesoncheck import error_window, gl_bindings, gl_surface, windows_display
 from yesoncheck.frame_handles import native_surface_of, whole_surface_handle
 from yesoncheck.gl_bindings import (
     GL_BLEND,
@@ -88,6 +88,17 @@ VIDEO_ITEM_MODES = ("auto", "gl", "pixmap")
 LOG_PREFIX = "[표시]"
 # (Mac) 실패 창의 킬 스위치 안내 앞에 붙는 줄 — player_base의 Settings 메뉴 '재생 디코더 (Mac)'가 그 걸쇠를 풂 (스펙 2026-11-04 §5.4 ④)
 DECODER_MENU_HINT = "Settings → 재생 디코더 (Mac) → ffmpeg (예전 방식) 으로 바꾸면 예전 방식으로 재생합니다"
+
+
+def failure_menu_hint(platform_name):
+    """그리기 실패 창에서 킬 스위치 안내 앞에 붙는 줄 — 그 플랫폼에 되돌리는 메뉴가 있으면."""
+    if platform_name == "darwin":
+        return DECODER_MENU_HINT
+    if platform_name == "win32":
+        return f"Settings → {windows_display.MENU_TEXT} → {windows_display.ACTION_TEXTS['cpu']}를 고르고 앱을 다시 켜면 CPU로 그립니다"
+    return ""
+
+
 # (Mac) 네이티브 면을 그리다 실패했고 받을 쪽(실패 콜백)이 있을 때 실패 창의 첫 줄 — 플레이어가 이 창만 ffmpeg로 바꿈 (스펙 2026-11-04 §5.8)
 NATIVE_FALLBACK_LINE = "네이티브 화면 그리기에 실패해 이 창은 ffmpeg 방식으로 바꿉니다(설정 파일은 그대로 — 다음 창은 다시 시도)"
 FAILURE_LINE = "영상 화면(GL 텍스처 스트리밍)을 그리지 못했습니다 — 영상 영역을 비워 둡니다 (재생·다른 기능은 그대로)."  # 그 밖의 실패 창 첫 줄
@@ -685,7 +696,8 @@ class VideoFrameItem(QGraphicsPixmapItem):
         callback = self._failure_callback
         try:
             mac = sys.platform == "darwin"
-            menu_hint = f"{DECODER_MENU_HINT}\n" if mac else ""  # 그 메뉴는 Mac에만 있음
+            hint = failure_menu_hint(sys.platform)
+            menu_hint = f"{hint}\n" if hint else ""
             first = NATIVE_FALLBACK_LINE if native and mac and callback is not None else FAILURE_LINE
             text = (
                 f"{first}\n\n"

@@ -43,9 +43,9 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from yesoncheck.video_widget import CustomVideoWidget
+from yesoncheck.video_widget import VIEWPORT_ENV, CustomVideoWidget
 from yesoncheck import bookmarks, build_info, default_app, error_window, external_tools, file_associations, \
-    instance_link, instances, mac_native_gate, mac_prefs, paths, timing_log, video_list
+    instance_link, instances, mac_native_gate, mac_prefs, paths, timing_log, user_files, video_list, windows_display
 from yesoncheck.movie_pipe_source import movie_source_mode
 from yesoncheck.user_files import UserFileError
 from yesoncheck.main_window_styles import (
@@ -80,6 +80,8 @@ from yesoncheck.worker_lifecycle import EXIT_WAIT_S, _RELEASED_WORKERS, release_
 
 # Settings → '재생 디코더 (Mac)' (스펙 2026-11-04 §5.4) — 항목 차례는 mac_native_gate.DECODERS
 DECODER_MENU_TEXT = "재생 디코더 (Mac)"
+DISPLAY_TITLE = "화면 그리기 설정"  # Settings → 화면 그리기 (Windows) — windows_display
+DISPLAY_TIP = "이 PC의 설정 파일(prefs.json)에 저장합니다 — 다음에 여는 창부터 적용됩니다"
 DECODER_ACTION_TEXTS = {"videotoolbox": "VideoToolbox (기본)", "ffmpeg": "ffmpeg (예전 방식)"}
 DECODER_SAVE_TITLE = "재생 디코더 설정"  # 저장 실패 창 제목 (app.load_playback_decoder의 읽기 실패 창과 같은 제목)
 DECODER_TIP = "이 창은 바로 바꾸고 이 Mac의 설정 파일(prefs.json)에 저장합니다 — 이미 열린 다른 창은 다음에 켤 때부터 따릅니다"
@@ -1374,6 +1376,7 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
                 self.decoder_action_group.append(action)
                 self.decoder_actions[name] = action
             self._sync_decoder_menu()
+        self._add_display_menu(settings_menu)
 
         # 공유 설정 폴더 변경 (Windows: PC마다 고름)
         if paths.IS_WINDOWS:
@@ -1558,6 +1561,66 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         mac_native_gate.set_preferred_decoder("ffmpeg", source=mac_native_gate.SOURCE_GL_FALLBACK)
         print(GL_FALLBACK_LOG, flush=True)
         self._swap_captures_and_settle_latch("[표시] ffmpeg 방식으로 바꾸지 못한 쪽이 있음 — 그 쪽은 다음에 열 때부터 ffmpeg")
+
+    def _add_display_menu(self, settings_menu):
+        """(Windows) Settings → 화면 그리기 — CPU·GPU 라디오와 '지금 이 창' 줄. 다른 플랫폼은 메뉴 없음(Mac은 늘 GL)."""
+        self.display_actions = {}
+        self.display_status_action = None
+        if sys.platform != "win32":
+            return
+        menu = settings_menu.addMenu(windows_display.MENU_TEXT)
+        menu.setToolTipsVisible(True)
+        for name in windows_display.RENDERERS:
+            action = menu.addAction(windows_display.ACTION_TEXTS[name])
+            action.setCheckable(True)
+            action.triggered.connect(lambda checked, renderer=name: self.set_display_renderer(renderer))
+            self.display_actions[name] = action
+        menu.addSeparator()
+        self.display_status_action = menu.addAction("")
+        self.display_status_action.setEnabled(False)
+        self._sync_display_menu()
+        menu.aboutToShow.connect(self._sync_display_menu)  # 메뉴는 영상 화면(videoWidget)보다 먼저 만들어지므로 '지금 이 창'은 열 때 맞춤
+
+    def _sync_display_menu(self):
+        """체크·활성·툴팁을 설정에 맞춤. 환경 변수 YESONCHECK_VIEWPORT가 있으면 그 값으로 체크하고 비활성(메뉴보다 우선). '지금 이 창'은 실제로 그리는 쪽 — GPU를 골랐어도 다음
+        창부터이거나, 이 PC의 GL이 맞지 않아 CPU일 수 있음."""
+        if not self.display_actions:
+            return
+        forced = os.environ.get(VIEWPORT_ENV)
+        if forced:
+            chosen, enabled = ("gpu" if forced == "gl" else "cpu"), False
+            tip = f"{VIEWPORT_ENV}={forced}가 우선합니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다"
+        else:
+            try:  # 창마다 프로세스 — 다른 창이 고쳤을 수 있으니 파일을 다시 읽음. 깨졌으면 기록만 남기고 지금 값으로 (시작·저장 때 창으로 알림)
+                windows_display.set_preferred(windows_display.read())
+            except (user_files.UserFileError, ValueError):
+                traceback.print_exc()
+            chosen, enabled, tip = windows_display.preferred(), True, DISPLAY_TIP
+        for name, action in self.display_actions.items():
+            action.setChecked(name == chosen)
+            action.setEnabled(enabled)
+            action.setToolTip(tip)
+        widget = getattr(self, "videoWidget", None)  # 창을 만드는 중이면 아직 없음
+        if widget is not None:
+            self.display_status_action.setText(f"지금 이 창: {'GPU' if widget.display_path() == 'gl' else 'CPU'}")
+
+    def set_display_renderer(self, name):
+        """(Windows) 메뉴에서 고른 화면 그리기를 이 PC의 설정 파일에 저장. 뷰포트는 창을 만들 때 정하므로 다음에 여는 창부터 적용 — 지금 창은 그대로. 저장 실패는 창으로 알리고 바꾸지 않음
+        (깨진 파일을 덮지 않음). 파일이 이미 그 값이면 아무것도 하지 않음 — 이 창의 캐시가 아니라 파일과 견줌(창마다 프로세스라 다른 창이 고쳤을 수 있음)."""
+        try:
+            if windows_display.read() == name:
+                self._sync_display_menu()
+                return
+            windows_display.save(name)
+        except (user_files.UserFileError, OSError, TimeoutError) as exc:
+            traceback.print_exc()
+            QMessageBox.critical(self, DISPLAY_TITLE, f"화면 그리기 설정을 저장하지 못해 바꾸지 않았습니다.\n{exc}")
+            self._sync_display_menu()
+            return
+        windows_display.set_preferred(name)
+        print(f"[뷰포트] 화면 그리기 설정: {name} (Settings 메뉴)", flush=True)
+        self._sync_display_menu()
+        QMessageBox.information(self, DISPLAY_TITLE, f"{windows_display.ACTION_TEXTS[name]}로 저장했습니다. 다음에 여는 창부터 적용됩니다.\n{self.display_status_action.text()}")
 
     def _sync_decoder_menu(self):
         """(Mac) Settings → 재생 디코더 (Mac)의 체크·활성·툴팁을 지금 유효한 디코더(mac_native_gate.effective_decoder)에 맞춤 — 메뉴를 만들 때, 고른 뒤(저장

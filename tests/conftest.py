@@ -197,14 +197,17 @@ def _isolated_prefs_and_decoder_cache(monkeypatch, tmp_path_factory):
     Windows의 expanduser는 USERPROFILE을 봄 — 둘 다. 게이트의 선호 디코더 캐시(프로세스에 하나)도 시험 앞뒤로 기본 videotoolbox로: app.launch가
     prefs를 읽어 정한 값·시험이 set_preferred_decoder로 바꾼 값이 다른 시험(다른 파일)에 남지 않게. 파일마다의 home 픽스처는 이 뒤에 돌아 HOME을 다시 바꿀 뿐 —
     무해. (mac_prefs.prefs_path를 바꿔치지 않는 이유: default_app이 from-import로 묶고 test_default_app이 default_app.prefs_path()를 직접 부름)"""
-    from yesoncheck import mac_native_gate
+    from yesoncheck import mac_native_gate, windows_display
 
+    windows_display.set_preferred(windows_display.DEFAULT_RENDERER)
     home = str(tmp_path_factory.mktemp("home"))
     monkeypatch.setenv("HOME", home)
     monkeypatch.setenv("USERPROFILE", home)
+    monkeypatch.setenv("LOCALAPPDATA", home)  # Windows 설정 파일(windows_display)도 진짜 파일이 아니라 없는 파일이 되게 — 깨진 파일이면 launch 시험이 창에서 멈춤
     mac_native_gate.set_preferred_decoder("videotoolbox")
     yield
     mac_native_gate.set_preferred_decoder("videotoolbox")
+    windows_display.set_preferred(windows_display.DEFAULT_RENDERER)
 
 
 @pytest.fixture(autouse=True)

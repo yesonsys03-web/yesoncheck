@@ -36,7 +36,7 @@ from tests.test_work_paths_ui import make_config
 from yesoncheck.gl_video_item import VideoFrameItem
 
 TOTAL = FAKE_FRAME_COUNT
-MEASURE = re.compile(r"^\[측정\] (\d+)장 (\d+\.\d\d)초 \((\d+\.\d)fps\) 네이티브=(yes|no) 와이프=(on|off) 표시=(gl|pixmap|raster) — (.+)$")
+MEASURE = re.compile(r"^\[측정\] (\d+)장 (\d+\.\d\d)초 \((\d+\.\d)fps\) 최대간격 \d+ms 끊김 \d+번 네이티브=(yes|no) 와이프=(on|off) 표시=(gl|pixmap|raster) — (.+)$")
 
 
 def assert_untouched(rig):
