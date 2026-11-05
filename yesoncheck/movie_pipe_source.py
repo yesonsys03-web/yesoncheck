@@ -1068,6 +1068,7 @@ class FFmpegPipeCapture:
     def _read(self):
         if self._cache_mode is None:  # 첫 read: 프레임 캐시 판정을 한 번 (_lock 밖 — 메모리를 읽음)
             self._decide_cache()
+        served = park = None
         with self._lock:
             session, target = self._session, self._target
             if session is None:
@@ -1077,9 +1078,15 @@ class FFmpegPipeCapture:
             if ahead == 0:  # ① 스트림 위치 — 아래에서 꺼내 내줌
                 self._arrive(n, target)
             elif self._ring.has(n) or self._full.has(n):  # ② 보관본의 복사본 (세션 그대로) — 링을 먼저, 그다음 채움기가 채운 전체 저장소
-                frame = (self._ring if self._ring.has(n) else self._full).copy_of(n)
+                from_ring = self._ring.has(n)
+                served = (self._ring if from_ring else self._full).copy_of(n)
                 self._arrive(n + 1, target)
-                return True, frame
+                if not from_ring:
+                    park = self._store_frontier(n)
+        if served is not None:
+            if park is not None:  # 보관본이 끝나는 곳으로 스트림을 미리 옮겨 둠 — 실패면 _restart가 죽음까지 알림(이 프레임은 그대로 내줌)
+                self._restart(session, park, backward=False, park=True)
+            return True, served
         if ahead:  # ③ 앞으로 버리기 / ④ 재시작(ahead < 0이면 뒤로 — 미리 채움) — 끝나면 스트림 위치 == n (①)
             session = self._seek(session, n, target, restart=not 0 < ahead <= SEEK_FORWARD_MAX, backward=ahead < 0)
             if session is None:
@@ -1243,14 +1250,28 @@ class FFmpegPipeCapture:
             if not self._pull(session, deliver=False)[0]:  # 버리기 — 목표 앞(< count)의 끝은 도중 실패
                 return None
 
-    def _restart(self, old, target, backward):
+    def _store_frontier(self, n):
+        """(_lock 안) 전체 저장소에서 n을 내준 뒤 스트림을 옮겨 둘 번호 — n 다음으로 전체 저장소에 없는 첫 번호, 옮길 필요가 없으면 None
+        (파일 끝까지 다 있음·스트림이 이미 거기 있음). 왜: 채움기가 앞부분만 채운 채 처음으로 돌아가면(반복 재생) 보관본을 내주는 동안 스트림은
+        멀리(파일 끝) 서 있다가 보관본이 끝나는 곳에서야 재시작해 재생 도중에 멈췄음(Windows 4K 0.75~0.84초 — 사용자 기록 2026-11-06, ring이면
+        없음). 보관본을 내주기 시작할 때 옮겨 두면 ffmpeg가 그동안 준비해 끝에 닿을 때 ①로 이어짐. 채움기는 0부터 차례로 채우므로 보관본은
+        앞에서부터 이어진 구간."""
+        frontier = n + 1
+        while frontier < self._count and self._full.has(frontier):
+            frontier += 1
+        if frontier >= self._count or frontier == self._stream_pos:
+            return None
+        return frontier
+
+    def _restart(self, old, target, backward, park=False):
         """(read 안, _lock 밖) 세션 재시작: 목표 K장 앞(start)을 -ss로 겨눈 새 ffmpeg → 캡처의 세션·GC 안전망을 새 세션으로 바꾸고
         스트림 위치를 start로(링은 on_restart로 비움 — 전체 저장소는 그대로; pos는 목표로) → 옛 세션 정지. → 새 세션, 또는 None (띄우지 못해
         죽음 — 알림까지 끝냄 / 띄우는 사이 release됨). 띄우지 못한 사유 글(트레이스백)을 만들다 실패해도 고정 사유(+ 원래 예외 한 줄)로
         죽음 — read 밖으로 예외를 내지 않음 (§5.5).
         K: 앞으로(backward 거짓) SEEK_BACK_K(0 — 목표에서 바로, 슬라이더를 앞으로 끄는 점프가 느려지지 않게), 뒤로(backward — 목표 <
         스트림 위치) KEEP_BEHIND — 0에서 자름. 뒤로는 start..목표−1을 _seek가 꺼내 버리며 보관해(on_restart로 비운 뒤라 남음) 이어지는 ←가
-        재시작 없이 나온다: 4K에서 링 밖의 ←가 매번 재시작(~0.5초)이던 것이 8번에 한 번(디코드 8장 ≈0.16초가 더해져 약 0.6초)."""
+        재시작 없이 나온다: 4K에서 링 밖의 ←가 매번 재시작(~0.5초)이던 것이 8번에 한 번(디코드 8장 ≈0.16초가 더해져 약 0.6초).
+        park: 보관본 끝으로 미리 옮겨 둠(_store_frontier) — 내줄 번호(pos)는 그대로, 스트림 위치만 target으로."""
         back = max(SEEK_BACK_K, KEEP_BEHIND) if backward else SEEK_BACK_K
         start = target - min(back, target)
         command, transport = (), None
@@ -1281,7 +1302,9 @@ class FFmpegPipeCapture:
                 old_finalizer, self._finalizer = self._finalizer, weakref.finalize(self, new.stop)
                 self._ring.on_restart()  # 링만 비움 — 전체 저장소는 채움기 것이라 그대로
                 # pos는 목표 그대로 — 미리 채우는 동안(start..목표−1을 버리는 중) 다른 스레드의 get(POS_FRAMES)가 목표 앞 번호를 보지 않게
-                self._stream_pos, self._pos = start, target
+                self._stream_pos = start
+                if not park:  # 옮겨 두기는 지금 내주는 자리(pos)를 바꾸지 않음
+                    self._pos = target
         if not swapped:  # 띄우는 사이 다른 스레드가 release함
             new.stop()
             return None
