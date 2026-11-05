@@ -833,7 +833,7 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 - **사이드바·썸네일·북마크**: `test_sidebar_refresh`·`test_video_list`·`test_thumbnails`·`test_bookmarks`·`test_sidebar_all_tab`
 - **워커·OCR·내보내기**: `test_workers_split`·`test_workers_transnetv2_guard`·`test_ocr_worker_lifetime`·`test_animatic2_availability`·`test_transnetv2_detect`·
   `test_runtime`·`test_export`·`test_unsaved_ocr_flag`·`test_review_sync`
-- **창 모양**: `test_stylesheet_freeze`(테마 시트를 해시로 고정)·`test_overlay_text_size`(B 키 오버레이 글자가 프레임 높이에 비례 — 1080p 1.5배·4K 2배 픽셀)·`test_playback_fps_label`(재생 FPS 라벨의 실제 fps — 진행한 프레임 세기·재생 중에만·첫 틱 제외·죽은 캡처·NaN·넉넉한 창에서 다 보임)·`test_scrollbar_style`·`test_slider_click`·`test_window_resize`·`test_high_dpi`·`test_force_focus`·`test_middle_panel_toggle`·`test_gl_viewport`(Mac GL 뷰포트 — 선택 규칙·GL 적용 시 보존 설정·테마 배경)·`test_overlay_slider_sync`(화살표 프레임 이동의 오버레이 슬라이더 동기화·대체 탐색 경로 한 칸 어긋남)
+- **창 모양**: `test_stylesheet_freeze`(테마 시트를 해시로 고정)·`test_overlay_text_size`(B 키 오버레이 글자가 프레임 높이에 비례 — 1080p 1.5배·4K 2배 픽셀)·`test_playback_fps_label`(재생 FPS 라벨의 실제 fps — 진행한 프레임 세기·재생 중에만·첫 틱 제외·죽은 캡처·NaN·넉넉한 창에서 다 보임)·`test_scrollbar_style`·`test_slider_click`·`test_window_resize`·`test_high_dpi`·`test_force_focus`·`test_middle_panel_toggle`·`test_gl_viewport`(Mac GL 뷰포트 — 선택 규칙·GL 적용 시 보존 설정·테마 배경)·`test_overlay_slider_sync`(화살표 프레임 이동의 오버레이 슬라이더 동기화·대체 탐색 경로 한 칸 어긋남)·`test_drag_release_seek`(긴 영상 멈춤 회귀 — 놓을 때 읽는 장수를 read 수로 고정, 캐시에 맞는 드래그는 read·set 0)
 - **ffmpeg 파이프 재생(ProRes)**: 실제 ffprobe·ffmpeg로 클립 공장(`tests/prores_clips.py` — numpy 프레임을 `prores_ks`에 파이프, 글꼴 의존인 drawtext 금지; 번호 클립·유채색 클립·경계 클립 voff·held·neg·rot·audio_first·truncated·vfr_h264)의 클립을 읽음 (mock 없음 — 오류 창 호출만 바꿔치기)
   - `test_pipe_spike`: 플랫폼 가정을 고정하는 스파이크 — 클립 공장 자가 검증, 파이프(`-fps_mode passthrough`) 대 cv2의 프레임 정렬과 바이트 기준(4:4:4 동일·4:2:2 ≤5), `-ss` 착지(K=0·K=2), 재시작 시간(시간은 print만)
   - `test_movie_pipe_gate`: 게이트 ①~⑥ — 좋은 probe의 필드 하나만 바꾼 사본으로 조건별 경계, 경계 클립의 판정, ffprobe의 time_base 분모 0("1/0")은 예외 없이 음성
@@ -1057,6 +1057,14 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 - 끄는 길 `YESONCHECK_MAC_NATIVE=off`(그 밖의 값·macOS 밖의 `on`은 시작 때 ValueError). 기록 `[재생] 네이티브(VideoToolbox): …` 줄이 있으면 새 경로, 열기 실패는 창 1회 뒤 파이프로 계속, 도중 실패는 파이프와 같은 B 방식
 - 의존성: PyObjC 12.2.2(core·AVFoundation·Quartz — Cocoa·CoreAudio·CoreMedia가 딸려 옴)를 arm64 lock에만. `check_frozen_imports`가 arm64에서 4K 4444를 VideoToolbox로 실제로 디코드(CI 세 job 통과 — Apple Silicon 러너 `hw=yes`)
 - 알고 둔 차이(구운 그림과): B 키 글꼴(Qt 글꼴 — 크기는 맞춤), 와이프 선·ROI가 B 키 상자 아래, 와이프에서 A의 글자·주석이 선에서 잘리지 않음, 주석은 안티앨리어싱. 시험 파일 11개 + 픽스처 `tests/native_fakes.py`('테스트 전략'). 눈 확인(M1)은 사용자 몫 — 내부 `records/2026-11-03-mac-native-playback/eye-check.md`
+
+### 2026-11-05 (긴 영상 — 슬라이더를 놓을 때 앱이 분 단위로 멈춤)
+- **증상**(사용자 보고 — Windows·Intel·Apple Silicon, 1.6.1에서도 같음): 25분 h264(36781장)에서 핸들을 좌우로 빠르게 끈 뒤 놓으면 앱이 멈췄다가 풀림. 짧은 영상에서는 보이지 않음. 화살표는 원인이 아니고 멈춘 동안 쌓인 입력
+- **원인**: 드래그가 프레임 캐시에 맞으면 그림만 바꾸고 캡처는 옮기지 않아(그래서 즉시 반응함) 캡처가 먼 곳에 남는데, 놓을 때 `sync_audio_on_release`가 5장 넘는 차이를 보면 `_seek_sequential` — 0번부터 목표까지 GUI 스레드에서 한 장씩 읽음. 멈춤이 목표 번호에 비례(실파일 30000번 119초)
+- **고침**: 놓을 때 `_precise_seek`(직접 이동)로 → 0.08초(실파일 전체를 순차로 읽은 프레임과 대조 — 직접 이동 37곳·끝 근처 80곳 일치). 같은 종류가 끝 근처(`_seek_conservative`의 앞으로 갈래가 현재 위치부터 목표까지 읽음 — 일부러 36778번에 놓으면 92초, 이 파일은 슬라이더 픽셀 간격상 마우스로 닿지 않고 몇천 장 클립에서 닿음)에도 있어 `_read_near_end`(목표 10장 앞부터, 이미 가까우면 옮기지 않음)로 → 0.13초. 그 길이 이제 와이프의 B도 같은 한도로 맞추고(놓을 때 예전 순차 읽기가 하던 일) 오류를 삼키지 않음(소스 실행은 슬롯 예외로 abort — 중간 구간과 같아짐, 빌드 앱은 예외 창)
+- **드래그 쪽**(사용자 요구 — 지금처럼 즉시 반응): 캐시에 맞는 드래그는 read·set 0을 시험이 고정, `on_slider_moved`·`_quick_preview_seek`는 바꾸지 않음. 바뀐 곳은 빈도 제한에 걸린 움직임이 끝 근처 값에 닿을 때뿐(`_seek_conservative`를 탐 — A는 읽는 장수가 줄고, 와이프면 B를 최대 11장 읽음)
+- 알고 둔 차이: 가변 프레임 h264는 놓을 때 N번째로 디코드한 프레임이 아니라 `set`이 닿은 프레임(공장 VFR 클립 120곳 중 28곳 한 칸, 틈이 큰 클립은 더 — 드래그 미리보기·휠·←와 같아짐). 목표 프레임만 못 읽으면 다음 프레임을 보임(`_seek_direct`의 기존 재시도 — 다른 탐색과 같음)
+- **남은 같은 종류(이 수정의 범위 밖)**: 보고한 프레임 수가 실제로 읽히는 수보다 많은 파일(소리가 영상보다 긴 mkv는 1초 꼬리부터, mp4·mov는 15초 꼬리부터 — 240장 클립 측정, 이번 파일은 36781장 전부 읽힘)은 읽히지 않는 구간에 닿으면 `_precise_seek` → `_seek_direct` 실패 → `_seek_sequential`로 0번부터(드래그 움직임마다, 기록 `순차적 프레임 읽기 사용`), 오른쪽 끝은 끝 6곳을 모두 못 읽으면 `_find_actual_last_frame`이 최대 10000장(기록 `빠른 검색 실패, 순차적 검색 시작`). 시험 `tests/test_drag_release_seek.py`
 
 ### 2026-11-03 (도형 주석 색 — 빨강이 파랑으로 굽히던 버그)
 - `annotation_burn.burn_annotations_on_frame`은 RGB 프레임(표시 경로의 `frame_a`, 내보내기 워커는 BGR → RGB로 바꿔 넘김)에 그리는데 도형(사각형·타원·선·화살표) 색을 `hex_to_bgr`로 넘겨 R·B가 뒤바뀌었음 — 화면과 '주석 포함 영상보내기' 결과 둘 다 (글자 패치는 RGB라 정상, 편집 중 미리보기는 Qt가 그려 정상).

@@ -1242,35 +1242,38 @@ class PlayerPlaybackMixin:
         
         self.update_frame()
 
+    def _read_near_end(self, cap, target_frame_idx):
+        """목표 10장 앞부터 읽어 목표 프레임을 돌려줌 (못 읽으면 None) — 앞으로 멀 때 현재 위치부터 다 읽으면 25분 영상에서 92초 GUI가 멈췄음 (tests/test_drag_release_seek.py)"""
+        current_pos = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+        start_frame = max(0, target_frame_idx - 10)
+        if start_frame <= current_pos < target_frame_idx:
+            start_frame = current_pos  # 이미 가까우면 옮기지 않고 앞으로 읽음 (옮기면 키프레임부터 다시 디코드)
+        else:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        frame = None
+        for _ in range(start_frame, target_frame_idx + 1):
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                return None
+        return frame
+
     def _seek_conservative(self, target_frame_idx, total_frames):
         """보수적인 프레임 이동 방법 - 마지막 프레임 근처에서 사용"""
-        try:
-            current_pos = int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES))
-            if target_frame_idx > current_pos:
-                for i in range(current_pos, target_frame_idx + 1):
-                    ret_a, frame_a = self.cap_a.read()
-                    if ret_a and frame_a is not None:
-                        if i == target_frame_idx:
-                            self.frame_a = self.process_frame(frame_a)
-                            self._update_ui_after_seek(target_frame_idx, total_frames)
-                            return True
-                    else:
-                        break
-            elif target_frame_idx < current_pos:
-                start_frame = max(0, target_frame_idx - 10)
-                self.cap_a.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-                for i in range(start_frame, target_frame_idx + 1):
-                    ret_a, frame_a = self.cap_a.read()
-                    if ret_a and frame_a is not None:
-                        if i == target_frame_idx:
-                            self.frame_a = self.process_frame(frame_a)
-                            self._update_ui_after_seek(target_frame_idx, total_frames)
-                            return True
-                    else:
-                        break
+        if target_frame_idx == int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES)):
             return False
-        except Exception as e:
+        frame_a = self._read_near_end(self.cap_a, target_frame_idx)
+        if frame_a is None:
             return False
+        self.frame_a = self.process_frame(frame_a)
+
+        # B 동기화
+        if self.cap_b and self.videoWidget.wipeEnabled:
+            frame_b = self._read_near_end(self.cap_b, target_frame_idx)
+            if frame_b is not None:
+                self.frame_b = self.process_frame(frame_b)
+
+        self._update_ui_after_seek(target_frame_idx, total_frames)
+        return True
 
     def _seek_direct(self, target_frame_idx, total_frames):
         """직접 프레임 이동을 시도합니다. 빠른 반응을 위해 사용됩니다."""
@@ -1460,10 +1463,12 @@ class PlayerPlaybackMixin:
                 if actual_frame_idx < 0:
                     actual_frame_idx = 0
                 
-                # 오차가 크면 순차적 읽기로 정확한 위치로 조정
+                # 오차가 크면 정확한 위치로 조정 — 드래그가 프레임 캐시에 맞으면 그림만 바꾸고 캡처는 옮기지 않아(그래서 드래그가 즉시 반응함) 이 차이가 남.
+                # 0번부터 순차로 읽지 않고 직접 이동(_precise_seek): 예전 _seek_sequential은 멈춤이 목표 번호에 비례해 25분 영상의 30000번에서 119초 GUI가 멈췄음
+                # (사용자 보고 2026-11-05 — tests/test_drag_release_seek.py)
                 if abs(actual_frame_idx - target_frame_idx) > 5:
                     print(f"드래그 완료: 정확한 위치로 조정 {actual_frame_idx} -> {target_frame_idx}")
-                    self._seek_sequential(target_frame_idx, total_frames)
+                    self._precise_seek(target_frame_idx, total_frames)
             
             # 개선된 오디오 동기화 - 동적 오프셋 계산
             original_fps = self.cap_a.get(cv2.CAP_PROP_FPS)
