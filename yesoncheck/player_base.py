@@ -221,7 +221,9 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         self.setFocusPolicy(Qt.StrongFocus)
         self.setAcceptDrops(True)
         self.timer = QTimer(self)
+        self.timer.setTimerType(Qt.PreciseTimer)  # 기본(Coarse)은 5% 안에서 간격을 바꿈 — 24fps가 25fps로 돌았음 (playback_clock)
         self.timer.timeout.connect(self.next_frame_playback)
+        self._playback_clock = None  # 재생 틱의 시각표 — play_video가 Play마다 새로 만듦
         self.videoWidget.fitToWindowChanged.connect(self.on_fit_to_window_changed)
         
 

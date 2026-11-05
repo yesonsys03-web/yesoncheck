@@ -9,11 +9,13 @@
 시험 영상은 프레임마다 밝기가 달라(write_test_video) 어느 프레임이 보이는지 밝기로 가른다. 드래그 신호는 setSliderDown·setSliderPosition — 진짜 마우스 드래그가 거치는 길과 같음.
 """
 
+import time
+
 import cv2
 import numpy as np
 import pytest
 from PyQt5.QtCore import QDateTime
-from PyQt5.QtTest import QTest
+from PyQt5.QtWidgets import QApplication
 
 from tests.conftest import write_test_video
 from tests.test_pipe_player import screen_image
@@ -263,18 +265,21 @@ def test_conservative_seek_from_close_by_reads_forward_on_b_too(rig, tmp_path):
 
 
 def test_release_moves_the_sound_with_the_picture(rig):
-    """소리 위치는 놓은 뒤의 캡처 위치에서 계산함 — 캡처를 옮기지 않거나 소리 맞춤을 빼면 NEAR 쪽 소리가 남음."""
+    """소리 위치는 놓은 뒤의 캡처 위치에서 계산함 — 캡처를 옮기지 않거나 소리 맞춤을 빼면 NEAR 쪽 소리가 남음.
+    값이 올 때까지 기다림: 정해진 시간만 돌면 가상 머신이 대기 중 잠을 길게 자 5ms 타이머를 놓침(Mac CI에서 빈 목록). 파일을 열 때 예약된 0ms도 함께 올 수 있어 순서는 보지 않음(Windows CI에서 [4137, 0])."""
     player, _cap, bar = rig
-    QTest.qWait(30)  # 파일을 열 때 예약된 소리 위치(0ms) 타이머를 먼저 보냄 — 이벤트를 안 돌리면 놓기 뒤에 함께 터져 순서가 플랫폼마다 다름(Windows CI에서 [4137, 0])
     drag_through(bar, FAR, NEAR, FAR)
     heard = []
     player.set_media_position = heard.append
 
     bar.setSliderDown(False)
-    QTest.qWait(30)  # 소리 맞춤은 5ms 뒤 타이머
 
     far_ms, near_ms = FAR / 24 * 1000, NEAR / 24 * 1000
-    assert heard and abs(heard[-1] - far_ms) < abs(heard[-1] - near_ms)
+    deadline = time.perf_counter() + 3
+    while not any(abs(ms - far_ms) < abs(ms - near_ms) for ms in heard) and time.perf_counter() < deadline:
+        QApplication.processEvents()
+        time.sleep(0.001)
+    assert any(abs(ms - far_ms) < abs(ms - near_ms) for ms in heard), heard
 
 
 def test_conservative_seek_does_not_swallow_errors(rig, monkeypatch):

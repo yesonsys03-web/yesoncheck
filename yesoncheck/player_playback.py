@@ -30,6 +30,7 @@ from yesoncheck.frame_handles import native_surface_of
 from yesoncheck.frame_utils import FrameCalculator
 from yesoncheck.mac_native_gate import native_ineligible_reason, native_wanted
 from yesoncheck.movie_pipe_source import PipeCaptureError, maybe_pipe_capture, movie_source_mode, probe_for_open, probe_movie
+from yesoncheck.playback_clock import PlaybackClock
 from yesoncheck.overlay_text_layout import (  # noqa: F401 (overlay_metrics: 옛 import 경로 — tests/test_overlay_text_size.py가 여기서 부름)
     OVERLAY_FONT,
     overlay_layout,
@@ -1696,6 +1697,7 @@ class PlayerPlaybackMixin:
     def next_frame_playback(self):
         if not self.cap_a or not self.timer.isActive(): 
             return
+        clock = self._playback_clock
             
         # 재생 중 주기적 오디오 동기화 (긴 영상에서 누적 오차 방지)
         current_frame = int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES)) - 1
@@ -1741,6 +1743,9 @@ class PlayerPlaybackMixin:
             self._print_measurement()  # 프레임 수를 크게 알리는 캡처(cv2)는 끝을 여기서 앎 — 마지막 틱이 이미 찍었으면 아무것도 안 함
             print("Video end detected in next_frame_playback")
             self.handle_video_end()
+        # 다음 틱 시각 — 이 틱이 재생을 멈췄거나 다시 시작했으면(끝·선택 재생의 다음 파일) 그쪽 시각표가 정함
+        if clock is not None and clock is self._playback_clock and self.timer.isActive():
+            self.timer.start(clock.next_delay_ms(time.perf_counter()))
 
     def _measure_tick(self):
         """[측정] 재생 틱이 프레임 하나를 진행해 그린 뒤: 장 수·시각을 적고, 마지막 프레임(다음 읽을 번호 ≥ 프레임 수)에 닿았으면 줄을 찍음."""
@@ -2373,9 +2378,8 @@ class PlayerPlaybackMixin:
             # 비디오의 원래 FPS를 사용하여 재생 속도 설정
             original_fps = self.cap_a.get(cv2.CAP_PROP_FPS)
             if original_fps > 0: 
-                # 개선된 타이머 설정 - 더 정확한 타이밍
-                timer_interval = max(1, int(1000 / original_fps))
-                self.timer.start(timer_interval)
+                self._playback_clock = PlaybackClock(original_fps, time.perf_counter())  # Play마다 새 시각표 — 멈춘 시간을 밀린 것으로 치지 않게
+                self.timer.start(self._playback_clock.first_delay_ms())
                 self._measure_run = _MeasureRun(time.perf_counter())  # [측정] 이 Play부터 (Play마다 새로)
                 
                 # 현재 프레임 위치를 비디오의 원래 FPS로 계산하여 오디오 동기화
@@ -2838,8 +2842,7 @@ class PlayerPlaybackMixin:
 
     def update_playback_fps(self, now=None):
         """1초마다(playback_fps_timer): 영상의 원래 fps와, 재생 중이면 **실제 fps**(지난 틱 뒤로 재생 틱 next_frame_playback이 진행한 프레임 수 ÷ 걸린 시간)를
-        `재생: 24 FPS · 실제 23.8`처럼 함께 — 실제가 원래 fps에 한참 못 미치면 리얼타임 재생이 아님(4K 확인용; 1초 표본이라 ±1 정도 흔들리고 타이머 간격
-        int(1000/fps)ms 때문에 원래 fps보다 조금 높게도 나옴). 진행한 프레임을 세므로 OCR 검토 창이 그리기를 건너뛰어도·탐색이 그려도 값이 흔들리지 않음.
+        `재생: 24 FPS · 실제 23.8`처럼 함께 — 실제가 원래 fps에 한참 못 미치면 리얼타임 재생이 아님(4K 확인용; 1초 표본이라 ±1 정도 흔들림). 진행한 프레임을 세므로 OCR 검토 창이 그리기를 건너뛰어도·탐색이 그려도 값이 흔들리지 않음.
         재생 중이 아니면 원래 fps만, 재생을 시작한 뒤 첫 틱도 원래 fps만(부분 구간). now는 시험용(기본 time.monotonic)."""
         if now is None:
             now = time.monotonic()
