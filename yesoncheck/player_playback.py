@@ -62,6 +62,7 @@ class _MeasureRun:
 
 class PlayerPlaybackMixin:
     _measure_run = None  # [측정] 지금 Play의 _MeasureRun — Play 전이거나 줄을 찍었으면 None
+    _last_measure_end = None  # 마지막으로 찍은 [측정] 줄의 (마지막 틱 시각, 파일 이름) — 선택 재생의 전환 줄이 가져가고 비움 (sidebar_playlist)
 
     def get_video_codec(self, file_path):
         """
@@ -340,7 +341,14 @@ class PlayerPlaybackMixin:
                     self.mediaPlayer.setMedia(QMediaContent(QUrl.fromLocalFile(file_path)))
                 
                 total_frames = int(self.cap_a.get(cv2.CAP_PROP_FRAME_COUNT))
+                # 신호를 막고 바꿈: 선택 재생 중에는 슬라이더가 앞 파일의 끝에 남아 있어(_stop_playback_for_open이 stop_video를 부르지 않음)
+                # 더 짧은 파일이면 Qt가 값을 새 끝으로 끌어내리며 valueChanged → 새 파일의 끝으로 갔다가 처음으로 되돌아왔음
+                # (파이프 4K에서 ffmpeg 재시작 두 번 — 사용자 보고 2026-11-06). 값도 0(새 파일의 처음 — 아래 display_first_frame이
+                # 보이는 자리)으로: 끌어내린 끝 값이 남으면 update_position_info가 '오른쪽 끝'으로 보고 Current를 전체 장수로 적음
+                self.positionScroll.blockSignals(True)
                 self.positionScroll.setMaximum(max(1, total_frames - 1))
+                self.positionScroll.setValue(0)
+                self.positionScroll.blockSignals(False)
                 # 스크롤바 핸들 크기를 고정 (페이지 스텝 설정)
                 # self.positionScroll.setPageStep(100)  # 고정된 페이지 스텝 값
 
@@ -1767,6 +1775,7 @@ class PlayerPlaybackMixin:
         wipe = bool(self.cap_b) and widget.wipeEnabled and (widget.wipe_enabled_x or widget.wipe_enabled_y)
         print(measurement_line(run.frames, run.last - run.t0, native_surface_of(self.frame_a) is not None, wipe,
                                widget.display_path(), os.path.basename(self.filename_a)), flush=True)
+        self._last_measure_end = (run.last, os.path.basename(self.filename_a))
 
     def next_frame(self):
         if not self.cap_a: 
