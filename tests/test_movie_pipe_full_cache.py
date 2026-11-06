@@ -534,15 +534,78 @@ def test_ring_hit_does_not_move_the_stream(auto_mode, prores_clip, sessions, fil
 
 
 def test_full_store_never_moves_the_stream(auto_mode, prores_clip, sessions):
-    """다 채운 뒤에는 끝까지 보관본이라 옮길 곳이 없음 — 지금처럼 재시작 0."""
+    """다 채운 뒤에는 끝까지 보관본이라 옮길 곳이 없음 — 지금처럼 재시작 0. 스트림(30)보다 앞인 60으로 가서 보관본을 읽게 함
+    (리뷰: 0만 읽고 처음으로 가면 0이 링에 있어 보관본을 한 번도 안 읽었음 — 끝까지 찼을 때 옮기지 않는 조건을 빼도 통과했음;
+    스트림이 보관본 구간 안이면 다른 조건이 막으므로, 스트림보다 앞을 읽어야 '끝까지 찼음' 조건만 봄)."""
     cap = open_full(prores_clip)
     try:
-        assert read_number(cap) == 0
+        assert [read_number(cap) for _ in range(30)] == list(range(30))  # 스트림 30
         assert cap.wait_fill(FILL_WAIT_S)
         count = len(main_sessions(sessions))
+        assert cap.set(1, 60) and [read_number(cap) for _ in range(60, COUNT)] == list(range(60, COUNT))
         assert cap.set(1, 0) and [read_number(cap) for _ in range(COUNT)] == list(range(COUNT))
         assert len(main_sessions(sessions)) == count
     finally:
+        cap.release()
+
+
+def test_store_growing_while_paused_does_not_move_the_stream_again(auto_mode, prores_clip, sessions, fill_gate):
+    """리뷰: 멈춘 동안 채움기가 보관본을 늘리면(끝이 40 → 60) 다음 보관본 읽기에서 끝이 달라져 매번 다시 옮겼음 — 멈춘 채 →를 천천히
+    누르면 누를 때마다 ffmpeg. 스트림이 이미 그 구간 안(읽는 번호 < 스트림 ≤ 보관본 끝)에 있으면 재생이 스트림에 닿을 때까지 보관본이라 옮기지 않음."""
+    gate = fill_gate(40)
+    cap = open_full(prores_clip)
+    try:
+        assert read_number(cap) == 0
+        assert gate.reached.wait(WAIT_S)
+        assert cap.set(1, 100) and read_number(cap) == 100
+        assert cap.set(1, 10) and read_number(cap) == 10  # 보관본 끝(40)으로 옮겨 둠
+        parked = len(main_sessions(sessions))
+        assert cap._session.start == 40
+        gate2 = fill_gate(60)
+        gate.opened.set()
+        assert gate2.reached.wait(WAIT_S)  # 멈춘 동안 40..59를 더 채움
+        for n in (11, 12, 13):
+            assert cap.set(1, n) and read_number(cap) == n
+        assert len(main_sessions(sessions)) == parked and cap._session.start == 40
+        gate2.opened.set()
+    finally:
+        gate.opened.set()
+        cap.release()
+
+
+def test_stream_already_inside_the_store_is_not_moved(auto_mode, prores_clip, sessions, fill_gate):
+    """리뷰: 재생 중 스트림이 30(보관본 0..59 안)에 있을 때 링 밖의 15로 가면, 15부터 재생해도 30에서 스트림에 닿으므로 옮길 필요가 없음."""
+    gate = fill_gate(60)
+    cap = open_full(prores_clip)
+    try:
+        assert read_number(cap) == 0
+        assert gate.reached.wait(WAIT_S)
+        assert [read_number(cap) for _ in range(1, 30)] == list(range(1, 30))  # 스트림 30, 링 22..29
+        count = len(main_sessions(sessions))
+        assert cap.set(1, 15) and read_number(cap) == 15
+        assert [read_number(cap) for _ in range(16, 90)] == list(range(16, 90))  # 보관본 → 30부터 스트림, 60 넘어서도 그대로
+        assert len(main_sessions(sessions)) == count
+    finally:
+        gate.opened.set()
+        cap.release()
+
+
+def test_moving_the_stream_keeps_the_ring(auto_mode, prores_clip, sessions, fill_gate):
+    """리뷰: 옮겨 둘 때 링까지 비우면 보던 자리(링)로 돌아갈 때마다 막히는 재시작(4K 0.45~0.63초)이 생겼음 — 북마크 두 곳을 오가는 비교 등.
+    옮겨 두기는 링을 그대로 둠(링은 번호로 찾으므로 옛 장이 있어도 번호는 맞음 — 새로 꺼낸 장이 들어오면 차례로 밀려남)."""
+    gate = fill_gate(40)
+    cap = open_full(prores_clip)
+    try:
+        assert read_number(cap) == 0
+        assert gate.reached.wait(WAIT_S)
+        assert cap.set(1, 100) and [read_number(cap) for _ in range(6)] == list(range(100, 106))  # 링 100..105
+        count = len(main_sessions(sessions))
+        for _ in range(3):
+            for n in (10, 103):
+                assert cap.set(1, n) and read_number(cap) == n
+        assert len(main_sessions(sessions)) == count + 1  # 처음 10에서 한 번 옮겨 둠, 103은 링에서
+    finally:
+        gate.opened.set()
         cap.release()
 
 

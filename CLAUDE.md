@@ -218,7 +218,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   - `yesoncheck/annotation_overlay.py` (170줄): 주석 층 `AnnotationOverlay` — 네이티브 프레임의 주석을 굽지 않고 Qt 아이템으로(위젯이 층 하나를 장면에 두고, 데이터는 플레이어). 층은 장면 원점의 프레임 사각형(층 좌표 = 프레임 픽셀, 그리지 않음)이고 자식을 그 사각형으로 자름(`ItemClipsChildrenToShape` — cv2가 프레임 밖을 자르는 것과 같게), 주석마다 자식(사각형·타원·선·화살표 경로·글자)을 주석 차례대로 쌓고 프레임마다 값이 바뀐 것만 고침(`set_annotations`·`clear`).
     기하는 굽는 길과 **같은 함수** — `annotation_burn.annotation_spec`(좌표·기본 굵기·글자 크기)·`rect_corners`·`ellipse_center_axes`·`arrow_tip_points`·`annotation_font`로 굽기 코드를 나눴고 굽는 결과는 바이트 그대로(나누기 전 함수와 대조). 격자에 놓는 법만 아이템 몫: cv2 정수 좌표 p → p + 0.5(픽셀 가운데 — `PIXEL_CENTER`), 획 폭은 cv2가 그 굵기로 실제로 칠하는 폭(`burned_stroke_extent` — 굵기 3을 5px로), 둥근 끝·이음, 글자 기준선은 굽는 패치와 같은 자리(`TEXT_PATCH_INSET`). 구운 그림과 다른 점은 위 `video_widget.py` 항목
   - `yesoncheck/overlay_text_layout.py` (57줄): B 키 오버레이("File: <이름>, Frame: n/N")의 크기·자리 규칙 — 굽는 길(`player_playback.overlay_text` — cv2)과 네이티브 아이템 길(`video_widget.set_overlay_text`)이 함께 써서 어긋나지 않게: `overlay_metrics(너비, 높이)`(2026-11-03 규칙 그대로 `player_playback`에서 옮김 — `OVERLAY_TEXT_SCALE`·`OverlayMetrics`)와 `overlay_layout(text, 너비, 높이)` → `OverlayLayout`(배율·굵기·여백·cv2 글자 너비/높이/꼬리·들어갈 너비 — 넘치면 줄임). Qt 없음
-- `yesoncheck/movie_pipe_source.py` (1,539줄): **ffmpeg 파이프 프레임 소스** — ProRes류 CFR mov를 번들 ffmpeg(`-f rawvideo -pix_fmt bgr24`, 출력 대상 `pipe:1` — 바이트가 오는 길은 아래 '전송')로 디코드해
+- `yesoncheck/movie_pipe_source.py` (1,564줄): **ffmpeg 파이프 프레임 소스** — ProRes류 CFR mov를 번들 ffmpeg(`-f rawvideo -pix_fmt bgr24`, 출력 대상 `pipe:1` — 바이트가 오는 길은 아래 '전송')로 디코드해
   `cv2.VideoCapture` 자리에 꽂는 덕타이핑 캡처 `FFmpegPipeCapture`(`isOpened`·`read`·`get`·`set`·`release`, `ImageSequenceCapture`와 같은 계약)와 그것을 고르는 게이트.
   **왜**: 4K ProRes 4444(3840×2160 24fps)가 cv2로는 디코드만으로 22fps라 실시간에 못 미침. 원인은 cv2 내장 FFmpeg의 단일 스레드 픽셀 변환(12bit 4:4:4 → BGR)으로 **보임**(간접 실측 2026-10-29:
   번들 ffmpeg도 단일 스레드로 돌리면 8.5fps, cv2에 `OPENCV_FFMPEG_CAPTURE_OPTIONS="threads;0"`은 효과 없음 23.0fps) — 번들 ffmpeg의 디코드+bgr24 변환은 8코어를 써서 50.7fps(이 Mac Intel 8코어 실측;
@@ -290,7 +290,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
     실패하면 **예산 장부의 몫을 곧바로 채운 만큼으로 줄임**(`_LEDGER.shrink` — 채우지 못한 몫은 다른 캡처가 씀; 채운 장과 그 몫은 release까지 남음, 이미 반환된 키는 되살리지 않음).
     채움 세션은 처음 쉬는 때 띄우되 Popen 바로 앞에서 정지 플래그를 다시 봄(그사이 release·죽음이면 띄우지 않음).
     `release`·죽음은 같은 잠금 안에서 두 저장소를 비우고 채움기를 세운 뒤(그 뒤 한 장도 넣지 못함) 채움 세션을 끝냄, release 없이 버려진 캡처는 캡처 단위 `weakref.finalize`가 채움기를 멈춤(장부 반환과 같은 사슬). 채우는 동안 안 채운 구간의 스크럽은 링 모드처럼 재시작(뒤로는 미리 채우기 포함 ~0.6초).
-    읽기 규칙 ②는 링을 먼저, 그다음 전체 저장소(`self._ring.has(n) or self._full.has(n)`); 주 세션의 재시작·미리 채우기는 링에만 씀. 시험용: `fill_done`·`fill_index`·`fill_failed`·`fill_session`(채움 세션은 `_PipeSession(…, is_filler=True)` — 시험이 재시작 횟수와 따로 셈)·`wait_fill(timeout)`.
+    읽기 규칙 ②는 링을 먼저, 그다음 전체 저장소(`self._ring.has(n) or self._full.has(n)`); 주 세션의 재시작·미리 채우기는 링에만 씀. **전체 저장소에서 내줄 때는 스트림을 보관본 끝으로 옮겨 둠**(2026-11-06 — `_store_frontier`·`_restart(…, park=True)`): 채움기가 앞부분만 채운 채 처음으로 돌아가면(반복 재생) 보관본을 내주는 동안 스트림은 멀리(파일 끝) 서 있다가 보관본이 끝나는 곳에서야 재시작해 재생 도중에 멈췄음(Windows 4K 2·3바퀴째 0.75·0.84초 — `ring`이면 0.1초 안팎). 그래서 전체 저장소에서 n을 내주면(링이 아니라) n 다음으로 저장소에 없는 첫 번호로 스트림만 옮겨 두고(`pos`는 그대로 — 지금 내주는 자리), ffmpeg가 그동안 준비해 끝에 닿을 때 ①로 이어짐. 파일 끝까지 다 있거나, 스트림이 이미 그 구간 안(n < 스트림 위치 ≤ 보관본 끝 — 재생이 스트림에 닿을 때까지 보관본)이면 옮기지 않음: 멈춘 동안 채움기가 보관본을 늘려 끝이 움직여도 다시 옮기지 않고(→를 천천히 눌러도 ffmpeg를 매번 띄우지 않음), 재생 중 스트림이 보관본 안에 있을 때 링 밖으로 뒤로 가도 옮기지 않음(리뷰에서 잡음). 옮겨 두기는 **링을 비우지 않음** — 보던 자리(링)로 돌아갈 때 재시작이 없게(링은 번호로 찾으므로 옛 장이 남아도 번호는 맞고, 새로 꺼낸 장이 들어오면 FIFO로 밀려남; 그래서 전체 모드에서는 '링 = 스트림 바로 앞의 연속 구간'이 아닐 수 있음). 옮기다 실패하면 `_restart`의 죽음 길(B) — 이 프레임은 그대로 내줌, 기록·창의 머리는 '보관본 끝(N번)으로 스트림을 미리 옮기려고…'. 알고 둔 비용: 선택 재생이 아닌 열기(사이드바 클릭·↑↓)의 `stop_video` → 옛 캡처 `seek_to_frame(1)`이 0을 보관본에서 내주면 놓을 캡처에도 한 번 옮겨 둠(ffmpeg 하나를 띄웠다 곧 끔 — 받아들임), 보관본 끝을 찾을 때 저장소를 훑음(4K 수백 장이면 무시할 만함). 시험용: `fill_done`·`fill_index`·`fill_failed`·`fill_session`(채움 세션은 `_PipeSession(…, is_filler=True)` — 시험이 재시작 횟수와 따로 셈)·`wait_fill(timeout)`.
     **판정은 첫 `read()` 머리에서 한 번**(`_decide_cache` — 생성자가 아니라): `open_file`이 새 캡처를 연 뒤 옛 캡처를 놓고 첫 프레임을 읽으므로, 생성 때 재면 나가는 파일 몫이 장부·사용 가능 메모리에 잡혀 4K를 4K로 바꿀 때 늘 링이 됨.
     첫 read 전에는 아무것도 보관하지 않아(생성자가 받은 첫 프레임은 세션 큐에) 모드 전환이 공짜. 판정 결과는 `cache_mode`(`None` 첫 read 전·`"ring"`·`"full"`).
     **예산**(`frame_cache_budget.full_cache_decision` — probe로 셈, 파일을 읽지 않음): `total = W×H×3 × nb_frames`가 ① `물리 RAM × FULL_CACHE_RAM_FRACTION(0.20) − committed` 이하이고
@@ -1069,6 +1069,14 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 5. 다양한 비디오 콘텐츠 유형으로 테스트
 
 ## 최근 변경 사항
+
+### 2026-11-06 (반복 재생 — 프레임 캐시가 앞부분만 찬 채 처음으로 돌아가면 도중에 멈춤)
+- **증상**(사용자 보고 — Windows 4K, GPU 화면 그리기): 파일 하나를 반복 재생하면 2·3바퀴째 도중에 멈춤(기록의 최대간격 0.75·0.84초). `YESONCHECK_FRAME_CACHE=ring`이면 0.1초 안팎이라 전체 프레임 캐시 쪽으로 좁힘
+- **원인**: 쉬는 동안 채우는 전체 저장소가 앞부분만 찬 채 반복 재생이 처음으로 돌아오면 읽기 규칙 ②가 보관본을 내주는 동안 ffmpeg 스트림은 파일 끝에 서 있다가, 보관본이 끝나는 번호에서야 ④ 재시작(4K ~0.5초 + 첫 프레임) — 재생 도중의 멈춤
+- **고침**: 전체 저장소에서 내주기 시작할 때 스트림을 보관본 끝(`_store_frontier`)으로 미리 옮겨 둠(`_restart(…, park=True)` — 내주는 자리 `pos`는 그대로, 링은 비우지 않음) → 끝에 닿을 때 ①로 이어짐. 스트림이 이미 그 구간 안이면 옮기지 않음 (`movie_pipe_source.py` 항목의 '전체 프레임 캐시')
+- **별도 리뷰에서 고친 것**: 멈춘 동안 보관본이 늘면 보관본 읽기마다 다시 옮기던 것(→ 천천히 누름마다 ffmpeg), 스트림이 이미 보관본 안인데 옮기던 것, 옮길 때 링을 비워 보던 자리로 돌아가면 재시작이 생기던 것, 저장소를 실제로 읽지 않던 시험(`test_full_store_never_moves_the_stream`), 옮기기 실패의 기록 머리를 '탐색'이 아니라 '미리 옮기기'로
+- **실측**: 이 Mac 파이프 모드 4K 반복 2~4바퀴 14.93~15.20초 → 13.97~14.12초(각 1회, 부하 아래). Windows 시험 빌드(사용자 PC): 반복 2~4바퀴 13.88~13.97초·최대간격 74~146ms, 사용자 확인 "파일 하나 루프 재생은 딜레이 없이 재생"
+- 시험 `tests/test_movie_pipe_full_cache.py`: 앞부분만 찬 저장소로 돌아가면 스트림을 그 끝에 옮겨 둠·옮긴 스트림을 다시 옮기지 않음·링에서 내주면 옮기지 않음·저장소가 끝까지 차면 옮기지 않음·멈춘 동안 저장소가 늘어도 다시 옮기지 않음·스트림이 이미 저장소 안이면 옮기지 않음·옮겨 둬도 링이 남아 링 자리로 오가면 재시작 없음, 기존 둘(채움기 실패·전체 모드 재시작)은 옮겨 두는 세션 하나를 더 셈
 
 ### 2026-11-06 (사이드바 — 목록 아래 개수 줄, 우클릭 '다른 앱으로 열기')
 - **개수 줄**(사용자 요청): 목록 바로 아래 한 줄에 지금 보는 탭의 개수 — Mov `12개`, Seq `시퀀스 3개`, All `15개 — mov 10 · mp4 2 · tga 2 · exr 1`(사용자 결정: 탭 이름은 그대로, 목록 아래 한 줄만). 원본 Mov·Seq 목록에서 셈(`sidebar_all._update_sidebar_count`, 글 `sidebar_counts`). 이어서 **종류마다, 그 안에 버전·테이크 괄호**(사용자 요청 '450개로 나오잖아 — TK1, HD 따로' → 'OSRO, OSAN도 따로' → 'TK1·TK2, v001·v002, v01·v02도'; 모양은 사용자 결정 — `sidebar_counts` 항목): `450개 — 기본 225 (TK1 225) · HD 225 (TK1 225)`
