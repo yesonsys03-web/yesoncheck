@@ -48,67 +48,82 @@ def test_unknown_tab_is_an_error():
         count_text("seqs", [], [])
 
 
-# ---------------------------------------------------------------- 영문 꼬리(버전)마다 (사용자 요청 2026-11-06)
-# FL_106 job은 같은 샷의 _TK1.mov 225개와 _TK1_HD.mov 225개 — 450개로만 보이면 샷 수를 모름. 이름의 마지막 `_` 뒤가 영문자뿐이면(_HD·_LR·
-# _PROXY …) 그 꼬리로 따로 세고, 나머지 묶음은 모두 같은 꼬리면 그 이름(TK1), 아니면 '기본'. 꼬리가 있는 목록만 나눠 보임.
+# ---------------------------------------------------------------- 종류(영문 꼬리)마다, 그 안에 버전·테이크 괄호 (사용자 요청 2026-11-06)
+# FL_106 job은 같은 샷의 _TK1.mov 225개와 _TK1_HD.mov 225개, Hazbin은 _OSAN_v02·_TX_v01, KOTH는 _v001. 이름 끝에서: 버전·테이크(TK + 숫자 또는
+# v + 숫자)는 끝 또는 영문 꼬리 바로 앞의 하나만, 종류는 버전 바로 앞(또는 끝)의 영문 꼬리 — 없으면 '기본'. 모양은 사용자 결정 '종류 안에 버전 괄호'.
 
 FL = ["/fl/FL_106_A001_TK1.mov", "/fl/FL_106_A002_TK1.mov", "/fl/FL_106_A001_TK1_HD.mov", "/fl/FL_106_A002_TK1_HD.mov"]
 
 
-def test_mov_tab_splits_letter_suffix_versions():
-    assert count_text("mov", FL, []) == "4개 — TK1 2 · HD 2"
+def test_kinds_with_versions_in_parentheses():
+    assert count_text("mov", FL, []) == "4개 — 기본 2 (TK1 2) · HD 2 (TK1 2)"
 
 
-def test_several_suffixes_base_first_then_by_count():
-    movies = FL + ["/fl/FL_106_A001_TK1_LR.mov"]
-    assert count_text("mov", movies, []) == "5개 — TK1 2 · HD 2 · LR 1"
+def test_several_kinds_base_first_then_by_count():
+    assert count_text("mov", FL + ["/fl/FL_106_A001_TK1_LR.mov"], []) == "5개 — 기본 2 (TK1 2) · HD 2 (TK1 2) · LR 1 (TK1 1)"
 
 
-def test_suffix_case_is_ignored_and_shown_upper():
-    assert count_text("mov", ["/a/X_TK1.mov", "/a/X_TK1_hd.mov", "/a/Y_TK1_Hd.mov"], []) == "3개 — TK1 1 · HD 2"
+def test_takes_are_counted_apart_and_case_is_ignored():
+    assert count_text("mov", ["/a/X_TK1.mov", "/a/X_TK1_hd.mov", "/a/Y_tk2_Hd.mov"], []) == "3개 — 기본 1 (TK1 1) · HD 2 (TK1 1 · TK2 1)"
 
 
-def test_rest_is_called_basic_when_its_suffixes_differ():
-    assert count_text("mov", ["/a/X_v001.mov", "/a/Y_v002.mov", "/a/X_v001_HD.mov"], []) == "3개 — 기본 2 · HD 1"
+def test_versions_are_counted_apart():
+    assert count_text("mov", ["/a/X_v001.mov", "/a/Y_v002.mov", "/a/Z_v001_HD.mov"], []) == \
+        "3개 — 기본 2 (v001 1 · v002 1) · HD 1 (v001 1)"
+
+
+def test_versions_by_count_then_name():
+    assert count_text("mov", ["/a/A_v01.mov", "/a/B_v02.mov", "/a/C_v02.mov"], []) == "3개 — 기본 3 (v02 2 · v01 1)"
+
+
+def test_kind_before_a_version_hazbin():
+    """사용자 요청 'OSRO, OSAN으로 구분되는 것들도 따로' + 'v01, v02도 구분' — 버전 V003처럼 대문자도 같은 버전 꼴로(v003)."""
+    names = ["/h/HH0305_010_0090_OSAN_v02.mov", "/h/HH0305_010_0100_OSAN_v01.mov", "/h/HH0305_011_0010_TX_v01.mov",
+             "/h/HH0305_012_0010_OSRO_V003.mov"]
+    assert count_text("mov", names, []) == "4개 — OSAN 2 (v01 1 · v02 1) · OSRO 1 (v003 1) · TX 1 (v01 1)"
+
+
+def test_koth_versions_only():
+    assert count_text("mov", ["/k/1604_004_v001.mov", "/k/1604_005_v002.mov"], []) == "2개 — 기본 2 (v001 1 · v002 1)"
+
+
+def test_shot_code_that_looks_like_a_version_is_not_one():
+    """FL_106에는 샷 코드가 V005인 샷이 있음 — 끝의 하나(TK1)만 버전으로 봄 (V005_TK1 같은 꼬리를 만들지 않음)."""
+    assert count_text("mov", ["/fl/FL_106_V005_TK1.mov", "/fl/FL_106_A001_TK1.mov", "/fl/FL_106_V005_TK1_HD.mov"], []) == \
+        "3개 — 기본 2 (TK1 2) · HD 1 (TK1 1)"
+
+
+def test_files_without_a_version_in_a_kind_are_counted_as_none():
+    assert count_text("mov", ["/a/X_A001_TK1.mov", "/a/X_A002.mov"], []) == "2개 — 기본 2 (TK1 1 · 없음 1)"
+
+
+def test_kind_without_versions_has_no_parentheses():
+    assert count_text("mov", ["/a/X_A001_HD.mov", "/a/X_A002_HD.mov"], []) == "2개 — HD 2"
 
 
 @pytest.mark.parametrize("names", [
-    ["/k/1604_004_v001.mov", "/k/1604_005_v002.mov"],                        # 버전 꼬리를 떼도 앞이 숫자 (KOTH)
-    ["/a/clip.mov", "/a/other.mp4"],                                          # 밑줄 없음
-    ["/a/OSAN_v01.mov", "/a/TX_v02.mov"],                                     # 버전을 떼면 밑줄이 없음
-    ["/a/샷_최종.mov", "/a/샷_초안.mov"],                                        # 영문이 아닌 꼬리
+    ["/a/clip.mov", "/a/other.mp4"],                 # 밑줄 없음
+    ["/a/샷_최종.mov", "/a/샷_초안.mov"],               # 영문이 아닌 꼬리
+    ["/a/FL_A001.mov", "/a/FL_A002.mov"],            # 끝이 버전도 영문 꼬리도 아님
 ])
-def test_no_letter_suffix_means_just_the_total(names):
+def test_nothing_to_split_means_just_the_total(names):
     assert count_text("mov", names, []) == "2개"
 
 
-def test_kind_before_a_version_suffix_is_counted():
-    """Hazbin `_OSAN_v02` — 끝의 버전 꼬리(v + 숫자, 대소문자 무시)를 떼고 그 앞 꼬리로 셈 (사용자 요청 'OSRO, OSAN으로 구분되는 것들도 따로')."""
-    names = ["/h/HH0305_010_0090_OSAN_v02.mov", "/h/HH0305_010_0100_OSAN_v01.mov", "/h/HH0305_011_0010_TX_v01.mov",
-             "/h/HH0305_012_0010_OSRO_V003.mov"]
-    assert count_text("mov", names, []) == "4개 — OSAN 2 · OSRO 1 · TX 1"
+def test_whole_name_is_not_a_kind():
+    """버전을 떼면 이름이 한 토막뿐(OSAN_v01) — 그 토막은 샷 이름이지 종류가 아님."""
+    assert count_text("mov", ["/a/OSAN_v01.mov", "/a/TX_v02.mov"], []) == "2개 — 기본 2 (v01 1 · v02 1)"
 
 
-def test_version_is_dropped_before_naming_the_rest():
-    """버전을 뗀 뒤의 꼬리로 나머지 묶음의 이름을 정함 — 같으면 그 꼬리, 다르면 '기본'."""
-    assert count_text("mov", ["/a/X_TK1_v01.mov", "/a/Y_TK1_v02.mov", "/a/X_TK1_HD_v01.mov"], []) == "3개 — TK1 2 · HD 1"
-    assert count_text("mov", ["/k/1604_004_v001.mov", "/k/1604_005_v001.mov", "/k/1604_006_OSAN_v001.mov"], []) == \
-        "3개 — 기본 2 · OSAN 1"
-
-
-def test_only_suffixed_files():
-    assert count_text("mov", ["/a/X_TK1_HD.mov", "/a/Y_TK1_HD.mov"], []) == "2개 — HD 2"
-
-
-def test_seq_tab_splits_by_base_name_suffix():
+def test_seq_tab_splits_by_base_name():
     assert count_text("seq", [], [("FL_A001_TK1", "tga"), ("FL_A002_TK1", "tga"), ("FL_A001_TK1_HD", "tga")]) == \
-        "시퀀스 3개 — TK1 2 · HD 1"
+        "시퀀스 3개 — 기본 2 (TK1 2) · HD 1 (TK1 1)"
 
 
-def test_all_tab_splits_inside_each_format():
+def test_all_tab_puts_formats_first_and_kinds_on_a_second_line():
     sequences = [("FL_A001_TK1", "tga"), ("FL_A002_TK1", "tga")]
     assert count_text("all", FL + ["/fl/FL_106_A003_TK1.mp4"], sequences) == \
-        "7개 — mov 4 (TK1 2 · HD 2) · mp4 1 · tga 2"
+        "7개 — mov 4 · mp4 1 · tga 2\n기본 5 (TK1 5) · HD 2 (TK1 2)"
 
 
 # ---------------------------------------------------------------- 창
@@ -188,11 +203,11 @@ def test_refresh_button_updates_the_count(player, qapp, tmp_path):
     for name in ("S01_TK1.mov", "S02_TK1.mov", "S01_TK1_HD.mov"):
         write_test_video(str(folder / name), frames=2, size=(32, 24))
     player.load_videos_from_folder(str(folder))
-    assert label_after(player, qapp, player.sidebar) == "3개 — TK1 2 · HD 1"
+    assert label_after(player, qapp, player.sidebar) == "3개 — 기본 2 (TK1 2) · HD 1 (TK1 1)"
 
     write_test_video(str(folder / "S02_TK1_HD.mov"), frames=2, size=(32, 24))  # 다른 PC가 넣음
     (folder / "S01_TK1.mov").unlink()  # 다른 PC가 지움
     player._refresh_sidebar_by_user()
     wait_refreshed(player)
     qapp.processEvents()
-    assert player.sidebar_count_label.text() == "3개 — TK1 1 · HD 2"
+    assert player.sidebar_count_label.text() == "3개 — 기본 1 (TK1 1) · HD 2 (TK1 2)"
