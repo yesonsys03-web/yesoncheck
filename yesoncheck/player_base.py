@@ -761,7 +761,9 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         self.sidebar_tabs.addTab(self.all_sidebar, 'All')
         self.sidebar_tabs.setFocusPolicy(Qt.NoFocus)
         self.sidebar_tabs.currentChanged.connect(self._on_sidebar_tab_changed)
-        self._init_all_tab_hooks()  # Mov·Seq 모델 변화 → All 목록 미룬 다시 만들기
+        self.sidebar_count_label = QLabel()  # 목록 아래 개수 줄 — 지금 보는 탭의 개수 (sidebar_all·sidebar_counts)
+        self.sidebar_count_label.setWordWrap(True)  # All의 포맷이 많아도 줄을 바꿈 — 사이드바(창) 최소 너비를 늘리지 않게
+        self._init_all_tab_hooks()  # Mov·Seq 모델 변화 → All 목록 미룬 다시 만들기·개수 줄
         selectFolderButton = QPushButton('Select Folder'); selectFolderButton.clicked.connect(self.select_folder)
         selectFolderButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         
@@ -827,6 +829,7 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         sidebarLayout.addLayout(viewModeLayout)  # 가로 배치된 뷰 모드 버튼들 추가
         sidebarLayout.addWidget(self.thumbnailProgressBar)  # 진행바를 버튼 아래에 추가
         sidebarLayout.addWidget(self.sidebar_tabs)  # Mov(self.sidebar)·Seq 탭
+        sidebarLayout.addWidget(self.sidebar_count_label)
         sidebarContainer = QWidget()
         sidebarContainer.setLayout(sidebarLayout); sidebarContainer.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
@@ -1073,8 +1076,15 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
                     self.toggle_play_pause_selected()
                     return True
 
+            # Seq 목록: 위아래 화살표는 고른 시퀀스를 A로 엶 (All 목록과 같음 — 예전에는 누를 때만 열려 화살표로는 그림이 바뀌지 않았음)
+            if source == self.seq_sidebar and key in [Qt.Key_Up, Qt.Key_Down]:
+                if not self.seq_sidebar.hasFocus():
+                    self.seq_sidebar.setFocus()
+                QTimer.singleShot(10, self.load_selected_seq_item)
+                return False  # 기본 동작(선택 이동) 허용
+
             # 사이드바 목록(Mov·Seq·All 어느 쪽이든 목록이 포커스를 가진 채)에서 먹는 단축키: 재생/정지와 확대·축소·화면 맞춤.
-            # 선택 재생(Enter·\)·위아래 화살표로 열기는 재생목록 기계장치가 Mov 경로 전제라 위의 Mov·All 목록 전용
+            # 선택 재생(Enter·\)은 재생목록 기계장치가 Mov 경로 전제라 위의 Mov·All 목록 전용
             if source in (self.sidebar, self.seq_sidebar, self.all_sidebar):
                 if key == Qt.Key_Space: 
                     self.toggle_play_pause()

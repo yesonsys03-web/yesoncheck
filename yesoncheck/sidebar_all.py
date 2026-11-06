@@ -7,6 +7,7 @@
 선택 재생은 `sidebar_playlist._playlist_selection`이 All 탭에서 mov만 고름 (시퀀스 연속 재생은 메모리 한계로 하지
 않음 — 사용자 결정). 우클릭 메뉴는 맨 위 'Mov만 모두 선택' + 누른 항목 종류의 기존 메뉴(선택을 원본 목록에 비춘 뒤
 그 목록의 메뉴 동작을 그대로 씀 — 동작이 Mov·Seq 탭과 달라지지 않음).
+목록 아래 개수 줄(self.sidebar_count_label)도 Mov·Seq 목록에서 파생된 보기라 여기서 갱신 — 원본 목록에서 셈(글은 sidebar_counts).
 
 player_sidebar를 모듈 수준에서 import하지 말 것 (순환 — 다른 사이드바 믹스인과 같음).
 """
@@ -17,6 +18,7 @@ from PyQt5.QtWidgets import QMenu
 
 from yesoncheck import paths
 from yesoncheck.file_names import natural_key
+from yesoncheck.sidebar_counts import count_text
 from yesoncheck.sidebar_items import ALL_KIND_ROLE
 
 # All 탭 시퀀스 항목 글자 색 — 테마별 하늘색 (주황 선택 강조·흰/검 기본색 어느 쪽과도 구분)
@@ -64,6 +66,30 @@ class SidebarAllMixin:
             model.rowsRemoved.connect(self._schedule_all_rebuild)
             model.modelReset.connect(self._schedule_all_rebuild)
             model.dataChanged.connect(self._schedule_all_rebuild)
+        # 개수 줄: 항목을 하나씩 넣을 때마다 세지 않게 미뤄서 한 번 (0ms — 이번 이벤트 처리가 끝나면 바로), 숨은 탭의 변화도 셈
+        self._count_timer = QTimer(self)
+        self._count_timer.setSingleShot(True)
+        self._count_timer.setInterval(0)
+        self._count_timer.timeout.connect(self._update_sidebar_count)
+        for model in (self.sidebar.model(), self.seq_sidebar.model()):
+            model.rowsInserted.connect(self._schedule_sidebar_count)
+            model.rowsRemoved.connect(self._schedule_sidebar_count)
+            model.modelReset.connect(self._schedule_sidebar_count)
+        self.sidebar_tabs.currentChanged.connect(self._schedule_sidebar_count)
+        self._update_sidebar_count()
+
+    def _schedule_sidebar_count(self, *_args):
+        """신호의 인자는 버림 (QTimer.start(int)에 바로 이으면 탭 번호가 밀리초로 들어감)."""
+        self._count_timer.start()
+
+    def _update_sidebar_count(self):
+        """목록 아래 개수 줄을 지금 보는 탭의 개수로 — 원본 Mov·Seq 목록에서 셈 (All 목록은 미뤄서 다시 만들어지므로 세지 않음)."""
+        tabs = {id(self.sidebar): "mov", id(self.seq_sidebar): "seq", id(self.all_sidebar): "all"}
+        tab = tabs[id(self.sidebar_tabs.currentWidget())]  # 모르는 탭은 All로 치지 않음 (탭을 더하면 여기서 KeyError)
+        movies = [self.sidebar.item(i).data(Qt.UserRole) for i in range(self.sidebar.count())]
+        sequences = [(seq.base, seq.ext) for seq in (self.seq_sidebar.item(i).data(Qt.UserRole)
+                                                       for i in range(self.seq_sidebar.count()))]
+        self.sidebar_count_label.setText(count_text(tab, movies, sequences))
 
     def _schedule_all_rebuild(self, *_args):
         """All 탭이 보이는 동안만 미뤄서 다시 만듦 (숨은 동안의 변화는 탭을 열 때 한 번에)."""
@@ -198,6 +224,7 @@ class SidebarAllMixin:
                 row = self._mov_row_for_path(item.toolTip())
                 if row is not None:
                     self._build_sidebar_menu(menu, self.sidebar.model().index(row, 0))
+            self._add_open_with_actions(menu, self._all_open_entries())  # All의 선택 그대로 — 비춘 선택이 아니라 (sidebar_open_with)
         # 메뉴가 떠 있는 동안·고른 일을 하는 동안 목록 다시 읽기는 미룸 (Mov·Seq 메뉴와 같음).
         # 고른 동작은 exec_ 안에서 동기로 돌므로 비춘 선택을 읽고, 닫힌 뒤 되돌려도 안전함
         with self._hold_sidebar_refresh():

@@ -7,6 +7,7 @@
 
 import os
 import shutil
+import sys
 import time
 
 import pytest
@@ -25,7 +26,10 @@ from yesoncheck.sequence_export_worker import SequenceExportWorker
 from yesoncheck.sequence_scan import group_sequences
 from yesoncheck.sidebar_sequences import SequenceExportDialog
 
-MENU_TEXTS = ["비디오 A로 열기", "비디오 B로 열기", "선택한 시퀀스로 MOV 만들기…", "썸네일 다시 만들기", "정보 보기"]
+# 맨 아래는 '다른 앱으로 열기' 무리 (sidebar_open_with — QuickTime Player 항목은 Mac에만)
+OPEN_WITH_TEXTS = (["QuickTime Player로 열기"] if sys.platform == "darwin" else []) + ["다른 앱으로 열기"]
+MENU_TEXTS = ["비디오 A로 열기", "비디오 B로 열기", "선택한 시퀀스로 MOV 만들기…", "썸네일 다시 만들기", "정보 보기",
+              *OPEN_WITH_TEXTS]
 JOB_LABEL = "시퀀스 MOV 만들기"
 
 
