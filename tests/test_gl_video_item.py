@@ -537,7 +537,7 @@ def test_reset_failure_schedules_a_repaint(qapp, shown, monkeypatch):
 
 @pytest.mark.parametrize("platform, menu", [("darwin", True), ("win32", False), ("linux", False)])
 def test_failure_window_names_the_decoder_menu_on_mac(qapp, shown, monkeypatch, platform, menu):
-    """Mac의 실패 창은 킬 스위치 안내 앞에 Settings → 재생 디코더 (Mac) → ffmpeg 안내 한 줄(그 선택이 걸쇠를 풂) — 다른 플랫폼에는 그 메뉴가 없으므로 예전 글 그대로."""
+    """Mac의 실패 창은 킬 스위치 안내 앞에 Settings → 재생 디코더 (Mac) → ffmpeg 안내 한 줄(그 선택이 걸쇠를 풂), Windows는 화면 그리기 메뉴 한 줄 — 그 밖의 플랫폼은 메뉴가 없으므로 예전 글 그대로."""
     monkeypatch.setattr(sys, "platform", platform)
     item = VideoFrameItem(stream=True)
     item._fail(gl_bindings.GLBindingError("x"))
@@ -546,6 +546,8 @@ def test_failure_window_names_the_decoder_menu_on_mac(qapp, shown, monkeypatch, 
     assert text.endswith(ENV_HINT)
     if menu:
         assert text.endswith(f"\n\n{MENU_HINT}\n{ENV_HINT}")
+    elif platform == "win32":
+        assert "재생 디코더" not in text and text.endswith(f"x\n\n{gl_video_item.failure_menu_hint('win32')}\n{ENV_HINT}")
     else:
         assert "재생 디코더" not in text and text.endswith(f"x\n\n{ENV_HINT}")
 

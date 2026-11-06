@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from tests.prores_clips import make_numbered_clip
-from yesoncheck import mac_native_gate, mac_prefs, movie_pipe_source
+from yesoncheck import mac_native_gate, mac_prefs, movie_pipe_source, windows_display
 from yesoncheck.mac_native_gate import (
     DECODERS, HDR_PRIMARIES, HDR_TRANSFERS, NATIVE_CODEC, NATIVE_MODE_ENV, NATIVE_MODES, PREF_KEY, SOURCE_FALLBACK,
     effective_decoder,
@@ -603,9 +603,10 @@ def test_launch_bad_pref_value_warns_once_and_uses_ffmpeg(qapp, monkeypatch, hom
 
 
 def test_launch_on_windows_ignores_prefs(qapp, monkeypatch, home, dialogs, capsys):
-    """macOS가 아니면 prefs.json을 읽지도 기록하지도 않음 (이 설정은 Mac 전용) — native_wanted는 선호와 무관하게 False."""
+    """macOS가 아니면 prefs.json을 읽지도 기록하지도 않음 (이 설정은 Mac 전용) — native_wanted는 선호와 무관하게 False. (Windows의 화면 그리기 설정은 자기 파일을 읽음 — test_windows_display)"""
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.delenv(ENV, raising=False)
+    monkeypatch.setattr(windows_display, "read", lambda: windows_display.DEFAULT_RENDERER)
     write_prefs('{"playback_decoder": "videotoolbox"}')
     reads = []
 

@@ -17,8 +17,9 @@ GL 호출은 max_texture_size를 읽는 glGetIntegerv 한 번뿐이며, 그때 �
 """
 
 import ctypes
+from typing import NamedTuple
 
-from PyQt5.QtGui import QSurfaceFormat
+from PyQt5.QtGui import QOffscreenSurface, QOpenGLContext, QSurfaceFormat
 
 # ---------------------------------------------------------------- 상수 (OpenGL 헤더 값 그대로)
 GL_TEXTURE_2D = 0x0DE1
@@ -40,6 +41,8 @@ GL_QUADS = 0x0007
 GL_BLEND = 0x0BE2
 GL_MAX_TEXTURE_SIZE = 0x0D33
 GL_NO_ERROR = 0
+GL_RENDERER = 0x1F01
+BAD_PROC_ADDRESSES = (0, 1, 2, 3, -1, 0xFFFFFFFF, 0xFFFFFFFFFFFFFFFF)
 
 _UINT, _INT, _FLOAT, _DOUBLE = ctypes.c_uint, ctypes.c_int, ctypes.c_float, ctypes.c_double
 _PTR = ctypes.c_void_p
@@ -68,6 +71,39 @@ FUNCTIONS = {
     "glGetError": (_UINT, []),
     "glGetIntegerv": (None, [_UINT, ctypes.POINTER(_INT)]),
 }
+
+
+class GLInfo(NamedTuple):
+    """이 PC의 기본 GL — windows_display.gl_problem이 판단."""
+
+    is_es: bool
+    version: tuple
+    renderer: str
+
+
+def context_info():
+    """시험용 컨텍스트를 만들어 GL 종류를 읽음 (창을 만들기 전에 — 그리기 코드와 맞는지 보려고). 컨텍스트를 못 만들면 None."""
+    context = QOpenGLContext()
+    if not context.create():
+        return None
+    surface = QOffscreenSurface()
+    surface.setFormat(context.format())
+    surface.create()
+    if not context.makeCurrent(surface):
+        return None
+    try:
+        proc = context.getProcAddress(b"glGetString")
+        address = int(proc) if proc is not None else 0
+        if address in BAD_PROC_ADDRESSES:  # 일부 드라이버는 없는 함수에 0이 아닌 값을 줌 — 그대로 부르면 프로세스가 죽음
+            raise GLBindingError(f"GL 함수 glGetString을 찾지 못했습니다 (주소 {address})")
+        renderer = ctypes.CFUNCTYPE(ctypes.c_char_p, _UINT)(address)(GL_RENDERER)
+        if renderer is None:  # 빈 글자로 치면 소프트웨어 GL 판정을 지나 '쓸 수 있음'이 됨
+            raise GLBindingError("glGetString(GL_RENDERER)이 값을 주지 않았습니다")
+        renderer = renderer.decode("utf-8", "replace")
+        version = context.format().version()
+        return GLInfo(context.isOpenGLES(), (version[0], version[1]), renderer)
+    finally:
+        context.doneCurrent()
 
 
 class GLBindingError(RuntimeError):
