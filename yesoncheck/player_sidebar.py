@@ -16,6 +16,7 @@ from yesoncheck import paths, video_list
 # PlayerSidebarMixin의 부모 믹스인 (북마크, 선택 재생, 공유 설정·작품 경로, 목록 다시 읽기, Seq 탭, 썸네일)
 from yesoncheck.sidebar_all import SidebarAllMixin
 from yesoncheck.sidebar_bookmarks import SidebarBookmarksMixin
+from yesoncheck.sidebar_open_with import SidebarOpenWithMixin
 from yesoncheck.sidebar_playlist import SidebarPlaylistMixin
 from yesoncheck.sidebar_config_paths import SidebarConfigPathsMixin
 from yesoncheck.sidebar_refresh import SidebarRefreshMixin
@@ -41,7 +42,7 @@ from yesoncheck.sidebar_items import (
 )
 
 
-class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin, SidebarRefreshMixin, SidebarSequencesMixin, SidebarAllMixin, SidebarThumbnailsMixin):
+class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin, SidebarRefreshMixin, SidebarSequencesMixin, SidebarAllMixin, SidebarOpenWithMixin, SidebarThumbnailsMixin):
 
     def dragEnterEvent(self, event):
         """메인 윈도우에 파일 드래그앤드롭 이벤트"""
@@ -210,8 +211,15 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
     def show_sidebar_context_menu(self, pos):
         index = self.sidebar.indexAt(pos)
         if index.isValid():
+            # 메뉴를 연 줄이 고른 것 밖이면 그 줄만 고름 (Seq·All 메뉴와 같음 — 마우스 오른쪽 누름은 Qt가 이미 고르지만 메뉴 키·시험은 아님;
+            # 같은 메뉴의 동작(파일 복사·다른 앱으로 열기 등)이 모두 같은 선택을 쓰게)
+            clicked = self.sidebar.item(index.row())
+            if clicked is not None and not clicked.isSelected():
+                self.sidebar.clearSelection()
+                clicked.setSelected(True)
             menu = QMenu(self.sidebar)
             self._build_sidebar_menu(menu, index)
+            self._add_open_with_actions(menu, self._mov_open_entries())  # 맨 아래 '다른 앱으로 열기' (sidebar_open_with)
             # 메뉴가 떠 있는 동안·고른 일을 하는 동안 목록 다시 읽기는 미룸 (index는 줄 번호 — 목록이 바뀌면 다른 영상을 가리킴)
             with self._hold_sidebar_refresh():
                 menu.exec_(self.sidebar.viewport().mapToGlobal(pos))
