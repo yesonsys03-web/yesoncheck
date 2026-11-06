@@ -206,7 +206,7 @@ def test_refresh_button_updates_the_count(player, qapp, tmp_path):
     assert label_after(player, qapp, player.sidebar) == "3개 — 기본 2 (TK1 2) · HD 1 (TK1 1)"
 
     write_test_video(str(folder / "S02_TK1_HD.mov"), frames=2, size=(32, 24))  # 다른 PC가 넣음
-    (folder / "S01_TK1.mov").unlink()  # 다른 PC가 지움
+    (folder / "S02_TK1.mov").unlink()  # 다른 PC가 지움 (불러오기가 A에 연 첫 파일 S01_TK1.mov는 아님 — Windows는 열린 파일을 못 지움)
     player._refresh_sidebar_by_user()
     wait_refreshed(player)
     qapp.processEvents()
