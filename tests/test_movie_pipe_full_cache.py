@@ -364,8 +364,9 @@ def test_filler_failure_logs_once_and_capture_keeps_working(auto_mode, prores_cl
         log = capsys.readouterr().err
         assert log.count(FILL_FAILURE_HEADLINE) == 1, log
         assert cap.fill_failed in log and prores_clip in log and FAILURE_HEADLINE not in log
-        assert cap.set(1, filled - 1) and read_number(cap) == filled - 1 and len(main_sessions(sessions)) == 1  # 채운 구간 — 보관본
-        assert cap.set(1, COUNT - 1) and read_number(cap) == COUNT - 1 and len(main_sessions(sessions)) == 2  # 밖 — 재시작
+        assert cap.set(1, filled - 1) and read_number(cap) == filled - 1  # 채운 구간 — 보관본, 스트림은 보관본 끝으로 옮겨 둠
+        assert len(main_sessions(sessions)) == 2 and cap._session.start == filled
+        assert cap.set(1, COUNT - 1) and read_number(cap) == COUNT - 1 and len(main_sessions(sessions)) == 3  # 밖 — 재시작
         assert cap.set(1, 50) and [read_number(cap) for _ in range(5)] == list(range(50, 55))
         qapp.processEvents()
         assert windows == [] and cap.isOpened()
@@ -478,9 +479,139 @@ def test_voff_seek_full_mode_replays_from_store(auto_mode, hold_fill, voff_clip,
         cap.release()
     assert FAILURE_HEADLINE not in capsys.readouterr().err
 
+def test_loop_into_partial_store_parks_the_stream_at_its_end(auto_mode, prores_clip, sessions, fill_gate):
+    """사용자 보고 2026-11-06 (Windows 4K, 반복 재생 2·3바퀴에 0.75~0.84초 멈춤 — ring이면 없음): 채움기가 앞부분만 채운 채 처음으로 돌아가면
+    보관본에서 꺼내는 동안 스트림은 파일 끝에 서 있다가, 보관본이 끝나는 곳에서야 재시작했음(재생 도중의 멈춤). 보관본에서 꺼내기 시작할 때
+    스트림을 보관본 끝으로 옮겨 두면(재시작을 그때 — ffmpeg는 보관본을 내주는 동안 준비) 끝에 닿을 때 재시작이 없음."""
+    gate = fill_gate(40)
+    cap = open_full(prores_clip)
+    try:
+        assert read_number(cap) == 0
+        assert gate.reached.wait(WAIT_S)  # 0..39가 들어 있고 채움기는 40 앞에 섬
+        assert [read_number(cap) for _ in range(1, COUNT)] == list(range(1, COUNT))  # 한 바퀴 끝까지 — 스트림은 끝
+        before = len(main_sessions(sessions))
+        assert cap.set(1, 0) and read_number(cap) == 0  # 반복 재생: 처음으로 → 보관본
+        assert len(main_sessions(sessions)) == before + 1 and cap._session.start == 40, "보관본 끝으로 옮겨 두지 않았습니다"
+        assert [read_number(cap) for _ in range(1, COUNT)] == list(range(1, COUNT))
+        assert len(main_sessions(sessions)) == before + 1, "보관본 끝에서 다시 재시작했습니다"
+    finally:
+        gate.opened.set()
+        cap.release()
+
+
+def test_parked_stream_is_not_moved_again(auto_mode, prores_clip, sessions, fill_gate):
+    """이미 보관본 끝에 서 있으면 다시 옮기지 않음 — 보관본 안을 스크럽할 때마다 ffmpeg를 띄우면 안 됨."""
+    gate = fill_gate(40)
+    cap = open_full(prores_clip)
+    try:
+        assert read_number(cap) == 0
+        assert gate.reached.wait(WAIT_S)
+        assert cap.set(1, 100) and read_number(cap) == 100
+        assert cap.set(1, 10) and read_number(cap) == 10
+        parked = len(main_sessions(sessions))
+        for n in (30, 5, 20, 39):
+            assert cap.set(1, n) and read_number(cap) == n
+        assert len(main_sessions(sessions)) == parked and cap._session.start == 40
+    finally:
+        gate.opened.set()
+        cap.release()
+
+
+def test_ring_hit_does_not_move_the_stream(auto_mode, prores_clip, sessions, fill_gate):
+    """링에서 나온 뒤로 한 칸(←)은 스트림이 바로 뒤에 있어 옮길 일이 없음 — 보관본(전체 저장소)에서만 꺼낸 경우에 옮김."""
+    gate = fill_gate(40)
+    cap = open_full(prores_clip)
+    try:
+        assert read_number(cap) == 0
+        assert gate.reached.wait(WAIT_S)
+        assert [read_number(cap) for _ in range(1, 21)] == list(range(1, 21))
+        first, count = pid(cap), len(main_sessions(sessions))
+        assert cap.set(1, 15) and read_number(cap) == 15  # 링에 있음 (13..20)
+        assert pid(cap) == first and len(main_sessions(sessions)) == count
+    finally:
+        gate.opened.set()
+        cap.release()
+
+
+def test_full_store_never_moves_the_stream(auto_mode, prores_clip, sessions):
+    """다 채운 뒤에는 끝까지 보관본이라 옮길 곳이 없음 — 지금처럼 재시작 0. 스트림(30)보다 앞인 60으로 가서 보관본을 읽게 함
+    (리뷰: 0만 읽고 처음으로 가면 0이 링에 있어 보관본을 한 번도 안 읽었음 — 끝까지 찼을 때 옮기지 않는 조건을 빼도 통과했음;
+    스트림이 보관본 구간 안이면 다른 조건이 막으므로, 스트림보다 앞을 읽어야 '끝까지 찼음' 조건만 봄)."""
+    cap = open_full(prores_clip)
+    try:
+        assert [read_number(cap) for _ in range(30)] == list(range(30))  # 스트림 30
+        assert cap.wait_fill(FILL_WAIT_S)
+        count = len(main_sessions(sessions))
+        assert cap.set(1, 60) and [read_number(cap) for _ in range(60, COUNT)] == list(range(60, COUNT))
+        assert cap.set(1, 0) and [read_number(cap) for _ in range(COUNT)] == list(range(COUNT))
+        assert len(main_sessions(sessions)) == count
+    finally:
+        cap.release()
+
+
+def test_store_growing_while_paused_does_not_move_the_stream_again(auto_mode, prores_clip, sessions, fill_gate):
+    """리뷰: 멈춘 동안 채움기가 보관본을 늘리면(끝이 40 → 60) 다음 보관본 읽기에서 끝이 달라져 매번 다시 옮겼음 — 멈춘 채 →를 천천히
+    누르면 누를 때마다 ffmpeg. 스트림이 이미 그 구간 안(읽는 번호 < 스트림 ≤ 보관본 끝)에 있으면 재생이 스트림에 닿을 때까지 보관본이라 옮기지 않음."""
+    gate = fill_gate(40)
+    cap = open_full(prores_clip)
+    try:
+        assert read_number(cap) == 0
+        assert gate.reached.wait(WAIT_S)
+        assert cap.set(1, 100) and read_number(cap) == 100
+        assert cap.set(1, 10) and read_number(cap) == 10  # 보관본 끝(40)으로 옮겨 둠
+        parked = len(main_sessions(sessions))
+        assert cap._session.start == 40
+        gate2 = fill_gate(60)
+        gate.opened.set()
+        assert gate2.reached.wait(WAIT_S)  # 멈춘 동안 40..59를 더 채움
+        for n in (11, 12, 13):
+            assert cap.set(1, n) and read_number(cap) == n
+        assert len(main_sessions(sessions)) == parked and cap._session.start == 40
+        gate2.opened.set()
+    finally:
+        gate.opened.set()
+        cap.release()
+
+
+def test_stream_already_inside_the_store_is_not_moved(auto_mode, prores_clip, sessions, fill_gate):
+    """리뷰: 재생 중 스트림이 30(보관본 0..59 안)에 있을 때 링 밖의 15로 가면, 15부터 재생해도 30에서 스트림에 닿으므로 옮길 필요가 없음."""
+    gate = fill_gate(60)
+    cap = open_full(prores_clip)
+    try:
+        assert read_number(cap) == 0
+        assert gate.reached.wait(WAIT_S)
+        assert [read_number(cap) for _ in range(1, 30)] == list(range(1, 30))  # 스트림 30, 링 22..29
+        count = len(main_sessions(sessions))
+        assert cap.set(1, 15) and read_number(cap) == 15
+        assert [read_number(cap) for _ in range(16, 90)] == list(range(16, 90))  # 보관본 → 30부터 스트림, 60 넘어서도 그대로
+        assert len(main_sessions(sessions)) == count
+    finally:
+        gate.opened.set()
+        cap.release()
+
+
+def test_moving_the_stream_keeps_the_ring(auto_mode, prores_clip, sessions, fill_gate):
+    """리뷰: 옮겨 둘 때 링까지 비우면 보던 자리(링)로 돌아갈 때마다 막히는 재시작(4K 0.45~0.63초)이 생겼음 — 북마크 두 곳을 오가는 비교 등.
+    옮겨 두기는 링을 그대로 둠(링은 번호로 찾으므로 옛 장이 있어도 번호는 맞음 — 새로 꺼낸 장이 들어오면 차례로 밀려남)."""
+    gate = fill_gate(40)
+    cap = open_full(prores_clip)
+    try:
+        assert read_number(cap) == 0
+        assert gate.reached.wait(WAIT_S)
+        assert cap.set(1, 100) and [read_number(cap) for _ in range(6)] == list(range(100, 106))  # 링 100..105
+        count = len(main_sessions(sessions))
+        for _ in range(3):
+            for n in (10, 103):
+                assert cap.set(1, n) and read_number(cap) == n
+        assert len(main_sessions(sessions)) == count + 1  # 처음 10에서 한 번 옮겨 둠, 103은 링에서
+    finally:
+        gate.opened.set()
+        cap.release()
+
+
 def test_restart_in_full_mode_keeps_store(auto_mode, prores_clip, sessions, fill_gate):
     """주 세션의 재시작은 링만 비우고 전체 저장소는 그대로 (채움기만 씀): 채움기를 40번 앞에 세워 0..39가 든 채로 100으로 재시작 →
-    전체 저장소 40장 그대로, 5로는 재시작 없이. 문을 열면 이어 채워 끝까지."""
+    전체 저장소 40장 그대로, 5는 보관본에서(스트림은 보관본 끝 40으로 옮겨 둠 — test_loop_into_partial_store_…). 문을 열면 이어 채워 끝까지."""
     gate = fill_gate(40)
     cap = open_full(prores_clip)
     try:
@@ -489,7 +620,8 @@ def test_restart_in_full_mode_keeps_store(auto_mode, prores_clip, sessions, fill
         assert cap.set(1, 100) and read_number(cap) == 100  # 재시작
         assert len(main_sessions(sessions)) == 2 and cap._ring.indices() == [100]
         assert cap._full.indices() == list(range(40))
-        assert cap.set(1, 5) and read_number(cap) == 5 and len(main_sessions(sessions)) == 2
+        assert cap.set(1, 5) and read_number(cap) == 5 and cap._full.indices() == list(range(40))
+        assert len(main_sessions(sessions)) == 3 and cap._session.start == 40
         gate.opened.set()
         assert cap.wait_fill(FILL_WAIT_S) and cap._full.indices() == list(range(COUNT))
     finally:
