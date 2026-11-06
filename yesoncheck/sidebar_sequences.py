@@ -438,6 +438,12 @@ class SidebarSequencesMixin:
             return
         self.open_file('A', item.data(Qt.UserRole).identity)
 
+    def load_selected_seq_item(self):
+        """위아래 화살표로 고른 Seq 항목을 A로 엶 (누를 때와 같은 규칙 — sidebar_all.load_selected_all_item과 같은 역할)."""
+        item = self.seq_sidebar.currentItem()
+        if item is not None:
+            self.on_seq_item_clicked(item)
+
     def _on_sidebar_tab_changed(self, index):
         """Mov·Seq 탭 전환 — 페이지가 바뀔 뿐 GUI 스레드는 디스크를 읽지 않음. Seq 탭에서는 선택 재생 단추를 끔
         (`_sync_selected_play_buttons` — 선택 재생은 영상 경로 전제). 썸네일 모드에서 Seq 탭을 보면 그 사이 Mov 탭이 만든 썸네일도
@@ -690,6 +696,7 @@ class SidebarSequencesMixin:
             item.setSelected(True)
         menu = QMenu(self.seq_sidebar)
         self._build_seq_menu(menu, item)
+        self._add_open_with_actions(menu, self._seq_open_entries())  # 맨 아래 '다른 앱으로 열기' (sidebar_open_with)
         # 메뉴가 떠 있는 동안·고른 일을 하는 동안 목록 다시 읽기는 미룸 (Mov 목록 메뉴와 같음 — 항목이 바뀌지 않게)
         with self._hold_sidebar_refresh():
             menu.exec_(self.seq_sidebar.viewport().mapToGlobal(pos))

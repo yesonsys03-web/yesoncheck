@@ -4,6 +4,7 @@
   asked_default_video_app  동영상 기본 앱 질문에 답했는지 (default_app — 처음 켤 때 한 번 묻기)
   playback_decoder         재생 디코더 "videotoolbox" | "ffmpeg" (app.launch가 시작 때 한 번 읽어 mac_native_gate의 캐시에 두고,
                            Setting 메뉴가 update_pref로 고침 — 값의 뜻·검증은 mac_native_gate)
+  open_with_apps           사이드바 '다른 앱으로 열기'에 등록한 앱 경로 목록 (open_with — Windows는 %LOCALAPPDATA%의 같은 이름 파일)
 이 모듈은 파일만 다룬다: 어떤 키가 무슨 뜻인지, 값이 맞는지는 호출한 쪽이 판단한다 (다른 창·다음 버전이 쓴 모르는 키는 그대로 둠).
 
 user_files의 규칙을 그대로 따른다: 파일이 없으면 빈 값, 읽지 못했거나 깨졌거나 JSON 객체가 아니면 UserFileError(경로와 원인) — 빈 값으로
@@ -47,3 +48,16 @@ def update_pref(key: str, value, path=None) -> None:
         return prefs
 
     user_files.update_json(path, mutate, {})
+
+
+def edit_prefs(edit, path=None) -> dict:
+    """잠금 안에서 다시 읽은 설정(dict)을 edit(prefs)가 제자리에서 고치고 씀 — 값이 앞 값에 따라 정해지는 키(목록에 더하기·빼기)용:
+    그사이 다른 창이 고친 것을 지우지 않음. 새 설정을 돌려줌. 깨진 파일·edit의 예외면 파일을 건드리지 않음 (update_pref와 같은 오류)."""
+    path = path or prefs_path()
+
+    def mutate(prefs):
+        prefs = _as_prefs(prefs, path)
+        edit(prefs)
+        return prefs
+
+    return user_files.update_json(path, mutate, {})

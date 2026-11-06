@@ -11,6 +11,7 @@ player_sidebar를 모듈 수준에서 import하지 말 것 — player_sidebar가
 """
 
 import os
+import time
 import traceback
 
 from PyQt5.QtGui import QColor
@@ -18,6 +19,12 @@ from PyQt5.QtWidgets import QMessageBox
 
 from yesoncheck import paths, video_list
 from yesoncheck.sidebar_items import ALL_KIND_ROLE
+
+
+def switch_line(gap, open_s, previous, name):
+    """선택 재생 전환의 기록 줄 — gap: 앞 파일의 마지막 틱(그 [측정] 줄의 끝)부터 다음 파일의 재생을 건 때까지(초 — 끝을 아는 틱 하나 +
+    열기 + 첫 프레임으로 이동; 실시간이면 1/fps 남짓), open_s: 그중 open_file이 걸린 시간."""
+    return f"[측정] 전환 {gap:.2f}초 (열기 {open_s:.2f}초) — {previous} → {name}"
 
 
 class SidebarPlaylistMixin:
@@ -72,6 +79,9 @@ class SidebarPlaylistMixin:
             self._playlist_resolving = False
 
     def _play_playlist_from_current(self):
+        # 전환 줄: 앞 차례를 끝까지 재생해 [측정] 줄을 찍었을 때만 (첫 차례·밖에서 재생한 영상의 낡은 시각은 쓰지 않음)
+        previous = self._last_measure_end if self._playlist_played_any else None
+        self._last_measure_end = None
         while 0 <= self.current_playlist_index < len(self.playlist):
             current_file = self.playlist[self.current_playlist_index]
             try:
@@ -112,11 +122,17 @@ class SidebarPlaylistMixin:
             
             # 파일 열기 및 재생
             try:
+                open_started = time.perf_counter()
                 if self.open_file('A', current_file):
+                    open_s = time.perf_counter() - open_started
                     self._playlist_played_any = True
                     # 첫 번째 프레임으로 이동
                     self.seek_to_frame(1)
                     self.play_video()
+                    if previous is not None:
+                        ended_at, previous_name = previous
+                        print(switch_line(time.perf_counter() - ended_at, open_s, previous_name, os.path.basename(current_file)),
+                              flush=True)
                     self.playSelectedPauseButton.setText('Selected Pause')
                     self.playSelectedPauseButton.setStyleSheet("background-color: yellow;")
                     print(f"Successfully started playing: {os.path.basename(current_file)}")

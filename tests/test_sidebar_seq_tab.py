@@ -661,8 +661,8 @@ def test_playlist_shortcuts_stay_mov_list_only(player, tmp_path, monkeypatch, ke
     assert called == []
 
 
-def test_up_down_open_the_selected_item_only_on_the_mov_list(player, tmp_path, monkeypatch):
-    """위아래 화살표로 선택을 옮기면 Mov 목록은 그 영상을 A로 엶 (Seq 목록은 누를 때만 엶 — 이 일은 Mov 목록 전용)."""
+def test_up_down_open_the_selected_item_on_the_mov_list(player, tmp_path, monkeypatch):
+    """위아래 화살표로 선택을 옮기면 Mov 목록은 그 영상을 A로 엶."""
     player.load_videos_from_folder(str(shot(tmp_path)))
     opened = []
     monkeypatch.setattr(player, "load_selected_item_to_video_a", lambda: opened.append("mov"))
@@ -671,7 +671,34 @@ def test_up_down_open_the_selected_item_only_on_the_mov_list(player, tmp_path, m
     pump()
     assert opened == ["mov"]
 
-    opened.clear()
-    QTest.keyClick(focus_list(player, "seq_sidebar"), Qt.Key_Down)
+
+def test_up_down_on_the_seq_list_open_the_sequence(player, tmp_path):
+    """Seq 목록도 위아래 화살표로 옮긴 시퀀스를 A로 엶 — 예전에는 누를 때만 열려 화살표로는 그림이 바뀌지 않았음(사용자 보고 2026-11-06).
+    All 목록(load_selected_all_item)과 같은 규칙."""
+    player.load_videos_from_folder(str(shot(tmp_path)))
+    widget = focus_list(player, "seq_sidebar")
+    widget.setCurrentRow(0)
+    first, second = (widget.item(i).data(Qt.UserRole).identity for i in (0, 1))
+
+    QTest.keyClick(widget, Qt.Key_Down)
     pump()
-    assert opened == []
+    assert player.filename_a == second
+
+    QTest.keyClick(widget, Qt.Key_Up)
+    pump()
+    assert player.filename_a == first
+
+
+def test_up_down_on_the_seq_list_are_ignored_while_play_selected_runs(player, tmp_path):
+    """선택 재생 중에는 누를 때처럼 열지 않음 (on_seq_item_clicked의 규칙)."""
+    player.load_videos_from_folder(str(shot(tmp_path)))
+    widget = focus_list(player, "seq_sidebar")
+    widget.setCurrentRow(0)
+    before = player.filename_a
+    player.is_playlist_playing = True
+    try:
+        QTest.keyClick(widget, Qt.Key_Down)
+        pump()
+    finally:
+        player.is_playlist_playing = False
+    assert player.filename_a == before
