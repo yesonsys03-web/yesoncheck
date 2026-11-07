@@ -52,6 +52,24 @@ def measurement_line(frames, elapsed, native, wipe, display, name, max_gap=0.0, 
             f"와이프={'on' if wipe else 'off'} 표시={display} — {name}")
 
 
+def open_timing_line(total, steps, name):
+    """영상 열기의 단계별 시간 줄 — `[측정] 열기 <총>초 — <단계> <초> · … · 그 밖 <초> — <파일 이름>`. steps: [(이름, 초)] (차례대로),
+    '그 밖'은 총합에서 단계 합을 뺀 나머지(반올림 탓에 음수면 0). 선택 재생 전환 약 1초 중 '열기'가 무엇에 드는지 재려고 (2026-11-07)."""
+    rest = max(0.0, total - sum(seconds for _label, seconds in steps))
+    parts = " · ".join(f"{label} {seconds:.2f}" for label, seconds in [*steps, ("그 밖", rest)])
+    return f"[측정] 열기 {total:.2f}초 — {parts} — {name}"
+
+
+def _capture_open_steps(cap, seconds):
+    """open_file의 캡처 단계: 파이프 캡처면 적어 둔 단계(ffprobe·ffmpeg 시작·첫 프레임 — movie_pipe_source)와 나머지(확인·네이티브 게이트의 probe
+    등 — 0.01초 넘을 때만 '캡처 그 밖'), 그 밖의 캡처(cv2·시퀀스·네이티브)는 '캡처 열기' 하나."""
+    steps = list(getattr(cap, "open_steps", None) or [])
+    if not steps:
+        return [("캡처 열기", seconds)]
+    rest = seconds - sum(value for _label, value in steps)
+    return steps + ([("캡처 그 밖", rest)] if rest >= 0.01 else [])
+
+
 class _MeasureRun:
     """[측정] Play 한 번의 기록 — t0: Play 직후 시각, frames: 그 뒤 진행한 장 수, last: 마지막 틱의 update_frame이 끝난 시각 (time.perf_counter), max_gap: 가장 긴 틱 간격(초), stalls: 틱 간격이 프레임 시간의 STALL_FACTOR배를 넘은 횟수 — 첫 틱(한 프레임을 기다리고 재생 시작 일까지 더해져 늘 김)과 번호가 건너뛴 틱(재생 중 탐색 — 사용자가 한 일)은 세지 않음. 처리가 늘 프레임 시간의 1.5배를 넘으면 거의 모든 틱이 세짐(끊김이 아니라 느린 것)."""
 
@@ -322,6 +340,7 @@ class PlayerPlaybackMixin:
             if file_path is None:
                 return False
             print(f"Attempting to open video file: {file_path}")
+            opened_at = time.perf_counter()  # '[측정] 열기' 줄 — 단계마다 시각을 찍음 (open_timing_line)
             opening_sequence = is_sequence_path(file_path)
             # 보던 영상을 멈추기 전에 확인하고 열어 봄 (열 수 없는 영상 때문에 빈 화면만 남지 않게)
             if opening_sequence:
@@ -330,11 +349,14 @@ class PlayerPlaybackMixin:
                 cap = self._open_movie_capture(file_path)
             if cap is None:
                 return False
+            steps = _capture_open_steps(cap, time.perf_counter() - opened_at)
 
+            mark = time.perf_counter()
             self._stop_playback_for_open()
 
             # 새로운 영상을 열 때 프레임 캐시 초기화 (이전 영상 프레임 방지)
             self.clear_cache()
+            steps.append(("멈추기", time.perf_counter() - mark))  # 선택 재생이 아니면 stop_video → 옛 캡처를 처음으로 (파이프면 ffmpeg 재시작일 수 있음)
 
             # 혼합 차단: 반대쪽이 다른 종류(mov/시퀀스)면 놓고 와이프를 끔 (열기에 성공한 뒤에만 — 실패하면 보던 것은 그대로)
             other_cap = self.cap_b if video_type == 'A' else self.cap_a
@@ -345,15 +367,19 @@ class PlayerPlaybackMixin:
                     self.update_frame()  # 놓은 A의 마지막 그림이 화면에 남지 않게
 
             if video_type == 'A':
+                mark = time.perf_counter()
                 if self.cap_a: self.cap_a.release()
+                steps.append(("옛 캡처 놓기", time.perf_counter() - mark))
                 self.filename_a = file_path
                 self.cap_a = cap
+                mark = time.perf_counter()
                 if opening_sequence:
                     # 시퀀스는 소리가 없음: 이전 영상의 소리만 놓음 (재생기를 만들지 않음)
                     self._drop_audio_media()
                 else:
                     # 소리 재생기를 처음 만드는 곳 (mediaPlayer 속성: 처음 쓸 때 만듦)
                     self.mediaPlayer.setMedia(QMediaContent(QUrl.fromLocalFile(file_path)))
+                steps.append(("소리", time.perf_counter() - mark))
                 
                 total_frames = int(self.cap_a.get(cv2.CAP_PROP_FRAME_COUNT))
                 # 신호를 막고 바꿈: 선택 재생 중에는 슬라이더가 앞 파일의 끝에 남아 있어(_stop_playback_for_open이 stop_video를 부르지 않음)
@@ -368,7 +394,9 @@ class PlayerPlaybackMixin:
                 # self.positionScroll.setPageStep(100)  # 고정된 페이지 스텝 값
 
             elif video_type == 'B':
+                mark = time.perf_counter()
                 if self.cap_b: self.cap_b.release()
+                steps.append(("옛 캡처 놓기", time.perf_counter() - mark))
                 self.filename_b = file_path
                 self.cap_b = cap
 
@@ -381,11 +409,16 @@ class PlayerPlaybackMixin:
             self.detect_fps()
             self.labelPlaybackFPS.setText('재생: 대기')
             # 스레드 안전성을 위해 QTimer.singleShot 대신 직접 호출
+            mark = time.perf_counter()
             self.display_first_frame()
+            steps.append(("첫 화면", time.perf_counter() - mark))  # 첫 read(파이프면 프레임 캐시 판정 포함)·변환·그리기
             if video_type == 'A':
+                mark = time.perf_counter()
                 self.reset_ocr_state()
                 if hasattr(self, 'on_video_annotations_reset'):
                     self.on_video_annotations_reset(file_path)
+                steps.append(("주석", time.perf_counter() - mark))  # 주석 파일 읽기(NAS)·OCR 상태 비우기
+            print(open_timing_line(time.perf_counter() - opened_at, steps, os.path.basename(file_path)), flush=True)
             return True
         return False
 

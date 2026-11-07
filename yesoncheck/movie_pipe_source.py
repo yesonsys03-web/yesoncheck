@@ -991,6 +991,7 @@ class FFmpegPipeCapture:
         except OSError as exc:
             raise PipeCaptureError(f"ffmpeg 출력을 받을 소켓을 만들지 못했습니다 ({exc}): {path}", (), "") from exc
         command = ()
+        started = time.perf_counter()
         try:
             command = _pipe_command(path, transport.output)  # ffmpeg가 없으면 ToolNotFoundError — 아래에서 소켓만 닫고 그대로
             session = _PipeSession(command, transport, probe.height, probe.width)
@@ -1001,7 +1002,11 @@ class FFmpegPipeCapture:
             transport.close()
             raise
         self._finalizer = weakref.finalize(self, session.stop)  # 세션을 멈추는 단 하나의 길 (release·죽음·GC·재시작이 같이 씀)
+        spawned = time.perf_counter()
         outcome, value = session.take(READ_TIMEOUT_S, remove=False)
+        # 열기 단계별 시간 (플레이어의 '[측정] 열기' 줄 — player_playback.open_timing_line): ffmpeg를 띄워 출력이 이어질 때까지, 첫 프레임을 받기까지.
+        # maybe_pipe_capture가 여기서 ffprobe를 돌렸으면 맨 앞에 더함
+        self.open_steps = [("ffmpeg 시작", spawned - started), ("첫 프레임", time.perf_counter() - spawned)]
         if outcome != _FRAME:
             self._finalizer()
             if outcome == _END:
@@ -1548,8 +1553,11 @@ def maybe_pipe_capture(path, full_cache=False, probe=None):
     if mode == "cv2":
         return None
     name = os.path.basename(path)
+    probe_seconds = None  # 여기서 ffprobe를 돌렸으면 그 시간 ('[측정] 열기' 줄의 ffprobe — 부른 쪽이 probe를 넘겼으면 그쪽 몫)
     if probe is None:
+        probed_at = time.perf_counter()
         probe = probe_for_open(path, mode)
+        probe_seconds = time.perf_counter() - probed_at
         if probe is None:  # auto에서 ffprobe가 못 읽음 — probe_for_open이 기록을 남겼고, 기존 cv2 경로로
             return None
     reason = ineligible_reason(probe, check_codec=mode != "pipe")
@@ -1559,6 +1567,8 @@ def maybe_pipe_capture(path, full_cache=False, probe=None):
         print(f"{PLAY_LOG_PREFIX} cv2: {name} (파이프 아님 — {reason})")
         return None
     capture = FFmpegPipeCapture(path, probe, full_cache=full_cache)
+    if probe_seconds is not None:
+        capture.open_steps.insert(0, ("ffprobe", probe_seconds))
     print(f"{PLAY_LOG_PREFIX} ffmpeg 파이프: {name} ({probe.codec} {probe.width}×{probe.height} {float(probe.avg):g}fps, "
           f"프레임 {probe.nb_frames})")
     return capture
