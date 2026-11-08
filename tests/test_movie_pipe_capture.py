@@ -410,8 +410,9 @@ def test_broken_file_raises_in_ctor(tmp_path, monkeypatch):
         with pytest.raises(PipeCaptureError) as raised:
             FFmpegPipeCapture(path, probe)
         error = raised.value
-        assert error.command[:-1] == [external_tools.ffmpeg_path(), "-nostdin", "-v", "error", "-i", path, "-map",
-                                      "0:V:0", "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "bgr24"]
+        assert error.command[:-1] == [external_tools.ffmpeg_path(), "-nostdin", "-v", "error", "-thread_type", "slice",
+                                      "-i", path, "-map", "0:V:0", "-fps_mode", "passthrough", "-f", "rawvideo",
+                                      "-pix_fmt", "bgr24"]
         assert error.command[-1] == started[-1].transport.output and error.command[-1].startswith(OUTPUT_MARK)
         assert cause in error.stderr
         assert path in str(error) and cause in str(error)
