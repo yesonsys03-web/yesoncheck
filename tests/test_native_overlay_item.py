@@ -216,7 +216,7 @@ def test_overlay_item_geometry_follows_overlay_metrics(fake_native_player, size)
     """1080p·4K 네이티브 프레임: 상자의 왼쪽 = margin_x − pad, 위 = 기준선 − cv2 글자 높이 − pad, 아래 = 기준선 + max(pad, cv2 꼬리, Qt 꼬리) — 왼쪽·위·
     (Qt 꼬리가 cv2보다 짧으면) 아래가 구운 흰 상자와 같은 픽셀; 글자 기준선은 장면(= 프레임) 좌표 (margin_x, 높이 − margin_y), Qt 대문자 높이 ≈ cv2
     글자 높이(±1px),
-    글자 잉크가 상자 안, 상자 오른쪽 = 자리 잡을 글(가장 넓은 숫자 — 프레임 번호가 바뀌어도 고정, 2026-11-09)의 글자 끝 + pad, 굵기는 cv2 획이 3px 이상이라 Bold.
+    글자 잉크가 상자 안, 상자 오른쪽 = 글자 끝 + pad(빈자리 없음 — 숫자 폭이 같은 글꼴이라 같은 자릿수 안에서는 떨리지 않음), 굵기는 cv2 획이 3px 이상이라 Bold.
 
     깨지는 변경: margin_x·margin_y를 바꿔 쓰면 왼쪽·아래가 어긋남; 기준선 대신 글자 아이템 원점(글줄 위)을 높이 − margin_y에 두면 글자가 상자 밑으로;
     글꼴 크기를 cv2 높이에 맞추지 않으면(앱 기본 글꼴 13pt 그대로) 대문자 높이가 틀림; pad를 빼면 상자가 글자에 붙음."""
@@ -247,8 +247,7 @@ def test_overlay_item_geometry_follows_overlay_metrics(fake_native_player, size)
     assert text.scenePos().y() + fm.ascent() == pytest.approx(baseline)
     assert fm.capHeight() == pytest.approx(th, abs=1)
     assert rect.contains(fm.tightBoundingRect(label).translated(m.margin_x, baseline)), "글자 잉크가 흰 상자 밖으로 나감"
-    reserve = overlay_reserve_text(label, widest_digit(fm.horizontalAdvance))
-    assert rect.right() == pytest.approx(m.margin_x + max(fm.horizontalAdvance(label), fm.horizontalAdvance(reserve)) + m.pad + 1, abs=0.01)
+    assert rect.right() == pytest.approx(m.margin_x + fm.horizontalAdvance(label) + m.pad + 1, abs=0.01)  # 글자에 딱 맞춤 (2026-11-09 사용자 결정)
     assert text.font().bold() is True and m.thickness >= 3
     assert_untouched(rig)
 

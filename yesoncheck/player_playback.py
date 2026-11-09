@@ -848,8 +848,8 @@ class PlayerPlaybackMixin:
         x = layout.margin_x
         y = height - layout.margin_y
         pad = layout.pad
-        cv2.rectangle(frame, (x - pad, y - layout.text_height - pad), (x + layout.box_width + pad, y + max(pad, layout.baseline)),
-                      (255, 255, 255), -1)  # g·p·_ 꼬리(baseline)까지 상자 안에, 오른쪽 끝은 프레임 번호와 상관없이 고정(box_width)
+        cv2.rectangle(frame, (x - pad, y - layout.text_height - pad), (x + layout.text_width + pad, y + max(pad, layout.baseline)),
+                      (255, 255, 255), -1)  # g·p·_ 꼬리(baseline)까지 상자 안에
         cv2.putText(frame, text, (x, y), OVERLAY_FONT, layout.scale, (0, 0, 0), layout.thickness)
 
     def on_overlay_slider_pressed(self):

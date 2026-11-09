@@ -58,6 +58,9 @@ OVERLAY_ITEM_Z = 13
 # 주석 층(네이티브 프레임 — annotation_overlay): B 키 상자 위(굽는 길도 B 글자를 먼저, 주석을 그 위에 구움 — Ruling 18), 주석 미리보기(14) 아래
 ANNOTATION_OVERLAY_Z = 13.5
 OVERLAY_FONT_REF_PX = 100  # 글꼴 크기를 정할 때 대문자 높이를 재는 기준 픽셀 크기 (overlay_font)
+# B 키 아이템의 글꼴 — 숫자 폭이 모두 같은 글꼴(사용자 보고 2026-11-09: Mac 시스템 글꼴 SF는 숫자 폭이 달라 '1' 29.3px 대 '0' 39.9px(60px Bold) —
+# 재생 중 프레임 번호가 바뀔 때마다 뒤의 '/전체'가 좌우로 움직여 떨려 보였음). Helvetica Neue는 모든 Mac에, 없으면 Arial(둘 다 숫자 폭이 같음)
+OVERLAY_FONT_FAMILIES = ["Helvetica Neue", "Arial"]
 
 
 def viewport_mode(platform_name, env, windows_renderer=windows_display.DEFAULT_RENDERER):
@@ -101,7 +104,8 @@ def windows_gl_problem():
 
 
 def overlay_font(text, layout):
-    """B 키 오버레이 아이템의 글꼴 — 앱 기본 글꼴을 굽는 길(cv2 Hershey)의 글자 크기에 맞춤(모양은 다름 — 사용자 결정 "같아 보이면 OK").
+    """B 키 오버레이 아이템의 글꼴 — 숫자 폭이 같은 글꼴(OVERLAY_FONT_FAMILIES — 프레임 번호가 바뀌어도 '/전체'가 제자리)을 굽는 길(cv2 Hershey)의
+    글자 크기에 맞춤(모양은 다름 — 사용자 결정 "같아 보이면 OK").
 
     크기: 대문자 높이(QFontMetricsF.capHeight)가 cv2 글자 높이(layout.text_height — 기준선 위 높이, 대문자 높이에 획 반 굵기를 더한 값)와 같게 —
     OVERLAY_FONT_REF_PX에서 잰 대문자 높이로 비례 계산(대문자 높이는 픽셀 크기에 비례). 그래도 Qt 글자가 들어갈 너비(layout.room)보다 넓으면
@@ -109,6 +113,7 @@ def overlay_font(text, layout):
     굽는 길이 4K 획을 √(k/1.5)만큼 더 굵게 하는 것(줄여 볼 때 획 가장자리가 섞여 가늘어 보임)은 아이템에는 필요 없음 — Qt 글자는 화면 해상도로
     그려져 줄여 봐도 가늘어지지 않음. 대문자 높이를 잴 수 없는 글꼴(0 이하)이면 ValueError — 크기를 지어내지 않음."""
     font = QFont()
+    font.setFamilies(OVERLAY_FONT_FAMILIES)
     font.setBold(layout.thickness >= 3)
     font.setPixelSize(OVERLAY_FONT_REF_PX)
     cap = QFontMetricsF(font).capHeight()
@@ -696,8 +701,8 @@ class CustomVideoWidget(QGraphicsView):
 
         굽는 길(player_playback.overlay_text)과 같은 규칙(overlay_layout — overlay_metrics의 크기·여백, 너비를 넘치면 줄임): 기준선은
         (margin_x, 높이 − margin_y), 상자는 글자 상자를 pad만큼 넓힌 것 — 왼쪽 margin_x − pad, 위 기준선 − cv2 글자 높이 − pad(구운 상자와 같은
-        픽셀), 아래 기준선 + max(pad, cv2 꼬리, Qt 꼬리)(Qt 글꼴의 g·p·_ 꼬리도 상자 안), 오른쪽 = 자리 잡을 글(overlay_reserve_text — 이 글꼴에서
-        가장 넓은 숫자)의 Qt 글자 끝 + pad(프레임 번호가 바뀌어도 고정 — 2026-11-09, 예전에는 지금 글자 끝이라 떨려 보였음). cv2.rectangle처럼 끝 픽셀까지
+        픽셀), 아래 기준선 + max(pad, cv2 꼬리, Qt 꼬리)(Qt 글꼴의 g·p·_ 꼬리도 상자 안), 오른쪽 Qt 글자 끝 + pad(글자에 딱 맞춤 — 글꼴이 숫자 폭이
+        같아(OVERLAY_FONT_FAMILIES) 같은 자릿수 안에서는 떨리지 않음, 2026-11-09). cv2.rectangle처럼 끝 픽셀까지
         칠하도록 너비·높이에 1을 더함. 글꼴은 overlay_font(대문자 높이 = cv2 글자 높이). 글자 아이템은 상자의 자식이라 자리는 상자 좌표 — 상자가
         원점에 있어 프레임 좌표와 같음 — 이고 보임/숨김은 상자를 따름."""
         if text is None:
@@ -713,10 +718,8 @@ class CustomVideoWidget(QGraphicsView):
         self.overlay_text_item.setFont(font)
         self.overlay_text_item.setText(text)
         self.overlay_text_item.setPos(x, y - metrics.ascent())  # 상자 좌표(= 프레임 좌표). 글자 아이템의 원점은 글줄 위 — 기준선이 y에 오게
-        reserve = overlay_reserve_text(text, widest_digit(metrics.horizontalAdvance))
-        text_room = max(metrics.horizontalAdvance(text), metrics.horizontalAdvance(reserve))
         self.overlay_box_item.setRect(QRectF(x - pad, y - layout.text_height - pad,
-                                             text_room + 2 * pad + 1, layout.text_height + pad + below + 1))
+                                             metrics.horizontalAdvance(text) + 2 * pad + 1, layout.text_height + pad + below + 1))
         self.overlay_box_item.setVisible(True)  # 자식인 글자도 함께 보임
 
     def _after_frame_shown(self):
