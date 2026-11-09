@@ -418,6 +418,8 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   비트레이트(영상 트랙, 없으면 컨테이너 전체라고 적음), 주사·인코더·만든 때(있을 때만), 음성 트랙(없으면 "없음"), 컨테이너, 파일 크기(십진 GB/MB + 바이트), 경로. 없는 값은 "알 수 없음", 영상 트랙(attached_pic 제외)이 없으면 ValueError.
   창(`player_playback.show_video_info`)은 `format_html`의 HTML(굵은 라벨 — 예전엔 `**`가 글자로 보였음)·'자세히'에 ffprobe JSON·마우스로 골라 복사 가능, 읽지 못하면 기록에 `[미디어 정보] 실패: <경로>` + 트레이스백, 창은 평문(종류·사유·파일, 자세히에 트레이스백, 경고 아이콘) — Qt 없음
 - `yesoncheck/windows_display.py` (70줄): (Windows) 화면 그리기 설정 CPU·GPU — 값·`prefs.json` 저장·이 PC의 GL을 쓸 수 있는지(`gl_problem`) — Qt 없음 (최근 변경 사항 2026-11-05)
+- `yesoncheck/qt_messages.py` (49줄): Qt(C++) 메시지(qWarning 등)를 `[Qt 경고] …` 한 줄씩 sys.stderr로 — 빌드 앱은 `setup_app_logging`이 건다(2026-11-09). 그 전에는 파이썬 stdout·stderr만 기록 파일로 가서 Qt 경고(소리 백엔드 DirectShow·WMF의 '열지 못함' 등)가 콘솔 없는 Windows 앱에서 사라졌음. 처리기는 Qt 콜백이라 예외를 내지 않음(쓰다 실패하면 원래 stderr에 한 번)
+- `yesoncheck/media_player_log.py` (79줄): 소리 재생기(QMediaPlayer) 진단 기록 — `player_base.mediaPlayer`가 만들 때 `attach`: 한 줄 `[소리] 출력 장치: 기본 <장치> · 모두 n개 [...] · 재생기 <쓸 수 있음…> · 재생 가능성 mov <…> · mp4 <…> · QT_MULTIMEDIA_PREFERRED_PLUGINS=<값>`, 그 뒤 파일마다 `[소리] 상태: <여는 중·열림·열 수 없음…> — <파일>`·`[소리] 소리 트랙: 있음|없음`·`[소리] 재생기 오류: <종류>: <errorString>`(2026-11-09 — Windows 11에서 소리가 안 난다는 보고, 그때까지 재생기 오류·상태를 아무도 받지 않았음). 신호는 재생기의 자식 QObject가 받음(순환 참조 없음)
 - `yesoncheck/frame_utils.py` (21줄): 영화 산업 표준 프레임 계산 (feet.frames 형식)
 - `yesoncheck/playback_clock.py` (35줄): 재생 틱의 시각표 `PlaybackClock` — k번째 틱 = 시작 + k/fps, 틱마다 다음 시각까지 남은 ms(최소 1)를 돌려줌, 프레임 `BEHIND_LIMIT_FRAMES`(2)장 넘게 밀리면 시각표를 지금으로 옮김(밀린 프레임을 몰아 보이지 않게). 프레임을 건너뛰게 하지 않음 — Qt 없음. `play_video`가 Play마다 만들고 `next_frame_playback`이 틱 끝에 `self.timer.start(…)`로 걺
 - `yesoncheck/build_info.py` (89줄): 빌드가 앱에 넣은 `build_info.json`(버전·커밋·빌드 시각·플랫폼)을 읽어 창
@@ -1070,6 +1072,12 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 5. 다양한 비디오 콘텐츠 유형으로 테스트
 
 ## 최근 변경 사항
+
+### 2026-11-09 (소리 진단 기록 — Windows 11에서 소리가 안 남)
+- **보고**(사용자): Windows 11에서 소리가 나오지 않음, Windows 10은 정상. 원인 미확인 — 기록에 아무것도 없었음: 빌드 앱은 Qt(C++) 경고를 기록 파일로 보내지 않았고(소리 백엔드가 실패를 알리는 길), QMediaPlayer의 오류·상태 신호도 받지 않았음
+- **넣은 것**(고치기 전에 증거부터): `qt_messages`(Qt 경고 → 기록)·`media_player_log`(출력 장치·재생 가능성·상태·오류 → `[소리]` 줄). 동작은 그대로
+- **후보(미확인)**: ① Qt 5의 Windows 기본 소리 백엔드는 DirectShow라 mov를 열려면 따로 설치한 필터(LAV·K-Lite 등)가 필요할 수 있음 — Windows 10 PC에만 있으면 맞음 ② Windows 11의 출력 장치·설정 ③ 볼륨·음소거. Windows 11 기록의 `[Qt 경고]`·`[소리]` 줄로 가림
+- 시험 `tests/test_audio_log.py`(Qt 메시지 줄 모양·sys.stderr로·빌드 앱 기록 파일에 남음·쓰기 실패에도 예외 없음, 출력 장치 줄·상태/오류/소리 트랙 줄·창의 재생기에 붙음)
 
 ### 2026-11-09 (ffmpeg 파이프 — Windows만 조각 스레드로 첫 프레임 앞당기기)
 - **왜**: Windows 시험 빌드(a652652)의 `[측정] 열기` 9번에서 '첫 프레임'(ffmpeg가 첫 4K 프레임을 넘겨주기까지)이 평균 0.74초(0.44~1.33)로 전환 평균 1.10초의 약 70% — ffprobe 0.12·주석 0.09·소리 0.04·첫 화면 0.03은 작음

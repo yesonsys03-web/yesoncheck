@@ -45,7 +45,8 @@ from PyQt5.QtWidgets import (
 
 from yesoncheck.video_widget import VIEWPORT_ENV, CustomVideoWidget
 from yesoncheck import bookmarks, build_info, default_app, error_window, external_tools, file_associations, \
-    instance_link, instances, mac_native_gate, mac_prefs, paths, timing_log, user_files, video_list, windows_display
+    instance_link, instances, mac_native_gate, mac_prefs, media_player_log, paths, timing_log, user_files, video_list, \
+    windows_display
 from yesoncheck.movie_pipe_source import movie_source_mode
 from yesoncheck.user_files import UserFileError
 from yesoncheck.main_window_styles import (
@@ -331,6 +332,7 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
             finally:
                 QApplication.restoreOverrideCursor()
             self._media_player = player
+            self._media_player_log = media_player_log.attach(player)  # 출력 장치·상태·오류를 [소리] 줄로 (Windows 11 소리 조사, 2026-11-09)
             self.media_player_create_seconds = time.perf_counter() - started
             timing_log.log("소리", f"재생기 준비 ({timing_log.since(started)})")
         return self._media_player
