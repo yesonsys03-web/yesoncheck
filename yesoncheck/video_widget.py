@@ -43,7 +43,7 @@ from yesoncheck import gl_bindings, paths, windows_display
 from yesoncheck.annotation_overlay import AnnotationOverlay
 from yesoncheck.frame_handles import native_surface_of, whole_surface_handle
 from yesoncheck.gl_video_item import LOG_PREFIX, VIDEO_ITEM_ENV, VideoFrameItem, use_stream_item, video_item_mode
-from yesoncheck.overlay_text_layout import overlay_layout
+from yesoncheck.overlay_text_layout import overlay_layout, overlay_reserve_text, widest_digit
 
 VIEWPORT_ENV = "YESONCHECK_VIEWPORT"
 VIEWPORT_MODES = ("gl", "raster")
@@ -116,10 +116,12 @@ def overlay_font(text, layout):
         raise ValueError(f"글꼴 {font.family()!r}의 대문자 높이를 잴 수 없습니다(capHeight {cap}, 픽셀 크기 {OVERLAY_FONT_REF_PX}, "
                          f"Qt 플랫폼 {QApplication.platformName()!r}) — B 키 오버레이 글자 크기를 정할 수 없음")
     font.setPixelSize(max(1, round(layout.text_height * OVERLAY_FONT_REF_PX / cap)))
-    advance = QFontMetricsF(font).horizontalAdvance(text)
+    # 너비는 자리 잡을 글로 잼 — 프레임 번호(Qt 글꼴은 숫자 폭도 다름)가 바뀌어도 글꼴 크기가 그대로 (overlay_text_layout 모듈 설명)
+    reserve = overlay_reserve_text(text, widest_digit(QFontMetricsF(font).horizontalAdvance))
+    advance = QFontMetricsF(font).horizontalAdvance(reserve)
     while advance > layout.room and font.pixelSize() > 1:  # 작은 크기에서는 폭이 크기에 비례하지 않아(글꼴의 작은 크기용 자간) 다시 잼
         font.setPixelSize(max(1, min(font.pixelSize() - 1, math.floor(font.pixelSize() * layout.room / advance))))
-        advance = QFontMetricsF(font).horizontalAdvance(text)
+        advance = QFontMetricsF(font).horizontalAdvance(reserve)
     return font
 
 
@@ -694,7 +696,8 @@ class CustomVideoWidget(QGraphicsView):
 
         굽는 길(player_playback.overlay_text)과 같은 규칙(overlay_layout — overlay_metrics의 크기·여백, 너비를 넘치면 줄임): 기준선은
         (margin_x, 높이 − margin_y), 상자는 글자 상자를 pad만큼 넓힌 것 — 왼쪽 margin_x − pad, 위 기준선 − cv2 글자 높이 − pad(구운 상자와 같은
-        픽셀), 아래 기준선 + max(pad, cv2 꼬리, Qt 꼬리)(Qt 글꼴의 g·p·_ 꼬리도 상자 안), 오른쪽 Qt 글자 끝 + pad. cv2.rectangle처럼 끝 픽셀까지
+        픽셀), 아래 기준선 + max(pad, cv2 꼬리, Qt 꼬리)(Qt 글꼴의 g·p·_ 꼬리도 상자 안), 오른쪽 = 자리 잡을 글(overlay_reserve_text — 이 글꼴에서
+        가장 넓은 숫자)의 Qt 글자 끝 + pad(프레임 번호가 바뀌어도 고정 — 2026-11-09, 예전에는 지금 글자 끝이라 떨려 보였음). cv2.rectangle처럼 끝 픽셀까지
         칠하도록 너비·높이에 1을 더함. 글꼴은 overlay_font(대문자 높이 = cv2 글자 높이). 글자 아이템은 상자의 자식이라 자리는 상자 좌표 — 상자가
         원점에 있어 프레임 좌표와 같음 — 이고 보임/숨김은 상자를 따름."""
         if text is None:
@@ -710,8 +713,10 @@ class CustomVideoWidget(QGraphicsView):
         self.overlay_text_item.setFont(font)
         self.overlay_text_item.setText(text)
         self.overlay_text_item.setPos(x, y - metrics.ascent())  # 상자 좌표(= 프레임 좌표). 글자 아이템의 원점은 글줄 위 — 기준선이 y에 오게
+        reserve = overlay_reserve_text(text, widest_digit(metrics.horizontalAdvance))
+        text_room = max(metrics.horizontalAdvance(text), metrics.horizontalAdvance(reserve))
         self.overlay_box_item.setRect(QRectF(x - pad, y - layout.text_height - pad,
-                                             metrics.horizontalAdvance(text) + 2 * pad + 1, layout.text_height + pad + below + 1))
+                                             text_room + 2 * pad + 1, layout.text_height + pad + below + 1))
         self.overlay_box_item.setVisible(True)  # 자식인 글자도 함께 보임
 
     def _after_frame_shown(self):
