@@ -17,7 +17,8 @@ if __package__ in (None, ""):
     from yesoncheck.main_window import VideoPlayer  # type: ignore  # pylint: disable=import-error
     from yesoncheck import (  # type: ignore  # pylint: disable=import-error
         build_info, default_app, error_window, file_associations, gl_video_item, launch_args, mac_app_events, mac_mounts,
-        mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, timing_log, update_install, user_files, windows_display,
+        mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, qt_messages, timing_log, update_install, user_files,
+        windows_display,
     )
     from yesoncheck.player_base import EXIT_WAIT_S, wait_for_released_workers  # type: ignore  # pylint: disable=import-error
     from yesoncheck.player_update import BOX_TITLE_PROPERTY  # type: ignore  # pylint: disable=import-error
@@ -25,7 +26,8 @@ else:
     from .main_window import VideoPlayer
     from . import (
         build_info, default_app, error_window, file_associations, gl_video_item, launch_args, mac_app_events, mac_mounts,
-        mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, timing_log, update_install, user_files, windows_display,
+        mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, qt_messages, timing_log, update_install, user_files,
+        windows_display,
     )
     from .player_base import EXIT_WAIT_S, wait_for_released_workers
     from .player_update import BOX_TITLE_PROPERTY
@@ -96,6 +98,7 @@ def setup_app_logging(platform=sys.platform):
     print(f"===== YesonCheck 시작 {datetime.datetime.now():%Y-%m-%d %H:%M:%S} (pid {os.getpid()}) =====")
 
     sys.excepthook = make_excepthook(log_path)
+    qt_messages.install()  # Qt(C++) 경고도 기록 파일로 — 예전에는 콘솔 없는 Windows 앱에서 사라졌음 (소리 백엔드 오류 등)
     remove_old_logs(log_dir)  # 기록 파일로 보낸 뒤에 — 정리 중의 문제도 기록에 남게
     return log_path
 

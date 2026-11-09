@@ -418,6 +418,8 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   비트레이트(영상 트랙, 없으면 컨테이너 전체라고 적음), 주사·인코더·만든 때(있을 때만), 음성 트랙(없으면 "없음"), 컨테이너, 파일 크기(십진 GB/MB + 바이트), 경로. 없는 값은 "알 수 없음", 영상 트랙(attached_pic 제외)이 없으면 ValueError.
   창(`player_playback.show_video_info`)은 `format_html`의 HTML(굵은 라벨 — 예전엔 `**`가 글자로 보였음)·'자세히'에 ffprobe JSON·마우스로 골라 복사 가능, 읽지 못하면 기록에 `[미디어 정보] 실패: <경로>` + 트레이스백, 창은 평문(종류·사유·파일, 자세히에 트레이스백, 경고 아이콘) — Qt 없음
 - `yesoncheck/windows_display.py` (70줄): (Windows) 화면 그리기 설정 CPU·GPU — 값·`prefs.json` 저장·이 PC의 GL을 쓸 수 있는지(`gl_problem`) — Qt 없음 (최근 변경 사항 2026-11-05)
+- `yesoncheck/qt_messages.py` (49줄): Qt(C++) 메시지(qWarning 등)를 `[Qt 경고] …` 한 줄씩 sys.stderr로 — 빌드 앱은 `setup_app_logging`이 건다(2026-11-09). 그 전에는 파이썬 stdout·stderr만 기록 파일로 가서 Qt 경고(소리 백엔드 DirectShow·WMF의 '열지 못함' 등)가 콘솔 없는 Windows 앱에서 사라졌음. 처리기는 Qt 콜백이라 예외를 내지 않음(쓰다 실패하면 원래 stderr에 한 번)
+- `yesoncheck/media_player_log.py` (124줄): 소리 재생기(QMediaPlayer) 진단 기록 — `player_base.mediaPlayer`가 만들 때 `attach`: 한 줄 `[소리] 출력 장치: 기본 <장치> · 모두 n개 [...] · 재생기 <쓸 수 있음…> · 재생 가능성 mov <…> · mp4 <…> · QT_MULTIMEDIA_PREFERRED_PLUGINS=<값>`(Windows는 끝에 ` · 백엔드 DirectShow(dsengine.dll)|Media Foundation(wmfengine.dll) · 플러그인 [...]` — `windows_backends`가 GetModuleHandleW로 실제로 불러온 백엔드 DLL을 봄: K-Lite가 깔린 PC는 환경 변수가 안 먹어도 DirectShow로 소리가 나므로 소리만으로는 가를 수 없음; 알아내지 못하면 트레이스백 + '알 수 없음', 재생기는 그대로), 그 뒤 파일마다 `[소리] 상태: <여는 중·열림·열 수 없음…> — <파일>`·`[소리] 소리 트랙: 있음|없음`·`[소리] 재생기 오류: <종류>: <errorString>`(2026-11-09 — Windows 11에서 소리가 안 난다는 보고, 그때까지 재생기 오류·상태를 아무도 받지 않았음). 신호는 재생기의 자식 QObject가 받음(순환 참조 없음)
 - `yesoncheck/frame_utils.py` (21줄): 영화 산업 표준 프레임 계산 (feet.frames 형식)
 - `yesoncheck/playback_clock.py` (35줄): 재생 틱의 시각표 `PlaybackClock` — k번째 틱 = 시작 + k/fps, 틱마다 다음 시각까지 남은 ms(최소 1)를 돌려줌, 프레임 `BEHIND_LIMIT_FRAMES`(2)장 넘게 밀리면 시각표를 지금으로 옮김(밀린 프레임을 몰아 보이지 않게). 프레임을 건너뛰게 하지 않음 — Qt 없음. `play_video`가 Play마다 만들고 `next_frame_playback`이 틱 끝에 `self.timer.start(…)`로 걺
 - `yesoncheck/build_info.py` (89줄): 빌드가 앱에 넣은 `build_info.json`(버전·커밋·빌드 시각·플랫폼)을 읽어 창
@@ -835,7 +837,7 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 
 **시험은 반드시 `~/coding/p310_tf/bin/python -m pytest`로 돌릴 것** — TensorFlow가 없는 `~/coding/p310`으로 돌리면 11개가 실패함.
 
-`tests/`에 시험 파일 119개 (수집 2,985개 — `pytest --collect-only -q tests`). `python -m pytest tests -q`로 돌리며(약 20분), 이 Mac의 소스 실행(`p310_tf` — Mac lock대로 PyObjC 포함)에서 2,939개가 통과(전체 실행에서 아래 플레이크 둘이 실패할 수 있음 — 따로 돌려 확인)하고 46개는 건너뜀 —
+`tests/`에 시험 파일 120개 (수집 2,996개 — `pytest --collect-only -q tests`). `python -m pytest tests -q`로 돌리며(약 20분), 이 Mac의 소스 실행(`p310_tf` — Mac lock대로 PyObjC 포함)에서 2,950개가 통과(전체 실행에서 아래 플레이크 둘이 실패할 수 있음 — 따로 돌려 확인)하고 46개는 건너뜀 —
 다른 OS 전용 시험, CI의 설치 파일 단계에서만 도는 시험이 건너뜀. PyObjC가 있어야 도는 네이티브 시험(`test_mac_native_source` 모듈과 진짜 네이티브 디코드 하나)은 Mac lock을 설치한 환경(이 Mac의 `p310_tf`·두 Mac CI job)에서 돌고 Windows CI에서만 건너뜀 (2026-11-09 기준; 부하 시험 `test_movie_pipe_transport::test_reader_keeps_up_while_main_thread_holds_gil`은 이 Mac이 바쁠 때 실패할 수 있음 — 따로 돌리면 통과; `test_fast_startup`의 종료 플레이크 1건(`test_app_exits_cleanly_while_shared_config_load_runs`, 자식 종료 코드 −11)은 러너 상태에 따라 간헐 실패 — main에서도 같은 빈도, 따로 돌리면 통과). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
 정적 빌드(`vendor/ffmpeg/`)를 씀 (`tests/conftest.py`). 시험을 건너뛰거나 지워서 통과시키지 말 것.
 
@@ -1077,6 +1079,12 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 - **고침**: `video_list.scan_job`의 BB_Animatic 갈래에 job 바로 아래 `Quicktime`을 더함(BM_Animatic의 `ANIMATIC`과 같은 모양). 다른 작품은 이 갈래를 지나지 않음
 - **실데이터 대조**(이 Mac에서 BB_Animatic 74개 job 전부, 고치기 전·후 코드): 바뀐 job은 F54 하나(영상 0 → 1개), 나머지 73개 job은 목록이 글자 그대로(영상 합 1,448 → 1,449)
 - 시험 `tests/test_video_list.py`(job 바로 아래 Quicktime·그 아래 하위 폴더는 아님·예전 모양 그대로·다른 작품 다섯은 job/Quicktime을 보지 않음)
+### 2026-11-09 (Windows 소리 — K-Lite 필요 안내, 소리 진단 기록)
+- **보고**(사용자): Windows 11에서 소리가 나오지 않음, Windows 10은 정상. 원인 미확인 — 기록에 아무것도 없었음: 빌드 앱은 Qt(C++) 경고를 기록 파일로 보내지 않았고(소리 백엔드가 실패를 알리는 길), QMediaPlayer의 오류·상태 신호도 받지 않았음
+- **넣은 것**(고치기 전에 증거부터 — 다음에 어느 PC에서 소리가 안 나도 기록으로 바로 알게): `qt_messages`(Qt 경고 → 기록)·`media_player_log`(출력 장치·재생 가능성·백엔드 환경 변수·Windows는 실제로 불러온 백엔드 DLL, 파일마다 상태·소리 트랙·오류 → `[소리]` 줄). 동작은 그대로
+- **원인(사용자 PC에서 확인)**: Qt 5의 Windows 기본 소리 백엔드 DirectShow는 mp4·mov를 혼자 열지 못함 — 소리가 나던 Windows 10 PC에는 K-Lite Codec Pack 18.4(LAV Splitter·LAV Audio)가 깔려 있었고, Windows 11 PC에 K-Lite를 깔자 소리가 남. 유튜브(브라우저)는 Windows 11에서도 소리가 났음(장치·드라이버 정상). 소리가 있는 파일: 애니매틱 mp4(H.264 + AAC)·립싱크/레이아웃 mov(H.264·ProRes + PCM `sowt`) — 렌더 ProRes(FL·KOTH)는 소리 트랙이 없음
+- **Media Foundation으로 바꾸기는 하지 않음**: Windows 11(K-Lite 깔린 채)에서 `QT_MULTIMEDIA_PREFERRED_PLUGINS=windowsmediafoundation`으로 켜자 소리가 나지 않았음(원인 미확인 — 그 상태의 기록은 받지 못함; Windows 판이 N인지·실제 불러온 백엔드는 확인 전). 사용자 결정: 'K-Lite를 쓰는 게 편하다 — 오디오 코덱이 다양해서 K-Lite가 효율적' → README '준비 사항'에 Windows는 K-Lite Codec Pack(Basic) 필요, '트러블슈팅'에 기록 줄 읽는 법. 다시 볼 때의 후보: 앱에 든 ffmpeg로 소리를 풀어 QAudioOutput으로(코덱 무관 — 소리 맞추기·탐색을 다시 짜야 함)
+- 시험 `tests/test_audio_log.py`(Qt 메시지 줄 모양·sys.stderr로·빌드 앱 기록 파일에 남음·쓰기 실패에도 예외 없음, 출력 장치 줄·상태/오류/소리 트랙 줄·창의 재생기에 붙음)
 ### 2026-11-09 (B 키 오버레이 — 숫자 폭이 같은 글꼴, 상자는 글자에 딱 맞춤)
 - **증상**(사용자 보고, PR #30을 넣은 앱): 상자는 멈췄지만 재생 중 프레임 숫자가 떨림, 번호가 짧으면 오른쪽에 빈자리
 - **원인**: Mac 네이티브 아이템 길의 글꼴이 앱 기본 글꼴(SF)이라 숫자 폭이 다름('1' 29.3px 대 '0' 39.9px, 60px Bold) — 프레임마다 글자 폭이 달라져 '/전체'가 움직였음. PR #30은 상자만 가장 넓은 번호에 맞춰 고정해 글자 안의 떨림은 남고 빈자리가 생겼음
