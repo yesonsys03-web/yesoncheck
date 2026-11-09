@@ -47,6 +47,7 @@ VideoPlayer._open_movie_capture의 삽입 분기가 같이 부른다 — 양성�
 """
 
 import collections
+import contextlib
 import errno
 import math
 import os
@@ -62,6 +63,7 @@ from fractions import Fraction
 
 import cv2
 import numpy as np
+import psutil
 
 from yesoncheck import frame_cache_budget
 from yesoncheck.external_tools import (
@@ -242,6 +244,27 @@ class PipeCaptureError(Exception):
 _FRAME, _END, _FAILED, _STOPPED, _TIMEOUT = "frame", "end", "failed", "stopped", "timeout"
 
 
+# Windows 우선순위 클래스(winbase.h — subprocess·psutil의 이름은 Windows에서만 있어 값으로 둠): 선택 재생이 미리 여는 ffmpeg (2026-11-09)
+BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
+NORMAL_PRIORITY_CLASS = 0x00000020
+
+
+def _popen_kwargs(low_priority):
+    """ffmpeg를 띄울 Popen 옵션 — subprocess_kwargs()(Windows 콘솔 창 없음)에, low_priority면 Windows에서만 BELOW_NORMAL을 더함.
+    왜(사용자 보고 2026-11-09): 선택 재생이 다음 차례를 미리 여는 ffmpeg가 재생 중인 ffmpeg·GUI와 같은 우선순위로 CPU를 다퉈, 미리 여는
+    0.7~1.4초 동안 재생이 끊기고 파일마다 0.1~2.2초 늦어짐(Windows 4K) — 낮추면 재생이 쓰고 남는 CPU만 씀(넘어갈 때 restore_priority로
+    보통으로). POSIX는 낮춘 우선순위(nice)를 사용자 권한으로 되돌릴 수 없어 바꾸지 않음."""
+    kwargs = dict(subprocess_kwargs())
+    if low_priority and sys.platform == "win32":
+        kwargs["creationflags"] = kwargs.get("creationflags", 0) | BELOW_NORMAL_PRIORITY_CLASS
+    return kwargs
+
+
+def _set_normal_priority(pid):
+    """(Windows) 프로세스 pid의 우선순위 클래스를 보통으로 — psutil 오류·OSError는 그대로 (restore_priority가 감쌈)."""
+    psutil.Process(pid).nice(NORMAL_PRIORITY_CLASS)
+
+
 def _pipe_command(path, output, seek_seconds=None):
     """bgr24 원시 프레임을 끝까지 output으로 내는 ffmpeg 명령 (스펙 §5.3) — seek_seconds가 있으면 그 시각(-ss, 입력 앞 = 컨테이너
     start 기준 시각, 소수 6자리)부터, 없으면 처음부터. output: 출력 대상 = _Transport.output — POSIX "pipe:1"(ffmpeg의 stdout이
@@ -406,10 +429,11 @@ class _PipeSession:
     _cond가 지키는 것: _frames·_stopped·_finished·failure.
     start: 이 세션이 내줄 첫 프레임의 번호 (처음 연 세션 0, 탐색 재시작은 -ss로 겨눈 번호).
     is_filler: 전체 모드 채움기(_Filler)의 세션인가 — 동작은 주 세션과 같고, 시험이 재시작 횟수(주 세션)와 따로 세는 표지·스레드 이름에만 쓴다.
+    low_priority: (Windows) ffmpeg를 BELOW_NORMAL로 띄움 — 선택 재생이 미리 여는 캡처의 처음 세션만 (_popen_kwargs).
     transport는 만든 쪽이 넘기고, 이 생성자가 성공하면 세션 것이다 (실패하면 만든 쪽이 닫는다 — 캡처의 생성자·_restart·채움기).
     """
 
-    def __init__(self, command, transport, height, width, start=0, is_filler=False):
+    def __init__(self, command, transport, height, width, start=0, is_filler=False, low_priority=False):
         self.command = command
         self.transport = transport
         self.start = start
@@ -426,7 +450,7 @@ class _PipeSession:
         self._stderr_chunks = []
         try:
             self.proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=transport.child_stdout,
-                                         stderr=subprocess.PIPE, **subprocess_kwargs())
+                                         stderr=subprocess.PIPE, **_popen_kwargs(low_priority))
         finally:
             transport.spawned()
         kind = "ffmpeg-pipe-fill" if is_filler else "ffmpeg-pipe"
@@ -670,6 +694,18 @@ class _ReadClock:
 
 
 _PROCESS_READS = _ReadClock()  # 이 프로세스의 모든 파이프 캡처의 read — 채움기의 쉬는 때는 자기 캡처와 이것 둘 다로 봄
+
+
+@contextlib.contextmanager
+def hold_idle_fill():
+    """그동안 이 프로세스의 쉬는 시간 채움기가 쉬는 때로 보지 않게 — 프로세스 시계를 read 중으로 잡음(이미 채우던 채움기는 다음 장부터 멈춤).
+    선택 재생이 넘어갈 때 아직 여는 중인 미리 열기를 GUI가 기다리는 동안(open_file): read가 없어 나가는 파일의 채움기(보통 우선순위,
+    8스레드)가 시작하면 낮은 우선순위의 미리 열기를 굶겨 기다림이 길어짐(코드 검토 2026-11-09)."""
+    _PROCESS_READS.enter()
+    try:
+        yield
+    finally:
+        _PROCESS_READS.leave()
 
 
 class _Filler:
@@ -960,7 +996,7 @@ class FFmpegPipeCapture:
     캡처를 붙잡지 않으므로 버려진 캡처의 GC가 늘 돎).
     """
 
-    def __init__(self, path, probe, full_cache=False):
+    def __init__(self, path, probe, full_cache=False, low_priority=False):
         if probe.width < 1 or probe.height < 1 or (probe.nb_frames or 0) < 1 or probe.avg is None or probe.r is None:
             raise ValueError(f"파이프로 열 수 없는 probe입니다 (pipe_eligible을 먼저 볼 것): {probe}")
         self._path = path
@@ -986,6 +1022,7 @@ class FFmpegPipeCapture:
         self._frame_bytes = probe.width * probe.height * 3  # bgr24 한 장
         self._ledger_key = None  # 전체 보관이면 장부(_LEDGER)의 키
         self._ledger_finalizer = None  # 전체 보관이면 장부 반환 (캡처의 weakref.finalize — release·죽음·GC가 같이 쓰고 한 번만 돎)
+        self._low_priority_session = None  # 낮은 우선순위로 띄운 처음 세션 — restore_priority가 한 번 보통으로 (선택 재생의 미리 열기)
         try:
             transport = _Transport()  # ffmpeg 출력을 받을 소켓 — Popen 전에
         except OSError as exc:
@@ -994,7 +1031,7 @@ class FFmpegPipeCapture:
         started = time.perf_counter()
         try:
             command = _pipe_command(path, transport.output)  # ffmpeg가 없으면 ToolNotFoundError — 아래에서 소켓만 닫고 그대로
-            session = _PipeSession(command, transport, probe.height, probe.width)
+            session = _PipeSession(command, transport, probe.height, probe.width, low_priority=low_priority)
         except OSError as exc:
             transport.close()
             raise PipeCaptureError(f"ffmpeg를 실행하지 못했습니다 ({exc}): {path}", command, "") from exc
@@ -1018,6 +1055,30 @@ class FFmpegPipeCapture:
             raise PipeCaptureError(f"영상을 ffmpeg 파이프로 열지 못했습니다 — {reason}: {path}", command,
                                    session.stderr_text())
         self._session = session
+        if low_priority:
+            self._low_priority_session = session
+
+    def restore_priority(self):
+        """낮은 우선순위로 연 캡처(선택 재생의 미리 열기)를 쓰기 전에 그 ffmpeg를 보통 우선순위로 → 바꿨으면 True. 바꿀 것이 없으면 False:
+        Windows가 아님(낮추지 않았음)·낮은 우선순위로 열지 않음·이미 되돌림·처음 세션을 탐색 재시작으로 버림(재시작 세션은 늘 보통)·닫힘·죽음·
+        ffmpeg가 이미 끝남(다 내보냄 — 되돌리는 사이에 끝나 psutil이 실패한 것도).
+        되돌리지 못하면(ffmpeg가 이미 끝남·권한 — psutil 오류·OSError) PipeCaptureError(원인 체인) — 낮은 우선순위로 재생하면 끊기므로 부른
+        쪽(open_file)이 버리고 예전처럼 엶. GUI 스레드에서 부름."""
+        with self._lock:
+            target, self._low_priority_session = self._low_priority_session, None
+            current = self._session
+        if target is None or target is not current or sys.platform != "win32":
+            return False
+        if target.proc.poll() is not None:  # 이미 다 내보내고 끝남(아주 짧은 파일) — 되돌릴 것이 없음, 읽기는 큐에서
+            return False
+        try:
+            _set_normal_priority(target.proc.pid)
+        except (psutil.Error, OSError) as exc:
+            if target.proc.poll() is not None:  # 되돌리는 사이에 끝남 — 위와 같음
+                return False
+            raise PipeCaptureError(f"미리 연 ffmpeg를 보통 우선순위로 되돌리지 못했습니다 ({type(exc).__name__}: {exc}): {self._path}",
+                                   target.command, target.stderr_text()) from exc
+        return True
 
     def isOpened(self):
         return self._session is not None
@@ -1530,7 +1591,7 @@ def probe_for_open(path, mode):
         return None
 
 
-def maybe_pipe_capture(path, full_cache=False, probe=None):
+def maybe_pipe_capture(path, full_cache=False, probe=None, low_priority=False):
     """영상 파일 path를 ffmpeg 파이프로 읽어야 하면 FFmpegPipeCapture, 아니면 None (부른 쪽이 기존 cv2.VideoCapture로 엶).
 
     full_cache: 캡처가 전체 프레임 캐시를 원하는가 — 플레이어 A/B만 True (VideoPlayer._open_movie_capture). 판정은 캡처의 첫 read
@@ -1538,6 +1599,8 @@ def maybe_pipe_capture(path, full_cache=False, probe=None):
 
     probe: 부른 쪽이 이미 읽은 MovieProbe — 플레이어의 네이티브 분기(VideoPlayer._native_or_pipe_capture)가 네이티브 게이트를 본 probe를 넘겨
     ffprobe를 한 번만 돌림. 주면 probe_movie를 다시 부르지 않고 그 값으로 판정(모드·게이트·기록 줄은 그대로), None(기본)이면 여기서 probe_for_open.
+
+    low_priority: (Windows) 캡처의 처음 ffmpeg를 BELOW_NORMAL로 — 선택 재생이 미리 여는 캡처만 (쓰기 전에 restore_priority).
 
     open_any_capture(annotation_export)와 VideoPlayer._open_movie_capture의 삽입 분기가 같은 이 함수를 부른다 — 판정 중복 없음.
     게이트는 양성 증거로만 켜진다(opt-in). 모드(YESONCHECK_MOVIE_SOURCE, movie_source_mode):
@@ -1566,7 +1629,7 @@ def maybe_pipe_capture(path, full_cache=False, probe=None):
             raise PipeCaptureError(f"{SOURCE_MODE_ENV}=pipe지만 이 파일은 파이프로 읽을 수 없습니다 — {reason}: {path}", [], "")
         print(f"{PLAY_LOG_PREFIX} cv2: {name} (파이프 아님 — {reason})")
         return None
-    capture = FFmpegPipeCapture(path, probe, full_cache=full_cache)
+    capture = FFmpegPipeCapture(path, probe, full_cache=full_cache, low_priority=low_priority)
     if probe_seconds is not None:
         capture.open_steps.insert(0, ("ffprobe", probe_seconds))
     print(f"{PLAY_LOG_PREFIX} ffmpeg 파이프: {name} ({probe.codec} {probe.width}×{probe.height} {float(probe.avg):g}fps, "
