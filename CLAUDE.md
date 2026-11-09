@@ -240,10 +240,10 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
   - **로그**(print): 파이프를 골랐으면 `[재생] ffmpeg 파이프: <이름> (prores 3840×2160 24fps, 프레임 334)` — **기록에 이 줄이 있으면 파이프 경로**. 게이트 음성이면 `[재생] cv2: <이름> (파이프 아님 — ② 프레임 속도가 일정하지 않음 …)`처럼
     사유 한 줄. `auto`에서 ffprobe가 파일을 못 읽으면(`RuntimeError` — 깨진 파일·확인 불가) 스택 트레이스·stderr 전문을 남기고 cv2로 엶(cv2도 못 열면 기존 오류 창). `ToolNotFoundError`(번들 ffprobe 없음)·probe 해석 오류(`KeyError` 등 코드 버그)·
     캡처 생성의 `PipeCaptureError`는 잡지 않고 그대로 올림. 전체 프레임 캐시를 원한 캡처(플레이어 A/B)는 첫 read에서 `[파이프] 프레임 캐시: …` 한 줄을 더 남김(아래 '전체 프레임 캐시').
-  - **ffmpeg 명령**(`_pipe_command`): `ffmpeg -nostdin -v error [-ss <t>] -i <파일> -map 0:V:0 -fps_mode passthrough -f rawvideo -pix_fmt bgr24 <출력>` — **`-fps_mode passthrough` 필수**(없으면 rawvideo가 CFR에 맞추려
+  - **ffmpeg 명령**(`_pipe_command`): `ffmpeg -nostdin -v error [-thread_type slice] [-ss <t>] -i <파일> -map 0:V:0 -fps_mode passthrough -f rawvideo -pix_fmt bgr24 <출력>` — **`-thread_type slice`는 Windows만**(2026-11-09 — Mac은 예전 명령 글자 그대로: 사용자 요청 '1.8.0의 Mac은 그대로 유지', `tests/test_pipe_command.py`가 고정): 기본(프레임 스레드)은
+    여러 프레임을 함께 디코드하느라 첫 장이 늦음 — 열기·탐색 재시작이 모두 그 첫 장을 기다림(Windows 선택 재생 전환의 약 70%). 이 Mac 4K 4444 첫 프레임 0.56초 → 0.17초, 334장 연속 48~49 → 52fps(OS 캐시에 올린 파일), 픽셀은 같음(실파일 334장·`-ss` 20장 bgr24 framemd5 일치). **`-fps_mode passthrough` 필수**(없으면 rawvideo가 CFR에 맞추려
     프레임을 복제해 섞음: 영상 start 0.5s 클립에서 파이프 132장 vs cv2 120장), **`-map 0:V:0`** 대문자 V(attached_pic 제외 — `probe_movie`가 고른 트랙과 같음; 소문자 `v:0`은 attached_pic을 포함). 경로는 인자 리스트 그대로(비ASCII 안전),
     Windows는 `subprocess_kwargs()`(CREATE_NO_WINDOW). 출력 대상은 POSIX `pipe:1`, Windows `tcp://127.0.0.1:<포트>?send_buffer_size=32768`.
-    디코더 스레드는 ffmpeg 기본(프레임 스레드) 그대로 — `-thread_type slice`는 첫 프레임을 약 3분의 1로 줄이지만 Windows 재생 중 끊김이 3배로 늘어 되돌림(아래 '최근 변경 사항' 2026-11-09).
   - **전송 — 왜 stdout 파이프가 아니라 소켓인가(실측)**: 처음에는 ffmpeg stdout 파이프를 읽었는데, 4K 한 장(24.9MB)이 64KB 파이프에서 ~467번의 read로 들어오고 호출마다 읽기 스레드가 GIL을 다시 잡아야 해서
     GUI 스레드가 파이썬을 실행 중이면(재생 틱의 `process_frame`·`update_frame`) 매번 switch interval(5ms)을 기다림 → 읽기 스레드 기아(메인이 GIL을 쥔 결정 실험에서 공급 28fps → 0.4fps, 실제 재생 15fps).
     소켓에서 `recv_into(..., MSG_WAITALL)`은 커널이 한 장을 다 채울 때까지 GIL을 놓은 채 syscall 한 번이라 **프레임당 recv 1회**(`recv_calls`로 시험이 구조 단언 — 무부하에서는 정확히 1회이고, 메모리 대역 경합 아래서는 커널이 `MSG_WAITALL`을 일찍 돌려준 일이 관측 1회(메모리 대역을 먹는 프로세스 4개 아래 295장에 +2) 있어 시험은 `프레임 수 + 1 + 2%`까지 허용; 조각 읽기로 돌아가는 회귀는 한 장에 수십~수백 번이라 여전히 잡힘) — 메인이 GIL을 쥐고 있어도 공급이 유지됨.
@@ -835,8 +835,8 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 
 **시험은 반드시 `~/coding/p310_tf/bin/python -m pytest`로 돌릴 것** — TensorFlow가 없는 `~/coding/p310`으로 돌리면 11개가 실패함.
 
-`tests/`에 시험 파일 112개 (수집 2,851개 — `pytest --collect-only -q tests`). `python -m pytest tests -q`로 돌리며(약 16분), 이 Mac의 소스 실행(`p310_tf` — Mac lock대로 PyObjC 포함)에서 2,806개가 통과(전체 실행에서 아래 플레이크 둘이 실패할 수 있음 — 따로 돌려 확인)하고 45개는 건너뜀 —
-다른 OS 전용 시험, CI의 설치 파일 단계에서만 도는 시험이 건너뜀. PyObjC가 있어야 도는 네이티브 시험(`test_mac_native_source` 모듈과 진짜 네이티브 디코드 하나)은 Mac lock을 설치한 환경(이 Mac의 `p310_tf`·두 Mac CI job)에서 돌고 Windows CI에서만 건너뜀 (2026-11-05 기준; 부하 시험 `test_movie_pipe_transport::test_reader_keeps_up_while_main_thread_holds_gil`은 이 Mac이 바쁠 때 실패할 수 있음 — 따로 돌리면 통과; `test_fast_startup`의 종료 플레이크 1건(`test_app_exits_cleanly_while_shared_config_load_runs`, 자식 종료 코드 −11)은 러너 상태에 따라 간헐 실패 — main에서도 같은 빈도, 따로 돌리면 통과). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
+`tests/`에 시험 파일 118개 (수집 2,958개 — `pytest --collect-only -q tests`). `python -m pytest tests -q`로 돌리며(약 20분), 이 Mac의 소스 실행(`p310_tf` — Mac lock대로 PyObjC 포함)에서 2,912개가 통과(전체 실행에서 아래 플레이크 둘이 실패할 수 있음 — 따로 돌려 확인)하고 46개는 건너뜀 —
+다른 OS 전용 시험, CI의 설치 파일 단계에서만 도는 시험이 건너뜀. PyObjC가 있어야 도는 네이티브 시험(`test_mac_native_source` 모듈과 진짜 네이티브 디코드 하나)은 Mac lock을 설치한 환경(이 Mac의 `p310_tf`·두 Mac CI job)에서 돌고 Windows CI에서만 건너뜀 (2026-11-09 기준; 부하 시험 `test_movie_pipe_transport::test_reader_keeps_up_while_main_thread_holds_gil`은 이 Mac이 바쁠 때 실패할 수 있음 — 따로 돌리면 통과; `test_fast_startup`의 종료 플레이크 1건(`test_app_exits_cleanly_while_shared_config_load_runs`, 자식 종료 코드 −11)은 러너 상태에 따라 간헐 실패 — main에서도 같은 빈도, 따로 돌리면 통과). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
 정적 빌드(`vendor/ffmpeg/`)를 씀 (`tests/conftest.py`). 시험을 건너뛰거나 지워서 통과시키지 말 것.
 
 시험 구성 (파일 이름 기준):
@@ -1071,10 +1071,13 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 
 ## 최근 변경 사항
 
-### 2026-11-09 (ffmpeg 파이프 조각 스레드 — 시도하고 되돌림)
-- **시도**: Windows 시험 빌드(a652652)의 `[측정] 열기`에서 '첫 프레임'이 평균 0.74초(0.44~1.33)로 선택 재생 전환 평균 1.10초의 약 70%라, `_pipe_command`에 `-thread_type slice`를 넣어 봄(ef7ac2e). 이 Mac(4K 4444, OS 캐시)은 첫 프레임 0.56 → 0.17초, 334장 연속 48~49 → 52fps, 픽셀 같음(bgr24 framemd5 334장·`-ss` 20장)
-- **Windows 결과**(사용자 PC, GPU 화면 그리기, 같은 10개 파일을 한 번씩): 첫 프레임 평균 0.23초(0.19~0.25), 전환 평균 0.61초(0.54~0.76). 그러나 파일 안 끊김(틱 간격 > 1.5장분)이 31 → 94번 — 10개 파일 모두 늘었고 최대간격 58~95 → 75~98ms, 평균 fps·걸린 시간은 같음. 한 번씩이라 원인 확정은 아님(이 Windows CPU에서 재생 중 디코드가 빠듯해진 것으로 추정)
-- **되돌림**(사용자 결정): 재생의 매끄러움을 지키고, 전환 시간은 '다음 파일 미리 열기'로 숨기기로 함
+### 2026-11-09 (ffmpeg 파이프 — Windows만 조각 스레드로 첫 프레임 앞당기기)
+- **왜**: Windows 시험 빌드(a652652)의 `[측정] 열기` 9번에서 '첫 프레임'(ffmpeg가 첫 4K 프레임을 넘겨주기까지)이 평균 0.74초(0.44~1.33)로 전환 평균 1.10초의 약 70% — ffprobe 0.12·주석 0.09·소리 0.04·첫 화면 0.03은 작음
+- **고침**: Windows에서만 `_pipe_command`에 `-thread_type slice`(입력 옵션) — 기본 프레임 스레드는 여러 프레임을 함께 디코드해 첫 장이 늦음. 열기·탐색 재시작·채움기·주석 내보내기가 같은 명령이라 모두 해당. **Mac은 그대로**(사용자 요청 '맥 버전은 그대로 유지 — 1.8.0의 Mac은 아주 좋아'): Mac 재생은 대부분 VideoToolbox이지만 ffmpeg를 고른 창·HDR ProRes·주석 내보내기는 이 파이프를 쓰므로 명령을 플랫폼으로 가름. main(1.8.0)과 견준 Mac의 차이는 열 때마다 남는 `[측정] 열기` 기록 줄뿐
+- **실측**(이 Intel Mac, 4K ProRes 4444 334장, OS 캐시에 올린 파일 — 한 프로세스 안에서): 첫 프레임 0.56·0.56·0.56초 → 0.18·0.17·0.16초, 48장 1.73초 → 1.05초, 334장 6.94·6.78초 → 6.40·6.46초(`-threads 1`은 첫 프레임 0.41초·9.3fps라 안 씀). 픽셀: 실파일 334장과 `-ss` 5초 20장의 bgr24 framemd5가 기본과 같음, `test_movie_pipe_capture`의 cv2 바이트 대조 통과
+- **Windows 실측**(사용자 PC, GPU 화면 그리기, 같은 4K 10개 선택 재생 — 빌드마다 한 번): 전환 평균 1.10초(0.79~1.64) → **0.61초(0.54~0.76)**, '첫 프레임' 0.74 → 0.23초. 파일 안 '끊김'(틱 간격 > 1.5장분 = 62.5ms)은 31 → 94번으로 늘었지만 **파일마다 가장 긴 간격은 75~98ms**(기본 58~193ms) — 눈에 띄는 멈춤이 없어 사용자 판정 '더 안정적'(아래 미리 열기와 견줌). 끊김 수만으로 판정하지 말 것 — 62.5ms를 조금 넘는 틱도 셈; 사람이 멈춤으로 보는 것은 최대간격·200ms 넘는 틱
+- **다음 차례 미리 열기는 해 보고 되돌림**(e6d15d0·9f04479 → 되돌림): 한 차례를 재생하는 동안 다음 차례의 캡처(ffprobe → ffmpeg → 첫 프레임)를 뒤 스레드로 열어 두고 넘어갈 때 그대로 씀 — 전환은 0.11~0.24초가 됐으나 미리 여는 0.7~1.4초 동안 재생이 멈춤: 10개 중 미리 열기가 겹친 9개 파일에서 최대간격 120~837ms, 파일마다 합쳐 4.9~5.6초 늦음, 미리 열지 않은 마지막 파일만 끊김 0(50ms). 미리 여는 ffmpeg를 Windows BELOW_NORMAL로 낮추고 넘어갈 때 되돌려도(9f04479) 그대로(끊김 117번·최대 837ms) — CPU 차례가 아니라 같은 코어·캐시·메모리 대역·네트워크를 함께 써서로 보임. 사용자 결정: '넘어갈 때 딜레이는 있어도 FPS가 안정적인 게 낫다 — slice 판이 더 안정적' → 미리 열기를 빼고 slice 판(ef7ac2e)으로. 다시 한다면: 미리 열기가 재생과 겹치지 않는 때(재생이 멈춘 동안 등)만, 또는 ffmpeg를 CPU 1~2개로 묶기(psutil cpu_affinity — 같은 세션이 다음 재생이 되므로 넘어갈 때 풀어야 함) — 둘 다 미시험
+- 시험 `tests/test_pipe_command.py`(Windows: 첫 열기·재시작 명령 둘 다 `-i` 앞에 slice; Mac: 예전 명령 글자 그대로), `test_movie_pipe_capture`의 고정 명령은 Windows에서만 옵션을 기대
 
 ### 2026-11-07 (영상 열기의 단계별 시간 기록)
 - **왜**(사용자 결정 — 미리 열기 전에 재기): Windows 선택 재생의 전환 0.80~1.37초 중 `open_file`이 평균 0.93초 — 그 안의 ffprobe·ffmpeg 시작·NAS 첫 4K 프레임·소리 열기·주석 읽기 중 무엇이 큰지 몰라 '다음 파일 미리 열기'를 어디까지 할지 정할 수 없었음
