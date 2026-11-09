@@ -29,9 +29,7 @@ from PyQt5.QtWidgets import (
 from yesoncheck.frame_handles import native_surface_of
 from yesoncheck.frame_utils import FrameCalculator
 from yesoncheck.mac_native_gate import native_ineligible_reason, native_wanted
-from yesoncheck.movie_pipe_source import (
-    PipeCaptureError, hold_idle_fill, maybe_pipe_capture, movie_source_mode, probe_for_open, probe_movie,
-)
+from yesoncheck.movie_pipe_source import PipeCaptureError, maybe_pipe_capture, movie_source_mode, probe_for_open, probe_movie
 from yesoncheck.playback_clock import PlaybackClock
 from yesoncheck.overlay_text_layout import (  # noqa: F401 (overlay_metrics: 옛 import 경로 — tests/test_overlay_text_size.py가 여기서 부름)
     OVERLAY_FONT,
@@ -67,9 +65,8 @@ def preopen_movie_capture(path, cancelled):
     """선택 재생이 다음 차례를 미리 여는 opener (playlist_preopen.Preopen — 뒤 스레드에서 불림: Qt·플레이어 상태를 건드리지 않음) →
     ffmpeg 파이프 캡처 또는 None(파이프로 여는 파일이 아님·닫혀서 그만둠). 플레이어 A를 여는 길(_native_or_pipe_capture)처럼 ffprobe 한 번
     (probe_for_open) 뒤 그 probe로 maybe_pipe_capture(full_cache=True — 프레임 캐시 판정은 넘어간 뒤 첫 read에서) — 그 사이에 닫혔으면
-    (cancelled()) ffmpeg를 띄우지 않음. ffmpeg는 낮은 우선순위로(low_priority — Windows만 BELOW_NORMAL: 재생 중인 ffmpeg·GUI와 CPU를 다퉈
-    재생이 끊기던 것, 사용자 보고 2026-11-09 — 넘어갈 때 open_file이 restore_priority로 보통으로). 열었으면 `[측정] 미리 열기 …` 한 줄.
-    예외는 그대로 올림 (Preopen이 가름) — 그 줄을 쓰다 실패하면 연 캡처를 놓고 올림 (주인 없이 남지 않게)."""
+    (cancelled()) ffmpeg를 띄우지 않음. 열었으면 `[측정] 미리 열기 …` 한 줄. 예외는 그대로 올림 (Preopen이 가름) — 그 줄을 쓰다 실패하면
+    연 캡처를 놓고 올림 (주인 없이 남지 않게)."""
     mode = movie_source_mode()
     if mode == "cv2":  # _preopen_wanted가 거름 — 그사이 바뀔 수 없는 값이지만 probe 없이 그만두는 규칙은 maybe_pipe_capture와 같게
         return None
@@ -78,7 +75,7 @@ def preopen_movie_capture(path, cancelled):
     probe_seconds = time.perf_counter() - started
     if probe is None or cancelled():
         return None
-    capture = maybe_pipe_capture(path, full_cache=True, probe=probe, low_priority=True)
+    capture = maybe_pipe_capture(path, full_cache=True, probe=probe)
     if capture is None:
         return None
     try:
@@ -352,10 +349,9 @@ class PlayerPlaybackMixin:
     def open_file(self, video_type, file_path=None, preopen=None):
         """영상을 A 또는 B로 엶 → 열었으면 True. 열지 못하면 창으로 알리고 False — 보던 영상은 멈추지 않음.
 
-        preopen: 선택 재생이 이 파일을 미리 연 것(playlist_preopen.Preopen — 경로가 같은지는 부른 쪽이 봄). 받은 캡처가 있으면 그 ffmpeg를 보통
-        우선순위로 되돌린 뒤(restore_priority — 미리 열 때 낮췄음, Windows) 캡처를 새로 열지 않고 그것을 씀(그 뒤는 같은 흐름 — '[측정] 열기'
-        줄의 캡처 단계는 '미리 연 캡처 기다림'·바꿨으면 '우선순위 되돌리기'). 받을 것이 없으면(None — 파일이 바뀜·미리 열지 못함 등)이나
-        되돌리지 못하면(기록 뒤 놓음 — 낮은 우선순위로 재생하면 끊김) 예전처럼 엶. 받다 난 그 밖의 예외는 그대로 올라감.
+        preopen: 선택 재생이 이 파일을 미리 연 것(playlist_preopen.Preopen — 경로가 같은지는 부른 쪽이 봄). 받은 캡처가 있으면 캡처를 새로 열지
+        않고 그것을 씀(그 뒤는 같은 흐름 — '[측정] 열기' 줄의 캡처 단계는 '미리 연 캡처 기다림'), 받을 것이 없으면(None — 파일이 바뀜·
+        미리 열지 못함 등) 예전처럼 엶. 받다 난 그 밖의 예외는 그대로 올라감.
 
         디스크에 없는 영상(목록에 남아 있던 것)이면 알리고 사이드바 목록을 다시 읽음. 영상이 있지만 확인하지 못하거나
         (권한·NAS 연결 끊김) OpenCV가 열지 못하면 오류 창 (예전에는 보던 영상을 멈춘 뒤 로그에만 남김).
@@ -378,14 +374,10 @@ class PlayerPlaybackMixin:
             print(f"Attempting to open video file: {file_path}")
             opened_at = time.perf_counter()  # '[측정] 열기' 줄 — 단계마다 시각을 찍음 (open_timing_line)
             opening_sequence = is_sequence_path(file_path)
-            cap = None
-            if preopen is not None:
-                with hold_idle_fill():  # 아직 여는 중이면 기다림 — 그동안 나가는 파일의 채움기가 미리 열기와 다투지 않게
-                    cap = preopen.take()
+            cap = None if preopen is None else preopen.take()  # 선택 재생이 미리 연 캡처 (아직 여는 중이면 기다림)
             if cap is not None:
                 steps = [("미리 연 캡처 기다림", time.perf_counter() - opened_at)]
-                cap = self._restore_preopened_priority(cap, file_path, steps)
-            if cap is None:
+            else:
                 # 보던 영상을 멈추기 전에 확인하고 열어 봄 (열 수 없는 영상 때문에 빈 화면만 남지 않게)
                 if opening_sequence:
                     cap = self._open_sequence_capture(file_path)
@@ -535,26 +527,6 @@ class PlayerPlaybackMixin:
                                  f"영상을 열지 못했습니다 (OpenCV가 읽지 못함 — 파일이 손상되었거나 지원하지 않는 "
                                  f"형식일 수 있음): {file_path}")
             return None
-        return cap
-
-    def _restore_preopened_priority(self, cap, file_path, steps):
-        """미리 연 캡처를 쓰기 전에 그 ffmpeg를 보통 우선순위로(restore_priority) → 쓸 캡처, 또는 되돌리지 못해 놓았으면 None(예전처럼 엶 —
-        낮은 우선순위로 재생하면 끊김; 트레이스백과 기록 한 줄). 바꿨으면 steps에 '우선순위 되돌리기'."""
-        mark = time.perf_counter()
-        try:
-            raised = cap.restore_priority()
-        except PipeCaptureError:
-            try:
-                traceback.print_exc()
-                print(f"[미리 열기] 버림 — 미리 연 ffmpeg를 보통 우선순위로 되돌리지 못함: {os.path.basename(file_path)}", flush=True)
-            finally:
-                cap.release()  # 기록을 쓰다 실패해도 낮은 우선순위의 ffmpeg를 남기지 않음
-            return None
-        except BaseException:
-            cap.release()  # 그 밖의 예외(코드 버그)는 그대로 올리되 캡처는 놓음
-            raise
-        if raised:
-            steps.append(("우선순위 되돌리기", time.perf_counter() - mark))
         return cap
 
     def _preopen_wanted(self, path):

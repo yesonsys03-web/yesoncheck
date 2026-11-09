@@ -245,7 +245,7 @@ def test_probe_interpretation_error_propagates(prores_clip, monkeypatch):
 def test_pipe_construction_error_propagates(prores_clip, monkeypatch):
     """게이트는 양성인데 파이프를 못 연 PipeCaptureError는 maybe_pipe_capture가 잡지 않음 — 부르는 쪽 몫."""
     class Failing:
-        def __init__(self, path, probe, full_cache=False, low_priority=False):  # FFmpegPipeCapture와 같은 인자
+        def __init__(self, path, probe, full_cache=False):
             raise PipeCaptureError("시험용 실패", ["ffmpeg"], "boom")
 
     monkeypatch.setattr(movie_pipe_source, "FFmpegPipeCapture", Failing)
@@ -277,7 +277,7 @@ def test_open_movie_capture_construction_failure_dialog(player, dialogs, mp4v_cl
     """게이트는 양성인데 ffmpeg가 못 열어 생성자가 PipeCaptureError를 올리면: 창에 ffmpeg stderr 전문이 있고 끝 줄은 킬 스위치 안내,
     보던 영상은 그대로."""
     class Failing:
-        def __init__(self, path, probe, full_cache=False, low_priority=False):  # FFmpegPipeCapture와 같은 인자
+        def __init__(self, path, probe, full_cache=False):
             raise PipeCaptureError(f"영상을 ffmpeg 파이프로 열지 못했습니다 (시험): {path}", ["ffmpeg", "-i", path], "Invalid data found")
 
     assert player.open_file("A", mp4v_clip) is True
