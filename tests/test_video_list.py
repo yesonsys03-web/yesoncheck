@@ -61,6 +61,38 @@ def test_animatic_rules_use_their_subfolder(tmp_path, work, sub):
     assert names(result) == ["a.mov"]
 
 
+def test_bb_animatic_also_reads_quicktime_right_under_the_job(tmp_path):
+    """BB_Animatic: job/<씬>/Quicktime에 더해 job 바로 아래의 Quicktime도 (사용자 보고 2026-11-09 — season15/F54_Music Video는
+    Quicktime이 씬 폴더 없이 job 바로 아래에 있어 목록이 비었음; 그때 BB_Animatic 74개 job 중 그런 job은 F54 하나)."""
+    job = tmp_path / "F54_Music Video"
+    touch(job / "Quicktime" / "FASA54_SQ01_FNL-YESON.mov")
+    touch(job / "Quicktime" / "._FASA54_SQ01_FNL-YESON.mov")
+    touch(job / "Quicktime" / "older" / "not_this.mov")  # Quicktime 아래 하위 폴더는 아님
+    touch(job / "SEQ01" / "Quicktime" / "b.mov")
+    touch(job / "StoryboardPDF" / "not_this.mov")
+    result = video_list.scan_job("BB_Animatic", str(job))
+    assert sorted(names(result)) == ["FASA54_SQ01_FNL-YESON.mov", "b.mov"]
+    assert result.unreadable == []
+
+
+def test_bb_animatic_without_job_quicktime_is_unchanged(tmp_path):
+    """job 바로 아래에 Quicktime이 없는 예전 모양(F01~F15 — job/SEQ*/Quicktime)은 그대로, 읽지 못한 폴더로 남지도 않음."""
+    job = tmp_path / "F14"
+    touch(job / "SEQ18B" / "Quicktime" / "a.mov")
+    touch(job / "SEQ20" / "Quicktime" / "c.mov")
+    result = video_list.scan_job("BB_Animatic", str(job))
+    assert sorted(names(result)) == ["a.mov", "c.mov"]
+    assert result.unreadable == []
+
+
+@pytest.mark.parametrize("work", ["FL", "TGN_Animatic", "BM_Animatic", "KOTH_Animatic", "MS_Animatic"])
+def test_other_works_do_not_read_job_quicktime(tmp_path, work):
+    """job 바로 아래 Quicktime을 보는 것은 BB_Animatic뿐 — 다른 작품의 규칙은 그대로 (TJS_Animatic은 예전부터 모든 하위 폴더 한 단계를 봄)."""
+    job = tmp_path / "job"
+    touch(job / "Quicktime" / "not_this.mov")
+    assert "not_this.mov" not in names(video_list.scan_job(work, str(job)))
+
+
 def test_bm_animatic_uses_animatic_folder_only(tmp_path):
     job = tmp_path / "job"
     touch(job / "top.mov")
