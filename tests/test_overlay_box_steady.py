@@ -1,10 +1,12 @@
-"""B 키 오버레이의 흰 상자 오른쪽 끝을 고정 (사용자 보고 2026-11-09 — "프레임 카운트가 1·2·3 자리로 바뀌면 흰 상자 오른쪽 끝이 계속 움직여
-떨려 보여, 고정해 줘").
+"""B 키 오버레이가 프레임마다 떨리지 않게 (사용자 보고 2026-11-09 — "프레임 카운트가 1·2·3 자리로 바뀌면 흰 상자 오른쪽 끝이 계속 움직여
+떨려 보여").
 
-예전에는 두 그리기 길 모두 상자 너비를 지금 글자의 너비로 정함: 굽는 길(cv2 Hershey — 숫자 폭은 모두 같지만 자릿수 1 → 119로 바뀜)과 네이티브
-아이템 길(Qt 글꼴 — Mac 시스템 글꼴은 숫자 폭이 다름: '1' 29.6px 대 '0' 40.1px, 60px Bold). 좁은 프레임에서는 글자를 들어갈 만큼 줄이는데 그 배율도
-지금 글자로 정해 글자 크기까지 떨렸음. 이제 상자 너비·배율·글꼴 크기는 '자리 잡을 글'(overlay_reserve_text — 'Frame: n/N'의 n을 N의 자릿수만큼
-가장 넓은 숫자로)로 정함. 글자는 예전처럼 왼쪽 맞춤 — 상자 오른쪽 끝만 고정.
+원인은 Mac 네이티브 아이템 길의 글꼴: Mac 시스템 글꼴(SF)은 숫자 폭이 달라('1' 29.3px 대 '0' 39.9px, 60px Bold) 프레임 번호가 바뀔 때마다 글자
+폭이 달라져 '/전체'와 상자 끝이 프레임마다 움직였음. 첫 고침(PR #30)은 상자 너비를 가장 넓은 번호에 맞춰 고정했는데, 상자는 멈췄지만 글자 안의
+'/전체'는 여전히 떨렸고 번호가 짧으면 오른쪽에 빈자리가 남았음. 이제(사용자 결정 '상자를 글자에 딱 맞춤'): 아이템 글꼴을 숫자 폭이 같은 글꼴
+(Helvetica Neue, 없으면 Arial)로 하고 상자는 글자에 딱 맞춤 — 같은 자릿수 안에서는 글자 폭·상자 끝이 그대로, 자릿수가 바뀌는 순간(9→10·99→100)에만
+한 칸씩 늘어남. 굽는 길(cv2 Hershey)은 원래 숫자 폭이 같음. 좁은 프레임에서 들어갈 만큼 줄이는 글자 크기는 '자리 잡을 글'(overlay_reserve_text —
+'Frame: n/N'의 n을 N의 자릿수만큼 가장 넓은 숫자로)로 정해 번호에 따라 글자 크기가 바뀌지 않음.
 """
 
 from types import SimpleNamespace
@@ -51,12 +53,26 @@ def test_widest_digit_picks_by_the_given_width():
 # ---------------------------------------------------------------- 굽는 길 (cv2)
 
 
+def digits(label):
+    """'Frame: n/N'의 n 자릿수 — 같은 자릿수끼리 묶어 봄."""
+    return len(label.rsplit("Frame: ", 1)[1].split("/")[0])
+
+
+def by_digits(values):
+    """[(자릿수, 값)] → {자릿수: 값들의 집합}."""
+    groups = {}
+    for count, value in values:
+        groups.setdefault(count, set()).add(value)
+    return groups
+
+
 @pytest.mark.parametrize("size", SIZES)
-def test_layout_box_and_scale_do_not_follow_the_frame_number(size):
-    layouts = [overlay_layout(label, *size) for label in LABELS]
-    assert len({layout.box_width for layout in layouts}) == 1
-    assert len({(layout.scale, layout.thickness, layout.text_height, layout.baseline) for layout in layouts}) == 1
-    assert all(layout.text_width <= layout.box_width <= layout.room for layout in layouts)
+def test_layout_scale_does_not_follow_the_frame_number(size):
+    """글자 크기(배율·굵기·높이)는 번호와 상관없이 같음, 글자 폭은 같은 자릿수 안에서 같음(Hershey는 숫자 폭이 같음)."""
+    layouts = [(digits(label), overlay_layout(label, *size)) for label in LABELS]
+    assert len({(layout.scale, layout.thickness, layout.text_height, layout.baseline) for _d, layout in layouts}) == 1
+    assert all(len(widths) == 1 for widths in by_digits((d, layout.text_width) for d, layout in layouts).values())
+    assert all(layout.text_width <= layout.room for _d, layout in layouts)
 
 
 def burned_extent(label, width, height):
@@ -71,25 +87,78 @@ def burned_extent(label, width, height):
 
 
 @pytest.mark.parametrize("size", SIZES)
-def test_burned_box_right_edge_is_fixed(size):
-    extents = [burned_extent(label, *size) for label in LABELS]
-    assert len({right for right, _ink in extents}) == 1
-    assert all(ink < right for right, ink in extents)  # 글자는 늘 상자 안
+def test_burned_box_hugs_the_text_and_holds_within_a_digit_count(size):
+    """구운 상자: 글자에 딱 맞춤 — 상자 끝과 글자 잉크 끝 사이는 pad와 마지막 글자 자체의 뒤 간격뿐(숫자 반 칸이 안 됨; 자리를 잡던 PR #30은 번호가
+    짧으면 숫자 한 칸 이상 비었음), 같은 자릿수 안에서는 끝이 제자리."""
+    import cv2
+
+    from yesoncheck.overlay_text_layout import OVERLAY_FONT
+
+    extents = [(digits(label), burned_extent(label, *size)) for label in LABELS]
+    layout = overlay_layout(LABELS[0], *size)
+    digit = cv2.getTextSize("0", OVERLAY_FONT, layout.scale, layout.thickness)[0][0]
+    assert all(len(rights) == 1 for rights in by_digits((d, right) for d, (right, _ink) in extents).values())
+    assert all(0 < right - ink < layout.pad + digit / 2 for _d, (right, ink) in extents)
 
 
 # ---------------------------------------------------------------- 네이티브 아이템 길 (Qt 글꼴)
 
 
 @pytest.mark.parametrize("size", SIZES)
-def test_native_item_box_right_edge_and_font_are_fixed(player_with_fake_native, size):
+def test_native_item_box_hugs_the_text_and_font_is_fixed(player_with_fake_native, size):
+    """아이템 상자: 오른쪽 끝 = 글자 끝 + pad (빈자리 없음), 글꼴 크기는 번호와 상관없이 같음."""
     widget = player_with_fake_native.player.videoWidget
-    rights, pixel_sizes = set(), set()
+    pixel_sizes = set()
     for label in LABELS:
         widget.set_overlay_text(label, *size)
         box, text = widget.overlay_box_item, widget.overlay_text_item
         rect = box.mapRectToScene(box.rect())
-        rights.add(round(rect.right(), 3))
+        pad = overlay_layout(label, *size).pad
+        end = text.scenePos().x() + QFontMetricsF(text.font()).horizontalAdvance(label)
+        assert rect.right() == pytest.approx(end + pad + 1, abs=0.01)
         pixel_sizes.add(text.font().pixelSize())
-        assert text.scenePos().x() + QFontMetricsF(text.font()).horizontalAdvance(label) < rect.right()  # 글자는 늘 상자 안
-    assert len(rights) == 1
     assert len(pixel_sizes) == 1
+
+
+# ---------------------------------------------------------------- 글자 안의 숫자 (Qt 글꼴)
+
+
+def test_overlay_font_asks_for_tabular_digit_families():
+    """B 키 아이템 글꼴은 숫자 폭이 같은 글꼴로 (사용자 보고 2026-11-09 — PR #30으로 상자는 고정됐지만 재생 중 프레임 숫자가 떨림: Mac 시스템
+    글꼴(SF)은 숫자 폭이 달라 '/97'이 프레임마다 좌우로 움직였음). Helvetica Neue(모든 Mac), 없으면 Arial."""
+    from yesoncheck.overlay_text_layout import overlay_layout
+    from yesoncheck.video_widget import OVERLAY_FONT_FAMILIES, overlay_font
+
+    label = "File: FL_106_A002_TK1.mov, Frame: 47/97"
+    font = overlay_font(label, overlay_layout(label, 1920, 1080))
+    assert font.families()[:len(OVERLAY_FONT_FAMILIES)] == OVERLAY_FONT_FAMILIES
+
+
+def _resolved_tabular_font(widget):
+    from PyQt5.QtGui import QFontInfo
+
+    from yesoncheck.video_widget import OVERLAY_FONT_FAMILIES
+
+    font = widget.overlay_text_item.font()
+    family = QFontInfo(font).family()
+    if family not in OVERLAY_FONT_FAMILIES:
+        pytest.skip(f"이 시험 환경에 {OVERLAY_FONT_FAMILIES} 글꼴이 없음({family}) — Mac CI·이 Mac에서 봄")
+    return font
+
+
+def test_native_item_digits_all_have_the_same_width(player_with_fake_native):
+    widget = player_with_fake_native.player.videoWidget
+    widget.set_overlay_text("File: FL_106_A002_TK1.mov, Frame: 47/97", 1920, 1080)
+    metrics = QFontMetricsF(_resolved_tabular_font(widget))
+    assert len({round(metrics.horizontalAdvance(d), 3) for d in "0123456789"}) == 1
+
+
+def test_native_item_count_does_not_move_within_the_same_digit_count(player_with_fake_native):
+    """같은 자릿수 안에서는 글자 전체 폭이 같음 = '/97'이 제자리 (프레임마다 떨리지 않음)."""
+    widget = player_with_fake_native.player.videoWidget
+    widths = set()
+    for n in (10, 11, 17, 41, 47, 88, 97):
+        label = f"File: FL_106_A002_TK1.mov, Frame: {n}/97"
+        widget.set_overlay_text(label, 1920, 1080)
+        widths.add(round(QFontMetricsF(_resolved_tabular_font(widget)).horizontalAdvance(label), 3))
+    assert len(widths) == 1
