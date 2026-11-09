@@ -1,14 +1,36 @@
 """B 키 오버레이(프레임 왼쪽 아래 "File: <이름>, Frame: n/N")의 크기·자리 규칙 — 두 그리기 길이 함께 쓴다:
 굽는 길(`player_playback.overlay_text` — cv2로 프레임 픽셀에 흰 상자·검정 글자)과 네이티브 프레임의 아이템 길(`video_widget.set_overlay_text` —
-읽기 전용 IOSurface 프레임에는 굽지 않고 Qt 아이템으로, 같은 자리·같은 크기). 한 곳에 두어 두 길이 어긋나지 않게. Qt 없음(cv2 글자 크기만)."""
+읽기 전용 IOSurface 프레임에는 굽지 않고 Qt 아이템으로, 같은 자리·같은 크기). 한 곳에 두어 두 길이 어긋나지 않게. Qt 없음(cv2 글자 크기만).
+
+흰 상자의 너비·글자 배율은 지금 글자가 아니라 '자리 잡을 글'(overlay_reserve_text — 'Frame: n/N'의 n을 N의 자릿수만큼 가장 넓은 숫자로)로 정함
+(사용자 보고 2026-11-09 — 프레임 번호가 1·2·3 자리로 바뀌면 흰 상자 오른쪽 끝이 계속 움직여 떨려 보였음; Qt 글꼴은 숫자 폭도 다름). 글자는 왼쪽 맞춤 그대로."""
 
 import math
+import re
 from typing import NamedTuple
 
 import cv2
 
 OVERLAY_TEXT_SCALE = 1.5  # B 키 오버레이 글자 크기 — 1080p 기준 예전(scale 0.7)의 배수, 프레임 높이에 비례 (overlay_metrics·overlay_text)
 OVERLAY_FONT = cv2.FONT_HERSHEY_SIMPLEX  # 굽는 길의 글꼴 — 아이템 길은 Qt 글꼴이지만 높이를 이 글꼴의 글자 높이에 맞춤
+
+
+_FRAME_NUMBER = re.compile(r"(?<=Frame: )(\d+)(?=/(\d+)$)")  # overlay_label 끝의 'Frame: <지금>/<전체>'의 <지금>
+
+
+def overlay_reserve_text(text, digit):
+    """흰 상자의 너비·글자 크기를 정할 글 — text 끝의 'Frame: n/N'에서 n을 digit으로 N의 자릿수(n이 더 길면 그것)만큼 바꾼 것. 파일 이름·전체 장
+    수는 그대로. 프레임 번호가 없으면 text 그대로(잡을 자리가 없음). digit은 그리는 글꼴에서 가장 넓은 숫자(widest_digit) — 번호가 1이든 119든 같은 글."""
+    match = _FRAME_NUMBER.search(text)
+    if match is None:
+        return text
+    digits = max(len(match.group(1)), len(match.group(2)))
+    return text[:match.start(1)] + digit * digits + text[match.end(1):]
+
+
+def widest_digit(width_of):
+    """0~9 중 width_of(숫자 한 글자 → 너비)가 가장 큰 숫자 (같으면 앞의 것)."""
+    return max("0123456789", key=width_of)
 
 
 class OverlayMetrics(NamedTuple):
@@ -42,16 +64,20 @@ class OverlayLayout(NamedTuple):
     text_height: int  # cv2 글자 높이(px) — 기준선 위
     baseline: int  # cv2 기준선 아래(g·p·_ 꼬리, px)
     room: int  # 글자가 들어갈 너비 = 너비 − 2·margin_x (아주 좁은 프레임에서도 1 이상)
+    box_width: int  # 흰 상자 안 글자 자리의 너비(px) — 자리 잡을 글(overlay_reserve_text)의 cv2 너비, 지금 글자보다 좁지 않음: 프레임 번호가 바뀌어도 그대로
 
 
 def overlay_layout(text, width, height):
     """width×height 프레임에 text를 놓는 배치 — overlay_metrics의 크기·여백, 너비를 넘치면 들어갈 만큼 배율·굵기를 줄임
-    (예전엔 0.5로 한 번만 줄여 좁은 프레임에선 여전히 넘쳤음)."""
+    (예전엔 0.5로 한 번만 줄여 좁은 프레임에선 여전히 넘쳤음). 넘치는지·상자 너비는 자리 잡을 글(overlay_reserve_text)로 봄 — 프레임 번호가
+    바뀌어도 배율·상자가 그대로 (2026-11-09)."""
     scale, thickness, pad, margin_x, margin_y = overlay_metrics(width, height)
-    (tw, th), base = cv2.getTextSize(text, OVERLAY_FONT, scale, thickness)
+    reserve = overlay_reserve_text(text, widest_digit(lambda d: cv2.getTextSize(d, OVERLAY_FONT, scale, thickness)[0][0]))
+    (rw, _rh), _rbase = cv2.getTextSize(reserve, OVERLAY_FONT, scale, thickness)
     room = max(1, width - 2 * margin_x)  # 아주 좁은 프레임에서도 음수가 되지 않게
-    if tw > room:
-        scale *= room / tw
-        thickness = max(1, round(thickness * room / tw))
-        (tw, th), base = cv2.getTextSize(text, OVERLAY_FONT, scale, thickness)
-    return OverlayLayout(scale, thickness, pad, margin_x, margin_y, tw, th, base, room)
+    if rw > room:
+        scale *= room / rw
+        thickness = max(1, round(thickness * room / rw))
+    (tw, th), base = cv2.getTextSize(text, OVERLAY_FONT, scale, thickness)
+    (rw, _rh), _rbase = cv2.getTextSize(reserve, OVERLAY_FONT, scale, thickness)
+    return OverlayLayout(scale, thickness, pad, margin_x, margin_y, tw, th, base, room, max(tw, rw))
