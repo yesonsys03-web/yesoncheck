@@ -837,7 +837,7 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 
 **시험은 반드시 `~/coding/p310_tf/bin/python -m pytest`로 돌릴 것** — TensorFlow가 없는 `~/coding/p310`으로 돌리면 11개가 실패함.
 
-`tests/`에 시험 파일 118개 (수집 2,958개 — `pytest --collect-only -q tests`). `python -m pytest tests -q`로 돌리며(약 20분), 이 Mac의 소스 실행(`p310_tf` — Mac lock대로 PyObjC 포함)에서 2,912개가 통과(전체 실행에서 아래 플레이크 둘이 실패할 수 있음 — 따로 돌려 확인)하고 46개는 건너뜀 —
+`tests/`에 시험 파일 119개 (수집 2,969개 — `pytest --collect-only -q tests`). `python -m pytest tests -q`로 돌리며(약 20분), 이 Mac의 소스 실행(`p310_tf` — Mac lock대로 PyObjC 포함)에서 2,923개가 통과(전체 실행에서 아래 플레이크 둘이 실패할 수 있음 — 따로 돌려 확인)하고 46개는 건너뜀 —
 다른 OS 전용 시험, CI의 설치 파일 단계에서만 도는 시험이 건너뜀. PyObjC가 있어야 도는 네이티브 시험(`test_mac_native_source` 모듈과 진짜 네이티브 디코드 하나)은 Mac lock을 설치한 환경(이 Mac의 `p310_tf`·두 Mac CI job)에서 돌고 Windows CI에서만 건너뜀 (2026-11-09 기준; 부하 시험 `test_movie_pipe_transport::test_reader_keeps_up_while_main_thread_holds_gil`은 이 Mac이 바쁠 때 실패할 수 있음 — 따로 돌리면 통과; `test_fast_startup`의 종료 플레이크 1건(`test_app_exits_cleanly_while_shared_config_load_runs`, 자식 종료 코드 −11)은 러너 상태에 따라 간헐 실패 — main에서도 같은 빈도, 따로 돌리면 통과). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
 정적 빌드(`vendor/ffmpeg/`)를 씀 (`tests/conftest.py`). 시험을 건너뛰거나 지워서 통과시키지 말 것.
 
@@ -1073,10 +1073,11 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 
 ## 최근 변경 사항
 
-### 2026-11-09 (소리 진단 기록 — Windows 11에서 소리가 안 남)
+### 2026-11-09 (Windows 소리 — K-Lite 필요 안내, 소리 진단 기록)
 - **보고**(사용자): Windows 11에서 소리가 나오지 않음, Windows 10은 정상. 원인 미확인 — 기록에 아무것도 없었음: 빌드 앱은 Qt(C++) 경고를 기록 파일로 보내지 않았고(소리 백엔드가 실패를 알리는 길), QMediaPlayer의 오류·상태 신호도 받지 않았음
-- **넣은 것**(고치기 전에 증거부터): `qt_messages`(Qt 경고 → 기록)·`media_player_log`(출력 장치·재생 가능성·상태·오류 → `[소리]` 줄). 동작은 그대로
-- **후보(미확인)**: ① Qt 5의 Windows 기본 소리 백엔드는 DirectShow라 mov를 열려면 따로 설치한 필터(LAV·K-Lite 등)가 필요할 수 있음 — Windows 10 PC에만 있으면 맞음 ② Windows 11의 출력 장치·설정 ③ 볼륨·음소거. Windows 11 기록의 `[Qt 경고]`·`[소리]` 줄로 가림
+- **넣은 것**(고치기 전에 증거부터 — 다음에 어느 PC에서 소리가 안 나도 기록으로 바로 알게): `qt_messages`(Qt 경고 → 기록)·`media_player_log`(출력 장치·재생 가능성·백엔드 환경 변수·Windows는 실제로 불러온 백엔드 DLL, 파일마다 상태·소리 트랙·오류 → `[소리]` 줄). 동작은 그대로
+- **원인(사용자 PC에서 확인)**: Qt 5의 Windows 기본 소리 백엔드 DirectShow는 mp4·mov를 혼자 열지 못함 — 소리가 나던 Windows 10 PC에는 K-Lite Codec Pack 18.4(LAV Splitter·LAV Audio)가 깔려 있었고, Windows 11 PC에 K-Lite를 깔자 소리가 남. 유튜브(브라우저)는 Windows 11에서도 소리가 났음(장치·드라이버 정상). 소리가 있는 파일: 애니매틱 mp4(H.264 + AAC)·립싱크/레이아웃 mov(H.264·ProRes + PCM `sowt`) — 렌더 ProRes(FL·KOTH)는 소리 트랙이 없음
+- **Media Foundation으로 바꾸기는 하지 않음**: Windows 11(K-Lite 깔린 채)에서 `QT_MULTIMEDIA_PREFERRED_PLUGINS=windowsmediafoundation`으로 켜자 소리가 나지 않았음(원인 미확인 — 그 상태의 기록은 받지 못함; Windows 판이 N인지·실제 불러온 백엔드는 확인 전). 사용자 결정: 'K-Lite를 쓰는 게 편하다 — 오디오 코덱이 다양해서 K-Lite가 효율적' → README '준비 사항'에 Windows는 K-Lite Codec Pack(Basic) 필요, '트러블슈팅'에 기록 줄 읽는 법. 다시 볼 때의 후보: 앱에 든 ffmpeg로 소리를 풀어 QAudioOutput으로(코덱 무관 — 소리 맞추기·탐색을 다시 짜야 함)
 - 시험 `tests/test_audio_log.py`(Qt 메시지 줄 모양·sys.stderr로·빌드 앱 기록 파일에 남음·쓰기 실패에도 예외 없음, 출력 장치 줄·상태/오류/소리 트랙 줄·창의 재생기에 붙음)
 
 ### 2026-11-09 (ffmpeg 파이프 — Windows만 조각 스레드로 첫 프레임 앞당기기)

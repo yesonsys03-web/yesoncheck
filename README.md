@@ -7,6 +7,7 @@ YesonCheck는 PyQt5 기반의 영상 비교/검토 툴입니다. 이번 리팩�
 - Python 3.10 (권장: `./setup_build_env.sh`가 만드는 `~/coding/p310_tf` 가상환경 — TensorFlow 포함. TF 이전의 `~/coding/p310`은 빌드에 쓰지 않음)
 - 시스템에 설치된 FFmpeg 6.x 이상 (`ffmpeg`, `ffprobe` 명령어가 PATH에서 동작해야 함)
 - pip 최신 버전: `python -m pip install --upgrade pip`
+- **Windows에서 소리를 들으려면 [K-Lite Codec Pack](https://codecguide.com/download_kl.htm) (Basic판이면 충분)** — YesonCheck의 소리는 Windows의 DirectShow로 재생하는데, DirectShow는 mp4·mov 파일을 혼자 열지 못합니다(K-Lite에 든 LAV 필터가 엶). 없으면 화면은 나오지만 소리가 나지 않습니다. 새 PC에는 YesonCheck와 함께 설치하세요. Mac은 필요 없습니다.
 
 ### 필수 파이썬 패키지
 `./setup_build_env.sh`가 아래 패키지를 `requirements-build.txt`의 고정 버전으로 설치합니다 ([BUILD.md](BUILD.md)).
@@ -359,6 +360,9 @@ yesoncheck/
   ProRes를 Mac의 디코더(VideoToolbox)로 열지 못했다는 알림입니다. 창을 닫으면 앱이 ffmpeg 방식으로 이어서 엽니다. 같은 일이 되풀이되면 Settings → 재생 디코더 (Mac)에서 `ffmpeg (예전 방식)`을 고르세요 (위 'Mac의 ProRes 재생' — 창 끝 줄의 환경 변수 `YESONCHECK_MAC_NATIVE=off`도 같은 효과). 재생 도중에 끊기면 'VideoToolbox로 영상을 읽다가 도중에 실패해 …' 오류 창이 한 번 뜨고 영상이 끝난 것처럼 멈춥니다 — 같은 영상을 다시 열면 됩니다.
 - **'네이티브 화면 그리기에 실패해 이 창은 ffmpeg 방식으로 바꿉니다' 창이 뜸 (Mac)**  
   이 Mac의 그래픽이 Mac 디코더의 그림을 그리지 못했다는 알림입니다. 그 창은 곧바로 ffmpeg 방식으로 바꿔 계속 재생하고, 다음에 켜는 창은 다시 Mac 디코더를 시도합니다. 창마다 되풀이되면 Settings → 재생 디코더 (Mac)에서 `ffmpeg (예전 방식)`을 고르세요.
+
+- **Windows에서 화면은 나오는데 소리가 나지 않음**  
+  그 PC에 K-Lite Codec Pack(Basic)이 설치되어 있는지 확인하세요(위 '준비 사항'). 앱 기록(`%LOCALAPPDATA%\YesonCheck\logs`)에 소리 재생기의 상태가 남습니다 — `[소리] 상태: 열 수 없음(InvalidMedia)`·`[소리] 재생기 오류: …`·`[Qt 경고] …` 줄이면 파일의 소리를 열지 못한 것이고, `[소리] 소리 트랙: 없음`이면 그 파일에 소리가 없는 것입니다(ProRes 렌더 파일은 대부분 소리가 없음). 환경 변수 `QT_MULTIMEDIA_PREFERRED_PLUGINS`를 설정해 두었다면 지우세요 — 앱이 K-Lite를 쓰지 않게 됩니다.
 
 ## 라이선스
 - YesonCheck는 GNU 일반 공중 사용 허가서 3판(**GPL-3.0**)으로 배포합니다. 전문은 [LICENSE](LICENSE)에 있습니다.
