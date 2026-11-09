@@ -149,7 +149,8 @@ def scan_job(work, base_path):
     - MS_Animatic: job 폴더 바로 안
     - TJS_Animatic: job 폴더 바로 안 + 숨김이 아닌 하위 폴더 한 단계 (파일만)
     - 나머지: job 폴더 바로 안 + 하위 폴더마다 정한 폴더 안 — 기본은 Harmony scene 구조(scene-*/frames, 작품 경로
-      관리에서 새로 등록한 작품도), BB_Animatic */Quicktime, TGN_Animatic */ANIMATIC. 그리고 BM_Animatic은 ANIMATIC
+      관리에서 새로 등록한 작품도), BB_Animatic */Quicktime, TGN_Animatic */ANIMATIC. 그리고 BB_Animatic은 job 바로 아래
+      Quicktime도(2026-11-09 — season15/F54_Music Video처럼 씬 폴더 없이 job/Quicktime인 job, 그때 74개 job 중 하나), BM_Animatic은 ANIMATIC
       폴더, KOTH_Animatic은 이름에 ANIMATIC이 든 폴더 (시즌 15까지 'POST-LOCK ANIMATIC', 시즌 16부터
       '1601_ANIMATIC'·'1604_ANIMATICS').
 
@@ -187,6 +188,8 @@ def scan_job(work, base_path):
                 sub = "frames"
             if sub and _is_dir(entry, unreadable):
                 videos += read_sub(os.path.join(entry.path, sub))
+        if work == "BB_Animatic":
+            videos += read_sub(os.path.join(base_path, "Quicktime"))  # 씬 폴더 없이 job/Quicktime인 job (없으면 빈 목록)
         if work == "BM_Animatic":
             videos += read_sub(os.path.join(base_path, "ANIMATIC"))
         if work == "KOTH_Animatic":

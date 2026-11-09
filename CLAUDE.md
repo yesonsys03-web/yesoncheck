@@ -349,7 +349,7 @@ PlayerOcrMixin > PlayerOverlayMixin > QMainWindow …`. 이 구조에서 지킬 
 - `yesoncheck/frame_cache_budget.py` (57줄): 파이프 캡처의 전체 프레임 캐시 예산 — 순수 판단 `full_cache_decision(frame_bytes, count, ram_total, ram_available, committed)` → `CacheDecision(full, reason, total_bytes)`(예산 검사가 사용 가능 메모리
   검사보다 먼저, 둘 다 다른 캡처가 잡은 committed를 뺌), 상수 `FULL_CACHE_RAM_FRACTION`(0.20)·`FULL_CACHE_HEADROOM_BYTES`(2GiB), 기록용 `gb`(십진 GB 소수 한 자리), `memory_snapshot`(psutil `virtual_memory()`의 total·available — 예외는 그대로). psutil은 `requirements-build.txt`에
   직접 고정(7.2.2 — lock에는 이미 간접 의존으로 있음). Qt·캡처 상태 없음 — 쓰는 곳은 위 `movie_pipe_source`의 '전체 프레임 캐시'
-- `yesoncheck/video_list.py` (427줄): 사이드바 영상 목록 규칙 (job·폴더 읽기, 정렬, 다시 읽기 계획, 없어진 영상 판정 `check_gone`) — Qt 없음
+- `yesoncheck/video_list.py` (472줄): 사이드바 영상 목록 규칙 (job·폴더 읽기 — 작품마다 영상을 찾는 폴더가 다름: `scan_job` 설명, BB_Animatic은 `job/<씬>/Quicktime`과 job 바로 아래 `Quicktime`, 정렬, 다시 읽기 계획, 없어진 영상 판정 `check_gone`) — Qt 없음
 - `yesoncheck/mac_mounts.py`: (Mac) 이 Mac에서 공유가 붙은 곳 — 자동 연결(autofs) 설정(`/etc/auto_master`와 간접 맵)과
   `/etc/fstab`을 읽어, 공유 설정의 앞부분(`/USA_DB`, path_map.json의 "mac", 제자리가 아닌 공유의 `/<이름>`)이 이 Mac에
   없으면 이름이 같은 공유를 열고, 제자리가 아닌 공유 아래 경로는 그 앞부분으로 되돌려 저장 (`paths.to_native`·`to_storage`
@@ -837,7 +837,7 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 
 **시험은 반드시 `~/coding/p310_tf/bin/python -m pytest`로 돌릴 것** — TensorFlow가 없는 `~/coding/p310`으로 돌리면 11개가 실패함.
 
-`tests/`에 시험 파일 120개 (수집 2,989개 — `pytest --collect-only -q tests`). `python -m pytest tests -q`로 돌리며(약 20분), 이 Mac의 소스 실행(`p310_tf` — Mac lock대로 PyObjC 포함)에서 2,943개가 통과(전체 실행에서 아래 플레이크 둘이 실패할 수 있음 — 따로 돌려 확인)하고 46개는 건너뜀 —
+`tests/`에 시험 파일 120개 (수집 2,996개 — `pytest --collect-only -q tests`). `python -m pytest tests -q`로 돌리며(약 20분), 이 Mac의 소스 실행(`p310_tf` — Mac lock대로 PyObjC 포함)에서 2,950개가 통과(전체 실행에서 아래 플레이크 둘이 실패할 수 있음 — 따로 돌려 확인)하고 46개는 건너뜀 —
 다른 OS 전용 시험, CI의 설치 파일 단계에서만 도는 시험이 건너뜀. PyObjC가 있어야 도는 네이티브 시험(`test_mac_native_source` 모듈과 진짜 네이티브 디코드 하나)은 Mac lock을 설치한 환경(이 Mac의 `p310_tf`·두 Mac CI job)에서 돌고 Windows CI에서만 건너뜀 (2026-11-09 기준; 부하 시험 `test_movie_pipe_transport::test_reader_keeps_up_while_main_thread_holds_gil`은 이 Mac이 바쁠 때 실패할 수 있음 — 따로 돌리면 통과; `test_fast_startup`의 종료 플레이크 1건(`test_app_exits_cleanly_while_shared_config_load_runs`, 자식 종료 코드 −11)은 러너 상태에 따라 간헐 실패 — main에서도 같은 빈도, 따로 돌리면 통과). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
 정적 빌드(`vendor/ffmpeg/`)를 씀 (`tests/conftest.py`). 시험을 건너뛰거나 지워서 통과시키지 말 것.
 
@@ -1073,6 +1073,12 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 
 ## 최근 변경 사항
 
+### 2026-11-09 (BB_Animatic — job 바로 아래 Quicktime도 목록에)
+- **증상**(사용자 보고): BB_Animatic → season15 → F54_Music Video를 고르면 목록이 빔
+- **원인**: BB_Animatic 규칙은 `job/<씬>/Quicktime/*`(F01~F15 — 예: `F14/SEQ18B/Quicktime`)만 봤는데 F54는 씬 폴더 없이 `F54_Music Video/Quicktime/FASA54_SQ01_FNL-YESON.mov`
+- **고침**: `video_list.scan_job`의 BB_Animatic 갈래에 job 바로 아래 `Quicktime`을 더함(BM_Animatic의 `ANIMATIC`과 같은 모양). 다른 작품은 이 갈래를 지나지 않음
+- **실데이터 대조**(이 Mac에서 BB_Animatic 74개 job 전부, 고치기 전·후 코드): 바뀐 job은 F54 하나(영상 0 → 1개), 나머지 73개 job은 목록이 글자 그대로(영상 합 1,448 → 1,449)
+- 시험 `tests/test_video_list.py`(job 바로 아래 Quicktime·그 아래 하위 폴더는 아님·예전 모양 그대로·다른 작품 다섯은 job/Quicktime을 보지 않음)
 ### 2026-11-09 (Windows 소리 — K-Lite 필요 안내, 소리 진단 기록)
 - **보고**(사용자): Windows 11에서 소리가 나오지 않음, Windows 10은 정상. 원인 미확인 — 기록에 아무것도 없었음: 빌드 앱은 Qt(C++) 경고를 기록 파일로 보내지 않았고(소리 백엔드가 실패를 알리는 길), QMediaPlayer의 오류·상태 신호도 받지 않았음
 - **넣은 것**(고치기 전에 증거부터 — 다음에 어느 PC에서 소리가 안 나도 기록으로 바로 알게): `qt_messages`(Qt 경고 → 기록)·`media_player_log`(출력 장치·재생 가능성·백엔드 환경 변수·Windows는 실제로 불러온 백엔드 DLL, 파일마다 상태·소리 트랙·오류 → `[소리]` 줄). 동작은 그대로
