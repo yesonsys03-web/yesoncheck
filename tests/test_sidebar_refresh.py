@@ -1660,8 +1660,8 @@ def test_playlist_not_advanced_twice_when_video_ends_under_box(new_player, dialo
     opened = []
     real_open = player.open_file
 
-    def recording_open(kind, path=None, **kwargs):  # kwargs: 선택 재생이 넘기는 preopen=
-        ok = real_open(kind, path, **kwargs)
+    def recording_open(kind, path=None):
+        ok = real_open(kind, path)
         if ok:
             opened.append(os.path.basename(path))
         return ok

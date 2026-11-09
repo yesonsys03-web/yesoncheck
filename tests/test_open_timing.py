@@ -32,12 +32,6 @@ def test_open_timing_line_format():
         "[측정] 열기 0.93초 — ffprobe 0.12 · 첫 프레임 0.40 · 그 밖 0.41 — A001.mov"
 
 
-def test_open_timing_line_title_for_preopen():
-    """선택 재생의 미리 열기(뒤 스레드)도 같은 모양의 줄 — 머리만 '미리 열기'."""
-    assert open_timing_line(0.5, [("ffprobe", 0.1)], "A002.mov", title="미리 열기") == \
-        "[측정] 미리 열기 0.50초 — ffprobe 0.10 · 그 밖 0.40 — A002.mov"
-
-
 def test_open_timing_line_never_shows_a_negative_rest():
     """반올림 탓에 단계 합이 총합을 조금 넘어도 '그 밖'을 음수로 적지 않음."""
     assert open_timing_line(0.5, [("ffprobe", 0.3), ("첫 프레임", 0.2004)], "x.mov").endswith("그 밖 0.00 — x.mov")

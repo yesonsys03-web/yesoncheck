@@ -246,8 +246,6 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         self.is_playlist_playing = False
         self._playlist_played_any = False  # 이번 선택 재생에서 연 영상이 있음 (없으면 끝날 때 보던 영상을 멈추지 않음)
         self._playlist_resolving = False  # 선택 재생이 다음 영상을 정하는 중 (그동안 영상이 끝나도 또 진행하지 않음)
-        self._playlist_preopen = None  # 선택 재생이 뒤에서 미리 연 다음 차례 (playlist_preopen.Preopen — sidebar_playlist)
-        self._playlist_preopen_closed = False  # 창을 닫음 — 다시 미리 열지 않음 (_close_playlist_preopen)
         self.current_item = None
         self.use_gpu = False
         self.gpu_backend = None
@@ -2080,8 +2078,7 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
             # Seq 썸네일의 뒤 스레드 일: 결과를 버리고 도는 워커는 끝날 때까지 붙잡아 둠 (앱이 끝나기 전에 wait_for_released_workers가 기다림)
             self._stop_seq_thumbnail_work()
 
-            # 비디오 캡처 객체 정리 (선택 재생이 미리 연 다음 차례도 — 여는 중이면 잠깐 기다림: _close_playlist_preopen)
-            self._close_playlist_preopen()
+            # 비디오 캡처 객체 정리
             if hasattr(self, 'cap_a') and self.cap_a:
                 self.cap_a.release()
             if hasattr(self, 'cap_b') and self.cap_b:

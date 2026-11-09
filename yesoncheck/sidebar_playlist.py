@@ -18,10 +18,7 @@ from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import QMessageBox
 
 from yesoncheck import paths, video_list
-from yesoncheck.playlist_preopen import Preopen
 from yesoncheck.sidebar_items import ALL_KIND_ROLE
-
-PREOPEN_CLOSE_WAIT_S = 3.0  # 창을 닫을 때 여는 중인 미리 열기를 기다리는 한도 — 보통은 이미 끝나 있음(재생을 건 직후 시작, 4K 약 1초)
 
 
 def switch_line(gap, open_s, previous, name):
@@ -48,7 +45,6 @@ class SidebarPlaylistMixin:
     def play_selected_files(self):
         selected_items = self._playlist_selection()
         if selected_items:
-            self._cancel_playlist_preopen("선택 재생을 새로 시작")
             self.playlist = [item.toolTip() for item in selected_items]
             self.current_playlist_index = 0
             self.is_playlist_playing = True
@@ -124,12 +120,10 @@ class SidebarPlaylistMixin:
                     else:
                         item.setForeground(QColor("#2c3e50"))  # 라이트 테마에서는 어두운 색상
             
-            # 파일 열기 및 재생 (앞 차례를 재생하는 동안 미리 열어 둔 캡처가 있으면 그것으로)
-            preopen = self._claim_playlist_preopen(current_file)
-            started = False
+            # 파일 열기 및 재생
             try:
                 open_started = time.perf_counter()
-                if self.open_file('A', current_file, preopen=preopen):
+                if self.open_file('A', current_file):
                     open_s = time.perf_counter() - open_started
                     self._playlist_played_any = True
                     # 첫 번째 프레임으로 이동
@@ -143,18 +137,12 @@ class SidebarPlaylistMixin:
                     self.playSelectedPauseButton.setStyleSheet("background-color: yellow;")
                     print(f"Successfully started playing: {os.path.basename(current_file)}")
                     print(f"is_playlist_playing after: {self.is_playlist_playing}")
-                    started = True
+                    return
                 # 열지 못함 (open_file이 창으로 알림) — 예전에는 보던 영상을 처음부터 다시 재생했음
             except Exception as e:
                 print(f"Error playing file {current_file}: {e}")
                 traceback.print_exc()
                 QMessageBox.warning(self, "Play Error", f"Failed to play file: {os.path.basename(current_file)}\nError: {str(e)}")
-            if preopen is not None:
-                preopen.cancel("이 차례를 열지 못함")  # open_file이 받았으면 아무것도 안 함 — 받기 전에 돌아갔을 때 주인 없이 남지 않게
-            if started:
-                # try 밖: 미리 열기를 시작하다 난 오류를 이 영상의 재생 오류로 치고 다음 영상으로 건너뛰지 않게
-                self._start_playlist_preopen()
-                return
             # 오류 발생 시 다음 파일로 이동
             self.current_playlist_index += 1
         print(f"Playlist index {self.current_playlist_index} is past the end ({len(self.playlist)} items)")
@@ -181,56 +169,8 @@ class SidebarPlaylistMixin:
                             f"디스크에 없는 영상 {len(gone)}개를 건너뜁니다:\n" + "\n".join(lines) + "\n목록을 다시 읽습니다.")
         self.refresh_sidebar()
 
-    def _start_playlist_preopen(self):
-        """지금 차례를 재생하기 시작한 뒤: 다음 차례를 뒤에서 미리 엶(playlist_preopen.Preopen — 사용자 요청 2026-11-09: 4K에서 넘어갈 때의
-        딜레이를 최소로). ffmpeg 파이프로 열 영상만(_preopen_wanted), 마지막 차례면 없음. 미리 여는 동안 다음 파일의 앞 몇 장을 디코드하므로
-        지금 재생과 CPU를 잠깐 나눔 — 끊김은 [측정] 줄로 봄."""
-        self._cancel_playlist_preopen("다음 차례를 새로 미리 엶")
-        if not self.is_playlist_playing or self._playlist_preopen_closed:
-            # 열기·재생 도중 떠 있던 창(주석 파일을 읽지 못함 등)의 이벤트 처리 동안 선택 재생이 멈췄거나 창이 닫힘 — 새로 열지 않음
-            return
-        following = self.current_playlist_index + 1
-        if following >= len(self.playlist):
-            return
-        path = paths.normalize_native(self.playlist[following])  # open_file이 여는 경로와 같게
-        if self._preopen_wanted(path):
-            self._playlist_preopen = Preopen(path, self._preopen_movie_capture)
-
-    def _claim_playlist_preopen(self, path):
-        """지금 열 차례(path)를 미리 연 것이 있으면 그 Preopen(이제 open_file이 받음), 없거나 다른 파일이거나 이제 미리 열 파일이 아니면
-        (디코더 설정이 바뀜 — Mac 메뉴) 닫고 None — 예전처럼 엶."""
-        preopen, self._playlist_preopen = self._playlist_preopen, None
-        if preopen is None:
-            return None
-        path = paths.normalize_native(path)
-        if not paths.same_path(preopen.path, path):
-            preopen.cancel("다음 차례가 바뀜")
-            return None
-        if not self._preopen_wanted(path):
-            preopen.cancel("이제 미리 열 파일이 아님 (디코더 설정이 바뀜)")
-            return None
-        return preopen
-
-    def _cancel_playlist_preopen(self, reason):
-        """미리 연 다음 차례를 닫음 (선택 재생이 멈춤·끝남·창 닫기 — 여는 중이면 뒤 스레드가 다 연 즉시 놓음, 기다리지 않음)."""
-        preopen, self._playlist_preopen = self._playlist_preopen, None
-        if preopen is not None:
-            preopen.cancel(reason)
-
-    def _close_playlist_preopen(self):
-        """창을 닫을 때(player_base._release_resources_on_close): 다시 미리 열지 않게 막고 닫은 뒤, 여는 중이었으면 PREOPEN_CLOSE_WAIT_S까지
-        기다림 — 끝나면 뒤 스레드가 캡처를 놓아 닫힌 창 뒤에 ffmpeg·기록 쓰기가 남지 않게(인터프리터가 끝나는 동안 데몬 스레드가 stdout을
-        쓰면 치명 오류가 날 수 있음). 한도를 넘으면(NAS가 멈춤 등) 한 줄 남기고 그대로 닫음 — 뒤 스레드가 다 연 즉시 놓음."""
-        self._playlist_preopen_closed = True
-        preopen = self._playlist_preopen
-        self._cancel_playlist_preopen("창을 닫음")
-        if preopen is not None and not preopen.wait(PREOPEN_CLOSE_WAIT_S):
-            print(f"[미리 열기] 창을 닫는 동안 {PREOPEN_CLOSE_WAIT_S:g}초 안에 다 열지 못함 — 기다리지 않고 닫습니다 "
-                  f"(다 열면 뒤 스레드가 놓음): {os.path.basename(preopen.path)}", flush=True)
-
     def _end_playlist_mode(self):
         """선택 재생 상태만 끝냄 (보던 영상은 그대로)."""
-        self._cancel_playlist_preopen("선택 재생을 멈춤")
         self.is_playlist_playing = False
         self.reset_sidebar_colors()
         self.playSelectedPauseButton.setText('Selected Play'); self.playSelectedPauseButton.setStyleSheet("")
@@ -244,7 +184,6 @@ class SidebarPlaylistMixin:
     def _finish_playlist(self):
         """선택 재생 끝. 재생한 영상이 있으면 예전처럼 멈추고 알림. 하나도 재생하지 못했으면(모두 없거나 열 수 없음 — 그때마다
         창으로 알림) 보던 영상은 멈추지 않고 선택 재생만 끝냄."""
-        self._cancel_playlist_preopen("선택 재생이 끝남")
         if not self._playlist_played_any:
             print("선택 재생: 재생할 수 있는 영상이 없어 선택 재생을 끝냄 (보던 영상은 그대로)")
             self._end_playlist_mode()
