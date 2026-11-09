@@ -52,12 +52,40 @@ def measurement_line(frames, elapsed, native, wipe, display, name, max_gap=0.0, 
             f"와이프={'on' if wipe else 'off'} 표시={display} — {name}")
 
 
-def open_timing_line(total, steps, name):
+def open_timing_line(total, steps, name, title="열기"):
     """영상 열기의 단계별 시간 줄 — `[측정] 열기 <총>초 — <단계> <초> · … · 그 밖 <초> — <파일 이름>`. steps: [(이름, 초)] (차례대로),
-    '그 밖'은 총합에서 단계 합을 뺀 나머지(반올림 탓에 음수면 0). 선택 재생 전환 약 1초 중 '열기'가 무엇에 드는지 재려고 (2026-11-07)."""
+    '그 밖'은 총합에서 단계 합을 뺀 나머지(반올림 탓에 음수면 0). 선택 재생 전환 약 1초 중 '열기'가 무엇에 드는지 재려고 (2026-11-07).
+    title: 머리 낱말 — 선택 재생의 미리 열기(preopen_movie_capture)는 '미리 열기'."""
     rest = max(0.0, total - sum(seconds for _label, seconds in steps))
     parts = " · ".join(f"{label} {seconds:.2f}" for label, seconds in [*steps, ("그 밖", rest)])
-    return f"[측정] 열기 {total:.2f}초 — {parts} — {name}"
+    return f"[측정] {title} {total:.2f}초 — {parts} — {name}"
+
+
+def preopen_movie_capture(path, cancelled):
+    """선택 재생이 다음 차례를 미리 여는 opener (playlist_preopen.Preopen — 뒤 스레드에서 불림: Qt·플레이어 상태를 건드리지 않음) →
+    ffmpeg 파이프 캡처 또는 None(파이프로 여는 파일이 아님·닫혀서 그만둠). 플레이어 A를 여는 길(_native_or_pipe_capture)처럼 ffprobe 한 번
+    (probe_for_open) 뒤 그 probe로 maybe_pipe_capture(full_cache=True — 프레임 캐시 판정은 넘어간 뒤 첫 read에서) — 그 사이에 닫혔으면
+    (cancelled()) ffmpeg를 띄우지 않음. 열었으면 `[측정] 미리 열기 …` 한 줄. 예외는 그대로 올림 (Preopen이 가름) — 그 줄을 쓰다 실패하면
+    연 캡처를 놓고 올림 (주인 없이 남지 않게)."""
+    mode = movie_source_mode()
+    if mode == "cv2":  # _preopen_wanted가 거름 — 그사이 바뀔 수 없는 값이지만 probe 없이 그만두는 규칙은 maybe_pipe_capture와 같게
+        return None
+    started = time.perf_counter()
+    probe = probe_for_open(path, mode)
+    probe_seconds = time.perf_counter() - started
+    if probe is None or cancelled():
+        return None
+    capture = maybe_pipe_capture(path, full_cache=True, probe=probe)
+    if capture is None:
+        return None
+    try:
+        capture.open_steps.insert(0, ("ffprobe", probe_seconds))
+        print(open_timing_line(time.perf_counter() - started, list(capture.open_steps), os.path.basename(path), title="미리 열기"),
+              flush=True)
+    except BaseException:
+        capture.release()
+        raise
+    return capture
 
 
 def _capture_open_steps(cap, seconds):
@@ -318,8 +346,12 @@ class PlayerPlaybackMixin:
             QMessageBox.critical(self, "영상 목록 오류",
                                  f"job 영상 목록을 만들다 예상치 못한 오류가 났습니다.\n\n{traceback.format_exc()}")
 
-    def open_file(self, video_type, file_path=None):
+    def open_file(self, video_type, file_path=None, preopen=None):
         """영상을 A 또는 B로 엶 → 열었으면 True. 열지 못하면 창으로 알리고 False — 보던 영상은 멈추지 않음.
+
+        preopen: 선택 재생이 이 파일을 미리 연 것(playlist_preopen.Preopen — 경로가 같은지는 부른 쪽이 봄). 받은 캡처가 있으면 캡처를 새로 열지
+        않고 그것을 씀(그 뒤는 같은 흐름 — '[측정] 열기' 줄의 캡처 단계는 '미리 연 캡처 기다림'), 받을 것이 없으면(None — 파일이 바뀜·
+        미리 열지 못함 등) 예전처럼 엶. 받다 난 그 밖의 예외는 그대로 올라감.
 
         디스크에 없는 영상(목록에 남아 있던 것)이면 알리고 사이드바 목록을 다시 읽음. 영상이 있지만 확인하지 못하거나
         (권한·NAS 연결 끊김) OpenCV가 열지 못하면 오류 창 (예전에는 보던 영상을 멈춘 뒤 로그에만 남김).
@@ -342,14 +374,18 @@ class PlayerPlaybackMixin:
             print(f"Attempting to open video file: {file_path}")
             opened_at = time.perf_counter()  # '[측정] 열기' 줄 — 단계마다 시각을 찍음 (open_timing_line)
             opening_sequence = is_sequence_path(file_path)
-            # 보던 영상을 멈추기 전에 확인하고 열어 봄 (열 수 없는 영상 때문에 빈 화면만 남지 않게)
-            if opening_sequence:
-                cap = self._open_sequence_capture(file_path)
+            cap = None if preopen is None else preopen.take()  # 선택 재생이 미리 연 캡처 (아직 여는 중이면 기다림)
+            if cap is not None:
+                steps = [("미리 연 캡처 기다림", time.perf_counter() - opened_at)]
             else:
-                cap = self._open_movie_capture(file_path)
-            if cap is None:
-                return False
-            steps = _capture_open_steps(cap, time.perf_counter() - opened_at)
+                # 보던 영상을 멈추기 전에 확인하고 열어 봄 (열 수 없는 영상 때문에 빈 화면만 남지 않게)
+                if opening_sequence:
+                    cap = self._open_sequence_capture(file_path)
+                else:
+                    cap = self._open_movie_capture(file_path)
+                if cap is None:
+                    return False
+                steps = _capture_open_steps(cap, time.perf_counter() - opened_at)
 
             mark = time.perf_counter()
             self._stop_playback_for_open()
@@ -492,6 +528,18 @@ class PlayerPlaybackMixin:
                                  f"형식일 수 있음): {file_path}")
             return None
         return cap
+
+    def _preopen_wanted(self, path):
+        """선택 재생이 이 파일을 미리 열지 — 열면 ffmpeg 파이프로 갈 영상일 때만(_native_or_pipe_capture의 파이프 줄과 같은 조건): 시퀀스가 아니고,
+        킬 스위치 YESONCHECK_MOVIE_SOURCE=cv2가 아니고, 네이티브를 원하지 않음(Windows·Mac에서 ffmpeg를 고른 창). Mac 기본(VideoToolbox)은
+        전환이 이미 0.11~0.16초라(2026-11-05 실측) 미리 열지 않음. 파일이 실제로 파이프 게이트를 통과하는지는 미리 열며 봄(아니면 None)."""
+        return not is_sequence_path(path) and movie_source_mode() != "cv2" and not native_wanted()
+
+    @staticmethod
+    def _preopen_movie_capture(path, cancelled):
+        """선택 재생 미리 열기의 opener (sidebar_playlist가 self.로 부름) — 뒤 스레드에서 불리므로 self를 받지 않음. 모듈 함수를 부를 때 찾음
+        (시험이 player_playback.preopen_movie_capture를 바꿔치기하면 닿게 — 클래스를 만들 때 묶으면 말없이 닿지 않음)."""
+        return preopen_movie_capture(path, cancelled)
 
     def _native_or_pipe_capture(self, file_path):
         """_open_movie_capture의 게이트 둘 — 네이티브(VideoToolbox: Mac(Intel·Apple Silicon)의 HDR이 아닌 ProRes — mac_native_gate) 먼저, 그다음 ffmpeg 파이프
@@ -2494,6 +2542,7 @@ class PlayerPlaybackMixin:
         
         if self.is_playlist_playing:
             self.is_playlist_playing = False; self.reset_sidebar_colors()
+            self._cancel_playlist_preopen("선택 재생을 멈춤")
         self.playSelectedPauseButton.setText('Selected Play'); self.playSelectedPauseButton.setStyleSheet("")
         self._sync_selected_play_buttons()  # Seq 탭이면 선택 재생이 끝난 이 단추는 꺼짐
 
