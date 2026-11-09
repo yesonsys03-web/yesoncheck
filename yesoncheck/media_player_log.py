@@ -6,8 +6,10 @@
 """
 
 import os
+import sys
+import traceback
 
-from PyQt5.QtCore import QObject
+from PyQt5.QtCore import QCoreApplication, QObject
 from PyQt5.QtMultimedia import QAudio, QAudioDeviceInfo, QMediaPlayer, QMultimedia
 
 STATUS = {
@@ -36,12 +38,54 @@ SUPPORT = {
     QMultimedia.PreferredService: "선호",
 }
 PLUGIN_ENV = "QT_MULTIMEDIA_PREFERRED_PLUGINS"  # Windows에서 소리 백엔드(directshow·windowsmediafoundation)를 고르는 Qt 환경 변수
+# (Windows) Qt 소리 백엔드 DLL — 어느 쪽을 불러왔는지로 실제 백엔드를 봄 (K-Lite가 깔린 PC에서는 환경 변수가 안 먹어도 DirectShow로 소리가
+# 나므로 소리만으로는 가를 수 없음)
+WINDOWS_BACKENDS = (("dsengine.dll", "DirectShow"), ("wmfengine.dll", "Media Foundation"))
 AVAILABILITY = {
     QMultimedia.Available: "쓸 수 있음",
     QMultimedia.ServiceMissing: "서비스 없음",
     QMultimedia.Busy: "사용 중",
     QMultimedia.ResourceError: "자원 오류",
 }
+
+
+def windows_backends(get_module=None):
+    """(Windows) 지금 이 프로세스에 불러온 Qt 소리 백엔드 → ['DirectShow(dsengine.dll)', 'Media Foundation(wmfengine.dll)'] 중 불러온 것(차례대로).
+    get_module: 이름 → 모듈 손잡이(0이면 없음) — 기본은 kernel32 GetModuleHandleW. 둘 다면 둘 다(Qt가 플러그인 정보를 읽느라 불렀을 수 있음)."""
+    if get_module is None:
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetModuleHandleW.restype = ctypes.c_void_p
+        kernel32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+        get_module = kernel32.GetModuleHandleW
+    return [f"{label}({dll})" for dll, label in WINDOWS_BACKENDS if get_module(dll)]
+
+
+def plugin_files(paths=None):
+    """Qt 플러그인 폴더들(paths — 기본은 QCoreApplication.libraryPaths())의 mediaservice 아래 파일 이름 (정렬) — 앱에 든 소리 백엔드."""
+    names = set()
+    for folder in QCoreApplication.libraryPaths() if paths is None else paths:
+        service = os.path.join(folder, "mediaservice")
+        if os.path.isdir(service):
+            names.update(os.listdir(service))
+    return sorted(names)
+
+
+def _backend_text():
+    """(Windows) 출력 장치 줄에 붙일 '백엔드 …·플러그인 [...]' — 알아내다 실패해도(진단일 뿐) 재생기는 그대로: 트레이스백을 남기고 '알 수 없음'."""
+    try:
+        loaded = windows_backends()
+        backend = ", ".join(loaded) if loaded else "아직 없음"
+    except Exception as exc:
+        traceback.print_exc()
+        backend = f"알 수 없음({type(exc).__name__}: {exc})"
+    try:
+        files = f"[{', '.join(plugin_files())}]"
+    except Exception as exc:
+        traceback.print_exc()
+        files = f"알 수 없음({type(exc).__name__}: {exc})"
+    return f" · 백엔드 {backend} · 플러그인 {files}"
 
 
 class _PlayerLog(QObject):
@@ -74,6 +118,7 @@ def attach(player):
     availability = AVAILABILITY.get(player.availability(), player.availability())
     support = " · ".join(f"{label} {SUPPORT.get(QMediaPlayer.hasSupport(mime), QMediaPlayer.hasSupport(mime))}"
                          for label, mime in (("mov", "video/quicktime"), ("mp4", "video/mp4")))
+    backend = _backend_text() if sys.platform == "win32" else ""
     print(f"[소리] 출력 장치: 기본 {default} · 모두 {len(names)}개 {names} · 재생기 {availability} · 재생 가능성 {support} · "
-          f"{PLUGIN_ENV}={os.environ.get(PLUGIN_ENV) or '(없음)'}", flush=True)
+          f"{PLUGIN_ENV}={os.environ.get(PLUGIN_ENV) or '(없음)'}{backend}", flush=True)
     return _PlayerLog(player)

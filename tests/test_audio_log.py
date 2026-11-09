@@ -101,3 +101,49 @@ def test_player_property_attaches_the_log(new_player_with_log, capsys):
 @pytest.fixture
 def new_player_with_log(new_player, tmp_path):  # noqa: F811
     return new_player(make_config(str(tmp_path), {}))
+
+
+# ---------------------------------------------------------------- 어느 소리 백엔드인가 (Windows)
+
+
+def test_windows_backend_reports_loaded_dlls():
+    """GetModuleHandleW로 지금 불러온 Qt 소리 백엔드 DLL을 봄 — K-Lite가 깔린 PC에서 환경 변수가 안 먹었는데도 소리가 나 'Media Foundation도
+    된다'고 잘못 읽지 않게 (DirectShow면 dsengine.dll, Media Foundation이면 wmfengine.dll)."""
+    loaded = {"wmfengine.dll"}
+    assert media_player_log.windows_backends(lambda name: 1 if name in loaded else 0) == ["Media Foundation(wmfengine.dll)"]
+    loaded = {"dsengine.dll", "wmfengine.dll"}
+    assert media_player_log.windows_backends(lambda name: 1 if name in loaded else 0) == [
+        "DirectShow(dsengine.dll)", "Media Foundation(wmfengine.dll)"]
+    assert media_player_log.windows_backends(lambda name: 0) == []
+
+
+def test_plugin_files_lists_mediaservice_folders(tmp_path):
+    plugins = tmp_path / "plugins"
+    (plugins / "mediaservice").mkdir(parents=True)
+    (plugins / "mediaservice" / "dsengine.dll").write_bytes(b"")
+    (plugins / "mediaservice" / "wmfengine.dll").write_bytes(b"")
+    (tmp_path / "empty").mkdir()
+    assert media_player_log.plugin_files([str(plugins), str(tmp_path / "empty")]) == ["dsengine.dll", "wmfengine.dll"]
+
+
+def test_attach_line_names_the_backend_on_windows(qapp, capsys, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(media_player_log, "windows_backends", lambda get_module=None: ["Media Foundation(wmfengine.dll)"])
+    monkeypatch.setattr(media_player_log, "plugin_files", lambda paths=None: ["dsengine.dll", "wmfengine.dll"])
+    media_player_log.attach(QMediaPlayer())
+    out = capsys.readouterr().out
+    assert "백엔드 Media Foundation(wmfengine.dll)" in out and "플러그인 [dsengine.dll, wmfengine.dll]" in out
+
+
+def test_backend_probe_failure_is_logged_not_raised(qapp, capsys, monkeypatch):
+    """백엔드를 알아내다 실패해도(진단일 뿐) 소리 재생기는 그대로 — 트레이스백째 기록하고 줄에는 '알 수 없음'."""
+    def broken(get_module=None):
+        raise OSError("GetModuleHandleW 실패")
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(media_player_log, "windows_backends", broken)
+    monkeypatch.setattr(media_player_log, "plugin_files", lambda paths=None: [])
+    media_player_log.attach(QMediaPlayer())
+    captured = capsys.readouterr()
+    assert "백엔드 알 수 없음(OSError: GetModuleHandleW 실패)" in captured.out
+    assert "Traceback" in captured.err
