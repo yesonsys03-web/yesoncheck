@@ -7,11 +7,18 @@ stop(정지된 프로세스·읽기에서 막힌 스레드 포함), 실패 글, 
 
 320×180 200장은 이 Mac에서 첫 장부터 끝까지 약 30ms라 GUI 스레드가 progress를 받은 뒤 멈추면 이미 끝나 있다 — 도중 멈춤 시험은 progress를
 직접 연결(Qt.DirectConnection)로 받아 워커 스레드 안에서 바로 paused를 세운다(끝나기 전에 멈춤이 걸림을 보장).
+
+정지 확인: POSIX는 psutil status()가 STOPPED. Windows의 status()는 모든 스레드의 대기 사유가 Suspended일 때만 STOPPED라, 파이프가 차서
+WriteFile에서 막힌 ffmpeg 스레드가 있으면 정지돼 있어도 running으로 보인다(CI run 42768144735 — 띄운 직후 정지는 모든 스레드가 Suspended라
+맞게 보임). 그래서 도중 멈춤 시험의 Windows 갈래는 동작으로 본다 — 파이프를 비워 봐서(_drain_pipe) 한 장도 더 오지 않음. 이 갈래는 이 Mac에서도
+sys.platform을 "win32"로 바꿔 끼워 같이 돌린다(정지된 ffmpeg는 POSIX에서도 파이프를 비워도 새 장을 주지 않음).
 """
 
 import socket
+import sys
 import threading
 import time
+import traceback
 
 import psutil
 import pytest
@@ -109,7 +116,36 @@ def _numbers(strip, count):
 
 
 def _is_stopped(pid):
+    """psutil이 보는 정지 상태. POSIX는 정확. Windows는 모든 스레드가 Suspended 대기일 때만 참 — 띄운 직후 정지에는 맞고, 파이프 쓰기에서
+    막힌 스레드가 있는 도중 정지에는 거짓으로 나옴(그때는 _drain_pipe로 동작을 봄)."""
     return psutil.Process(pid).status() == psutil.STATUS_STOPPED
+
+
+def _drain_pipe(stream, limit, seconds):
+    """도우미 데몬 스레드가 stream(워커의 ffmpeg stdout)을 비워 가며 받은 바이트 수를 seconds 뒤에 봄 → (바이트 수, 스레드, 도우미의 예외 글).
+
+    limit 바이트에 닿으면 그만 읽음(정지가 안 됐으면 ffmpeg가 계속 밀어 넣으므로 상한). read1에는 타임아웃이 없어 스레드가 막혀 있어도 시험은
+    seconds 뒤 결과만 본다 — 뒤의 worker.stop()이 프로세스를 죽이면 read1이 EOF로 풀림. 워커가 stdout을 닫은 뒤의 ValueError는 끝으로 봄."""
+    received = [0]
+    errors = []
+
+    def drain():
+        try:
+            while received[0] < limit:
+                chunk = stream.read1(limit - received[0])
+                if not chunk:
+                    return
+                received[0] += len(chunk)
+        except ValueError:
+            if not stream.closed:
+                errors.append(traceback.format_exc())
+        except Exception:
+            errors.append(traceback.format_exc())
+
+    thread = threading.Thread(target=drain, name="test-drain-pipe", daemon=True)
+    thread.start()
+    time.sleep(seconds)
+    return received[0], thread, errors
 
 
 def test_builds_every_frame_in_order(qapp, numbered_clip, make_builder):
@@ -172,9 +208,14 @@ def test_threads_option_follows_constant(monkeypatch):
     assert command[command.index("-filter_threads") + 1] == "3" and command.index("-filter_threads") < command.index("-i")
 
 
-def test_pause_suspends_process_and_resume_finishes(qapp, numbered_clip_200, make_builder):
-    strip = HoverStrip(plan_for(200, 320, 180))
+@pytest.mark.parametrize("platform", [sys.platform, "win32"], ids=["this_platform", "forced_win32"])
+def test_pause_suspends_process_and_resume_finishes(qapp, numbered_clip_200, make_builder, monkeypatch, platform):
+    plan = plan_for(200, 320, 180)
+    strip = HoverStrip(plan)
     worker = make_builder(numbered_clip_200, strip)
+    # forced_win32: Windows 갈래(파이프 비우기)를 이 플랫폼에서도 돌림. 워커를 만든 뒤에 바꿈 — 생성자의 ffmpeg_path()(shutil.which)는
+    # 부를 때 sys.platform을 읽어 win32면 ffmpeg.exe를 찾음. 그 뒤(Popen·psutil·external_tools)는 import 때 정한 상수만 봄
+    monkeypatch.setattr(sys, "platform", platform)
     got = _Signals(worker)
     paused_at = []
 
@@ -190,8 +231,21 @@ def test_pause_suspends_process_and_resume_finishes(qapp, numbered_clip_200, mak
     n1 = strip.filled_count
     _pump(qapp, 0.5)
     assert strip.filled_count == n1 == paused_at[0] < 200  # 멈춘 뒤로는 한 장도 더 채우지 않음
-    assert _is_stopped(worker.pid)  # 읽기만 멈춘 것이 아니라 프로세스가 정지 (CPU 0)
     assert got.done == [] and got.failed == []
+    if sys.platform == "win32":
+        # 읽기만 멈춘 것이 아니라 프로세스가 정지 — 동작으로: 파이프를 0.5초 비워도 이미 버퍼에 있던 것(한 장 미만 — 이 Mac 98,304B)만 옴.
+        # 정지가 안 됐으면 ffmpeg가 계속 밀어 넣어 상한(한 장)까지 옴. 시험이 장을 먹었으므로 끝까지 채우기는 보지 않고 stop으로 끝냄.
+        pid = worker.pid
+        drained, drainer, errors = _drain_pipe(worker._process.stdout, plan.frame_bytes, 0.5)
+        assert drained < plan.frame_bytes, f"정지된 ffmpeg에서 {drained}바이트가 옴 (한 장 {plan.frame_bytes}바이트)"
+        worker.stop()
+        drainer.join(STOP_WAIT_MS / 1000)
+        assert not worker.isRunning() and not psutil.pid_exists(pid)
+        assert not drainer.is_alive() and errors == []
+        _pump(qapp, 0.1)
+        assert got.done == [] and got.failed == []
+        return
+    assert _is_stopped(worker.pid)  # 읽기만 멈춘 것이 아니라 프로세스가 정지 (CPU 0)
     worker.paused = False
     _finish(qapp, worker)
     assert got.failed == [] and got.done_counts == [200]
