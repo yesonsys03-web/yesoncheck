@@ -625,6 +625,29 @@ def test_builder_failure_logs_and_shows_window_once(fake_builders, player_with_c
     assert not player._hover_timer.isActive()
 
 
+def test_failure_window_once_per_file_across_files(fake_builders, player_with_clip, numbered_clip, second_clip, dialogs, capsys):
+    """실패하는 두 파일을 오가도(A → B → A) 오류 창은 파일마다 한 번 — 세션 동안 실패한 파일을 모두 기억하므로 A의 두 번째 실패는 기록만
+    (기억이 마지막 파일 하나뿐이면 오갈 때마다 창이 다시 뜸)."""
+    player = player_with_clip
+
+    def fail_current(text, count):
+        wait_until(lambda: len(fake_builders) == count, 3, f"워커 {count}번째를 띄우지 않았습니다")
+        fake_builders[-1].failed.emit(text)
+        QApplication.processEvents()
+
+    fail_current("A 실패 1", 1)
+    assert player.open_file("A", second_clip) is True
+    fail_current("B 실패", 2)
+    assert player.open_file("A", numbered_clip) is True
+    fail_current("A 실패 2", 3)
+
+    assert [text.split("\n", 1)[0] for text in dialogs.criticals] == [
+        f"띠를 만들지 못했습니다 — {numbered_clip}", f"띠를 만들지 못했습니다 — {second_clip}",
+    ]
+    err = capsys.readouterr().err
+    assert err.count(f"{LOG_PREFIX} 띠를 만들지 못했습니다 — {numbered_clip}") == 2 and "A 실패 2" in err  # 창 없이도 기록은 매번
+
+
 def test_missing_ffmpeg_reports_once_and_stops_tick(player_with_clip, numbered_clip, monkeypatch, dialogs, capsys):
     """ffmpeg를 찾지 못해 워커를 만들지 못하면 실패와 같은 길(기록 + 창 1회)이고 틱을 멈춤 — 50ms마다 다시 시도해 창이 쌓이지 않음."""
     player = player_with_clip

@@ -34,7 +34,8 @@ ffmpeg는 파일 전체(NAS)를 읽기 시작하자마자 kill될 뿐이고, 그
 
 끝 신호(done·failed)는 워커 스레드가 내 GUI 대기열로 온다. 그래서 stop()·release_worker 전에 대기열에 들어간 신호가 다음 파일을 연 뒤에
 도착할 수 있다 — 슬롯은 보낸 쪽(sender)이 지금 워커일 때만 받는다 (옛 워커가 이미 지워졌으면 sender가 None이라 그것도 버림). 실패는
-기록(stderr)에 매번, 오류 창은 파일마다 한 번(_hover_failed_for — 다시 시도하지 않음; 같은 파일을 다시 열어 또 실패해도 기록만).
+기록(stderr)에 매번, 오류 창은 파일마다 한 번(_hover_failed_for — 이 창이 떠 있는 동안 실패한 파일을 모두 기억하는 set이라 실패하는 두
+파일을 오가도 창이 다시 뜨지 않음; 다시 시도하지 않음; 같은 파일을 다시 열어 또 실패해도 기록만).
 
 Settings → 슬라이더 썸네일 (켜기/끄기): create_menu_bar가 _add_hover_thumbs_menu를 화면 그리기 메뉴 바로 뒤에서 부르고(Mac·Windows 모두), 고르면
 set_slider_thumbnails가 hover_strip의 설정 파일(prefs.json)에 저장한 뒤 이 창에 바로 적용한다 (끔 → _hover_thumbs_close, 켬 → 지금 A 영상의 띠를
@@ -80,7 +81,7 @@ class PlayerHoverThumbsMixin:
         self._hover_moved_at = 0.0
         self._hover_busy_since = None  # 워커 없이 바빠진 때 (쉬면 None)
         self._hover_busy_logged = False  # 이 계획에서 진단 기록을 남겼음
-        self._hover_failed_for = ""  # 오류 창을 이미 띄운 파일
+        self._hover_failed_for: set[str] = set()  # 오류 창을 이미 띄운 파일들 (이 창이 떠 있는 동안)
         self._hover_popup = SliderPreviewPopup(THUMB_WIDTH, 180)  # 계획마다 그 파일의 그림 크기로 맞춤
         # Qt는 설치된 이벤트 필터를 붙잡아 주지 않음 — parent와 이 목록이 쥠
         self._hover_filters = [
@@ -206,10 +207,10 @@ class PlayerHoverThumbsMixin:
         """틱 정지 + 알림: 기록(stderr)은 매번, 오류 창은 파일마다 한 번 (이미 띄운 파일이면 기록만). 이미 채운 장은 그대로 보임."""
         self._hover_timer.stop()
         message = f"띠를 만들지 못했습니다 — {self._hover_path}\n{text}\n\nSettings → {MENU_TEXT}을 끄면 만들지 않습니다"
-        if self._hover_failed_for == self._hover_path:
+        if self._hover_path in self._hover_failed_for:
             print(f"{LOG_PREFIX} {message}", file=sys.stderr, flush=True)
             return
-        self._hover_failed_for = self._hover_path
+        self._hover_failed_for.add(self._hover_path)
         error_window.show_error(LOG_PREFIX, message)
 
     def _hover_live_plan(self):
