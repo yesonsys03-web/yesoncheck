@@ -1601,6 +1601,9 @@ class PlayerPlaybackMixin:
 
     def sync_audio_on_release(self):
         if self.cap_a:
+            # 드래그 표지 해제(on_overlay_slider_released와 같음): 드래그 미리보기가 슬라이더 값을 blockSignals로 먼저 써 두면 놓을 때
+            # valueChanged가 안 와 on_slider_value_changed의 해제가 안 걸려 True로 남음 — 아래 이동이 와이프 B를 다시 그리도록 맨 앞에서
+            self.is_dragging = False
             # 드래그가 끝났을 때 정확한 위치로 조정
             total_frames = int(self.cap_a.get(cv2.CAP_PROP_FRAME_COUNT))
             current_scroll_value = self.positionScroll.value()
