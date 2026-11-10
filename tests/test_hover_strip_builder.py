@@ -146,8 +146,8 @@ def test_sampled_plan_picks_every_step(qapp, numbered_clip, make_builder, monkey
 def test_command_shape():
     every = StripPlan(total=48, step=1, count=48, width=320, height=180)
     assert build_command("/opt/ffmpeg", "/clips/a b.mov", every) == [
-        "/opt/ffmpeg", "-nostdin", "-v", "error", "-threads", "2", "-i", "/clips/a b.mov", "-map", "0:V:0", "-fps_mode",
-        "passthrough", "-vf", "scale=320:180", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
+        "/opt/ffmpeg", "-nostdin", "-v", "error", "-filter_threads", "1", "-threads", "1", "-i", "/clips/a b.mov", "-map", "0:V:0",
+        "-fps_mode", "passthrough", "-vf", "scale=320:180", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
     ]
     sampled = StripPlan(total=14_400, step=29, count=497, width=180, height=320)
     command = build_command("ffmpeg", "x.mov", sampled)
@@ -158,13 +158,18 @@ def test_command_shape():
 
 
 def test_threads_option_follows_constant(monkeypatch):
+    """디코더 스레드(-threads — 입력 옵션)·필터 스레드(-filter_threads — 전역 옵션)는 두 상수를 호출 때 읽음. None이면 그 옵션 자체가 없음."""
     every = StripPlan(total=48, step=1, count=48, width=320, height=180)
     monkeypatch.setattr(hover_strip_builder, "FFMPEG_THREADS", None)  # 끄면 ffmpeg 기본 — 옵션 자체가 없음
-    assert "-threads" not in build_command("ffmpeg", "x.mov", every)
-    monkeypatch.setattr(hover_strip_builder, "FFMPEG_THREADS", 4)  # 호출 때 읽음 — 입력 옵션이라 -i 바로 앞
+    monkeypatch.setattr(hover_strip_builder, "FFMPEG_FILTER_THREADS", None)
     command = build_command("ffmpeg", "x.mov", every)
-    assert command.count("-threads") == 1
+    assert "-threads" not in command and "-filter_threads" not in command
+    monkeypatch.setattr(hover_strip_builder, "FFMPEG_THREADS", 4)  # 입력 옵션이라 -i 바로 앞
+    monkeypatch.setattr(hover_strip_builder, "FFMPEG_FILTER_THREADS", 3)  # 전역 옵션 — -i 앞
+    command = build_command("ffmpeg", "x.mov", every)
+    assert command.count("-threads") == 1 and command.count("-filter_threads") == 1
     assert command[command.index("-i") - 2:command.index("-i")] == ["-threads", "4"]
+    assert command[command.index("-filter_threads") + 1] == "3" and command.index("-filter_threads") < command.index("-i")
 
 
 def test_pause_suspends_process_and_resume_finishes(qapp, numbered_clip_200, make_builder):
