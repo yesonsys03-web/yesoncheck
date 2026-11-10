@@ -77,7 +77,7 @@ class SliderPreviewPopup(QWidget):
 
     그림이 없으면(None) 상자는 비우고 크기는 그대로 둔다 — 아직 안 만든 자리에서도 번호는 보이고 창이 들쭉날쭉 변하지 않는다.
 
-    parent: popup_parent(창)로 고를 것 (플랫폼 분기 — 아래 함수). Qt.ToolTip은 창 종류 플래그라 parent가 있어도 따로 뜨는 최상위 창이고
+    parent: popup_parent(창)로 고를 것 (플랫폼 분기 — 위의 popup_parent). Qt.ToolTip은 창 종류 플래그라 parent가 있어도 따로 뜨는 최상위 창이고
     (isWindow 그대로) place_above의 move는 그대로 화면 좌표다. 위젯 parent가 있으면 그 창이 지워질 때 함께 지워진다 — parent 없는 최상위 창은
     인터프리터가 끝날 때 QApplication보다 늦게 지워져 종료 순서가 꼬일 수 있다는 리뷰 가설(이 Mac 종료 세그폴트 플레이크 18/24 → 7/24로 줄었음)."""
 

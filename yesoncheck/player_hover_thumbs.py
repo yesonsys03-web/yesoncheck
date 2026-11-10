@@ -7,8 +7,8 @@
 
 VideoPlayerBase의 부모 클래스로 붙음 — `class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin, QMainWindow)`.
 상태는 VideoPlayerBase.__init__이 부르는 _init_hover_thumbs가 만들고(두 슬라이더가 창 안에 들어간 뒤 — 필터가 slider.window()에도 걸림),
-open_file(A 영상)·_release_side('A')·_load_job_list(job을 바꿔 A를 놓을 때)·_release_resources_on_close가 _hover_thumbs_open·
-_hover_thumbs_close를 부른다. open_file은 맨 앞(경로 정리 직후, 새 캡처를 열기 전)에 _hover_thumbs_pause도 부른다 — 새 캡처를 여는 동안(NAS에서
+open_file(A 영상)·_release_side('A')·_load_job_list(job을 바꿔 A를 놓을 때)가 _hover_thumbs_open·
+_hover_thumbs_close를 부르고, _release_resources_on_close(창 닫기)는 _hover_thumbs_destroy를 부른다. open_file은 맨 앞(경로 정리 직후, 새 캡처를 열기 전)에 _hover_thumbs_pause도 부른다 — 새 캡처를 여는 동안(NAS에서
 ffprobe·파이프 ffmpeg 시작·첫 디코드) 옛 띠 ffmpeg가 디코드하며 다투지 않게 먼저 정지하고, 연 뒤의 _hover_thumbs_open → close가 kill한다(못
 열었거나 B를 열었으면 다음 쉬는 틱이 paused = busy로 되돌림). 이름은 모두 `_hover_`로 시작해 다른 믹스인과 겹치지 않는다. player_base를 모듈
 수준에서 import하지 말 것 (순환).

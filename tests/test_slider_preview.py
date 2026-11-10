@@ -162,7 +162,7 @@ def test_popup_set_thumb_size_resizes_for_a_new_plan(qapp, popup):
 
 
 def test_popup_with_parent_is_a_tooltip_window_owned_by_it(qapp):
-    """parent를 주면 그 창이 가지지만(창이 지워지면 함께 지워짐 — 종료 순서) 여전히 따로 뜨는 ToolTip 최상위 창이고, place_above는 그대로
+    """parent를 주면 그 창이 가지지만(창이 지워지면 함께 지워짐; 종료 순서 안정은 가설 — 이 Mac 플레이크 18/24 → 7/24) 여전히 따로 뜨는 ToolTip 최상위 창이고, place_above는 그대로
     화면 좌표로 놓는다 (커서 x에 가로 가운데, 아래 끝은 슬라이더 위 끝에서 GAP 위)."""
     window = QMainWindow()
     slider = QSlider(Qt.Horizontal)
