@@ -10,10 +10,12 @@ x → 값은 Qt의 QSliderPrivate::pixelPosToRangeValue 식을 **그대로** 쓴
 (측정: 그런 식은 900칸 중 162·333칸이 틀렸고 Qt 식은 0칸). 호버 그림의 프레임이 클릭하면 실제로 가는 프레임과 같아야 하므로 Qt가 클릭 때 쓰는 식과 같아야 한다.
 
 eventFilter는 PyQt5 가상 함수라 거기서 빠져나간 예외는 qFatal(프로세스 종료, 오류 창 없음)이다. 호버는 마우스가 움직일 때마다 불려 lookup이 던진 예외 하나로
-앱이 죽으면 안 되므로, 본문 전체를 try/except로 감싸 error_window.report_from_handler로 기록(트레이스백 전부)·오류 창에 알리고 이벤트는 그대로 흘려보낸다
-(삼키지 않음 — 조용한 실패가 아니라 보이는 실패). 필터는 늘 False를 돌려줘 슬라이더의 기본 처리(클릭·드래그)를 막지 않는다.
+앱이 죽으면 안 되므로, 본문 전체를 try/except로 감싸 창을 숨기고 이벤트는 그대로 흘려보낸다. 알림은 필터마다 처음 한 번만 error_window.report_from_handler
+(트레이스백 전부 기록 + 오류 창)이고, 그 뒤로는 창 없이 기록(stderr) 한 줄씩(예외 종류·글) — lookup의 버그 하나로 마우스가 움직일 때마다 창이 쌓이지 않게,
+그래도 조용히 넘기지는 않게. 필터는 늘 False를 돌려줘 슬라이더의 기본 처리(클릭·드래그)를 막지 않는다.
 """
 
+import sys
 from typing import Callable, Optional, Tuple
 
 import numpy as np
@@ -22,8 +24,11 @@ from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import QLabel, QSlider, QStyle, QStyleOptionSlider, QVBoxLayout, QWidget
 
 from yesoncheck import error_window
+from yesoncheck.hover_strip import LOG_PREFIX
 
 GAP = 8  # 창과 슬라이더 사이 간격(px) — 창의 아래 끝이 슬라이더 위 끝에서 이만큼 위 (위가 모자라면 슬라이더 아래 끝에서 이만큼 아래)
+
+ERROR_CONTEXT = "슬라이더 호버 처리 중 오류"  # eventFilter 예외의 기록·창 글 (모듈 설명)
 
 LookupResult = Optional[Tuple[str, Optional[np.ndarray]]]
 
@@ -140,6 +145,7 @@ class SliderHoverFilter(QObject):
         self._slider = slider
         self._lookup = lookup
         self._popup = popup
+        self._reported = False  # eventFilter 예외를 창으로 알렸음 (처음 한 번만 — 모듈 설명)
         slider.setMouseTracking(True)  # 버튼을 안 눌러도 MouseMove가 와야 함
         slider.installEventFilter(self)
         slider.window().installEventFilter(self)
@@ -155,9 +161,14 @@ class SliderHoverFilter(QObject):
                     self._show_at(event.pos().x())
                 elif kind in (QEvent.Leave, QEvent.MouseButtonPress, QEvent.Hide):
                     self._popup.hide()
-        except BaseException:
+        except BaseException as exc:
             self._popup.hide()  # 낡은 그림이 남지 않게 (오류는 아래에서 보임)
-            error_window.report_from_handler("[슬라이더 썸네일]", "슬라이더 호버 처리 중 오류")
+            if not self._reported:
+                self._reported = True
+                error_window.report_from_handler(LOG_PREFIX, ERROR_CONTEXT)
+            else:  # 창은 처음 한 번만 — 그 뒤로는 기록 한 줄씩 (조용히 넘기지 않음)
+                print(f"{LOG_PREFIX} {ERROR_CONTEXT} (되풀이 — 트레이스백·오류 창은 처음 한 번만): {type(exc).__name__}: {exc}",
+                      file=sys.stderr, flush=True)
         return False
 
     def _show_at(self, x: int) -> None:

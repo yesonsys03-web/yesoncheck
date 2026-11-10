@@ -13,6 +13,7 @@ from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QSlider
 
 from yesoncheck import error_window
+from yesoncheck.hover_strip import LOG_PREFIX
 from yesoncheck.main_window_styles import OVERLAY_SLIDER_STYLE, POSITION_SCROLL_INITIAL_STYLE
 from yesoncheck.slider_preview import GAP, SliderHoverFilter, SliderPreviewPopup, slider_value_at
 from yesoncheck.slider_style import jump_to_click
@@ -307,7 +308,9 @@ def test_filter_returns_false_so_the_slider_still_handles_events(qapp, styled_sl
     del hover
 
 
-def test_filter_reports_lookup_exception(qapp, styled_slider, popup, monkeypatch):
+def test_filter_reports_lookup_exception(qapp, styled_slider, popup, monkeypatch, capsys):
+    """lookup이 던지면 창을 숨기고 처음 한 번은 report_from_handler(트레이스백 기록 + 오류 창), 그 뒤로는 창 없이 기록 한 줄씩 — 호버는 마우스가
+    움직일 때마다 불려 lookup 버그 하나로 창이 쌓이면 안 되지만, 조용히 넘기지도 않음. 예외는 밖으로 나가지 않음(qFatal 회피)."""
     import sys
 
     slider = styled_slider("main")
@@ -333,10 +336,14 @@ def test_filter_reports_lookup_exception(qapp, styled_slider, popup, monkeypatch
     pos = QPoint(450, _y(slider))
     event = QMouseEvent(QEvent.MouseMove, QPointF(pos), QPointF(slider.mapToGlobal(pos)), Qt.NoButton, Qt.NoButton, Qt.NoModifier)
     assert hover.eventFilter(slider, event) is False  # 예외가 밖으로 안 나가고 기본 처리 그대로
-    assert reports == [("[슬라이더 썸네일]", "슬라이더 호버 처리 중 오류", boom)]
+    assert reports == [(LOG_PREFIX, "슬라이더 호버 처리 중 오류", boom)]
     assert popup.isVisible() is False  # 낡은 그림이 남지 않음
+    capsys.readouterr()
 
     _send_move(slider, 460)  # Qt 이벤트 경로로도 프로세스가 죽지 않음
-    assert len(reports) == 2
+    _send_move(slider, 470)
+    assert len(reports) == 1  # 창은 처음 한 번만
+    lines = [line for line in capsys.readouterr().err.splitlines() if line.startswith(LOG_PREFIX)]
+    assert len(lines) == 2 and all("슬라이더 호버 처리 중 오류" in line and "RuntimeError: lookup 실패" in line for line in lines)
     assert popup.isVisible() is False
     del hover
