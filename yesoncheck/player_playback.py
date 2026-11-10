@@ -1631,6 +1631,11 @@ class PlayerPlaybackMixin:
                 if abs(actual_frame_idx - target_frame_idx) > tolerance:
                     print(f"드래그 완료: 정확한 위치로 조정 {actual_frame_idx} -> {target_frame_idx}")
                     self._precise_seek(target_frame_idx, total_frames)
+                    if wipe_b and int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES)) - 1 != target_frame_idx:
+                        # _precise_seek가 아무것도 안 할 수 있음: 끝에서 3장째(목표 ≥ 총 − 3)는 _seek_conservative의 기존 가드(목표 == POS — POS는 '다음에 읽을 번호'라 A가
+                        # 목표 − 1에 있을 때 참)가 이동 없이 False를 돌려줌. 허용 오차 0이라 이 가드에 닿으면 그림(캐시 적중)만 목표이고 A 캡처는 한 장 앞, B는 드래그 중의 옛 장으로
+                        # 남으므로 직접 이동으로 A 캡처·B·슬라이더·라벨을 함께 맞춤
+                        self._seek_direct(target_frame_idx, total_frames)
                 elif wipe_b and (self.frame_b is None or max(0, int(self.cap_b.get(cv2.CAP_PROP_POS_FRAMES)) - 1) != target_frame_idx):
                     # 캡처는 목표에 있으나(캐시 미적중 드래그) B가 없거나 다른 자리: 드래그 미리보기(_quick_preview_seek)가 B 동기화를 통째로 건너뛰어 frame_b가 None이거나
                     # 드래그 전 장으로 남으므로, 놓을 때 A가 보여 주는 장(target_frame_idx)에 B를 맞추고 다시 그림 (와이프 B가 검게 남음 — 사용자 보고).

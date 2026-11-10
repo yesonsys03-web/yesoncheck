@@ -14,6 +14,7 @@ B 단언은 놓는 길이 둘:
 - 이동이 안 도는 드래그(캐시 미적중 — 캡처가 이미 목표에 있음): 드래그 미리보기가 B 동기화를 통째로 건너뛰어 frame_b가 None인 채라, 표지를 풀어도 B가 검게 남음.
   놓을 때 B를 A의 장에 맞춰 다시 그려야 함(sync_audio_on_release의 elif) — 이 길의 시험은 A·B에 같은 클립을 열어 두 프레임의 밝기가 같음(같은 장)으로 가름.
   와이프면 정밀 이동의 허용 오차가 0(캡처와 1~5장 차이로 놓아도 이동 — 슬라이더·라벨·A/B 캡처가 함께 목표로), B가 이미 그 자리면(평범한 클릭·오버레이 슬라이더 놓기) elif도 다시 읽지 않음.
+  정밀 이동이 아무것도 안 하는 모서리(끝에서 3장째 + A가 목표 − 1): 놓는 쪽이 이동 뒤 A 캡처가 목표에 없으면 _seek_direct로 맞춤.
 """
 
 import os
@@ -244,3 +245,36 @@ def test_overlay_slider_release_reads_b_only_once(wipe_player):
 
     assert (player.cap_b.reads, player.cap_b.sets) == (1, 1)
     assert position(player.cap_b) - 1 == 30
+
+
+def test_wipe_release_where_precise_seek_does_nothing_near_the_end_still_aligns_b_and_captures(wipe_player, monkeypatch):
+    """끝에서 세 번째 장(48장 클립의 45번)에서 놓을 때 정밀 이동이 아무것도 안 하는 모서리: 허용 오차 0이라 놓을 때 _precise_seek가 불리는데,
+    _seek_conservative의 기존 가드(`목표 == cap_a의 POS` — POS는 '다음에 읽을 번호'라 A가 목표 − 1에 있을 때 참)가 이동 없이 False를 돌려줌.
+    그러면 그림(캐시 적중)만 45번이고 A 캡처는 44, B는 드래그 중의 옛 장(44)으로 남음 — 놓는 쪽이 이동 뒤 A 캡처가 목표에 없으면 직접 이동으로 함께 맞춤.
+    만드는 법: 45(미적중 — 캐시에 담김) → 44(이웃이라 미리보기가 건너뛰고 valueChanged가 44로 이동) → 45(캐시 적중 — 캡처는 44에 남고 그림만 45)."""
+    player = wipe_player
+    calls = []
+    original = player.videoWidget.updateFrame
+
+    def recording_update_frame(frame_a, frame_b=None, *args, **kwargs):
+        calls.append((frame_a is not None, frame_b is not None))
+        return original(frame_a, frame_b, *args, **kwargs)
+
+    monkeypatch.setattr(player.videoWidget, "updateFrame", recording_update_frame)
+    bar = player.positionScroll
+    bar.setSliderDown(True)
+    for value in (45, 44, 45):
+        bar.setSliderPosition(value)
+    assert player.cache_hits == 1
+    assert position(player.cap_a) - 1 == 44 and position(player.cap_b) - 1 == 44 and bar.value() == 45  # 전제: A 캡처가 목표 − 1 (가드에 닿는 자리)
+    calls.clear()
+
+    bar.setSliderDown(False)
+    QApplication.processEvents()
+
+    assert calls and calls[-1] == (True, True), f"놓은 뒤 B가 안 그려짐: {calls}"
+    assert bar.value() == 45
+    assert player.labelFrameCount.text() == "Current: 46"
+    assert position(player.cap_a) - 1 == 45
+    assert position(player.cap_b) - 1 == 45  # A·B 캡처가 같은 자리
+    assert player.frame_b.mean() == pytest.approx(player.frame_a.mean(), abs=2)  # 같은 장 (45번 — 이웃 장이면 10 차이)
