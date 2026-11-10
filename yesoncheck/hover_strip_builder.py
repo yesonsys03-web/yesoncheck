@@ -15,6 +15,9 @@ Popen(stdout=PIPE) 하나다.
 psutil.Process(pid).suspend()(POSIX SIGSTOP·Windows NtSuspendProcess), 거짓이 되면 resume() — CPU가 즉시 0이 된다. 정지된 프로세스에도 kill은
 그대로 먹는다(SIGKILL·TerminateProcess) — stop()은 정지 여부와 상관없이 kill한다. 정지·재개가 실패하면(psutil.NoSuchProcess·AccessDenied)
 기록 한 줄을 남기고 읽기만 멈추는(또는 잇는) 방식으로 둔다 — 조용히 넘기지 않는다.
+띠 ffmpeg의 스레드는 2개로 제한한다(FFMPEG_THREADS, -threads 2): 4K 재생을 띠 워커를 띄운 지 0.5초 안에 시작하면 Play+0.5초에 69~78ms
+끊김이 한 번 났다(끔 최대간격 43~58ms, 정지는 그때 이미 걸려 있음). 기본 프레임 스레딩이 이 Mac에서 16스레드라 Play 직전에 4K 장 16개를
+한꺼번에 디코드하는 버스트가 원인으로 의심되어, 스레드를 줄여 버스트를 누그러뜨린다(스펙 §5.3).
 
 수명: 생성자는 띄우지 않는다 — start()가 run에서 Popen(stdout=PIPE, stderr=PIPE)하고, 띄운 직후 잠금 안에서 paused면 바로 정지한다. stderr는
 데몬 스레드가 끝까지 모은다(안 비우면 파이프가 차서 ffmpeg가 멈춤 — movie_pipe_source._PipeSession과 같은 모양). 끝은 셋 중 하나다.
@@ -53,6 +56,9 @@ BATCH_S = 0.05  # progress 묶음 간격 (초) — 또는 BATCH_FRAMES장마다,
 BATCH_FRAMES = 10
 STOP_WAIT_MS = 2000  # stop()이 kill한 프로세스를 거두고, 스레드 끝을 기다리는 최대 시간 (각각)
 _STDERR_CHUNK = 65536
+# 띠 ffmpeg의 디코더 프레임 스레드 수 (-threads, 입력 옵션). 기본값(None)이면 ffmpeg 기본 — 이 Mac에서 16스레드라 4K 재생을 띠 워커를
+# 띄운 직후(~0.5초 안)에 시작하면 Play 직전 디코드 버스트로 Play+0.5초에 69~78ms 끊김이 한 번 났다(끔 43~58ms). 2로 줄여 완화(스펙 §5.3).
+FFMPEG_THREADS: int | None = 2
 
 
 def build_command(ffmpeg: str, path: str, plan: StripPlan) -> list[str]:
@@ -61,7 +67,8 @@ def build_command(ffmpeg: str, path: str, plan: StripPlan) -> list[str]:
     구분자로 읽히지 않게 하는 필터 파서용 (셸 따옴표 아님)."""
     scale = f"scale={plan.width}:{plan.height}"
     vf = scale if plan.step == 1 else f"select=not(mod(n\\,{plan.step})),{scale}"
-    return [ffmpeg, "-nostdin", "-v", "error", "-i", path, "-map", "0:V:0", "-fps_mode", "passthrough", "-vf", vf,
+    threads = [] if FFMPEG_THREADS is None else ["-threads", str(FFMPEG_THREADS)]  # 호출 때 읽음 — 입력 옵션이라 -i 앞
+    return [ffmpeg, "-nostdin", "-v", "error", *threads, "-i", path, "-map", "0:V:0", "-fps_mode", "passthrough", "-vf", vf,
             "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]
 
 

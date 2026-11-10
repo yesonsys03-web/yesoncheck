@@ -19,7 +19,7 @@ from PyQt5.QtCore import Qt
 
 from tests.conftest import write_test_video
 from tests.prores_clips import frame_number, make_numbered_clip
-from yesoncheck import hover_strip
+from yesoncheck import hover_strip, hover_strip_builder
 from yesoncheck.hover_strip import LOG_PREFIX, HoverStrip, StripPlan, plan_for
 from yesoncheck.hover_strip_builder import STOP_WAIT_MS, HoverStripBuilder, build_command
 
@@ -138,8 +138,8 @@ def test_sampled_plan_picks_every_step(qapp, numbered_clip, make_builder, monkey
 def test_command_shape():
     every = StripPlan(total=48, step=1, count=48, width=320, height=180)
     assert build_command("/opt/ffmpeg", "/clips/a b.mov", every) == [
-        "/opt/ffmpeg", "-nostdin", "-v", "error", "-i", "/clips/a b.mov", "-map", "0:V:0", "-fps_mode", "passthrough",
-        "-vf", "scale=320:180", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
+        "/opt/ffmpeg", "-nostdin", "-v", "error", "-threads", "2", "-i", "/clips/a b.mov", "-map", "0:V:0", "-fps_mode",
+        "passthrough", "-vf", "scale=320:180", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
     ]
     sampled = StripPlan(total=14_400, step=29, count=497, width=180, height=320)
     command = build_command("ffmpeg", "x.mov", sampled)
@@ -147,6 +147,16 @@ def test_command_shape():
     # 셸 없이 인자 하나 — 쉼표 앞의 역슬래시 하나는 필터 파서용(select 식 안의 쉼표가 필터 구분자가 아니게)
     assert vf == "select=not(mod(n\\,29)),scale=180:320" and vf.count("\\") == 1
     assert len(command) == len(build_command("ffmpeg", "x.mov", every))
+
+
+def test_threads_option_follows_constant(monkeypatch):
+    every = StripPlan(total=48, step=1, count=48, width=320, height=180)
+    monkeypatch.setattr(hover_strip_builder, "FFMPEG_THREADS", None)  # 끄면 ffmpeg 기본 — 옵션 자체가 없음
+    assert "-threads" not in build_command("ffmpeg", "x.mov", every)
+    monkeypatch.setattr(hover_strip_builder, "FFMPEG_THREADS", 4)  # 호출 때 읽음 — 입력 옵션이라 -i 바로 앞
+    command = build_command("ffmpeg", "x.mov", every)
+    assert command.count("-threads") == 1
+    assert command[command.index("-i") - 2:command.index("-i")] == ["-threads", "4"]
 
 
 def test_pause_suspends_process_and_resume_finishes(qapp, numbered_clip_200, make_builder):
