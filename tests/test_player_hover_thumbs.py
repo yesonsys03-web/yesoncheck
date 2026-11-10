@@ -289,6 +289,40 @@ def test_arrow_stepping_counts_as_busy(fake_builders, player_with_clip):
     assert time.monotonic() - last_move >= IDLE_S
 
 
+def test_stale_is_dragging_flag_does_not_block_the_strip(shown_player, numbered_clip, real_builders, capsys):
+    """기존 표지 is_dragging이 드래그 뒤 True로 남아도(드래그 미리보기가 값을 blockSignals로 써 둬 놓을 때 valueChanged가 안 옴 — 실기
+    보고) 쉬면 띠를 만듦: 쉬는 때는 is_dragging을 보지 않고 isSliderDown·위치 변화로 드래그를 덮는다."""
+    player = shown_player
+    player.is_dragging = True  # 고장 난 채 남은 표지 흉내 — open_file은 이 표지를 되돌리지 않음
+    assert player.open_file("A", numbered_clip) is True
+    wait_until(lambda: strip_done(player), WAIT_S, "is_dragging이 남은 채로는 띠를 만들지 못했습니다")
+    assert player.is_dragging is True  # 시험 내내 남아 있었음 (기존 표지는 건드리지 않음)
+    assert len(real_builders) == 1
+    assert f"{LOG_PREFIX} 띠 완성: {CLIP_COUNT}/{CLIP_COUNT}장 " in capsys.readouterr().out
+
+
+def test_slider_held_down_waits_and_logs_once_then_completes(shown_player, numbered_clip, real_builders, monkeypatch, capsys):
+    """메인 슬라이더를 누르고 있는 동안은 쉬는 때가 아님 — 워커를 띄우지 않고, 워커 없이 BUSY_LOG_S보다 오래 바쁘면 진단 기록 한 줄(계획마다
+    한 번). 놓으면 이어서 띠를 다 만듦."""
+    from yesoncheck import player_hover_thumbs
+
+    monkeypatch.setattr(player_hover_thumbs, "BUSY_LOG_S", 0.4)
+    player = shown_player
+    player.positionScroll.setSliderDown(True)
+    assert player.open_file("A", numbered_clip) is True
+    QTest.qWait(1500)
+    assert real_builders == [] and player._hover_builder is None
+    out = capsys.readouterr().out
+    assert out.count(f"{LOG_PREFIX} 쉬는 때를 기다리는 중 ") == 1
+    line = next(line for line in out.splitlines() if "쉬는 때를 기다리는 중" in line)
+    assert "재생 False, 슬라이더 누름 True/False, 위치 변화 " in line and line.endswith(f"초 전 — {numbered_clip}")
+
+    player.positionScroll.setSliderDown(False)
+    wait_until(lambda: strip_done(player), WAIT_S, "슬라이더를 놓은 뒤 띠를 다 만들지 못했습니다")
+    assert len(real_builders) == 1
+    assert "쉬는 때를 기다리는 중" not in capsys.readouterr().out
+
+
 # ---------------------------------------------------------------- 열기·놓기·닫기
 
 def test_quick_reopen_never_spawns_ffmpeg(fake_builders, player_with_clip, second_clip):

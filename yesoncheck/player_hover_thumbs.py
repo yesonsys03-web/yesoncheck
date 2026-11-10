@@ -14,9 +14,13 @@ _hover_thumbs_close를 부른다. 이름은 모두 `_hover_`로 시작해 다른
 한 칸마다 디코드라 쉬는 때가 아닌데, 이것들은 재생·멈춤을 거치지 않는다. 길마다(play_video·stop·next_frame·seek_to_frame·휠·선택 재생…)
 훅을 달면 글자 그대로 둬야 할 재생·탐색 코드를 고치게 되고 새 길이 생기면 빠진다. 그래서 GUI 타이머가 TICK_MS마다
 cap_a.get(CAP_PROP_POS_FRAMES)를 읽어 앞 값과 다르면 '움직임'으로 적고, IDLE_S(0.3초 — 전체 프레임 캐시 채움기의 IDLE_FILL_DELAY_S와 같은
-값) 안에 움직였으면 바쁨으로 본다 — cv2·파이프·네이티브 어느 캡처에서나 같은 신호이고 get은 디코드하지 않는다. 재생(timer.isActive)·
-드래그(is_dragging·두 슬라이더의 isSliderDown)는 그대로 본다. 워커가 돌면 틱마다 worker.paused = busy만 넘긴다(워커가 바뀔 때만 ffmpeg를
-정지·재개 — Qt 객체를 다른 스레드에서 읽지 않으려고 GUI 타이머가 표지를 넘김).
+값) 안에 움직였으면 바쁨으로 본다 — cv2·파이프·네이티브 어느 캡처에서나 같은 신호이고 get은 디코드하지 않는다. 재생(timer.isActive)과
+드래그(두 슬라이더의 isSliderDown — 마우스를 누른 동안 참)는 그대로 본다: busy = 재생 ∨ 메인 누름 ∨ 오버레이 누름 ∨ 위치가 IDLE_S 안에 바뀜.
+기존 표지 is_dragging은 보지 않는다 — on_slider_moved가 True로 두고 valueChanged(on_slider_value_changed)만 되돌리는데, 드래그 미리보기가
+슬라이더 값을 blockSignals로 써 두면 놓을 때 Qt가 valueChanged를 내지 않아 드래그 뒤에도 True로 남을 수 있고(실기 보고 — 그 뒤 연 모든
+파일에서 띠를 띄우지 않았음), 드래그 중은 isSliderDown이, 캐시에 안 맞는 미리보기 디코드는 위치 변화가 이미 덮는다. 워커가 돌면 틱마다
+worker.paused = busy만 넘긴다(워커가 바뀔 때만 ffmpeg를 정지·재개 — Qt 객체를 다른 스레드에서 읽지 않으려고 GUI 타이머가 표지를 넘김).
+워커 없이 BUSY_LOG_S(5초)보다 오래 바쁘면 무엇이 바쁜지 기록 한 줄(계획마다 한 번 — 띠가 왜 안 생기는지 기록으로 바로 알게).
 
 왜 워커를 열 때 바로 띄우지 않고 START_DELAY_S(0.5초) 뒤 쉴 때 띄우나: 선택 재생·↑↓ 연타처럼 열자마자 다음 파일로 넘어가면 바로 띄운
 ffmpeg는 파일 전체(NAS)를 읽기 시작하자마자 kill될 뿐이고, 그 사이 새 파일의 첫 화면(파이프 ffmpeg 시작·첫 디코드)과 다툰다. 쉬기 전에
@@ -51,6 +55,7 @@ from yesoncheck.slider_preview import LookupResult, SliderHoverFilter, SliderPre
 START_DELAY_S = 0.5  # 열린 뒤 이만큼 지나야 워커를 띄움 (모듈 설명)
 IDLE_S = 0.3  # 재생 캡처의 위치가 이 안에 바뀌었으면 쉬는 때가 아님
 TICK_MS = 50  # 쉬는 때 판정 간격 — 띄울 워커가 있거나 돌고 있는 동안만 돎
+BUSY_LOG_S = 5.0  # 워커 없이 이만큼 넘게 바쁘면 진단 기록 한 줄 (계획마다 한 번)
 BUILDER_LABEL = "슬라이더 썸네일 띠"  # release_worker의 기록 이름
 HOVER_TITLE = "슬라이더 썸네일 설정"  # Settings → 슬라이더 썸네일의 저장 실패 창 제목 (app.SLIDER_THUMBS_TITLE의 읽기 실패 창과 같은 제목)
 HOVER_TIP = "슬라이더 위에 커서를 올리면 그 프레임의 작은 그림을 보여 줍니다 — 이 창은 바로, 이미 열린 다른 창은 다음에 켤 때부터"
@@ -68,6 +73,8 @@ class PlayerHoverThumbsMixin:
         self._hover_opened_at = 0.0  # time.monotonic()
         self._hover_last_pos = None  # 앞 틱에서 읽은 재생 캡처 위치
         self._hover_moved_at = 0.0
+        self._hover_busy_since = None  # 워커 없이 바빠진 때 (쉬면 None)
+        self._hover_busy_logged = False  # 이 계획에서 진단 기록을 남겼음
         self._hover_failed_for = ""  # 오류 창을 이미 띄운 파일
         self._hover_popup = SliderPreviewPopup(THUMB_WIDTH, 180)  # 계획마다 그 파일의 그림 크기로 맞춤
         # Qt는 설치된 이벤트 필터를 붙잡아 주지 않음 — parent와 이 목록이 쥠
@@ -104,6 +111,8 @@ class PlayerHoverThumbsMixin:
         self._hover_strip = hover_strip.HoverStrip(plan)
         self._hover_opened_at = self._hover_moved_at = time.monotonic()
         self._hover_last_pos = None
+        self._hover_busy_since = None
+        self._hover_busy_logged = False
         self._hover_timer.start()
 
     def _hover_thumbs_close(self) -> None:
@@ -130,13 +139,22 @@ class PlayerHoverThumbsMixin:
         if position != self._hover_last_pos:
             self._hover_last_pos = position
             self._hover_moved_at = now
-        busy = (self.timer.isActive() or self.is_dragging or self.positionScroll.isSliderDown()
-                or self.overlaySlider.isSliderDown() or now - self._hover_moved_at < IDLE_S)
+        busy = (self.timer.isActive() or self.positionScroll.isSliderDown() or self.overlaySlider.isSliderDown()
+                or now - self._hover_moved_at < IDLE_S)  # is_dragging은 보지 않음 (모듈 설명)
         worker = self._hover_builder
         if worker is not None:
             worker.paused = busy
-        elif not busy and now - self._hover_opened_at >= START_DELAY_S:
-            self._hover_spawn()
+        elif not busy:
+            self._hover_busy_since = None
+            if now - self._hover_opened_at >= START_DELAY_S:
+                self._hover_spawn()
+        elif self._hover_busy_since is None:
+            self._hover_busy_since = now
+        elif not self._hover_busy_logged and now - self._hover_busy_since > BUSY_LOG_S:
+            self._hover_busy_logged = True
+            print(f"{LOG_PREFIX} 쉬는 때를 기다리는 중 {now - self._hover_busy_since:.0f}초 — 재생 {self.timer.isActive()}, "
+                  f"슬라이더 누름 {self.positionScroll.isSliderDown()}/{self.overlaySlider.isSliderDown()}, "
+                  f"위치 변화 {now - self._hover_moved_at:.1f}초 전 — {self._hover_path}", flush=True)
 
     def _hover_spawn(self) -> None:
         """워커를 만들어 띄움 (기록 한 줄). ffmpeg를 찾지 못해 만들지 못하면 실패와 같은 길 — 틱을 멈춰 50ms마다 다시 시도하지 않음."""
