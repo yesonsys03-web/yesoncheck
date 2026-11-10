@@ -12,6 +12,7 @@ Enter는 QEnterEvent로: 필터가 Enter의 pos()를 읽으므로 맨 QEvent(Ent
 """
 
 import os
+import sys
 import time
 
 import cv2
@@ -266,22 +267,72 @@ def test_builder_not_spawned_before_start_delay_and_pauses_while_playing(fake_bu
         checked += 1
     assert checked >= 1
 
-    player.timer.start(60_000)  # 재생 흉내 (틱은 오지 않음 — isActive만 참)
+    idle_s = player_hover_thumbs.IDLE_S
+    play_started = time.monotonic()
+    player.timer.start(60_000)  # 재생 흉내 (틱은 오지 않음 — isActive만 참; 위치도 그대로)
     QTest.qWait(1000)
     assert fake_builders == []  # 재생 중에는 띄우지 않음
 
     player.timer.stop()
+    # 재생 중 틱은 위치를 읽지 않고 그때를 '움직임'으로 적음 — 멈춘 뒤 IDLE_S를 새로 셈 (실제 재생이면 위치가 바뀌어 같은 결과)
+    moved_at = player._hover_moved_at
+    assert moved_at >= play_started
     wait_until(lambda: len(fake_builders) == 1, 2, "쉬는데 워커를 띄우지 않았습니다")
+    assert time.monotonic() - moved_at >= idle_s
     builder = fake_builders[0]
     assert builder.started and builder.path == numbered_clip and builder.strip is player._hover_strip
     QTest.qWait(100)
     assert builder.paused is False
 
+    play_started = time.monotonic()
     player.timer.start(60_000)
     wait_until(lambda: builder.paused is True, 1, "재생 중인데 워커를 멈추지 않았습니다")
     player.timer.stop()
+    moved_at = player._hover_moved_at
+    assert moved_at >= play_started
     wait_until(lambda: builder.paused is False, 1, "재생을 멈췄는데 워커를 이어 가지 않았습니다")
+    assert time.monotonic() - moved_at >= idle_s
     assert len(fake_builders) == 1
+
+
+def test_tick_while_playing_only_pauses(slow_ffmpeg, shown_player, numbered_clip, real_builders, monkeypatch):
+    """재생 중(timer.isActive) 틱은 가장 싼 길 — 재생 캡처의 get·슬라이더를 보지 않고 worker.paused = True만. 워커는 값이 바뀔 때만 psutil을
+    부르므로 재생 내내 정지(suspend)는 한 번(50ms마다 SIGSTOP을 다시 보내지 않음). psutil은 부름만 적는 대역 — 진짜 ffmpeg는 정지되지 않고
+    읽기만 멈춤 (창이 닫힐 때 kill — real_builders가 확인)."""
+    calls = []
+
+    class _Records:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def suspend(self):
+            calls.append(("suspend", self.pid))
+
+        def resume(self):
+            calls.append(("resume", self.pid))
+
+    monkeypatch.setattr("yesoncheck.hover_strip_builder.psutil.Process", _Records)
+    player = shown_player
+    builder = start_and_catch_running(player, numbered_clip)
+    cap = player.cap_a
+    tick_gets = []
+    real_get = cap.get
+
+    def counting_get(prop):
+        if sys._getframe(1).f_code.co_name == "_hover_thumbs_tick":  # 틱이 부른 것만 (재생 fps 라벨의 1초 타이머 등도 get을 부름)
+            tick_gets.append(prop)
+        return real_get(prop)
+
+    monkeypatch.setattr(cap, "get", counting_get)  # 파이프 캡처(파이썬 객체)라 인스턴스에서 바꿔치기
+    player.timer.start(60_000)  # 재생 흉내
+    QTest.qWait(10 * player_hover_thumbs.TICK_MS)
+    assert builder.paused is True and calls == [("suspend", builder.pid)]
+    assert tick_gets == []  # 재생 중 틱은 위치를 읽지 않음
+
+    player.timer.stop()
+    wait_until(lambda: builder.paused is False, 2, "재생을 멈췄는데 워커를 이어 가지 않았습니다")
+    assert calls == [("suspend", builder.pid), ("resume", builder.pid)]
+    assert tick_gets and set(tick_gets) == {cv2.CAP_PROP_POS_FRAMES}  # 멈춘 뒤에는 다시 위치를 읽어 쉬는 때를 판정
 
 
 def test_arrow_stepping_counts_as_busy(fake_builders, player_with_clip):

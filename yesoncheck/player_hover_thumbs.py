@@ -16,11 +16,15 @@ _hover_thumbs_close를 부른다. 이름은 모두 `_hover_`로 시작해 다른
 cap_a.get(CAP_PROP_POS_FRAMES)를 읽어 앞 값과 다르면 '움직임'으로 적고, IDLE_S(0.3초 — 전체 프레임 캐시 채움기의 IDLE_FILL_DELAY_S와 같은
 값) 안에 움직였으면 바쁨으로 본다 — cv2·파이프·네이티브 어느 캡처에서나 같은 신호이고 get은 디코드하지 않는다. 재생(timer.isActive)과
 드래그(두 슬라이더의 isSliderDown — 마우스를 누른 동안 참)는 그대로 본다: busy = 재생 ∨ 메인 누름 ∨ 오버레이 누름 ∨ 위치가 IDLE_S 안에 바뀜.
+재생 중의 틱은 가장 싼 길이다(재생 틱과 같은 GUI 스레드라): 맨 앞에서 timer.isActive()면 재생 캡처의 get·슬라이더를 보지 않고 워커가 있으면
+worker.paused = True만 둔 채 끝 — 그때를 '움직임'으로 적어(_hover_moved_at) 재생이 멈춘 뒤 IDLE_S를 새로 세고, 재생은 아래 진단 기록의 '오래
+바쁨'에 넣지 않는다(보이는 까닭이라 — 재생 전부터 세던 바쁨이 재생 시간까지 더해 적히지 않게).
 기존 표지 is_dragging은 보지 않는다 — on_slider_moved가 True로 두고 valueChanged(on_slider_value_changed)만 되돌리는데, 드래그 미리보기가
 슬라이더 값을 blockSignals로 써 두면 놓을 때 Qt가 valueChanged를 내지 않아 드래그 뒤에도 True로 남을 수 있고(실기 보고 — 그 뒤 연 모든
 파일에서 띠를 띄우지 않았음), 드래그 중은 isSliderDown이, 캐시에 안 맞는 미리보기 디코드는 위치 변화가 이미 덮는다. 워커가 돌면 틱마다
-worker.paused = busy만 넘긴다(워커가 바뀔 때만 ffmpeg를 정지·재개 — Qt 객체를 다른 스레드에서 읽지 않으려고 GUI 타이머가 표지를 넘김).
-워커 없이 BUSY_LOG_S(5초)보다 오래 바쁘면 무엇이 바쁜지 기록 한 줄(계획마다 한 번 — 띠가 왜 안 생기는지 기록으로 바로 알게).
+worker.paused = busy만 넘긴다(워커는 값이 바뀔 때만 잠금을 잡고 ffmpeg를 정지·재개 — 같은 값이면 아무것도 안 함; Qt 객체를 다른 스레드에서
+읽지 않으려고 GUI 타이머가 표지를 넘김). 워커 없이 BUSY_LOG_S(5초)보다 오래 바쁘면 무엇이 바쁜지 기록 한 줄(계획마다 한 번 — 띠가 왜 안
+생기는지 기록으로 바로 알게; 재생 중에는 세지 않음).
 
 왜 워커를 열 때 바로 띄우지 않고 START_DELAY_S(1.0초) 뒤 쉴 때 띄우나: 선택 재생·↑↓ 연타처럼 열자마자 다음 파일로 넘어가면 바로 띄운
 ffmpeg는 파일 전체(NAS)를 읽기 시작하자마자 kill될 뿐이고, 그 사이 새 파일의 첫 화면(파이프 ffmpeg 시작·첫 디코드)과 다툰다. 쉬기 전에
@@ -130,18 +134,26 @@ class PlayerHoverThumbsMixin:
         self._hover_popup.hide()
 
     def _hover_thumbs_tick(self) -> None:
-        """쉬는 때 판정 (TICK_MS마다 — 모듈 설명). 재생 캡처가 없거나 닫혔으면 띠를 버리고 끝. 워커가 없으면 쉴 때 띄우고, 있으면 paused만 넘김."""
+        """쉬는 때 판정 (TICK_MS마다 — 모듈 설명). 재생 중이면 워커에 멈춤 표지만 두고 끝(재생 캡처·슬라이더를 보지 않음). 재생 캡처가 없거나
+        닫혔으면 띠를 버리고 끝. 워커가 없으면 쉴 때 띄우고, 있으면 paused만 넘김."""
+        now = time.monotonic()
+        if self.timer.isActive():  # 재생 중: get·슬라이더 조회 없이 (모듈 설명)
+            worker = self._hover_builder
+            if worker is not None:
+                worker.paused = True  # 이미 참이면 워커가 아무것도 안 함
+            self._hover_moved_at = now  # 재생이 멈춘 뒤 IDLE_S를 새로 셈
+            self._hover_busy_since = None  # 재생은 진단 기록의 '오래 바쁨'에 넣지 않음
+            return
         cap = self.cap_a
         if cap is None or not cap.isOpened():
             self._hover_thumbs_close()
             return
-        now = time.monotonic()
         position = cap.get(cv2.CAP_PROP_POS_FRAMES)
         if position != self._hover_last_pos:
             self._hover_last_pos = position
             self._hover_moved_at = now
-        busy = (self.timer.isActive() or self.positionScroll.isSliderDown() or self.overlaySlider.isSliderDown()
-                or now - self._hover_moved_at < IDLE_S)  # is_dragging은 보지 않음 (모듈 설명)
+        busy = (self.positionScroll.isSliderDown() or self.overlaySlider.isSliderDown()
+                or now - self._hover_moved_at < IDLE_S)  # 재생은 위에서 끝남, is_dragging은 보지 않음 (모듈 설명)
         worker = self._hover_builder
         if worker is not None:
             worker.paused = busy
