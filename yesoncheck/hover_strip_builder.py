@@ -16,7 +16,7 @@ psutil.Process(pid).suspend()(POSIX SIGSTOP·Windows NtSuspendProcess), 거짓�
 그대로 먹는다(SIGKILL·TerminateProcess) — stop()은 정지 여부와 상관없이 kill한다. 정지·재개가 실패하면(psutil.Error 전부 — NoSuchProcess·
 AccessDenied 등 — 와 OSError: Windows에서 끝나 가는 프로세스의 NtSuspendProcess는 psutil이 감싸지 않은 OSError로 올 수 있음) 기록 한 줄을
 남기고 읽기만 멈추는(또는 잇는) 방식으로 둔다 — 조용히 넘기지 않고, GUI 틱 슬롯(paused setter)이나 워커 스레드로 올려 실패로 만들지도 않는다.
-띠 ffmpeg의 디코드·축소는 1코어로 묶는다(스펙 §5.3 — 쉴 때만 돌므로 느려도 됨, 이 Mac 4K 334장 쉴 때 약 40초(추정 — 재측정 전)):
+띠 ffmpeg의 디코드·축소는 1코어로 묶는다(스펙 §5.3 — 쉴 때만 돌므로 느려도 됨, 이 Mac 4K 334장 쉴 때 약 38초(이 Mac 실측 — 쉴 때만)):
 디코더 스레드 FFMPEG_THREADS(-threads 1 — 입력 옵션, -i 앞)와 필터 스레드 FFMPEG_FILTER_THREADS(-filter_threads 1 — 전역 옵션, -i 앞).
 -threads는 **디코더** 스레드만 묶는다 — -vf scale(4K → 320 축소 + rgb24 변환)은 따로 CPU 수만큼 slice 스레드를 쓰므로(이 Mac 16코어,
 번들 ffmpeg 9.0.2 실측: 프로세스 스레드 기본 68개, -threads 2만이면 54개, -filter_threads 1 -threads 2면 24개, 둘 다 1이면 22개 — 나머지는
