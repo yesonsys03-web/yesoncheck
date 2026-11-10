@@ -250,13 +250,20 @@ def load_display_renderer():
 
 def load_slider_thumbnails():
     """슬라이더 호버 썸네일의 켬/끔 설정을 시작 때 한 번 읽어 hover_strip의 캐시에 둠 — 창(Settings 메뉴 체크)·영상을 열 때 그 캐시를 봄. 깨진 파일·나쁜 값은 기본(켬)으로
-    치지 않고 트레이스백·창을 보인 뒤 이 세션은 끔 — 읽지 못한 채 ffmpeg를 돌리지 않음 (Settings에서 다시 켤 수 있음). 파일은 건드리지 않는다. 모든 플랫폼."""
+    치지 않고 트레이스백·창을 보인 뒤 이 세션은 끔 — 읽지 못한 채 ffmpeg를 돌리지 않음. 파일은 건드리지 않는다. 모든 플랫폼.
+    창의 끝 글은 둘로 갈림: 나쁜 값(ValueError)은 메뉴로 켜면 고른 값으로 고쳐 쓰므로 'Settings에서 다시 켤 수 있습니다', 깨진 JSON(UserFileError)은
+    메뉴도 그 파일을 덮지 않아(저장 실패 창) 그 말이 거짓이라 '설정 파일을 고치거나 지운 뒤 다시 켜면 켜집니다'."""
     try:
         hover_strip.set_enabled(hover_strip.read_enabled())
     except (user_files.UserFileError, ValueError) as exc:
         traceback.print_exc()
         hover_strip.set_enabled(False)
-        QMessageBox.warning(None, hover_strip.SETTINGS_TITLE, f"{exc}\n\n이 세션은 슬라이더 썸네일을 끕니다 — Settings → {hover_strip.MENU_TEXT}에서 다시 켤 수 있습니다")
+        if isinstance(exc, user_files.UserFileError):
+            note = (f"이 세션은 슬라이더 썸네일을 끕니다.\n설정 파일을 고치거나 지운 뒤 다시 켜면 켜집니다 — Settings → {hover_strip.MENU_TEXT}은 "
+                    "파일을 덮지 않습니다")
+        else:
+            note = f"이 세션은 슬라이더 썸네일을 끕니다 — Settings → {hover_strip.MENU_TEXT}에서 다시 켤 수 있습니다"
+        QMessageBox.warning(None, hover_strip.SETTINGS_TITLE, f"{exc}\n\n{note}")
     print(f"{hover_strip.LOG_PREFIX} 설정: {'켬' if hover_strip.enabled() else '끔'}", flush=True)
 
 

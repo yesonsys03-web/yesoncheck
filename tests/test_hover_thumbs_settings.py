@@ -32,6 +32,8 @@ SET_OFF_LOG = f"{LOG_PREFIX} 설정: 끔 (Settings 메뉴)"
 SET_ON_LOG = f"{LOG_PREFIX} 설정: 켬 (Settings 메뉴)"
 SAVE_FAILED_HEAD = "설정을 저장하지 못해 바꾸지 않았습니다.\n"
 STARTUP_NOTE = f"이 세션은 슬라이더 썸네일을 끕니다 — Settings → {MENU_TEXT}에서 다시 켤 수 있습니다"
+# 깨진 JSON이면 메뉴도 그 파일을 덮지 않아(저장 실패 창) 'Settings에서 다시 켤 수 있음'이 거짓 — 고치거나 지우라고 안내
+BROKEN_FILE_NOTE = f"이 세션은 슬라이더 썸네일을 끕니다.\n설정 파일을 고치거나 지운 뒤 다시 켜면 켜집니다 — Settings → {MENU_TEXT}은 파일을 덮지 않습니다"
 
 
 @pytest.fixture(autouse=True)
@@ -298,12 +300,12 @@ def test_startup_reads_pref(dialogs, capsys):
     assert hover_strip.enabled() is True and dialogs.messages == []
 
 
-@pytest.mark.parametrize("content, error_name", [
-    ("{깨짐", "UserFileError"),
-    (json.dumps({hover_strip.PREF_KEY: "yes"}), "ValueError"),
-    (json.dumps({hover_strip.PREF_KEY: 1}), "ValueError"),  # 1은 불리언이 아님 (bool이 아닌 int)
+@pytest.mark.parametrize("content, error_name, note", [
+    ("{깨짐", "UserFileError", BROKEN_FILE_NOTE),
+    (json.dumps({hover_strip.PREF_KEY: "yes"}), "ValueError", STARTUP_NOTE),  # 나쁜 값은 메뉴로 켜면 고쳐 씀 (test_bad_value_…)
+    (json.dumps({hover_strip.PREF_KEY: 1}), "ValueError", STARTUP_NOTE),  # 1은 불리언이 아님 (bool이 아닌 int)
 ])
-def test_startup_broken_prefs_warns_and_disables(dialogs, capsys, content, error_name):
+def test_startup_broken_prefs_warns_and_disables(dialogs, capsys, content, error_name, note):
     """깨진 JSON(UserFileError)·불리언이 아닌 값(ValueError) → 경고 창 1회(제목 hover_strip.SETTINGS_TITLE — 메뉴의 저장 실패 창과 같은 상수, 글 '<원인>\\n\\n이 세션은 …끕니다'), 트레이스백,
     enabled() False(기본으로 치지 않음), 파일은 그대로, 끝 줄은 '설정: 끔'."""
     path = write_prefs(content)
@@ -312,7 +314,7 @@ def test_startup_broken_prefs_warns_and_disables(dialogs, capsys, content, error
 
     assert hover_strip.SETTINGS_TITLE == "슬라이더 썸네일 설정"
     assert [(kind, title) for kind, title, _ in dialogs.messages] == [("warning", hover_strip.SETTINGS_TITLE)]
-    assert dialogs.warnings[0].endswith(f"\n\n{STARTUP_NOTE}")
+    assert dialogs.warnings[0].endswith(f"\n\n{note}")
     assert hover_strip.enabled() is False
     assert read_text(path) == content
     captured = capsys.readouterr()
