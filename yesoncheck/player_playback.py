@@ -1627,6 +1627,13 @@ class PlayerPlaybackMixin:
                 if abs(actual_frame_idx - target_frame_idx) > 5:
                     print(f"드래그 완료: 정확한 위치로 조정 {actual_frame_idx} -> {target_frame_idx}")
                     self._precise_seek(target_frame_idx, total_frames)
+                elif self.cap_b and self.videoWidget.wipeEnabled:
+                    # 이동이 없는 놓기(캐시에 안 맞아 캡처가 이미 목표 곁에 있는 드래그)도 B를 맞춤: 드래그 미리보기(_quick_preview_seek)가 B 동기화를 통째로
+                    # 건너뛰어 frame_b가 None이거나 드래그 전 장으로 남으므로, 놓을 때 A가 보여 주는 장(target_frame_idx)에 B를 맞추고 다시 그림 (와이프 B가 검게 남음 — 사용자 보고)
+                    self.cap_b.set(cv2.CAP_PROP_POS_FRAMES, target_frame_idx)
+                    ret_b, frame_b = self.cap_b.read()
+                    self.frame_b = self.process_frame(frame_b) if ret_b and frame_b is not None else None
+                    self.update_frame()
             
             # 개선된 오디오 동기화 - 동적 오프셋 계산
             original_fps = self.cap_a.get(cv2.CAP_PROP_FPS)
