@@ -1,0 +1,210 @@
+# -*- coding: utf-8 -*-
+"""슬라이더 호버 썸네일을 플레이어에 잇는 얇은 믹스인 (PlayerHoverThumbsMixin) — 띠의 수명(열기·놓기·닫기)·쉬는 때 판정·호버 조회·실패 알림.
+
+잇기만 한다: 띠 계획·저장소는 hover_strip, ffmpeg 워커는 hover_strip_builder, 커서 위 창·슬라이더 필터는 slider_preview의 몫이고, 이 모듈은
+디코드도 위젯 그리기도 설정 파일 읽기·쓰기도 하지 않는다. 재생 캡처(cap_a)에서는 틱과 열 때의 값 읽기(get — 위치·장수·크기)만 하고 프레임을
+꺼내지 않는다 (꺼내면 본화면이 튀고 파이프 스트림·링이 깨짐 — hover_strip 설명).
+
+VideoPlayerBase의 부모 클래스로 붙음 — `class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin, QMainWindow)`.
+상태는 VideoPlayerBase.__init__이 부르는 _init_hover_thumbs가 만들고(두 슬라이더가 창 안에 들어간 뒤 — 필터가 slider.window()에도 걸림),
+open_file(A 영상)·_release_side('A')·_release_resources_on_close가 _hover_thumbs_open·_hover_thumbs_close를 부른다. 이름은 모두 `_hover_`로
+시작해 다른 믹스인과 겹치지 않는다. player_base를 모듈 수준에서 import하지 말 것 (순환).
+
+왜 쉬는 때를 재생·멈춤 훅이 아니라 재생 캡처의 위치 변화로 보나 (스펙 §5.5): 이 앱의 핵심 작업인 ←/→ 연타·휠 탐색·슬라이더 클릭도 4K면
+한 칸마다 디코드라 쉬는 때가 아닌데, 이것들은 재생·멈춤을 거치지 않는다. 길마다(play_video·stop·next_frame·seek_to_frame·휠·선택 재생…)
+훅을 달면 글자 그대로 둬야 할 재생·탐색 코드를 고치게 되고 새 길이 생기면 빠진다. 그래서 GUI 타이머가 TICK_MS마다
+cap_a.get(CAP_PROP_POS_FRAMES)를 읽어 앞 값과 다르면 '움직임'으로 적고, IDLE_S(0.3초 — 전체 프레임 캐시 채움기의 IDLE_FILL_DELAY_S와 같은
+값) 안에 움직였으면 바쁨으로 본다 — cv2·파이프·네이티브 어느 캡처에서나 같은 신호이고 get은 디코드하지 않는다. 재생(timer.isActive)·
+드래그(is_dragging·두 슬라이더의 isSliderDown)는 그대로 본다. 워커가 돌면 틱마다 worker.paused = busy만 넘긴다(워커가 바뀔 때만 ffmpeg를
+정지·재개 — Qt 객체를 다른 스레드에서 읽지 않으려고 GUI 타이머가 표지를 넘김).
+
+왜 워커를 열 때 바로 띄우지 않고 START_DELAY_S(0.5초) 뒤 쉴 때 띄우나: 선택 재생·↑↓ 연타처럼 열자마자 다음 파일로 넘어가면 바로 띄운
+ffmpeg는 파일 전체(NAS)를 읽기 시작하자마자 kill될 뿐이고, 그 사이 새 파일의 첫 화면(파이프 ffmpeg 시작·첫 디코드)과 다툰다. 쉬기 전에
+넘어간 파일은 프로세스를 아예 띄우지 않아 비용이 0이다. 띠를 만들지 않는 파일(크기 상한 — hover_strip.skip_reason)은 계획만 두고 저장소·
+타이머는 만들지 않는다 (호버는 번호 + 빈 상자).
+
+끝 신호(done·failed)는 워커 스레드가 내 GUI 대기열로 온다. 그래서 stop()·release_worker 전에 대기열에 들어간 신호가 다음 파일을 연 뒤에
+도착할 수 있다 — 슬롯은 보낸 쪽(sender)이 지금 워커일 때만 받는다 (옛 워커가 이미 지워졌으면 sender가 None이라 그것도 버림). 실패는
+기록(stderr)에 매번, 오류 창은 파일마다 한 번(_hover_failed_for — 다시 시도하지 않음; 같은 파일을 다시 열어 또 실패해도 기록만).
+"""
+
+import sys
+import time
+import traceback
+
+import cv2
+from PyQt5.QtCore import QTimer
+
+from yesoncheck import error_window, hover_strip, hover_strip_builder, worker_lifecycle
+from yesoncheck.external_tools import ToolNotFoundError
+from yesoncheck.hover_strip import LOG_PREFIX, MENU_TEXT, THUMB_WIDTH
+from yesoncheck.sequence_scan import is_sequence_path
+from yesoncheck.slider_preview import LookupResult, SliderHoverFilter, SliderPreviewPopup
+
+START_DELAY_S = 0.5  # 열린 뒤 이만큼 지나야 워커를 띄움 (모듈 설명)
+IDLE_S = 0.3  # 재생 캡처의 위치가 이 안에 바뀌었으면 쉬는 때가 아님
+TICK_MS = 50  # 쉬는 때 판정 간격 — 띄울 워커가 있거나 돌고 있는 동안만 돎
+BUILDER_LABEL = "슬라이더 썸네일 띠"  # release_worker의 기록 이름
+
+
+class PlayerHoverThumbsMixin:
+    """VideoPlayer의 슬라이더 호버 썸네일 — 띠의 수명·쉬는 때 판정·두 슬라이더의 값 → (번호, 그림) 조회·실패 알림 (모듈 설명)."""
+
+    def _init_hover_thumbs(self) -> None:
+        """상태·커서 위 창·두 슬라이더의 필터·쉬는 때 타이머를 만듦 (VideoPlayerBase.__init__ — create_overlay_controls 뒤에)."""
+        self._hover_plan = None  # 지금 A 영상의 띠 계획 (없으면 호버에 창 없음)
+        self._hover_strip = None  # 띠 저장소 (크기 상한으로 만들지 않는 파일은 계획만 있고 None — 번호 + 빈 상자)
+        self._hover_builder = None  # 지금 워커 (띄우기 전·닫은 뒤 None — 끝난 워커는 닫을 때까지 둠)
+        self._hover_path = ""
+        self._hover_opened_at = 0.0  # time.monotonic()
+        self._hover_last_pos = None  # 앞 틱에서 읽은 재생 캡처 위치
+        self._hover_moved_at = 0.0
+        self._hover_failed_for = ""  # 오류 창을 이미 띄운 파일
+        self._hover_popup = SliderPreviewPopup(THUMB_WIDTH, 180)  # 계획마다 그 파일의 그림 크기로 맞춤
+        # Qt는 설치된 이벤트 필터를 붙잡아 주지 않음 — parent와 이 목록이 쥠
+        self._hover_filters = [
+            SliderHoverFilter(self.positionScroll, self._hover_lookup_main, self._hover_popup, self),
+            SliderHoverFilter(self.overlaySlider, self._hover_lookup_overlay, self._hover_popup, self),
+        ]
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setInterval(TICK_MS)
+        self._hover_timer.timeout.connect(self._hover_thumbs_tick)
+
+    def _hover_thumbs_open(self, file_path: str, total: int, width: int, height: int) -> None:
+        """A에 영상을 연 뒤 (open_file — 슬라이더 범위를 정한 직후): 옛 띠를 버리고 새 계획을 둠. 워커는 아직 띄우지 않음 (쉬는 때 틱이 띄움).
+        기능이 꺼졌거나 시퀀스면 아무것도 두지 않음. total·width·height는 재생 캡처의 get 값."""
+        self._hover_thumbs_close()
+        if not hover_strip.enabled() or is_sequence_path(file_path):
+            return
+        if total < 1 or width < 1 or height < 1:  # 장수·크기를 모르는 캡처 (cv2가 0을 돌려주는 스트림 등) — 열기는 그대로 이어 감
+            print(f"{LOG_PREFIX} 띠를 만들지 않음: 장수·크기를 알 수 없음 (장수 {total}, {width}×{height}) — {file_path}", flush=True)
+            return
+        try:
+            reason = hover_strip.skip_reason(file_path)
+        except OSError:
+            print(f"{LOG_PREFIX} 파일 크기를 읽지 못해 띠를 만들지 않음 — {file_path}", file=sys.stderr, flush=True)
+            traceback.print_exc()
+            return
+        plan = hover_strip.plan_for(total, width, height)
+        self._hover_plan = plan
+        self._hover_path = file_path
+        self._hover_popup.set_thumb_size(plan.width, plan.height)
+        if reason is not None:
+            print(f"{LOG_PREFIX} 띠를 만들지 않음: {reason} — {file_path}", flush=True)
+            return
+        self._hover_strip = hover_strip.HoverStrip(plan)
+        self._hover_opened_at = self._hover_moved_at = time.monotonic()
+        self._hover_last_pos = None
+        self._hover_timer.start()
+
+    def _hover_thumbs_close(self) -> None:
+        """띠를 버림: 틱 정지, 워커가 있으면 stop()(ffmpeg kill·거두기·스레드 끝 대기) 뒤 release_worker(끝나지 않았으면 끝날 때까지 붙잡아 둠),
+        계획·저장소를 놓고 창을 숨김. 여러 번 불러도 됨 (새 A 열기·_release_side('A')·창 닫기·틱이 본 죽은 캡처)."""
+        self._hover_timer.stop()
+        worker, self._hover_builder = self._hover_builder, None
+        if worker is not None:
+            worker.stop()
+            worker_lifecycle.release_worker(worker, BUILDER_LABEL)
+        self._hover_plan = None
+        self._hover_strip = None
+        self._hover_path = ""
+        self._hover_popup.hide()
+
+    def _hover_thumbs_tick(self) -> None:
+        """쉬는 때 판정 (TICK_MS마다 — 모듈 설명). 재생 캡처가 없거나 닫혔으면 띠를 버리고 끝. 워커가 없으면 쉴 때 띄우고, 있으면 paused만 넘김."""
+        cap = self.cap_a
+        if cap is None or not cap.isOpened():
+            self._hover_thumbs_close()
+            return
+        now = time.monotonic()
+        position = cap.get(cv2.CAP_PROP_POS_FRAMES)
+        if position != self._hover_last_pos:
+            self._hover_last_pos = position
+            self._hover_moved_at = now
+        busy = (self.timer.isActive() or self.is_dragging or self.positionScroll.isSliderDown()
+                or self.overlaySlider.isSliderDown() or now - self._hover_moved_at < IDLE_S)
+        worker = self._hover_builder
+        if worker is not None:
+            worker.paused = busy
+        elif not busy and now - self._hover_opened_at >= START_DELAY_S:
+            self._hover_spawn()
+
+    def _hover_spawn(self) -> None:
+        """워커를 만들어 띄움 (기록 한 줄). ffmpeg를 찾지 못해 만들지 못하면 실패와 같은 길 — 틱을 멈춰 50ms마다 다시 시도하지 않음."""
+        plan = self._hover_plan
+        print(f"{LOG_PREFIX} 띠 만들기 시작: {plan.count}장(간격 {plan.step}, 전체 {plan.total}장) {plan.width}×{plan.height} — "
+              f"{self._hover_path}", flush=True)
+        try:
+            worker = hover_strip_builder.HoverStripBuilder(self._hover_path, self._hover_strip, parent=self)
+        except ToolNotFoundError:
+            self._hover_fail(f"띠 워커를 만들지 못했습니다.\n{traceback.format_exc().rstrip()}")
+            return
+        worker.done.connect(self._hover_on_done)
+        worker.failed.connect(self._hover_on_failed)
+        self._hover_builder = worker
+        worker.start()
+
+    def _hover_from_current_builder(self) -> bool:
+        """(끝 신호 슬롯 안) 보낸 쪽이 지금 워커인지 — 옛 워커가 놓이기 전에 대기열에 넣은 신호는 버림 (모듈 설명)."""
+        sender = self.sender()
+        return sender is not None and sender is self._hover_builder
+
+    def _hover_on_done(self, filled: int, seconds: float) -> None:
+        """워커가 끝까지 읽음: 기록 한 줄, 틱 정지. 워커 객체는 두고 놓기(release_worker)는 닫을 때."""
+        if not self._hover_from_current_builder():
+            return
+        print(f"{LOG_PREFIX} 띠 완성: {filled}/{self._hover_plan.count}장 {seconds:.1f}초 — {self._hover_path}", flush=True)
+        self._hover_timer.stop()
+
+    def _hover_on_failed(self, text: str) -> None:
+        """워커 실패 (text: 파일·명령·종료 코드·stderr 전문·트레이스백)."""
+        if not self._hover_from_current_builder():
+            return
+        self._hover_fail(text)
+
+    def _hover_fail(self, text: str) -> None:
+        """틱 정지 + 알림: 기록(stderr)은 매번, 오류 창은 파일마다 한 번 (이미 띄운 파일이면 기록만). 이미 채운 장은 그대로 보임."""
+        self._hover_timer.stop()
+        message = f"띠를 만들지 못했습니다 — {self._hover_path}\n{text}\n\nSettings → {MENU_TEXT}을 끄면 만들지 않습니다"
+        if self._hover_failed_for == self._hover_path:
+            print(f"{LOG_PREFIX} {message}", file=sys.stderr, flush=True)
+            return
+        self._hover_failed_for = self._hover_path
+        error_window.show_error(LOG_PREFIX, message)
+
+    def _hover_lookup_main(self, value: int) -> LookupResult:
+        """메인 슬라이더 값 → (번호 글, 그림|None), 계획이 없으면 None. 프레임은 on_slider_moved·on_slider_value_changed와 같은 식 —
+        최대값 − 1 이상이면 마지막 장 (한 장짜리는 최대값 1이라 늘 이 갈래 → 0), 아니면 비례 반올림."""
+        plan = self._hover_plan
+        if plan is None:
+            return None
+        last = plan.total - 1
+        maximum = self.positionScroll.maximum()
+        if value >= maximum - 1:
+            frame = last
+        else:
+            frame = max(0, min(round(value / maximum * last), last))
+        return self._hover_entry(frame)
+
+    def _hover_lookup_overlay(self, value: int) -> LookupResult:
+        """오버레이 슬라이더 값 → (번호 글, 그림|None), 계획이 없으면 None. 클릭이 실제로 착지하는 프레임: on_overlay_slider_released가 값
+        그대로의 프레임(min(v, N − 1))으로 간 뒤 부르는 sync_audio_on_release가 메인 슬라이더 규칙을 한 번 더 건다 — 그 프레임 자리의 메인
+        슬라이더 값(update_position_info의 식)이 '최대값 − 1 이상'이면 마지막 장으로 감. 그래서 v = N − 2도 마지막 장이다 (실측·시험:
+        클릭 착지 대조 — 스펙 §5.4의 'v = N − 2에서 한 장 다름'은 이 두 번째 탐색을 빠뜨린 것)."""
+        plan = self._hover_plan
+        if plan is None:
+            return None
+        last = plan.total - 1
+        frame = max(0, min(value, last))
+        maximum = self.positionScroll.maximum()
+        if last > 0 and round(frame / last * maximum) >= maximum - 1:  # 한 장짜리는 on_overlay_slider_released가 탐색 없이 끝남 → 0
+            frame = last
+        return self._hover_entry(frame)
+
+    def _hover_entry(self, frame: int) -> LookupResult:
+        """프레임(0-based) → (번호 글 = 프레임 + 1 — 'Current:' 라벨과 같음, 가장 가까운 샘플의 그림 — 아직 없거나 저장소가 없으면 None)."""
+        strip = self._hover_strip
+        if strip is None:
+            return str(frame + 1), None
+        sample = strip.plan.sample_for(frame)
+        return str(frame + 1), strip.image(sample) if strip.has(sample) else None

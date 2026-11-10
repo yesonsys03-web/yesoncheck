@@ -390,6 +390,7 @@ class PlayerPlaybackMixin:
                 self.positionScroll.setMaximum(max(1, total_frames - 1))
                 self.positionScroll.setValue(0)
                 self.positionScroll.blockSignals(False)
+                self._hover_thumbs_open(file_path, total_frames, int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
                 # 스크롤바 핸들 크기를 고정 (페이지 스텝 설정)
                 # self.positionScroll.setPageStep(100)  # 고정된 페이지 스텝 값
 
@@ -575,6 +576,7 @@ class PlayerPlaybackMixin:
             self.filename_a = ""
             self.frame_a = None
             self._drop_audio_media()
+            self._hover_thumbs_close()
         else:
             cap, self.cap_b = self.cap_b, None
             self.filename_b = ""
