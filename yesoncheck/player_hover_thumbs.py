@@ -52,6 +52,7 @@ import time
 import traceback
 
 import cv2
+from PyQt5 import sip
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QMessageBox
 
@@ -100,7 +101,7 @@ class PlayerHoverThumbsMixin:
         """A에 영상을 연 뒤 (open_file — 슬라이더 범위를 정한 직후): 옛 띠를 버리고 새 계획을 둠. 워커는 아직 띄우지 않음 (쉬는 때 틱이 띄움).
         기능이 꺼졌거나 시퀀스면 아무것도 두지 않음. total·width·height는 재생 캡처의 get 값."""
         self._hover_thumbs_close()
-        if not hover_strip.enabled() or is_sequence_path(file_path):
+        if self._hover_popup is None or not hover_strip.enabled() or is_sequence_path(file_path):  # 창을 닫아 지운 뒤면 아무것도
             return
         if total < 1 or width < 1 or height < 1:  # 장수·크기를 모르는 캡처 (cv2가 0을 돌려주는 스트림 등) — 열기는 그대로 이어 감
             print(f"{LOG_PREFIX} 띠를 만들지 않음: 장수·크기를 알 수 없음 (장수 {total}, {width}×{height}) — {file_path}", flush=True)
@@ -142,7 +143,26 @@ class PlayerHoverThumbsMixin:
         self._hover_plan = None
         self._hover_strip = None
         self._hover_path = ""
-        self._hover_popup.hide()
+        if self._hover_popup is not None:
+            self._hover_popup.hide()
+
+    def _hover_thumbs_destroy(self) -> None:
+        """창 닫기(_release_resources_on_close): 띠를 버리고(_hover_thumbs_close) 두 필터를 떼고(detach) 커서 위 창을 바로 지움. 여러 번 불러도 됨.
+        파일을 바꿀 때는 _hover_thumbs_close(숨기기만)이고 창을 지우는 것은 여기뿐 — 지운 뒤로는 _hover_thumbs_open이 아무것도 하지 않음.
+
+        왜 바로 지우나: Windows의 창은 parent가 없어(popup_parent) 플레이어 창과 함께 지워지지 않는다 — 이 길이 유일한 정리다. parent 없는
+        최상위 창이 인터프리터가 끝날 때 QApplication보다 늦게 지워지면 종료 때 매달릴 수 있다는 가설(종료 세그폴트 플레이크). deleteLater는
+        이벤트 루프 없이 끝나는 프로세스(exec 없이 창을 닫고 끝나는 자식 시험 등)에서는 돌지 않으므로 sip.delete로 C++ 객체를 바로 지운다 —
+        먼저 parent를 떼어(Mac·Linux) parent가 다시 지우지 않게. Mac·Linux는 parent 덕에 안 해도 되지만 같은 길로."""
+        self._hover_thumbs_close()
+        for hover_filter in self._hover_filters:
+            hover_filter.detach()
+        self._hover_filters = []
+        popup, self._hover_popup = self._hover_popup, None
+        if popup is not None:
+            popup.hide()
+            popup.setParent(None)
+            sip.delete(popup)
 
     def _hover_thumbs_tick(self) -> None:
         """쉬는 때 판정 (TICK_MS마다 — 모듈 설명). 재생 중이면 워커에 멈춤 표지만 두고 끝(재생 캡처·슬라이더를 보지 않음). 재생 캡처가 없거나

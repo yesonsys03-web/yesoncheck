@@ -23,7 +23,7 @@ from yesoncheck.main_window_styles import (
     OVERLAY_SLIDER_STYLE,
     POSITION_SCROLL_INITIAL_STYLE,
 )
-from yesoncheck.slider_preview import GAP, SliderHoverFilter, SliderPreviewPopup, popup_parent, slider_value_at
+from yesoncheck.slider_preview import ERROR_CONTEXT, GAP, SliderHoverFilter, SliderPreviewPopup, popup_parent, slider_value_at
 from yesoncheck.slider_style import jump_to_click
 
 SHEETS = {"main": POSITION_SCROLL_INITIAL_STYLE, "overlay": OVERLAY_SLIDER_STYLE}
@@ -372,6 +372,27 @@ def test_filter_shows_hides_and_calls_lookup(qapp, styled_slider, popup):
     slider.hide()  # 슬라이더가 숨으면 창도 (탭·창 전환)
     qapp.processEvents()
     assert not popup.isVisible()
+    del hover
+
+
+def test_detached_filter_leaves_slider_and_window_alone(qapp, styled_slider, popup, capsys):
+    """detach() 뒤: 슬라이더·창 둘 다에서 떼어져 호버·창 비활성에 lookup도 창도 건드리지 않음 — 창을 지운 뒤 만지지 않게. 직접 불러도 False,
+    여러 번 불러도 됨."""
+    slider = styled_slider("main")
+    seen = []
+    hover = SliderHoverFilter(slider, lambda value: seen.append(value) or (str(value), None), popup, slider)
+    _send_move(slider, 450)
+    assert popup.isVisible() and len(seen) == 1
+    popup.hide()
+
+    hover.detach()
+    hover.detach()
+    _send_enter(slider, 300)
+    _send_move(slider, 300)
+    _send_plain(slider.window(), QEvent.WindowDeactivate)
+    assert seen == [slider_value_at(slider, 450)] and not popup.isVisible()
+    assert hover.eventFilter(slider, QEvent(QEvent.WindowDeactivate)) is False
+    assert ERROR_CONTEXT not in capsys.readouterr().err
     del hover
 
 

@@ -2022,7 +2022,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
             # 끝나기 전에 wait_for_released_workers가 정해진 시간까지 기다림). 결과는 버림 (신호를 막음).
             # 맨 먼저: 뒤의 정리에서 오류가 나도 실행 중인 스레드를 놓지 않은 채 남기지 않게
             self._sidebar_scan_closed = True
-            self._hover_thumbs_close()  # 슬라이더 썸네일 띠 워커(ffmpeg) 정지도 맨 앞에 (같은 까닭) — 끝나지 않았으면 끝날 때까지 붙잡아 둠
+            self._hover_thumbs_destroy()  # 슬라이더 썸네일: 띠 워커(ffmpeg) 정지도 맨 앞에 (같은 까닭) + 필터를 떼고 커서 위 창을 바로 지움
             if getattr(self, '_app_state_connected', False):
                 QApplication.instance().applicationStateChanged.disconnect(self._on_application_state_changed)
                 self._app_state_connected = False
