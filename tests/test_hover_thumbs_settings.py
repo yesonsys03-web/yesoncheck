@@ -19,8 +19,8 @@ from PyQt5 import sip
 from PyQt5.QtTest import QTest
 
 from tests.test_player_hover_thumbs import (  # noqa: F401 (픽스처 — 이 모듈 안에서 이름으로 요청됨)
-    CLIP_COUNT, WAIT_S, hover, numbered_clip, player_with_clip, real_builders, shown_player, slow_ffmpeg, start_and_catch_running,
-    strip_done, wait_until,
+    CLIP_COUNT, WAIT_S, hover, numbered_clip, past_start_delay_ms, player_with_clip, real_builders, shown_player, slow_ffmpeg,
+    start_and_catch_running, strip_done, wait_until,
 )
 from tests.test_sequence_capture import make_seq
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
@@ -160,7 +160,7 @@ def test_toggle_on_without_movie_or_with_sequence_builds_nothing(shown_player, t
     action.trigger()
     action.trigger()
     assert hover_strip.enabled() is True and player._hover_plan is None and not player._hover_timer.isActive()
-    QTest.qWait(700)
+    QTest.qWait(past_start_delay_ms())
     assert player._hover_builder is None
     assert "Traceback" not in capsys.readouterr().err
 

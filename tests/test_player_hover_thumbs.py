@@ -28,7 +28,7 @@ from tests.conftest import write_test_video
 from tests.prores_clips import frame_number, make_numbered_clip
 from tests.test_sequence_capture import make_seq
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
-from yesoncheck import error_window, external_tools, hover_strip, hover_strip_builder
+from yesoncheck import error_window, external_tools, hover_strip, hover_strip_builder, player_hover_thumbs
 from yesoncheck.hover_strip import LOG_PREFIX, MENU_TEXT
 from yesoncheck.slider_preview import slider_value_at
 
@@ -159,6 +159,11 @@ def popup_image(popup):
     return np.frombuffer(pointer, np.uint8).reshape(height, stride)[:, :width * 3].reshape(height, width, 3).copy()
 
 
+def past_start_delay_ms():
+    """열린 뒤 워커를 띄울 때(START_DELAY_S)를 넉넉히 지나는 기다림(ms) — '띄우지 않음' 단언이 지연 덕에 그냥 맞는 일이 없게 (상수를 부를 때 읽음)."""
+    return int((player_hover_thumbs.START_DELAY_S + 0.3) * 1000)
+
+
 def wait_until(condition, timeout, what):
     """이벤트를 처리하며 condition()이 참이 될 때까지 (시간 초과면 실패)."""
     deadline = time.monotonic() + timeout
@@ -219,7 +224,7 @@ def test_hover_shows_number_matching_current_label(shown_player, numbered_clip, 
 # ---------------------------------------------------------------- 쉬면 띠를 만들고 그림을 보임
 
 def test_strip_builds_when_idle_and_popup_shows_image(player_with_clip, numbered_clip, real_builders, capsys):
-    """열자마자는 번호 + 빈 상자, 쉬면(0.5초 + 쉬는 때) 띠를 만들고 다 만든 뒤에는 그 프레임의 그림 (간격 1). 띠는 재생 캡처를 쓰지
+    """열자마자는 번호 + 빈 상자, 쉬면(START_DELAY_S + 쉬는 때) 띠를 만들고 다 만든 뒤에는 그 프레임의 그림 (간격 1). 띠는 재생 캡처를 쓰지
     않음 — 파이프 세션·위치가 그대로."""
     player = player_with_clip
     slider, popup = player.positionScroll, player._hover_popup
@@ -246,9 +251,20 @@ def test_strip_builds_when_idle_and_popup_shows_image(player_with_clip, numbered
 # ---------------------------------------------------------------- 쉬는 때
 
 def test_builder_not_spawned_before_start_delay_and_pauses_while_playing(fake_builders, player_with_clip, numbered_clip):
+    """열린 지 START_DELAY_S 전에는 쉬어도 워커를 띄우지 않음 — 1초 이상(열고 곧바로 Play하는 흐름과 겹치지 않게: 그 전에 Play하면 ffmpeg를
+    아예 안 띄움, Ruling 14). 벽시계에 기대지 않게: qWait에서 돌아온 때가 아직 열린 지 START_DELAY_S 전이면 그동안의 틱도 모두 그 전이므로
+    그때마다 0개를 단언 (느린 기계면 단언 횟수만 줄어듦)."""
     player = player_with_clip
-    QTest.qWait(300)
-    assert fake_builders == []  # 열린 지 START_DELAY_S 전
+    delay = player_hover_thumbs.START_DELAY_S
+    assert delay >= 1.0
+    checked = 0
+    while time.monotonic() < player._hover_opened_at + delay - 0.06:
+        QTest.qWait(50)
+        if time.monotonic() >= player._hover_opened_at + delay:
+            break
+        assert fake_builders == [], f"열린 지 {time.monotonic() - player._hover_opened_at:.2f}초 — START_DELAY_S 전에 띄움"
+        checked += 1
+    assert checked >= 1
 
     player.timer.start(60_000)  # 재생 흉내 (틱은 오지 않음 — isActive만 참)
     QTest.qWait(1000)
@@ -285,8 +301,7 @@ def test_arrow_stepping_counts_as_busy(fake_builders, player_with_clip):
     assert seen == [True] * 10
 
     wait_until(lambda: builder.paused is False, 2, "멈춘 뒤에도 워커가 쉬지 못합니다")
-    from yesoncheck.player_hover_thumbs import IDLE_S  # 함수 안: 모듈이 없을 때도 다른 시험은 모아짐
-    assert time.monotonic() - last_move >= IDLE_S
+    assert time.monotonic() - last_move >= player_hover_thumbs.IDLE_S
 
 
 def test_stale_is_dragging_flag_does_not_block_the_strip(shown_player, numbered_clip, real_builders, capsys):
@@ -304,8 +319,6 @@ def test_stale_is_dragging_flag_does_not_block_the_strip(shown_player, numbered_
 def test_slider_held_down_waits_and_logs_once_then_completes(shown_player, numbered_clip, real_builders, monkeypatch, capsys):
     """메인 슬라이더를 누르고 있는 동안은 쉬는 때가 아님 — 워커를 띄우지 않고, 워커 없이 BUSY_LOG_S보다 오래 바쁘면 진단 기록 한 줄(계획마다
     한 번). 놓으면 이어서 띠를 다 만듦."""
-    from yesoncheck import player_hover_thumbs
-
     monkeypatch.setattr(player_hover_thumbs, "BUSY_LOG_S", 0.4)
     player = shown_player
     player.positionScroll.setSliderDown(True)
@@ -326,7 +339,7 @@ def test_slider_held_down_waits_and_logs_once_then_completes(shown_player, numbe
 # ---------------------------------------------------------------- 열기·놓기·닫기
 
 def test_quick_reopen_never_spawns_ffmpeg(fake_builders, player_with_clip, second_clip):
-    """열린 지 0.5초 안에 다른 파일을 A로 — 첫 파일로는 워커를 띄우지 않고, 새 계획은 둘째 파일의 것 (Review Focus 2)."""
+    """열린 지 START_DELAY_S 안에 다른 파일을 A로 — 첫 파일로는 워커를 띄우지 않고, 새 계획은 둘째 파일의 것 (Review Focus 2)."""
     player = player_with_clip
     QTest.qWait(100)
     assert player.open_file("A", second_clip) is True
@@ -367,7 +380,7 @@ def test_sequence_and_b_side_do_not_build(player_with_clip, numbered_clip, mp4_c
     assert player._hover_plan is None and player._hover_builder is None and not player._hover_timer.isActive()
     hover(player.positionScroll, player.positionScroll.width() // 2)
     assert not player._hover_popup.isVisible()
-    QTest.qWait(800)
+    QTest.qWait(past_start_delay_ms())
     assert player._hover_builder is None
 
 
@@ -504,13 +517,13 @@ def test_size_cap_skips_with_log(player_with_clip, numbered_clip, monkeypatch, c
     assert player.open_file("A", numbered_clip) is True
     reason = hover_strip.skip_reason(numbered_clip)
 
-    QTest.qWait(900)
+    QTest.qWait(past_start_delay_ms())
     assert player._hover_builder is None and player._hover_strip is None and not player._hover_timer.isActive()
     slider, popup = player.positionScroll, player._hover_popup
     hover(slider, slider.width() - 1)
     assert popup.isVisible() and popup.number_label.text() == str(CLIP_COUNT) and popup_image(popup) is None
     assert (popup.image_label.width(), popup.image_label.height()) == (320, 180)
-    out = capsys.readouterr().out  # 열고 0.9초 쉬고 호버한 뒤까지 — 기록 줄은 정확히 한 번
+    out = capsys.readouterr().out  # 열고 START_DELAY_S 넘게 쉬고 호버한 뒤까지 — 기록 줄은 정확히 한 번
     assert out.count(f"{LOG_PREFIX} 띠를 만들지 않음: {reason} — {numbered_clip}") == 1
     assert "띠 만들기 시작" not in out
 
@@ -583,7 +596,7 @@ def test_disabled_feature_shows_nothing(shown_player, numbered_clip, monkeypatch
     monkeypatch.setattr(hover_strip, "_enabled", hover_strip.enabled())  # 시험 뒤 되돌림
     hover_strip.set_enabled(False)
     assert player.open_file("A", numbered_clip) is True
-    QTest.qWait(800)
+    QTest.qWait(past_start_delay_ms())
     assert player._hover_plan is None and player._hover_builder is None and not player._hover_timer.isActive()
     for slider in (player.positionScroll, player.overlaySlider):
         hover(slider, slider.width() // 2)

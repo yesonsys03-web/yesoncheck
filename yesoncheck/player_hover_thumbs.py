@@ -22,9 +22,10 @@ cap_a.get(CAP_PROP_POS_FRAMES)를 읽어 앞 값과 다르면 '움직임'으로 
 worker.paused = busy만 넘긴다(워커가 바뀔 때만 ffmpeg를 정지·재개 — Qt 객체를 다른 스레드에서 읽지 않으려고 GUI 타이머가 표지를 넘김).
 워커 없이 BUSY_LOG_S(5초)보다 오래 바쁘면 무엇이 바쁜지 기록 한 줄(계획마다 한 번 — 띠가 왜 안 생기는지 기록으로 바로 알게).
 
-왜 워커를 열 때 바로 띄우지 않고 START_DELAY_S(0.5초) 뒤 쉴 때 띄우나: 선택 재생·↑↓ 연타처럼 열자마자 다음 파일로 넘어가면 바로 띄운
+왜 워커를 열 때 바로 띄우지 않고 START_DELAY_S(1.0초) 뒤 쉴 때 띄우나: 선택 재생·↑↓ 연타처럼 열자마자 다음 파일로 넘어가면 바로 띄운
 ffmpeg는 파일 전체(NAS)를 읽기 시작하자마자 kill될 뿐이고, 그 사이 새 파일의 첫 화면(파이프 ffmpeg 시작·첫 디코드)과 다툰다. 쉬기 전에
-넘어간 파일은 프로세스를 아예 띄우지 않아 비용이 0이다. 띠를 만들지 않는 파일(크기 상한 — hover_strip.skip_reason)은 계획만 두고 저장소·
+넘어간 파일은 프로세스를 아예 띄우지 않아 비용이 0이다. 1.0초(처음 0.5초 — 3차 측정 전 Ruling 14로 늘림)는 열고 곧바로 Play하는 흐름과도
+겹치지 않게: 그 안에 Play하면 워커를 띄우지 않은 채 재생이 시작된다(측정에서 끊김은 띄운 지 0.5초 안에 Play한 판에서 났음). 띠를 만들지 않는 파일(크기 상한 — hover_strip.skip_reason)은 계획만 두고 저장소·
 타이머는 만들지 않는다 (호버는 번호 + 빈 상자).
 
 끝 신호(done·failed)는 워커 스레드가 내 GUI 대기열로 온다. 그래서 stop()·release_worker 전에 대기열에 들어간 신호가 다음 파일을 연 뒤에
@@ -52,7 +53,7 @@ from yesoncheck.hover_strip import LOG_PREFIX, MENU_TEXT, THUMB_WIDTH
 from yesoncheck.sequence_scan import is_sequence_path
 from yesoncheck.slider_preview import LookupResult, SliderHoverFilter, SliderPreviewPopup
 
-START_DELAY_S = 0.5  # 열린 뒤 이만큼 지나야 워커를 띄움 (모듈 설명)
+START_DELAY_S = 1.0  # 열린 뒤 이만큼 지나야 워커를 띄움 (모듈 설명)
 IDLE_S = 0.3  # 재생 캡처의 위치가 이 안에 바뀌었으면 쉬는 때가 아님
 TICK_MS = 50  # 쉬는 때 판정 간격 — 띄울 워커가 있거나 돌고 있는 동안만 돎
 BUSY_LOG_S = 5.0  # 워커 없이 이만큼 넘게 바쁘면 진단 기록 한 줄 (계획마다 한 번)
