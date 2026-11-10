@@ -47,7 +47,8 @@ def test_plan_frame_bytes():
 
 
 @pytest.mark.parametrize("size,expected", [((3840, 2160), (320, 180)), ((1920, 1080), (320, 180)), ((1002, 562), (320, 180)),
-                                           ((320, 240), (320, 240)), ((1080, 1920), (320, 568)), ((4, 2), (320, 160))])
+                                           ((320, 240), (320, 240)), ((1080, 1920), (180, 320)), ((4, 2), (320, 160)),
+                                           ((1000, 1000), (320, 320)), ((2, 1000), (2, 320))])
 def test_thumb_size_even_and_proportional(size, expected):
     assert hover_strip.thumb_size(*size) == expected
 
@@ -66,6 +67,7 @@ def test_strip_put_has_image_and_memory_bound():
     strip = hover_strip.HoverStrip(plan)
     assert strip.plan is plan
     assert strip.nbytes <= 500 * 320 * 180 * 3 and strip.filled_count == 0 and not strip.has(7)
+    assert hover_strip.HoverStrip(hover_strip.plan_for(500, 1080, 1920)).nbytes <= 500 * 320 * 320 * 3  # 세로 영상도 320 상자 안
     with pytest.raises(LookupError):
         strip.image(7)
     strip.put(7, bytes([9]) * plan.frame_bytes)

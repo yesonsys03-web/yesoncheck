@@ -6,13 +6,14 @@
 이 모듈은 그 띠의 크기·장수를 정하고(StripPlan), 만든 그림을 담고(HoverStrip), 만들지 말아야 할 파일을 가르고(skip_reason), 기능을 켜고 끄는
 선택을 prefs.json에 두는(read_enabled·save_enabled) 규칙만 가진다 — 프로세스·스레드·화면은 다른 모듈의 몫이라 Qt 없이 시험한다.
 
-크기 (스펙 §5.2): 그림 폭은 THUMB_WIDTH(320)로 고정하고 높이는 비율을 지켜 짝수로 맞춘다. ffmpeg의 scale에는 폭·높이 **둘 다 명시**해 넘긴다 —
-`-2`(ffmpeg가 짝수 높이를 알아서 고름)에 맡기면 ffmpeg가 정한 높이와 이쪽 버퍼 크기(frame_bytes)가 어긋날 수 있어서다. 한 장의 바이트 수는
+크기 (스펙 §5.2): 그림은 THUMB_WIDTH(320) × THUMB_WIDTH 상자 안에 맞춘다 — THUMB_WIDTH는 이름과 달리 '긴 변의 길이'다. 가로로 긴 영상(W ≥ H)은 폭 320에
+짝수 높이, 세로로 긴 영상(W < H)은 높이 320에 짝수 폭이고, 짧은 변은 비율을 지켜 짝수로 맞춘다. ffmpeg의 scale에는 폭·높이 **둘 다 명시**해 넘긴다 —
+`-2`(ffmpeg가 짝수 변을 알아서 고름)에 맡기면 ffmpeg가 정한 크기와 이쪽 버퍼 크기(frame_bytes)가 어긋날 수 있어서다. 한 장의 바이트 수는
 이 모듈이 정하고 ffmpeg가 그대로 따른다. 장수는 MAX_THUMBS(500) 이하: 전체 장수가 그 이하면 프레임마다, 넘으면 step 간격으로 띄엄띄엄
 (샘플 i = 원본 i × step).
 
-메모리: 320×180×3 = 172,800B(173KB)/장이라 16:9에서 500장이 86.4MB로 멈춘다 (파일 하나 분 — 바꾸면 버리고 디스크에 쓰지 않음). 세로로 긴
-영상은 장당이 커서 상한도 커진다 (9:16 세로 320×568이면 545KB/장 — 500장 272.6MB). 폭은 고정이고 장수 상한은 MAX_THUMBS.
+메모리: 320×180×3 = 172,800B(173KB)/장이라 16:9에서 500장이 86.4MB로 멈춘다 (파일 하나 분 — 바꾸면 버리고 디스크에 쓰지 않음). 어떤 비율이든 한 장은
+320×320 상자 안이라 최대 307,200B/장 — 500장 153.6MB(정사각형)가 상한이다 (세로 9:16은 180×320 = 172,800B/장으로 16:9와 같음).
 
 파일 크기 상한 (스펙 §5.2): 띄엄띄엄 골라도 ffmpeg의 select는 디코드한 뒤 버리므로 파일 **전체**를 읽고 전부 디코드한다. 그래서 장수 상한만으로는
 수십 GB짜리 긴 ProRes가 NAS에서 통째로 다시 읽히는 것을 막지 못한다 — os.stat 크기가 MAX_FILE_BYTES(사용자 결정 "크기 상한", 숫자는 제 결정)를
@@ -32,7 +33,7 @@ import numpy as np
 from yesoncheck import mac_prefs, windows_display
 from yesoncheck.frame_cache_budget import gb
 
-THUMB_WIDTH = 320  # 그림 폭 (논리 px) — 키우면 메모리만 비례해 늘어남
+THUMB_WIDTH = 320  # 그림의 긴 변 (논리 px — 가로 영상은 폭, 세로 영상은 높이) — 키우면 메모리가 제곱으로 늘어남
 MAX_THUMBS = 500  # 띠의 최대 장수
 MAX_FILE_BYTES = 4 * 10**9  # 이보다 큰 파일은 띠를 만들지 않음 (os.stat 크기)
 PREF_KEY = "slider_thumbnails"
@@ -47,8 +48,11 @@ def _ceil_div(a: int, b: int) -> int:
 
 
 def thumb_size(width: int, height: int) -> tuple[int, int]:
-    """원본 width×height의 그림 크기 (THUMB_WIDTH, 짝수 높이) — 비율을 지키고 높이는 최소 2."""
-    return THUMB_WIDTH, max(2, round(height * THUMB_WIDTH / width / 2) * 2)
+    """원본 width×height의 그림 (폭, 높이) — THUMB_WIDTH(긴 변) 상자 안에 비율을 지켜 맞춤. 짧은 변은 짝수·최소 2.
+    가로로 긴 영상(width ≥ height)은 (THUMB_WIDTH, 짝수 높이), 세로로 긴 영상은 (짝수 폭, THUMB_WIDTH)."""
+    if width >= height:
+        return THUMB_WIDTH, max(2, round(height * THUMB_WIDTH / width / 2) * 2)
+    return max(2, round(width * THUMB_WIDTH / height / 2) * 2), THUMB_WIDTH
 
 
 @dataclass(frozen=True)
