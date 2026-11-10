@@ -84,7 +84,8 @@ class PlayerHoverThumbsMixin:
         self._hover_busy_since = None  # 워커 없이 바빠진 때 (쉬면 None)
         self._hover_busy_logged = False  # 이 계획에서 진단 기록을 남겼음
         self._hover_failed_for: set[str] = set()  # 오류 창을 이미 띄운 파일들 (이 창이 떠 있는 동안)
-        self._hover_popup = SliderPreviewPopup(THUMB_WIDTH, 180)  # 계획마다 그 파일의 그림 크기로 맞춤
+        # 계획마다 그 파일의 그림 크기로 맞춤. parent = 이 창 — 창과 함께 지워짐(종료 순서 — SliderPreviewPopup 설명), ToolTip이라 따로 뜨는 창 그대로
+        self._hover_popup = SliderPreviewPopup(THUMB_WIDTH, 180, parent=self)
         # Qt는 설치된 이벤트 필터를 붙잡아 주지 않음 — parent와 이 목록이 쥠
         self._hover_filters = [
             SliderHoverFilter(self.positionScroll, self._hover_lookup_main, self._hover_popup, self),

@@ -7,14 +7,20 @@ QMouseEvent·QEnterEvent를 직접 만들어 QApplication.sendEvent로 보낸다
 
 import numpy as np
 import pytest
+from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, Qt
 from PyQt5.QtGui import QEnterEvent, QMouseEvent
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QSlider
+from PyQt5.QtWidgets import QApplication, QMainWindow, QSlider
 
 from yesoncheck import error_window, slider_preview
 from yesoncheck.hover_strip import LOG_PREFIX
-from yesoncheck.main_window_styles import OVERLAY_SLIDER_STYLE, POSITION_SCROLL_INITIAL_STYLE
+from yesoncheck.main_window_styles import (
+    DARK_STYLESHEET,
+    LIGHT_STYLESHEET,
+    OVERLAY_SLIDER_STYLE,
+    POSITION_SCROLL_INITIAL_STYLE,
+)
 from yesoncheck.slider_preview import GAP, SliderHoverFilter, SliderPreviewPopup, slider_value_at
 from yesoncheck.slider_style import jump_to_click
 
@@ -151,6 +157,55 @@ def test_popup_set_thumb_size_resizes_for_a_new_plan(qapp, popup):
     assert popup.width() < wide[0] and popup.height() > wide[1]
     popup.show_frame("5", np.zeros((320, 180, 3), np.uint8))
     assert (popup.image_label.pixmap().width(), popup.image_label.pixmap().height()) == (180, 320)
+
+
+def test_popup_with_parent_is_a_tooltip_window_owned_by_it(qapp):
+    """parent를 주면 그 창이 가지지만(창이 지워지면 함께 지워짐 — 종료 순서) 여전히 따로 뜨는 ToolTip 최상위 창이고, place_above는 그대로
+    화면 좌표로 놓는다 (커서 x에 가로 가운데, 아래 끝은 슬라이더 위 끝에서 GAP 위)."""
+    window = QMainWindow()
+    slider = QSlider(Qt.Horizontal)
+    slider.setRange(0, MAX_VALUE)
+    window.setCentralWidget(slider)
+    window.resize(700, 120)
+    window.move(40, 400)
+    window.show()
+    QTest.qWaitForWindowExposed(window)
+    popup = SliderPreviewPopup(320, 180, parent=window)
+    assert popup.parent() is window and popup.isWindow() and popup.windowFlags() & Qt.ToolTip
+
+    popup.show_frame("7", None)
+    popup.place_above(slider, 350)
+    popup.show()
+    qapp.processEvents()
+    slider_top_left = slider.mapToGlobal(QPoint(0, 0))
+    assert popup.x() == slider.mapToGlobal(QPoint(350, 0)).x() - popup.width() // 2
+    assert popup.y() == slider_top_left.y() - GAP - popup.height()
+
+    window.close()
+    window.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    assert sip.isdeleted(window) and sip.isdeleted(popup)
+
+
+@pytest.mark.parametrize("sheet", [DARK_STYLESHEET, LIGHT_STYLESHEET], ids=["dark", "light"])
+def test_popup_keeps_its_look_under_a_themed_parent(qapp, sheet):
+    """parent 창의 테마 시트가 내려와도 창의 모양(배경·테두리·번호의 색·크기·굵기)은 이 창의 시트 그대로 — 어두운·밝은 테마 모두 같은 어두운 창."""
+    window = QMainWindow()
+    window.setStyleSheet(sheet)
+    window.show()
+    QTest.qWaitForWindowExposed(window)
+    popup = SliderPreviewPopup(320, 180, parent=window)
+    try:
+        popup.show_frame("12", None)
+        popup.show()
+        qapp.processEvents()
+        image = popup.grab().toImage()
+        assert (image.pixelColor(0, 0).name(), image.pixelColor(3, 3).name()) == ("#8a8a8a", "#1e1e1e")  # 테두리·배경
+        number = popup.number_label
+        assert number.palette().color(number.foregroundRole()).name() == "#ffffff"
+        assert number.font().pixelSize() == 22 and number.font().bold()
+    finally:
+        window.close()
 
 
 def test_popup_resizes_to_fit_a_wider_number_text(qapp, styled_slider):

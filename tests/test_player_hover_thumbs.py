@@ -713,6 +713,12 @@ def test_missing_ffmpeg_reports_once_and_stops_tick(player_with_clip, numbered_c
     assert capsys.readouterr().err.count(f"{LOG_PREFIX} 띠를 만들지 못했습니다") == 1
 
 
+def test_popup_is_owned_by_the_player(shown_player):
+    """커서 위 창의 parent는 플레이어 창 — 창과 함께 지워짐(종료 순서). ToolTip이라 따로 뜨는 창 그대로."""
+    popup = shown_player._hover_popup
+    assert popup.parent() is shown_player and popup.isWindow() and popup.windowFlags() & Qt.ToolTip
+
+
 def test_disabled_feature_shows_nothing(shown_player, numbered_clip, monkeypatch, qapp):
     """기능을 끄면 계획도 워커도 없고 호버에 창이 뜨지 않음. 예전 'Position' 툴팁도 없음 (창이 그 자리를 대신함 — 꺼도 되살리지 않음)."""
     player = shown_player

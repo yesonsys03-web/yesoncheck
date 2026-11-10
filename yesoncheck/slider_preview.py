@@ -32,7 +32,9 @@ ERROR_CONTEXT = "슬라이더 호버 처리 중 오류"  # eventFilter 예외의
 
 LookupResult = Optional[Tuple[str, Optional[np.ndarray]]]
 
-# 인라인 스타일만 — main_window_styles.py의 시트는 건드리지 않는다. 창은 부모 없는 최상위 창이라 앱 창의 시트가 내려오지도 않음
+# 인라인 스타일만 — main_window_styles.py의 시트는 건드리지 않는다. 창에 parent(플레이어 창)를 주면 앱 창의 시트가 내려오지만, 여기서 정한
+# 속성(배경·테두리·글자 색·크기·굵기)은 이 시트가 가까워 이긴다 — 내려오는 것은 정하지 않은 글꼴 종류뿐(창의 다른 글자와 같은 목록, 어두운·
+# 밝은 테마 모두 같음 — 시험이 두 테마에서 배경·테두리·글자 색을 확인)
 _POPUP_STYLE = """
 #sliderPreviewPopup { background: #1e1e1e; border: 1px solid #8a8a8a; }
 #sliderPreviewImage { background: transparent; border: none; }
@@ -59,10 +61,14 @@ def slider_value_at(slider: QSlider, x: int) -> int:
 class SliderPreviewPopup(QWidget):
     """커서 위에 뜨는 작은 창 — 그림(고정 크기 상자) 아래 번호. 포커스를 가져가지 않는다 (ToolTip 창 + 활성화 없이 보임 + 포커스 없음).
 
-    그림이 없으면(None) 상자는 비우고 크기는 그대로 둔다 — 아직 안 만든 자리에서도 번호는 보이고 창이 들쭉날쭉 변하지 않는다."""
+    그림이 없으면(None) 상자는 비우고 크기는 그대로 둔다 — 아직 안 만든 자리에서도 번호는 보이고 창이 들쭉날쭉 변하지 않는다.
 
-    def __init__(self, thumb_width: int, thumb_height: int):
-        super().__init__(None, Qt.ToolTip | Qt.FramelessWindowHint)
+    parent: 이 창을 가질 창(플레이어). Qt.ToolTip은 창 종류 플래그라 parent가 있어도 따로 뜨는 최상위 창이고(QToolTip도 그렇게 씀)
+    place_above의 move는 그대로 화면 좌표다. parent를 주면 그 창이 지워질 때 함께 지워진다 — parent 없는 최상위 창은 인터프리터가 끝날 때
+    QApplication보다 늦게 지워져 종료 순서가 꼬일 수 있다(종료 세그폴트 플레이크를 더 자주 터뜨린다는 리뷰 가설 — 그래서 플레이어는 parent를 줌)."""
+
+    def __init__(self, thumb_width: int, thumb_height: int, parent: Optional[QWidget] = None):
+        super().__init__(parent, Qt.ToolTip | Qt.FramelessWindowHint)
         self.setObjectName("sliderPreviewPopup")
         self.setAttribute(Qt.WA_StyledBackground, True)  # QWidget 자체는 시트의 배경·테두리를 이 속성이 있어야 그림
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
