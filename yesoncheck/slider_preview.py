@@ -20,7 +20,7 @@ from typing import Callable, Optional, Tuple
 
 import numpy as np
 from PyQt5.QtCore import QEvent, QObject, QPoint, Qt
-from PyQt5.QtGui import QImage, QPixmap
+from PyQt5.QtGui import QGuiApplication, QImage, QPixmap
 from PyQt5.QtWidgets import QLabel, QSlider, QStyle, QStyleOptionSlider, QVBoxLayout, QWidget
 
 from yesoncheck import error_window
@@ -110,12 +110,15 @@ class SliderPreviewPopup(QWidget):
         self.adjustSize()
 
     def place_above(self, slider: QSlider, x: int) -> None:
-        """창을 슬라이더 좌표 x(커서)에 가로 가운데로, 아래 끝은 슬라이더 위 끝에서 GAP 위로 — 화면의 쓸 수 있는 영역 안으로 밀어 넣음.
+        """창을 슬라이더 좌표 x(커서)에 가로 가운데로, 아래 끝은 슬라이더 위 끝에서 GAP 위로 — 커서가 있는 화면의 쓸 수 있는 영역 안으로 밀어 넣음.
 
-        위에 들어갈 자리가 없으면 슬라이더 아래 끝에서 GAP 아래로. (show_frame이 창 크기를 맞춘 뒤에 부를 것.)"""
-        available = slider.screen().availableGeometry()
+        위에 들어갈 자리가 없으면 슬라이더 아래 끝에서 GAP 아래로. (show_frame이 창 크기를 맞춘 뒤에 부를 것.) 화면은 커서 자리(슬라이더 세로
+        가운데)의 QGuiApplication.screenAt — 모니터가 둘이고 앱 창이 걸쳐 있으면 slider.screen()(창이 속한 화면 하나)은 커서 쪽이 아닐 수 있음;
+        어느 화면에도 없으면(None) slider.screen()."""
+        cursor = slider.mapToGlobal(QPoint(x, slider.height() // 2))
+        available = (QGuiApplication.screenAt(cursor) or slider.screen()).availableGeometry()
         slider_top = slider.mapToGlobal(QPoint(0, 0)).y()
-        cursor_x = slider.mapToGlobal(QPoint(x, 0)).x()
+        cursor_x = cursor.x()
 
         left = cursor_x - self.width() // 2
         top = slider_top - GAP - self.height()

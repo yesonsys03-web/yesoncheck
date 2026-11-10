@@ -7,12 +7,12 @@ QMouseEvent·QEnterEvent를 직접 만들어 QApplication.sendEvent로 보낸다
 
 import numpy as np
 import pytest
-from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt
+from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, Qt
 from PyQt5.QtGui import QEnterEvent, QMouseEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QSlider
 
-from yesoncheck import error_window
+from yesoncheck import error_window, slider_preview
 from yesoncheck.hover_strip import LOG_PREFIX
 from yesoncheck.main_window_styles import OVERLAY_SLIDER_STYLE, POSITION_SCROLL_INITIAL_STYLE
 from yesoncheck.slider_preview import GAP, SliderHoverFilter, SliderPreviewPopup, slider_value_at
@@ -204,6 +204,38 @@ def test_place_above_clamps_to_screen(qapp, styled_slider, popup):
     assert popup.x() + popup.width() - 1 <= available.right()
     assert popup.x() > available.left()  # 오른쪽 끝에서 밀렸을 뿐 왼쪽 끝으로 날아가지 않음
     assert popup.y() + popup.height() - 1 < slider_top  # 슬라이더 위에 있음
+
+
+def test_place_above_uses_the_screen_under_the_cursor(qapp, styled_slider, popup, monkeypatch):
+    """모니터가 둘이면 창은 커서가 있는 화면 안으로 밈 — slider.screen()은 앱 창이 속한 화면 하나라, 창이 두 화면에 걸쳐 있으면 커서 쪽 화면과
+    다를 수 있음. offscreen은 화면이 하나라 QGuiApplication.screenAt을 바꿔치기: 커서 자리(슬라이더 세로 가운데)를 받아 다른 화면을 돌려주면 그
+    화면의 쓸 수 있는 영역으로, None(어느 화면에도 없음)이면 slider.screen()으로."""
+    slider = styled_slider("main")
+    slider.move(0, 400)
+    qapp.processEvents()
+    asked = []
+
+    class _LeftScreen:  # 슬라이더 왼쪽의 다른 화면 (가로 -1000..-1)
+        @staticmethod
+        def availableGeometry():
+            return QRect(-1000, 0, 1000, 2000)
+
+    answer = {"screen": _LeftScreen()}
+
+    class _Gui:
+        @staticmethod
+        def screenAt(point):
+            asked.append(QPoint(point))
+            return answer["screen"]
+
+    monkeypatch.setattr(slider_preview, "QGuiApplication", _Gui)
+    popup.place_above(slider, 450)
+    assert asked == [slider.mapToGlobal(QPoint(450, slider.height() // 2))]
+    assert popup.x() + popup.width() == 0  # 그 화면의 오른쪽 끝(-1)까지 밀림 — slider.screen()의 영역이 아님
+
+    answer["screen"] = None
+    popup.place_above(slider, 450)
+    assert popup.x() == slider.mapToGlobal(QPoint(450, 0)).x() - popup.width() // 2  # slider.screen() 안 — 커서에 가운데 맞춤
 
 
 def test_place_below_when_there_is_no_room_above(qapp, styled_slider, popup):
