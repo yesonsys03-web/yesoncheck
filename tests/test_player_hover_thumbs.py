@@ -495,6 +495,55 @@ def test_reopening_same_path_restarts_builder(slow_ffmpeg, shown_player, numbere
     assert [builder.path for builder in real_builders] == [numbered_clip, numbered_clip]
 
 
+def test_opening_next_file_pauses_old_builder_while_opening(slow_ffmpeg, shown_player, numbered_clip, second_clip, real_builders,
+                                                           monkeypatch):
+    """도는 워커가 있는데 다음 파일을 열면(↑↓·사이드바) 새 캡처를 여는 동안 옛 ffmpeg는 정지돼 있음 — 열기(NAS에서 ffprobe·파이프 ffmpeg
+    시작·첫 디코드)와 옛 띠의 디코드가 다투지 않게. open_file 맨 앞(경로 정리 직후)이 멈추고, 연 뒤의 _hover_thumbs_open → close가 kill.
+    여는 순간의 상태는 _open_movie_capture를 감싸 그 안에서 봄 (SIGSTOP이 닿을 때까지 한도 1초 — 멈추지 않았으면 그동안 계속 돌거나 끝남)."""
+    player = shown_player
+    old = start_and_catch_running(player, numbered_clip)
+    pid = old.pid
+    statuses = []
+    real_open = player._open_movie_capture
+
+    def status_of(pid):
+        try:
+            return psutil.Process(pid).status()
+        except psutil.NoSuchProcess:
+            return "끝남"
+
+    def recording_open(path):
+        deadline = time.monotonic() + 1
+        status = status_of(pid)
+        while status != psutil.STATUS_STOPPED and time.monotonic() < deadline:
+            time.sleep(0.005)
+            status = status_of(pid)
+        statuses.append((path, status))
+        return real_open(path)
+
+    monkeypatch.setattr(player, "_open_movie_capture", recording_open)
+    assert player.open_file("A", second_clip) is True
+    assert statuses == [(second_clip, psutil.STATUS_STOPPED)]
+    assert sip.isdeleted(old) or not old.isRunning()
+    assert not psutil.pid_exists(pid)  # 연 뒤에는 끝남 (정지된 채 kill)
+    assert player._hover_path == second_clip and player._hover_builder is None
+
+
+def test_failed_open_leaves_old_builder_resumable(fake_builders, player_with_clip, numbered_clip, tmp_path, dialogs):
+    """열기 맨 앞의 멈춤은 열지 못했을 때(없는 파일 — 창으로 알리고 False)·B를 열 때도 걸리지만, 옛 띠는 그대로라 다음 쉬는 틱이 되돌림
+    (멈춘 채 남지 않음)."""
+    player = player_with_clip
+    wait_until(lambda: len(fake_builders) == 1, 3, "워커를 띄우지 않았습니다")
+    builder = fake_builders[0]
+    wait_until(lambda: builder.paused is False, 2, "워커가 쉬지 못합니다")
+
+    assert player.open_file("A", str(tmp_path / "없는 영상.mov")) is False
+    assert builder.paused is True and player._hover_builder is builder and player._hover_path == numbered_clip
+    wait_until(lambda: builder.paused is False, 2, "열지 못한 뒤 옛 워커를 이어 가지 않았습니다")
+    assert dialogs.messages  # 열지 못함 창 (기존 동작)
+    assert len(fake_builders) == 1 and not builder.stopped
+
+
 def test_stale_plan_never_shows_after_a_is_dropped_elsewhere(player_with_clip):
     """_release_side를 거치지 않고 A를 놓는 길(job 불러오기의 cap_a.release·None·filename_a "")이 띠가 끝난 뒤(틱도 멈춤)에 와도 호버에
     옛 파일의 번호·그림이 뜨지 않음 — 조회마다 캡처·파일 이름을 다시 봄. A의 파일 이름이 계획의 것이 아니어도 마찬가지."""

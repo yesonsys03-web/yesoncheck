@@ -8,7 +8,10 @@
 VideoPlayerBase의 부모 클래스로 붙음 — `class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin, QMainWindow)`.
 상태는 VideoPlayerBase.__init__이 부르는 _init_hover_thumbs가 만들고(두 슬라이더가 창 안에 들어간 뒤 — 필터가 slider.window()에도 걸림),
 open_file(A 영상)·_release_side('A')·_load_job_list(job을 바꿔 A를 놓을 때)·_release_resources_on_close가 _hover_thumbs_open·
-_hover_thumbs_close를 부른다. 이름은 모두 `_hover_`로 시작해 다른 믹스인과 겹치지 않는다. player_base를 모듈 수준에서 import하지 말 것 (순환).
+_hover_thumbs_close를 부른다. open_file은 맨 앞(경로 정리 직후, 새 캡처를 열기 전)에 _hover_thumbs_pause도 부른다 — 새 캡처를 여는 동안(NAS에서
+ffprobe·파이프 ffmpeg 시작·첫 디코드) 옛 띠 ffmpeg가 디코드하며 다투지 않게 먼저 정지하고, 연 뒤의 _hover_thumbs_open → close가 kill한다(못
+열었거나 B를 열었으면 다음 쉬는 틱이 paused = busy로 되돌림). 이름은 모두 `_hover_`로 시작해 다른 믹스인과 겹치지 않는다. player_base를 모듈
+수준에서 import하지 말 것 (순환).
 
 왜 쉬는 때를 재생·멈춤 훅이 아니라 재생 캡처의 위치 변화로 보나 (스펙 §5.5): 이 앱의 핵심 작업인 ←/→ 연타·휠 탐색·슬라이더 클릭도 4K면
 한 칸마다 디코드라 쉬는 때가 아닌데, 이것들은 재생·멈춤을 거치지 않는다. 길마다(play_video·stop·next_frame·seek_to_frame·휠·선택 재생…)
@@ -120,6 +123,12 @@ class PlayerHoverThumbsMixin:
         self._hover_busy_since = None
         self._hover_busy_logged = False
         self._hover_timer.start()
+
+    def _hover_thumbs_pause(self) -> None:
+        """open_file 맨 앞 (새 캡처를 열기 전): 도는 워커가 있으면 멈춤 표지 — ffmpeg를 바로 정지(모듈 설명). 없으면 아무것도 안 함."""
+        worker = self._hover_builder
+        if worker is not None:
+            worker.paused = True
 
     def _hover_thumbs_close(self) -> None:
         """띠를 버림: 틱 정지, 워커가 있으면 stop()(ffmpeg kill·거두기·스레드 끝 대기) 뒤 release_worker(끝나지 않았으면 끝날 때까지 붙잡아 둠),

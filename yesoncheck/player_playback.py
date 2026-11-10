@@ -340,6 +340,7 @@ class PlayerPlaybackMixin:
             file_path = self._frame_to_sequence_path(file_path)
             if file_path is None:
                 return False
+            self._hover_thumbs_pause()  # 새 캡처를 여는 동안 옛 슬라이더 썸네일 띠 ffmpeg를 정지 (연 뒤 _hover_thumbs_open이 kill)
             print(f"Attempting to open video file: {file_path}")
             opened_at = time.perf_counter()  # '[측정] 열기' 줄 — 단계마다 시각을 찍음 (open_timing_line)
             opening_sequence = is_sequence_path(file_path)
