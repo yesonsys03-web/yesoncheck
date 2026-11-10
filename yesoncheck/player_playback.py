@@ -296,6 +296,7 @@ class PlayerPlaybackMixin:
             if self.cap_a:
                 self.cap_a.release()
                 self.cap_a = None
+                self._hover_thumbs_close()
             if self.cap_b:
                 self.cap_b.release()
                 self.cap_b = None

@@ -2021,6 +2021,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
             # 끝나기 전에 wait_for_released_workers가 정해진 시간까지 기다림). 결과는 버림 (신호를 막음).
             # 맨 먼저: 뒤의 정리에서 오류가 나도 실행 중인 스레드를 놓지 않은 채 남기지 않게
             self._sidebar_scan_closed = True
+            self._hover_thumbs_close()  # 슬라이더 썸네일 띠 워커(ffmpeg) 정지도 맨 앞에 (같은 까닭) — 끝나지 않았으면 끝날 때까지 붙잡아 둠
             if getattr(self, '_app_state_connected', False):
                 QApplication.instance().applicationStateChanged.disconnect(self._on_application_state_changed)
                 self._app_state_connected = False
@@ -2036,7 +2037,6 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
 
             # 실행 중인 내보내기·병합 중지 (ffmpeg 종료)
             self.stop_running_jobs()
-            self._hover_thumbs_close()  # 슬라이더 썸네일 띠 워커(ffmpeg) 정지 — 끝나지 않았으면 끝날 때까지 붙잡아 둠
 
             # 실행 중인 공유 설정 불러오기: 정해진 시간까지만 기다리고, 늦게 오는 결과는 버림
             self._shared_config_closed = True

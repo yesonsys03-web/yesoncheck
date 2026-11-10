@@ -11,6 +11,7 @@ Enter는 QEnterEvent로: 필터가 Enter의 pos()를 읽으므로 맨 QEvent(Ent
 둘 다 hover_strip_builder 모듈의 이름을 바꿔치기한다 (믹스인이 그 모듈에서 이름을 읽음).
 """
 
+import os
 import time
 
 import cv2
@@ -336,23 +337,29 @@ def test_sequence_and_b_side_do_not_build(player_with_clip, numbered_clip, mp4_c
     assert player._hover_builder is None
 
 
-def test_release_and_close_stop_builder(new_player, shown_player, numbered_clip, real_builders, monkeypatch, tmp_path, qapp):
-    """워커(진짜 ffmpeg)가 도는 중에 _release_side('A')·창 닫기 → 스레드가 끝나고 프로세스가 거둬짐. ffmpeg는 -re(제 속도로 읽기)로
-    느리게 해 '도는 중'을 확실히 잡는다 (48장 24fps = 2초)."""
+@pytest.fixture
+def slow_ffmpeg(monkeypatch):
+    """띠 ffmpeg를 -re(제 속도로 읽기)로 느리게 — 48장 24fps = 2초라 '도는 중'인 진짜 워커를 확실히 잡는다 (build_command를 감쌈)."""
     real_command = hover_strip_builder.build_command
     monkeypatch.setattr(hover_strip_builder, "build_command",
                         lambda *args: (lambda cmd: cmd[:2] + ["-re"] + cmd[2:])(real_command(*args)))
 
-    def start_and_catch_running(player):
-        assert player.open_file("A", numbered_clip) is True
-        wait_until(lambda: player._hover_builder is not None and player._hover_builder.pid is not None, 5,
-                   "워커가 ffmpeg를 띄우지 않았습니다")
-        builder = player._hover_builder
-        assert builder.isRunning() and psutil.pid_exists(builder.pid)
-        assert player._hover_strip.filled_count < CLIP_COUNT  # 아직 도는 중
-        return builder
 
-    builder = start_and_catch_running(shown_player)
+def start_and_catch_running(player, path):
+    """path를 A로 열고 진짜 워커가 ffmpeg를 띄워 아직 채우는 중일 때 → 그 워커 (slow_ffmpeg와 함께)."""
+    assert player.open_file("A", path) is True
+    wait_until(lambda: player._hover_builder is not None and player._hover_builder.pid is not None, 5,
+               "워커가 ffmpeg를 띄우지 않았습니다")
+    builder = player._hover_builder
+    assert builder.isRunning() and psutil.pid_exists(builder.pid)
+    assert player._hover_strip.filled_count < player._hover_plan.count  # 아직 도는 중
+    return builder
+
+
+def test_release_and_close_stop_builder(slow_ffmpeg, new_player, shown_player, numbered_clip, real_builders, tmp_path, qapp):
+    """워커(진짜 ffmpeg)가 도는 중에 _release_side('A')·창 닫기 → 스레드가 끝나고 프로세스가 거둬짐."""
+
+    builder = start_and_catch_running(shown_player, numbered_clip)
     shown_player._release_side("A")
     assert sip.isdeleted(builder) or not builder.isRunning()
     assert not psutil.pid_exists(builder.pid)
@@ -362,7 +369,7 @@ def test_release_and_close_stop_builder(new_player, shown_player, numbered_clip,
     other = new_player(make_config(str(tmp_path / "other"), {}))
     other.show()
     QTest.qWaitForWindowExposed(other)
-    builder = start_and_catch_running(other)
+    builder = start_and_catch_running(other, numbered_clip)
     other.close()
     assert sip.isdeleted(builder) or not builder.isRunning()
     assert not psutil.pid_exists(builder.pid)
@@ -372,6 +379,70 @@ def test_release_and_close_stop_builder(new_player, shown_player, numbered_clip,
         return [p.pid for p in psutil.Process().children(recursive=True) if "ffmpeg" in p.name().lower()]
 
     wait_until(lambda: ffmpeg_children() == [], 5, f"ffmpeg 프로세스가 남았습니다: {ffmpeg_children()}")
+
+
+def test_reopening_same_path_restarts_builder(slow_ffmpeg, shown_player, numbered_clip, real_builders):
+    """같은 경로를 A로 다시 열면 옛 워커가 멈추고(옛 ffmpeg 없음) 새 계획에서 새 워커가 뜸 (스펙: 같은 경로도 다시 만듦)."""
+    player = shown_player
+    old = start_and_catch_running(player, numbered_clip)
+    old_pid = old.pid
+    assert player.open_file("A", numbered_clip) is True
+    assert sip.isdeleted(old) or not old.isRunning()
+    assert not psutil.pid_exists(old_pid)
+    assert player._hover_builder is None and player._hover_path == numbered_clip  # 새 계획 — 워커는 쉬는 때 다시
+
+    wait_until(lambda: player._hover_builder is not None and player._hover_builder.pid is not None, 5,
+               "다시 연 파일의 워커를 띄우지 않았습니다")
+    assert player._hover_builder is not old and player._hover_builder.pid != old_pid
+    assert [builder.path for builder in real_builders] == [numbered_clip, numbered_clip]
+
+
+def test_stale_plan_never_shows_after_a_is_dropped_elsewhere(player_with_clip):
+    """_release_side를 거치지 않고 A를 놓는 길(job 불러오기의 cap_a.release·None·filename_a "")이 띠가 끝난 뒤(틱도 멈춤)에 와도 호버에
+    옛 파일의 번호·그림이 뜨지 않음 — 조회마다 캡처·파일 이름을 다시 봄. A의 파일 이름이 계획의 것이 아니어도 마찬가지."""
+    player = player_with_clip
+    slider, popup = player.positionScroll, player._hover_popup
+    wait_until(lambda: strip_done(player), WAIT_S, "띠를 다 만들지 못했습니다")
+    hover(slider, slider.width() // 2)
+    assert popup.isVisible() and popup_image(popup) is not None
+
+    path, player.filename_a = player.filename_a, "/다른/영상.mov"
+    hover(slider, slider.width() // 2)
+    assert not popup.isVisible()
+    player.filename_a = path
+    hover(slider, slider.width() // 2)
+    assert popup.isVisible()
+
+    player.cap_a.release()  # job 불러오기(player_playback._load_job_list)의 세 줄 그대로
+    player.cap_a = None
+    player.filename_a = ""
+    for target in (player.positionScroll, player.overlaySlider):
+        hover(target, target.width() // 2)
+        assert not popup.isVisible()
+
+
+def test_job_switch_without_videos_drops_the_strip(new_player, dialogs, work_area, qapp):
+    """실제 job 불러오기 길: 영상이 있는 job에서 띠가 끝난 뒤 영상이 없는 job을 고르면 A가 놓이며 띠도 버림 (계획·워커 없음, 창 없음)."""
+    write_test_video(os.path.join(work_area.local, "S1", "job_01", "scene-001", "frames", "a.mov"))
+    os.makedirs(os.path.join(work_area.local, "S1", "job_02", "scene-001", "frames"))
+    player = new_player(make_config(work_area.local, {"SMOKE": work_area.stored}, work_area.path_map))
+    player.resize(1200, 800)
+    player.show()
+    QTest.qWaitForWindowExposed(player)
+    player.workComboBox.setCurrentText("SMOKE")
+    player.seasonComboBox.setCurrentText("S1")
+    player.jobComboBox.setCurrentText("job_01")
+    assert player.cap_a is not None and player._hover_plan is not None  # 첫 영상을 A로 엶
+    wait_until(lambda: strip_done(player), WAIT_S, "띠를 다 만들지 못했습니다")
+    builder = player._hover_builder
+
+    player.jobComboBox.setCurrentText("job_02")
+    assert player.cap_a is None and player.filename_a == ""
+    assert player._hover_plan is None and player._hover_strip is None and player._hover_builder is None
+    assert sip.isdeleted(builder) or not builder.isRunning()
+    hover(player.positionScroll, player.positionScroll.width() // 2)
+    assert not player._hover_popup.isVisible()
+    assert dialogs.errors() == []
 
 
 def test_dead_capture_hides_popup_and_stops_tick(player_with_clip):
@@ -398,7 +469,6 @@ def test_size_cap_skips_with_log(player_with_clip, numbered_clip, monkeypatch, c
     capsys.readouterr()
     assert player.open_file("A", numbered_clip) is True
     reason = hover_strip.skip_reason(numbered_clip)
-    assert f"{LOG_PREFIX} 띠를 만들지 않음: {reason} — {numbered_clip}" in capsys.readouterr().out
 
     QTest.qWait(900)
     assert player._hover_builder is None and player._hover_strip is None and not player._hover_timer.isActive()
@@ -406,6 +476,9 @@ def test_size_cap_skips_with_log(player_with_clip, numbered_clip, monkeypatch, c
     hover(slider, slider.width() - 1)
     assert popup.isVisible() and popup.number_label.text() == str(CLIP_COUNT) and popup_image(popup) is None
     assert (popup.image_label.width(), popup.image_label.height()) == (320, 180)
+    out = capsys.readouterr().out  # 열고 0.9초 쉬고 호버한 뒤까지 — 기록 줄은 정확히 한 번
+    assert out.count(f"{LOG_PREFIX} 띠를 만들지 않음: {reason} — {numbered_clip}") == 1
+    assert "띠 만들기 시작" not in out
 
 
 def test_unknown_size_or_unreadable_file_skips_with_log(player_with_clip, numbered_clip, tmp_path, capsys):

@@ -7,8 +7,8 @@
 
 VideoPlayerBase의 부모 클래스로 붙음 — `class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin, QMainWindow)`.
 상태는 VideoPlayerBase.__init__이 부르는 _init_hover_thumbs가 만들고(두 슬라이더가 창 안에 들어간 뒤 — 필터가 slider.window()에도 걸림),
-open_file(A 영상)·_release_side('A')·_release_resources_on_close가 _hover_thumbs_open·_hover_thumbs_close를 부른다. 이름은 모두 `_hover_`로
-시작해 다른 믹스인과 겹치지 않는다. player_base를 모듈 수준에서 import하지 말 것 (순환).
+open_file(A 영상)·_release_side('A')·_load_job_list(job을 바꿔 A를 놓을 때)·_release_resources_on_close가 _hover_thumbs_open·
+_hover_thumbs_close를 부른다. 이름은 모두 `_hover_`로 시작해 다른 믹스인과 겹치지 않는다. player_base를 모듈 수준에서 import하지 말 것 (순환).
 
 왜 쉬는 때를 재생·멈춤 훅이 아니라 재생 캡처의 위치 변화로 보나 (스펙 §5.5): 이 앱의 핵심 작업인 ←/→ 연타·휠 탐색·슬라이더 클릭도 4K면
 한 칸마다 디코드라 쉬는 때가 아닌데, 이것들은 재생·멈춤을 거치지 않는다. 길마다(play_video·stop·next_frame·seek_to_frame·휠·선택 재생…)
@@ -172,33 +172,43 @@ class PlayerHoverThumbsMixin:
         self._hover_failed_for = self._hover_path
         error_window.show_error(LOG_PREFIX, message)
 
-    def _hover_lookup_main(self, value: int) -> LookupResult:
-        """메인 슬라이더 값 → (번호 글, 그림|None), 계획이 없으면 None. 프레임은 on_slider_moved·on_slider_value_changed와 같은 식 —
-        최대값 − 1 이상이면 마지막 장 (한 장짜리는 최대값 1이라 늘 이 갈래 → 0), 아니면 비례 반올림."""
-        plan = self._hover_plan
-        if plan is None:
+    def _hover_live_plan(self):
+        """호버가 쓸 계획 — 계획이 없거나, 재생 캡처가 없거나 닫혔거나, A가 계획의 파일이 아니면 None. A를 놓는 길이 모두 _release_side를
+        거치지는 않고(job 불러오기는 cap_a를 직접 놓음) 띠가 끝나면 틱도 멈춰 있으므로 조회마다 다시 본다 — 어느 길로 놓든 옛 파일의
+        번호·그림이 뜨지 않게."""
+        cap = self.cap_a
+        if self._hover_plan is None or cap is None or not cap.isOpened() or self.filename_a != self._hover_path:
             return None
-        last = plan.total - 1
+        return self._hover_plan
+
+    def _hover_main_frame(self, value: int, last: int) -> int:
+        """메인 슬라이더 값 → 프레임(0-based, last = N − 1) — on_slider_moved·on_slider_value_changed·sync_audio_on_release와 같은 식:
+        최대값 − 1 이상이면 마지막 장 (한 장짜리는 최대값 1이라 늘 이 갈래 → 0), 아니면 비례 반올림."""
         maximum = self.positionScroll.maximum()
         if value >= maximum - 1:
-            frame = last
-        else:
-            frame = max(0, min(round(value / maximum * last), last))
-        return self._hover_entry(frame)
+            return last
+        return max(0, min(round(value / maximum * last), last))
+
+    def _hover_lookup_main(self, value: int) -> LookupResult:
+        """메인 슬라이더 값 → (번호 글, 그림|None), 쓸 계획이 없으면 None."""
+        plan = self._hover_live_plan()
+        if plan is None:
+            return None
+        return self._hover_entry(self._hover_main_frame(value, plan.total - 1))
 
     def _hover_lookup_overlay(self, value: int) -> LookupResult:
-        """오버레이 슬라이더 값 → (번호 글, 그림|None), 계획이 없으면 None. 클릭이 실제로 착지하는 프레임: on_overlay_slider_released가 값
+        """오버레이 슬라이더 값 → (번호 글, 그림|None), 쓸 계획이 없으면 None. 클릭이 실제로 착지하는 프레임: on_overlay_slider_released가 값
         그대로의 프레임(min(v, N − 1))으로 간 뒤 부르는 sync_audio_on_release가 메인 슬라이더 규칙을 한 번 더 건다 — 그 프레임 자리의 메인
-        슬라이더 값(update_position_info의 식)이 '최대값 − 1 이상'이면 마지막 장으로 감. 그래서 v = N − 2도 마지막 장이다 (실측·시험:
-        클릭 착지 대조 — 스펙 §5.4의 'v = N − 2에서 한 장 다름'은 이 두 번째 탐색을 빠뜨린 것)."""
-        plan = self._hover_plan
+        슬라이더 값(update_position_info의 식 round(프레임 / (N − 1) × 최대값))에 메인 식(_hover_main_frame)을 건 것이 착지. 최대값 = N − 1이라
+        그 값이 '최대값 − 1' 밑이면 프레임 그대로이고, v = N − 2는 마지막 장이다 (실측·시험: 클릭 착지 대조 — 스펙 §5.4의 'v = N − 2에서 한 장
+        다름'은 이 두 번째 탐색을 빠뜨린 것)."""
+        plan = self._hover_live_plan()
         if plan is None:
             return None
         last = plan.total - 1
         frame = max(0, min(value, last))
-        maximum = self.positionScroll.maximum()
-        if last > 0 and round(frame / last * maximum) >= maximum - 1:  # 한 장짜리는 on_overlay_slider_released가 탐색 없이 끝남 → 0
-            frame = last
+        if last > 0:  # 한 장짜리는 on_overlay_slider_released가 탐색 없이 끝남 → 0
+            frame = self._hover_main_frame(round(frame / last * self.positionScroll.maximum()), last)
         return self._hover_entry(frame)
 
     def _hover_entry(self, frame: int) -> LookupResult:
