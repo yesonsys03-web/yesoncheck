@@ -38,7 +38,8 @@ _POPUP_STYLE = """
 def slider_value_at(slider: QSlider, x: int) -> int:
     """슬라이더 좌표의 x(px)를 슬라이더 값으로 — Qt QSliderPrivate::pixelPosToRangeValue와 같은 식 (모듈 설명: 클릭이 착지하는 값과 같다).
 
-    핸들 폭이 -1이어도 보정하지 않고 핸들 반을 빼지도 않는다. 범위 밖 x는 최솟값·최댓값으로 붙는다 (sliderValueFromPosition)."""
+    핸들 폭이 -1이어도 보정하지 않고 핸들 반을 빼지도 않는다. 범위 밖 x는 최솟값·최댓값으로 붙는다 (sliderValueFromPosition).
+    가로 슬라이더 전용 — 세로 슬라이더는 y축 식이 달라 이 함수로는 맞지 않는다."""
     opt = QStyleOptionSlider()
     slider.initStyleOption(opt)
     style = slider.style()
@@ -83,27 +84,30 @@ class SliderPreviewPopup(QWidget):
         self.adjustSize()
 
     def show_frame(self, number_text: str, image: Optional[np.ndarray]) -> None:
-        """번호 글과 그림을 바꿈. image는 (h, w, 3) uint8 RGB 연속 배열, None이면 빈 상자.
+        """번호 글과 그림을 바꾸고 창을 새 내용에 맞춤 (번호 글이 그림 폭보다 넓으면 늘고, 짧아지면 다시 줄어듦 — place_above는 이 뒤에 부를 것).
 
-        배열은 다른 스레드가 쓰는 버퍼의 보기일 수 있어 QImage를 .copy()해서 쥔다 (원본을 가리킨 채로 두지 않음). 모양이 다르면 ValueError —
-        연속이 아닌 배열을 QImage에 그대로 넘기면 엉뚱한 바이트를 읽는다."""
+        image는 (h, w, 3) uint8 RGB 연속 배열, None이면 빈 상자. 배열은 다른 스레드가 쓰는 버퍼의 보기일 수 있어 QImage를 .copy()해서 쥔다
+        (원본을 가리킨 채로 두지 않음). 모양이 다르면 아무것도 바꾸기 전에 ValueError — 연속이 아닌 배열을 QImage에 그대로 넘기면 엉뚱한
+        바이트를 읽고, 번호만 바뀌고 그림은 낡은 채로 남아서도 안 된다."""
+        if image is not None:
+            if image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8 or not image.flags["C_CONTIGUOUS"]:
+                raise ValueError(
+                    f"그림은 (h, w, 3) uint8 연속 RGB 배열이어야 합니다: shape={image.shape} dtype={image.dtype} "
+                    f"연속={image.flags['C_CONTIGUOUS']}"
+                )
         self.number_label.setText(number_text)
         if image is None:
             self.image_label.clear()
-            return
-        if image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8 or not image.flags["C_CONTIGUOUS"]:
-            raise ValueError(
-                f"그림은 (h, w, 3) uint8 연속 RGB 배열이어야 합니다: shape={image.shape} dtype={image.dtype} "
-                f"연속={image.flags['C_CONTIGUOUS']}"
-            )
-        height, width = image.shape[:2]
-        qimage = QImage(image.data, width, height, width * 3, QImage.Format_RGB888).copy()
-        self.image_label.setPixmap(QPixmap.fromImage(qimage))
+        else:
+            height, width = image.shape[:2]
+            qimage = QImage(image.data, width, height, width * 3, QImage.Format_RGB888).copy()
+            self.image_label.setPixmap(QPixmap.fromImage(qimage))
+        self.adjustSize()
 
     def place_above(self, slider: QSlider, x: int) -> None:
         """창을 슬라이더 좌표 x(커서)에 가로 가운데로, 아래 끝은 슬라이더 위 끝에서 GAP 위로 — 화면의 쓸 수 있는 영역 안으로 밀어 넣음.
 
-        위에 들어갈 자리가 없으면 슬라이더 아래 끝에서 GAP 아래로. (show_frame으로 크기가 정해진 뒤에 부를 것.)"""
+        위에 들어갈 자리가 없으면 슬라이더 아래 끝에서 GAP 아래로. (show_frame이 창 크기를 맞춘 뒤에 부를 것.)"""
         available = slider.screen().availableGeometry()
         slider_top = slider.mapToGlobal(QPoint(0, 0)).y()
         cursor_x = slider.mapToGlobal(QPoint(x, 0)).x()
@@ -121,7 +125,9 @@ class SliderHoverFilter(QObject):
     """슬라이더에 커서가 올라오면 popup을 띄워 그 자리의 프레임을 보이고 커서를 따라가게 하는 이벤트 필터 (모듈 설명).
 
     lookup(value)는 **슬라이더 값**을 받아 None(숨김) 또는 (번호 글, (h, w, 3) uint8 RGB 그림|None)을 돌려준다 — 값 → 프레임 변환은 부른 쪽의 몫.
-    슬라이더가 창 계층에 들어간 뒤에 만들 것 (slider.window()에도 걸어 창이 비활성이 되면 숨기므로)."""
+    슬라이더가 창 계층에 들어간 뒤에 만들 것 (slider.window()에도 걸어 창이 비활성이 되면 숨기므로).
+    수명 주의: 호출부가 이 필터의 참조를 쥐거나 parent를 줄 것 — Qt는 설치된 이벤트 필터를 붙잡아 주지 않는다
+    (parent=None으로 만들고 변수에 안 담으면 필터가 지워져 호버가 오류 없이 죽는다)."""
 
     def __init__(
         self,
@@ -150,6 +156,7 @@ class SliderHoverFilter(QObject):
                 elif kind in (QEvent.Leave, QEvent.MouseButtonPress, QEvent.Hide):
                     self._popup.hide()
         except BaseException:
+            self._popup.hide()  # 낡은 그림이 남지 않게 (오류는 아래에서 보임)
             error_window.report_from_handler("[슬라이더 썸네일]", "슬라이더 호버 처리 중 오류")
         return False
 

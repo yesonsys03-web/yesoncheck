@@ -135,8 +135,11 @@ def test_popup_copies_the_array_before_another_thread_overwrites_it(qapp, popup)
     ],
 )
 def test_popup_rejects_arrays_that_are_not_contiguous_rgb_uint8(qapp, popup, bad):
+    popup.show_frame("keep", np.full((180, 320, 3), 50, np.uint8))
     with pytest.raises(ValueError):
         popup.show_frame("1", bad)
+    assert popup.number_label.text() == "keep"  # 검사가 먼저: 거부된 호출은 번호도 그림도 바꾸지 않음
+    assert popup.image_label.pixmap().toImage().pixelColor(5, 5).red() == 50
 
 
 def test_popup_set_thumb_size_resizes_for_a_new_plan(qapp, popup):
@@ -147,6 +150,29 @@ def test_popup_set_thumb_size_resizes_for_a_new_plan(qapp, popup):
     assert popup.width() < wide[0] and popup.height() > wide[1]
     popup.show_frame("5", np.zeros((320, 180, 3), np.uint8))
     assert (popup.image_label.pixmap().width(), popup.image_label.pixmap().height()) == (180, 320)
+
+
+def test_popup_resizes_to_fit_a_wider_number_text(qapp, styled_slider):
+    """번호 글이 그림 폭보다 넓으면 show_frame에서 창이 늘고 (place_above·show 사이에 크기가 안 변해 가운데 맞춤이 유지됨), 짧은 글이면 다시 줄어든다."""
+    slider = styled_slider("main")
+    slider.move(0, 400)
+    qapp.processEvents()
+    window = SliderPreviewPopup(180, 320)  # 세로 영상 계획: 그림 폭 180
+    try:
+        narrow = window.width()
+        window.show_frame("28800 / 28800 / 28800 / 28800", None)  # 그림 폭(180)보다 넓은 글
+        assert window.width() > narrow
+        window.place_above(slider, 450)
+        placed = (window.x(), window.width())
+        window.show()
+        qapp.processEvents()
+        assert (window.x(), window.width()) == placed  # 첫 show에서 창이 더 늘며 어긋나지 않음
+        assert window.x() == slider.mapToGlobal(QPoint(450, 0)).x() - window.width() // 2  # 가운데 맞춤 유지
+
+        window.show_frame("1", None)
+        assert window.width() == narrow  # 한 번 늘어난 창이 줄지 않고 남지 않음
+    finally:
+        window.close()
 
 
 def test_popup_never_takes_focus(qapp, popup):
@@ -293,16 +319,24 @@ def test_filter_reports_lookup_exception(qapp, styled_slider, popup, monkeypatch
     monkeypatch.setattr(error_window, "report_from_handler", fake_report)
     boom = RuntimeError("lookup 실패")
 
+    failing = {"now": False}
+
     def lookup(value):
-        raise boom
+        if failing["now"]:
+            raise boom
+        return ("3", None)
 
     hover = SliderHoverFilter(slider, lookup, popup, slider)
+    _send_move(slider, 440)
+    assert popup.isVisible()  # 앞의 호버로 창이 떠 있는 상태에서 lookup이 실패
+    failing["now"] = True
     pos = QPoint(450, _y(slider))
     event = QMouseEvent(QEvent.MouseMove, QPointF(pos), QPointF(slider.mapToGlobal(pos)), Qt.NoButton, Qt.NoButton, Qt.NoModifier)
     assert hover.eventFilter(slider, event) is False  # 예외가 밖으로 안 나가고 기본 처리 그대로
     assert reports == [("[슬라이더 썸네일]", "슬라이더 호버 처리 중 오류", boom)]
+    assert popup.isVisible() is False  # 낡은 그림이 남지 않음
 
     _send_move(slider, 460)  # Qt 이벤트 경로로도 프로세스가 죽지 않음
     assert len(reports) == 2
-    assert not popup.isVisible()
+    assert popup.isVisible() is False
     del hover
