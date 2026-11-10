@@ -10,8 +10,9 @@ stop(정지된 프로세스·읽기에서 막힌 스레드 포함), 실패 글, 
 
 정지 확인: POSIX는 psutil status()가 STOPPED. Windows의 status()는 모든 스레드의 대기 사유가 Suspended일 때만 STOPPED라, 파이프가 차서
 WriteFile에서 막힌 ffmpeg 스레드가 있으면 정지돼 있어도 running으로 보인다(CI run 42768144735 — 띄운 직후 정지는 모든 스레드가 Suspended라
-맞게 보임). 그래서 도중 멈춤 시험의 Windows 갈래는 동작으로 본다 — 파이프를 비워 봐서(_drain_pipe) 한 장도 더 오지 않음. 이 갈래는 이 Mac에서도
-sys.platform을 "win32"로 바꿔 끼워 같이 돌린다(정지된 ffmpeg는 POSIX에서도 파이프를 비워도 새 장을 주지 않음).
+맞게 보임). 그래서 도중 멈춤 시험은 확인 방법을 매개변수로 둘 다 둔다 — evidence="status"(psutil status — Windows에서는 틀린 확인이라
+건너뜀)와 evidence="drain"(동작으로: 파이프를 비워 봐서(_drain_pipe) 한 장도 더 오지 않고, 비우는 도우미가 read1에서 막혀 살아 있음 — 정지된
+ffmpeg는 어느 OS에서나 새 장을 주지 않으므로 모든 OS에서 돎).
 """
 
 import socket
@@ -208,14 +209,15 @@ def test_threads_option_follows_constant(monkeypatch):
     assert command[command.index("-filter_threads") + 1] == "3" and command.index("-filter_threads") < command.index("-i")
 
 
-@pytest.mark.parametrize("platform", [sys.platform, "win32"], ids=["this_platform", "forced_win32"])
-def test_pause_suspends_process_and_resume_finishes(qapp, numbered_clip_200, make_builder, monkeypatch, platform):
+@pytest.mark.parametrize("evidence", ["status", "drain"])
+def test_pause_suspends_process_and_resume_finishes(qapp, numbered_clip_200, make_builder, evidence):
+    """도중 멈춤: 멈춘 뒤로는 한 장도 더 채우지 않고 프로세스가 정지. evidence는 정지를 확인하는 방법 (모듈 설명) — status는 psutil로 본 뒤
+    재개해 끝까지 채우고, drain은 파이프를 비워 동작으로 본 뒤 stop으로 끝냄(시험이 장을 먹었으므로)."""
+    if evidence == "status" and sys.platform == "win32":
+        pytest.skip("Windows의 psutil status()는 파이프 쓰기에서 막힌 스레드가 있으면 정지돼 있어도 running — drain 갈래가 동작으로 확인")
     plan = plan_for(200, 320, 180)
     strip = HoverStrip(plan)
     worker = make_builder(numbered_clip_200, strip)
-    # forced_win32: Windows 갈래(파이프 비우기)를 이 플랫폼에서도 돌림. 워커를 만든 뒤에 바꿈 — 생성자의 ffmpeg_path()(shutil.which)는
-    # 부를 때 sys.platform을 읽어 win32면 ffmpeg.exe를 찾음. 그 뒤(Popen·psutil·external_tools)는 import 때 정한 상수만 봄
-    monkeypatch.setattr(sys, "platform", platform)
     got = _Signals(worker)
     paused_at = []
 
@@ -232,12 +234,14 @@ def test_pause_suspends_process_and_resume_finishes(qapp, numbered_clip_200, mak
     _pump(qapp, 0.5)
     assert strip.filled_count == n1 == paused_at[0] < 200  # 멈춘 뒤로는 한 장도 더 채우지 않음
     assert got.done == [] and got.failed == []
-    if sys.platform == "win32":
+    if evidence == "drain":
         # 읽기만 멈춘 것이 아니라 프로세스가 정지 — 동작으로: 파이프를 0.5초 비워도 이미 버퍼에 있던 것(한 장 미만 — 이 Mac 98,304B)만 옴.
         # 정지가 안 됐으면 ffmpeg가 계속 밀어 넣어 상한(한 장)까지 옴. 시험이 장을 먹었으므로 끝까지 채우기는 보지 않고 stop으로 끝냄.
         pid = worker.pid
         drained, drainer, errors = _drain_pipe(worker._process.stdout, plan.frame_bytes, 0.5)
         assert drained < plan.frame_bytes, f"정지된 ffmpeg에서 {drained}바이트가 옴 (한 장 {plan.frame_bytes}바이트)"
+        # 살아 있는 정지 프로세스면 도우미는 read1에서 막혀 있어야 함 — 끝났으면 EOF(프로세스가 죽음)·오류라 위 단언이 헛돈 것
+        assert drainer.is_alive(), f"파이프를 비우는 도우미가 끝났습니다 (EOF 또는 오류 — {drained}바이트): {errors}"
         worker.stop()
         drainer.join(STOP_WAIT_MS / 1000)
         assert not worker.isRunning() and not psutil.pid_exists(pid)
