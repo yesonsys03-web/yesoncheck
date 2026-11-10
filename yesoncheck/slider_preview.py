@@ -149,6 +149,7 @@ class SliderHoverFilter(QObject):
         self._lookup = lookup
         self._popup = popup
         self._reported = False  # eventFilter 예외를 창으로 알렸음 (처음 한 번만 — 모듈 설명)
+        self._drawn = None  # 마지막으로 그린 (번호 글, 그림 데이터 주소|None) — 같으면 다시 그리지 않음 (_show_at)
         slider.setMouseTracking(True)  # 버튼을 안 눌러도 MouseMove가 와야 함
         slider.installEventFilter(self)
         slider.window().installEventFilter(self)
@@ -175,7 +176,12 @@ class SliderHoverFilter(QObject):
         return False
 
     def _show_at(self, x: int) -> None:
-        """슬라이더 좌표 x의 값으로 lookup → 창을 그리고 커서 위에 놓아 보임. 끌고 있을 때·lookup이 None이면 숨김."""
+        """슬라이더 좌표 x의 값으로 lookup → 창을 그리고 커서 위에 놓아 보임. 끌고 있을 때·lookup이 None이면 숨김.
+
+        MouseMove마다 다시 그리지 않는다: (번호 글, 그림 데이터의 주소)가 이 필터가 마지막으로 그린 것과 같고 창이 떠 있으면 show_frame(QImage
+        복사·adjustSize)을 건너뛰고 자리만 옮김. 그림은 객체가 아니라 데이터 주소로 본다 — 띠의 image(i)는 부를 때마다 새 뷰 객체지만 같은 행은
+        같은 주소이고, 한 띠 안에서 행은 한 번만 채워짐(hover_strip). 창이 숨어 있었으면 늘 다시 그림 — 파일을 바꿀 때(띠를 버리면 창을 숨김)
+        새 띠가 옛 주소를 물려받아도 옛 그림이 남지 않고, 두 필터가 창 하나를 나눠 써도 그 사이엔 Leave로 숨음."""
         if self._slider.isSliderDown():
             self._popup.hide()
             return
@@ -184,6 +190,9 @@ class SliderHoverFilter(QObject):
             self._popup.hide()
             return
         number_text, image = result
-        self._popup.show_frame(number_text, image)
+        drawn = (number_text, None if image is None else image.__array_interface__["data"][0])
+        if drawn != self._drawn or not self._popup.isVisible():
+            self._popup.show_frame(number_text, image)
+            self._drawn = drawn  # show_frame이 거부(ValueError)하면 바꾸지 않음
         self._popup.place_above(self._slider, x)
         self._popup.show()

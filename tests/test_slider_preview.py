@@ -328,6 +328,54 @@ def test_filter_hides_while_slider_down(qapp, styled_slider, popup):
     del hover
 
 
+def test_filter_redraws_only_when_the_frame_changes(qapp, styled_slider, popup, monkeypatch):
+    """MouseMove마다 다시 그리지 않음 — (번호 글, 그림 데이터의 주소)가 앞과 같고 창이 떠 있으면 show_frame(QImage 복사·adjustSize)을 건너뛰고
+    자리만 옮김. 띠의 image(i)는 부를 때마다 새 뷰 객체라 객체가 아니라 데이터 주소로 비교. 빈 상자 → 그림(그 장이 채워짐)·다른 프레임·창이
+    숨은 뒤에는 다시 그림."""
+    slider = styled_slider("main")
+    frames = np.zeros((MAX_VALUE // 10 + 1, 180, 320, 3), np.uint8)
+    filled = set()
+
+    def lookup(value):  # 슬라이더 값 10칸이 한 프레임 — 띠처럼 부를 때마다 새 뷰 (같은 행이면 같은 주소)
+        frame = value // 10
+        return str(frame + 1), (frames[frame] if frame in filled else None)
+
+    drawn, placed = [], []
+    real_show_frame, real_place_above = popup.show_frame, popup.place_above
+
+    def counting_show_frame(number_text, image):
+        drawn.append(number_text)
+        real_show_frame(number_text, image)
+
+    def counting_place_above(target, x):
+        placed.append(x)
+        real_place_above(target, x)
+
+    monkeypatch.setattr(popup, "show_frame", counting_show_frame)
+    monkeypatch.setattr(popup, "place_above", counting_place_above)
+    hover = SliderHoverFilter(slider, lookup, popup, slider)
+    x = 450
+    frame = slider_value_at(slider, x) // 10
+
+    _send_move(slider, x)
+    _send_move(slider, x)
+    assert drawn == [str(frame + 1)] and placed == [x, x] and popup.isVisible()  # 두 번째는 자리만
+
+    filled.add(frame)  # 띠가 그 장을 채움 → 같은 x라도 그림이 생겼으니 다시 그림
+    _send_move(slider, x)
+    _send_move(slider, x)
+    assert drawn == [str(frame + 1)] * 2 and popup.image_label.pixmap().width() == 320
+
+    far = 100
+    _send_move(slider, far)  # 다른 프레임
+    assert len(drawn) == 3 and drawn[-1] == str(slider_value_at(slider, far) // 10 + 1)
+
+    _send_plain(slider, QEvent.Leave)  # 숨은 뒤에는 같은 자리라도 다시 그림 (그동안 다른 쪽이 창을 바꿨을 수 있음)
+    _send_move(slider, far)
+    assert len(drawn) == 4 and popup.isVisible()
+    del hover
+
+
 def test_filter_returns_false_so_the_slider_still_handles_events(qapp, styled_slider, popup):
     slider = styled_slider("main")
     hover = SliderHoverFilter(slider, lambda value: ("1", None), popup, slider)
