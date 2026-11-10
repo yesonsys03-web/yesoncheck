@@ -69,6 +69,7 @@ from yesoncheck.main_window_styles import (
     VOLUME_SLIDER_STYLE,
     WORK_PATH_BUTTON_STYLE,
 )
+from yesoncheck.player_hover_thumbs import PlayerHoverThumbsMixin
 from yesoncheck.player_ocr import PlayerOcrMixin
 from yesoncheck.player_overlay import PlayerOverlayMixin
 from yesoncheck.slider_style import jump_to_click
@@ -120,7 +121,7 @@ def korean_date(day):
     return f"{day.year}년 {day.month:02d}월 {day.day:02d}일"
 
 
-class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
+class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
     # 창을 닫을 때 실행 중인 공유 설정 불러오기를 기다리는 최대 시간 (그 뒤에는 로그만 남기고 닫음)
     SHARED_CONFIG_CLOSE_WAIT_MS = 5000
     # 창을 닫을 때 실행 중인 분석·내보내기·병합을 기다리는 최대 시간 (그 뒤에는 끝날 때까지 붙잡아 둠)
@@ -233,6 +234,7 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         
         # 오버레이 컨트롤 생성
         self.create_overlay_controls()
+        self._init_hover_thumbs()  # 슬라이더 호버 썸네일 — 두 슬라이더가 창 안에 들어간 뒤 (필터가 slider.window()에도 걸림)
         
         # 오버레이 타이머 초기화
         self.overlay_timer = QTimer(self)
@@ -553,7 +555,6 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
         self.positionScroll.setStyleSheet(POSITION_SCROLL_INITIAL_STYLE)
         self.positionScroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.positionScroll.setMinimumSize(100, 20)
-        self.positionScroll.setToolTip('Position')
         self.positionScroll.valueChanged.connect(self.on_slider_value_changed)  # 드래그 완료 시
         self.positionScroll.sliderMoved.connect(self.on_slider_moved)  # 드래그 중 실시간 업데이트
         self.positionScroll.sliderReleased.connect(self.sync_audio_on_release)
@@ -1389,6 +1390,7 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
                 self.decoder_actions[name] = action
             self._sync_decoder_menu()
         self._add_display_menu(settings_menu)
+        self._add_hover_thumbs_menu(settings_menu)  # 슬라이더 썸네일 켜기/끄기 (PlayerHoverThumbsMixin)
 
         # 공유 설정 폴더 변경 (Windows: PC마다 고름)
         if paths.IS_WINDOWS:
@@ -2020,6 +2022,7 @@ class VideoPlayerBase(PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
             # 끝나기 전에 wait_for_released_workers가 정해진 시간까지 기다림). 결과는 버림 (신호를 막음).
             # 맨 먼저: 뒤의 정리에서 오류가 나도 실행 중인 스레드를 놓지 않은 채 남기지 않게
             self._sidebar_scan_closed = True
+            self._hover_thumbs_close()  # 슬라이더 썸네일 띠 워커(ffmpeg) 정지도 맨 앞에 (같은 까닭) — 끝나지 않았으면 끝날 때까지 붙잡아 둠
             if getattr(self, '_app_state_connected', False):
                 QApplication.instance().applicationStateChanged.disconnect(self._on_application_state_changed)
                 self._app_state_connected = False

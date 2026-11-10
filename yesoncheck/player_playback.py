@@ -296,6 +296,7 @@ class PlayerPlaybackMixin:
             if self.cap_a:
                 self.cap_a.release()
                 self.cap_a = None
+                self._hover_thumbs_close()
             if self.cap_b:
                 self.cap_b.release()
                 self.cap_b = None
@@ -339,6 +340,7 @@ class PlayerPlaybackMixin:
             file_path = self._frame_to_sequence_path(file_path)
             if file_path is None:
                 return False
+            self._hover_thumbs_pause()  # 새 캡처를 여는 동안 옛 슬라이더 썸네일 띠 ffmpeg를 정지 (연 뒤 _hover_thumbs_open이 kill)
             print(f"Attempting to open video file: {file_path}")
             opened_at = time.perf_counter()  # '[측정] 열기' 줄 — 단계마다 시각을 찍음 (open_timing_line)
             opening_sequence = is_sequence_path(file_path)
@@ -390,6 +392,7 @@ class PlayerPlaybackMixin:
                 self.positionScroll.setMaximum(max(1, total_frames - 1))
                 self.positionScroll.setValue(0)
                 self.positionScroll.blockSignals(False)
+                self._hover_thumbs_open(file_path, total_frames, int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
                 # 스크롤바 핸들 크기를 고정 (페이지 스텝 설정)
                 # self.positionScroll.setPageStep(100)  # 고정된 페이지 스텝 값
 
@@ -575,6 +578,7 @@ class PlayerPlaybackMixin:
             self.filename_a = ""
             self.frame_a = None
             self._drop_audio_media()
+            self._hover_thumbs_close()
         else:
             cap, self.cap_b = self.cap_b, None
             self.filename_b = ""
