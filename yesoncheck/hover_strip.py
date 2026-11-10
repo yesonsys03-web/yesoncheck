@@ -21,6 +21,12 @@
 수십 GB짜리 긴 ProRes가 NAS에서 통째로 다시 읽히는 것을 막지 못한다 — os.stat 크기가 MAX_FILE_BYTES(사용자 결정 "크기 상한", 숫자는 제 결정)를
 넘으면 띠를 만들지 않는다 (실패가 아니라 규칙 — 번호 + 빈 상자만 보임).
 
+띠 ffmpeg의 스레드 (thread_limits — 스펙 2026-11-11 §2): 원본 화소가 SINGLE_THREAD_ABOVE_PIXELS(1920×1080)보다 많은 파일(4K 등)만 디코더·필터
+스레드를 묶는다(값은 hover_strip_builder의 두 상수 — 1코어). 1코어는 4K ProRes 4444에서 Play 직전 여러 코어로 4K 장을 한꺼번에 디코드·축소하는
+버스트를 막으려고 측정 뒤 넣은 것이고(2026-11-10 1·2차 게이트 실패 → Ruling 14), Full HD 이하 파일은 장당 일이 1/4 이하라 그 버스트가 재생을
+흔든다는 근거가 없다 — 그래서 옵션을 넣지 않아(ffmpeg 기본, 이 Mac은 CPU 수만큼) 긴 720p 애니매틱(22.6분 32,553장)의 띠가 67.0초 → 18.8초
+(이 Mac 실측). 4K 명령은 글자 그대로라 측정된 설정이 바뀌지 않는다. 그래서 계획은 그림 크기와 함께 원본 크기(source_width·source_height)도 든다.
+
 상수는 시험이 monkeypatch로 바꿔 끼울 수 있게 함수가 부를 때마다 모듈 값으로 읽는다 (기본 인자로 굳히지 않음). 설정 키 slider_thumbnails는
 Mac은 mac_prefs, Windows는 windows_display의 위치에 두며(prefs_path), 읽기·쓰기 규칙은 mac_prefs의 것을 그대로 쓴다: 없으면 기본 켬, 깨진
 파일은 UserFileError(빈 값으로 치지 않아 다음 저장이 덮지 않음), 불리언이 아닌 값은 ValueError(값을 지어내지 않음).
@@ -38,6 +44,7 @@ from yesoncheck.frame_cache_budget import gb
 THUMB_WIDTH = 320  # 그림의 긴 변 (논리 px — 가로 영상은 폭, 세로 영상은 높이) — 키우면 메모리가 제곱으로 늘어남
 MAX_THUMBS = 500  # 띠의 최대 장수
 MAX_FILE_BYTES = 4 * 10**9  # 이보다 큰 파일은 띠를 만들지 않음 (os.stat 크기)
+SINGLE_THREAD_ABOVE_PIXELS = 1920 * 1080  # 원본 화소가 이보다 많은 파일만 띠 ffmpeg의 스레드를 묶음 (thread_limits — 모듈 설명)
 PREF_KEY = "slider_thumbnails"
 MENU_TEXT = "슬라이더 썸네일"
 LOG_PREFIX = "[슬라이더 썸네일]"
@@ -60,12 +67,15 @@ def thumb_size(width: int, height: int) -> tuple[int, int]:
 
 @dataclass(frozen=True)
 class StripPlan:
-    """띠 계획. total: 원본 전체 장수, step: 샘플 간격(원본 프레임), count: 띠의 장수, width·height: 그림 크기."""
+    """띠 계획. total: 원본 전체 장수, step: 샘플 간격(원본 프레임), count: 띠의 장수, width·height: 그림 크기,
+    source_width·source_height: 원본 크기 (스레드 규칙 thread_limits가 봄)."""
     total: int
     step: int
     count: int
     width: int
     height: int
+    source_width: int
+    source_height: int
 
     def source_frame(self, i: int) -> int:
         """샘플 i의 원본 프레임 번호 (0-based)."""
@@ -87,7 +97,16 @@ def plan_for(total: int, width: int, height: int) -> StripPlan:
         raise ValueError(f"띠 계획의 장수·폭·높이는 1 이상이어야 합니다: total={total} width={width} height={height}")
     step = _ceil_div(total, MAX_THUMBS)  # total ≤ MAX_THUMBS면 1
     thumb_width, thumb_height = thumb_size(width, height)
-    return StripPlan(total=total, step=step, count=_ceil_div(total, step), width=thumb_width, height=thumb_height)
+    return StripPlan(total=total, step=step, count=_ceil_div(total, step), width=thumb_width, height=thumb_height,
+                     source_width=width, source_height=height)
+
+
+def thread_limits(plan: StripPlan, decoder: int | None, filters: int | None) -> tuple[int | None, int | None]:
+    """띠 ffmpeg의 (디코더 스레드, 필터 스레드) — 원본 화소가 SINGLE_THREAD_ABOVE_PIXELS보다 많으면 부른 쪽의 값(큰 파일의 값) 그대로, 그 이하면
+    (None, None) — 옵션을 넣지 않음(ffmpeg 기본). 문턱은 부를 때마다 모듈 값으로 읽음 (모듈 설명)."""
+    if plan.source_width * plan.source_height > SINGLE_THREAD_ABOVE_PIXELS:
+        return decoder, filters
+    return None, None
 
 
 def skip_reason(path: str) -> str | None:

@@ -181,22 +181,36 @@ def test_sampled_plan_picks_every_step(qapp, numbered_clip, make_builder, monkey
 
 
 def test_command_shape():
-    every = StripPlan(total=48, step=1, count=48, width=320, height=180)
+    """4K 원본(Full HD보다 큼)의 명령 — 1코어로 묶은 지금 명령과 글자 그대로 (측정된 4K 설정이 바뀌지 않음, hover_strip.thread_limits)."""
+    every = StripPlan(total=48, step=1, count=48, width=320, height=180, source_width=3840, source_height=2160)
     assert build_command("/opt/ffmpeg", "/clips/a b.mov", every) == [
         "/opt/ffmpeg", "-nostdin", "-v", "error", "-filter_threads", "1", "-threads", "1", "-i", "/clips/a b.mov", "-map", "0:V:0",
         "-fps_mode", "passthrough", "-vf", "scale=320:180", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
     ]
-    sampled = StripPlan(total=14_400, step=29, count=497, width=180, height=320)
+    sampled = StripPlan(total=14_400, step=29, count=497, width=180, height=320, source_width=2160, source_height=3840)
     command = build_command("ffmpeg", "x.mov", sampled)
     vf = command[command.index("-vf") + 1]
     # 셸 없이 인자 하나 — 쉼표 앞의 역슬래시 하나는 필터 파서용(select 식 안의 쉼표가 필터 구분자가 아니게)
     assert vf == "select=not(mod(n\\,29)),scale=180:320" and vf.count("\\") == 1
     assert len(command) == len(build_command("ffmpeg", "x.mov", every))
+    assert command[4:8] == ["-filter_threads", "1", "-threads", "1"]
+
+
+@pytest.mark.parametrize("source", [(1920, 1080), (1280, 720), (1080, 1920), (320, 180)])
+def test_full_hd_or_smaller_source_has_no_thread_options(source):
+    """원본이 Full HD 이하면 스레드 옵션을 넣지 않음(ffmpeg 기본 — 이 Mac은 CPU 수만큼): 긴 720p 애니매틱의 띠가 1코어로 67초 걸리던 것
+    (스펙 2026-11-11 §2). 나머지 명령은 4K의 것에서 그 네 토큰만 빠진 것."""
+    plan = StripPlan(total=48, step=1, count=48, width=320, height=180, source_width=source[0], source_height=source[1])
+    command = build_command("ffmpeg", "x.mov", plan)
+    assert "-threads" not in command and "-filter_threads" not in command
+    big = StripPlan(total=48, step=1, count=48, width=320, height=180, source_width=3840, source_height=2160)
+    assert command == [arg for i, arg in enumerate(build_command("ffmpeg", "x.mov", big)) if i not in (4, 5, 6, 7)]
 
 
 def test_threads_option_follows_constant(monkeypatch):
-    """디코더 스레드(-threads — 입력 옵션)·필터 스레드(-filter_threads — 전역 옵션)는 두 상수를 호출 때 읽음. None이면 그 옵션 자체가 없음."""
-    every = StripPlan(total=48, step=1, count=48, width=320, height=180)
+    """(Full HD보다 큰 원본) 디코더 스레드(-threads — 입력 옵션)·필터 스레드(-filter_threads — 전역 옵션)는 두 상수를 호출 때 읽음.
+    None이면 그 옵션 자체가 없음."""
+    every = StripPlan(total=48, step=1, count=48, width=320, height=180, source_width=3840, source_height=2160)
     monkeypatch.setattr(hover_strip_builder, "FFMPEG_THREADS", None)  # 끄면 ffmpeg 기본 — 옵션 자체가 없음
     monkeypatch.setattr(hover_strip_builder, "FFMPEG_FILTER_THREADS", None)
     command = build_command("ffmpeg", "x.mov", every)

@@ -16,8 +16,10 @@ psutil.Process(pid).suspend()(POSIX SIGSTOP·Windows NtSuspendProcess), 거짓�
 그대로 먹는다(SIGKILL·TerminateProcess) — stop()은 정지 여부와 상관없이 kill한다. 정지·재개가 실패하면(psutil.Error 전부 — NoSuchProcess·
 AccessDenied 등 — 와 OSError: Windows에서 끝나 가는 프로세스의 NtSuspendProcess는 psutil이 감싸지 않은 OSError로 올 수 있음) 기록 한 줄을
 남기고 읽기만 멈추는(또는 잇는) 방식으로 둔다 — 조용히 넘기지 않고, GUI 틱 슬롯(paused setter)이나 워커 스레드로 올려 실패로 만들지도 않는다.
-띠 ffmpeg의 디코드·축소는 1코어로 묶는다(스펙 §5.3 — 쉴 때만 돌므로 느려도 됨, 이 Mac 4K 334장 쉴 때 약 38초(이 Mac 실측 — 쉴 때만)):
-디코더 스레드 FFMPEG_THREADS(-threads 1 — 입력 옵션, -i 앞)와 필터 스레드 FFMPEG_FILTER_THREADS(-filter_threads 1 — 전역 옵션, -i 앞).
+원본이 Full HD보다 큰 파일(4K 등)의 띠 ffmpeg는 디코드·축소를 1코어로 묶는다(스펙 §5.3 — 쉴 때만 돌므로 느려도 됨, 이 Mac 4K 334장 쉴 때
+약 38초(이 Mac 실측 — 쉴 때만)): 디코더 스레드 FFMPEG_THREADS(-threads 1 — 입력 옵션, -i 앞)와 필터 스레드 FFMPEG_FILTER_THREADS
+(-filter_threads 1 — 전역 옵션, -i 앞). Full HD 이하 원본은 두 옵션을 넣지 않는다(ffmpeg 기본 — hover_strip.thread_limits: 2026-11-11, 긴 720p
+애니매틱 67.0초 → 18.8초 실측; 4K 명령은 글자 그대로).
 -threads는 **디코더** 스레드만 묶는다 — -vf scale(4K → 320 축소 + rgb24 변환)은 따로 CPU 수만큼 slice 스레드를 쓰므로(이 Mac 16코어,
 번들 ffmpeg 9.0.2 실측: 프로세스 스레드 기본 68개, -threads 2만이면 54개, -filter_threads 1 -threads 2면 24개, 둘 다 1이면 22개 — 나머지는
 ffmpeg 자신의 구성 요소 스레드(미확인)) 필터 쪽 손잡이가 -filter_threads다. 까닭(측정 — CLAUDE.md 2026-11-10): 띠 워커를 띄운 지 0.5초 안에 4K
@@ -57,14 +59,15 @@ import psutil
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from yesoncheck.external_tools import decode_output, ffmpeg_path, subprocess_kwargs
-from yesoncheck.hover_strip import LOG_PREFIX, HoverStrip, StripPlan
+from yesoncheck.hover_strip import LOG_PREFIX, HoverStrip, StripPlan, thread_limits
 
 POLL_S = 0.05  # 멈춘 동안 표지를 다시 보는 간격 (초)
 BATCH_S = 0.05  # progress 묶음 간격 (초) — 또는 BATCH_FRAMES장마다, 먼저 오는 쪽 (GUI 신호 폭주 방지)
 BATCH_FRAMES = 10
 STOP_WAIT_MS = 2000  # stop()이 kill한 프로세스를 거두고, 스레드 끝을 기다리는 최대 시간 (각각)
 _STDERR_CHUNK = 65536
-# 띠 ffmpeg의 스레드 (모듈 설명 — 둘 다 None이면 그 옵션을 넣지 않아 ffmpeg 기본: 이 Mac은 디코더·필터 모두 CPU 수만큼)
+# 원본이 Full HD보다 큰 파일의 띠 ffmpeg 스레드 (모듈 설명 — hover_strip.thread_limits가 고름; Full HD 이하·None이면 그 옵션을 넣지 않아
+# ffmpeg 기본: 이 Mac은 디코더·필터 모두 CPU 수만큼)
 FFMPEG_THREADS: int | None = 1  # 디코더 스레드 (-threads — 입력 옵션이라 -i 바로 앞). 필터(-vf scale)는 묶지 않음
 FFMPEG_FILTER_THREADS: int | None = 1  # 필터 스레드 (-filter_threads — 전역 옵션, -i 앞). -vf scale의 slice 스레드를 묶음
 
@@ -72,12 +75,14 @@ FFMPEG_FILTER_THREADS: int | None = 1  # 필터 스레드 (-filter_threads — �
 def build_command(ffmpeg: str, path: str, plan: StripPlan) -> list[str]:
     """띠 하나를 만드는 ffmpeg 명령 (인자 리스트 그대로 — 셸 없음). -map 0:V:0(대문자 — attached_pic 제외)·-fps_mode passthrough(복제
     금지)는 파이프 소스와 같은 이유. 간격이 1이면 scale만, 아니면 select로 step장마다 하나 — 쉼표 앞의 역슬래시는 select 식의 쉼표가 필터
-    구분자로 읽히지 않게 하는 필터 파서용 (셸 따옴표 아님). 스레드 옵션은 두 상수를 호출 때 읽음(시험의 monkeypatch가 닿게): 필터 스레드
-    (-filter_threads, 전역)를 앞에, 디코더 스레드(-threads, 입력 옵션)를 -i 바로 앞에 — -threads는 디코더만 묶음(모듈 설명)."""
+    구분자로 읽히지 않게 하는 필터 파서용 (셸 따옴표 아님). 스레드 옵션은 원본 크기로 hover_strip.thread_limits가 고르고(Full HD 이하면 없음),
+    값은 두 상수를 호출 때 읽음(시험의 monkeypatch가 닿게): 필터 스레드(-filter_threads, 전역)를 앞에, 디코더 스레드(-threads, 입력 옵션)를
+    -i 바로 앞에 — -threads는 디코더만 묶음(모듈 설명)."""
     scale = f"scale={plan.width}:{plan.height}"
     vf = scale if plan.step == 1 else f"select=not(mod(n\\,{plan.step})),{scale}"
-    filter_threads = [] if FFMPEG_FILTER_THREADS is None else ["-filter_threads", str(FFMPEG_FILTER_THREADS)]
-    threads = [] if FFMPEG_THREADS is None else ["-threads", str(FFMPEG_THREADS)]
+    decoder, filters = thread_limits(plan, FFMPEG_THREADS, FFMPEG_FILTER_THREADS)
+    filter_threads = [] if filters is None else ["-filter_threads", str(filters)]
+    threads = [] if decoder is None else ["-threads", str(decoder)]
     return [ffmpeg, "-nostdin", "-v", "error", *filter_threads, *threads, "-i", path, "-map", "0:V:0", "-fps_mode", "passthrough",
             "-vf", vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]
 
