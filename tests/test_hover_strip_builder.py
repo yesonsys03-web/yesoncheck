@@ -425,18 +425,25 @@ def test_mp4_builds(qapp, tmp_path, make_builder):
     assert all(abs(float(strip.image(i).mean()) - (i * 10) % 255) <= 6 for i in range(30))
 
 
-def test_suspend_failure_logs_and_only_stops_reading(qapp, numbered_clip_200, make_builder, monkeypatch, capsys):
-    """psutil이 정지·재개를 못 하면(AccessDenied·NoSuchProcess) 기록 한 줄씩 — 읽기만 멈췄다가 이어서 끝까지."""
+@pytest.mark.parametrize("suspend_error, resume_error", [
+    (psutil.AccessDenied, psutil.NoSuchProcess),
+    # Windows에서 끝나 가는 프로세스의 NtSuspendProcess는 psutil이 감싸지 않은 OSError로 올 수 있음 — 그 밖의 psutil 오류는 psutil.Error
+    (lambda pid: OSError(5, f"시험: NtSuspendProcess 실패 (pid {pid})"), lambda pid: psutil.Error()),
+], ids=["psutil-denied-gone", "oserror-psutil-error"])
+def test_suspend_failure_logs_and_only_stops_reading(qapp, numbered_clip_200, make_builder, monkeypatch, capsys, suspend_error,
+                                                     resume_error):
+    """psutil이 정지·재개를 못 하면(psutil.Error 전부 — AccessDenied·NoSuchProcess 등 — 와 OSError) 기록 한 줄씩 — 읽기만 멈췄다가 이어서
+    끝까지 (예외가 GUI 틱 슬롯·워커 스레드로 올라가 실패가 되지 않음)."""
 
     class _Refuses:
         def __init__(self, pid):
             self.pid = pid
 
         def suspend(self):
-            raise psutil.AccessDenied(self.pid)
+            raise suspend_error(self.pid)
 
         def resume(self):
-            raise psutil.NoSuchProcess(self.pid)
+            raise resume_error(self.pid)
 
     monkeypatch.setattr("yesoncheck.hover_strip_builder.psutil.Process", _Refuses)
     strip = HoverStrip(plan_for(200, 320, 180))
@@ -450,6 +457,7 @@ def test_suspend_failure_logs_and_only_stops_reading(qapp, numbered_clip_200, ma
     worker.paused = False
     _finish(qapp, worker)
     assert got.failed == [] and got.done_counts == [200]
-    err = capsys.readouterr().err
-    assert err.count(f"{LOG_PREFIX} 정지/재개 실패") == 2
-    assert "AccessDenied" in err and "NoSuchProcess" in err
+    lines = [line for line in capsys.readouterr().err.splitlines() if line.startswith(f"{LOG_PREFIX} 정지/재개 실패")]
+    assert len(lines) == 2
+    assert f"정지, pid {worker.pid}: {type(suspend_error(worker.pid)).__name__}: " in lines[0]
+    assert f"재개, pid {worker.pid}: {type(resume_error(worker.pid)).__name__}: " in lines[1]

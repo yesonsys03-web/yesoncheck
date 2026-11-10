@@ -13,8 +13,9 @@ Popen(stdout=PIPE) 하나다.
 왜 멈춤이 psutil 프로세스 정지인가 (스펙 §5.3): 파이프를 읽지 않는 것만으로는 ffmpeg가 바로 멈추지 않는다 — 프레임 스레드들이 이미 디코드
 중인 장(스레드 수만큼 — 4K 4444면 8코어로 수백 ms)을 마저 디코드해 재생의 첫 틱들과 겹친다. 그래서 paused가 참이 되면
 psutil.Process(pid).suspend()(POSIX SIGSTOP·Windows NtSuspendProcess), 거짓이 되면 resume() — CPU가 즉시 0이 된다. 정지된 프로세스에도 kill은
-그대로 먹는다(SIGKILL·TerminateProcess) — stop()은 정지 여부와 상관없이 kill한다. 정지·재개가 실패하면(psutil.NoSuchProcess·AccessDenied)
-기록 한 줄을 남기고 읽기만 멈추는(또는 잇는) 방식으로 둔다 — 조용히 넘기지 않는다.
+그대로 먹는다(SIGKILL·TerminateProcess) — stop()은 정지 여부와 상관없이 kill한다. 정지·재개가 실패하면(psutil.Error 전부 — NoSuchProcess·
+AccessDenied 등 — 와 OSError: Windows에서 끝나 가는 프로세스의 NtSuspendProcess는 psutil이 감싸지 않은 OSError로 올 수 있음) 기록 한 줄을
+남기고 읽기만 멈추는(또는 잇는) 방식으로 둔다 — 조용히 넘기지 않고, GUI 틱 슬롯(paused setter)이나 워커 스레드로 올려 실패로 만들지도 않는다.
 띠 ffmpeg의 디코드·축소는 1코어로 묶는다(스펙 §5.3 — 쉴 때만 돌므로 느려도 됨, 이 Mac 4K 334장 쉴 때 약 40초(추정 — 재측정 전)):
 디코더 스레드 FFMPEG_THREADS(-threads 1 — 입력 옵션, -i 앞)와 필터 스레드 FFMPEG_FILTER_THREADS(-filter_threads 1 — 전역 옵션, -i 앞).
 -threads는 **디코더** 스레드만 묶는다 — -vf scale(4K → 320 축소 + rgb24 변환)은 따로 CPU 수만큼 slice 스레드를 쓰므로(이 Mac 16코어,
@@ -253,7 +254,7 @@ class HoverStripBuilder(QThread):
                 process.suspend()
             else:
                 process.resume()
-        except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
+        except (psutil.Error, OSError) as exc:  # NoSuchProcess·AccessDenied 등 + Windows의 감싸지 않은 OSError (모듈 설명)
             action, fallback = ("정지", "읽기만 멈춤") if pause else ("재개", "읽기를 이어 감")
             print(f"{LOG_PREFIX} 정지/재개 실패 — {action}, pid {pid}: {type(exc).__name__}: {exc} ({fallback}): {self.path}",
                   file=sys.stderr, flush=True)
