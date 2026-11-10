@@ -714,9 +714,11 @@ def test_missing_ffmpeg_reports_once_and_stops_tick(player_with_clip, numbered_c
 
 
 def test_popup_is_owned_by_the_player(shown_player):
-    """커서 위 창의 parent는 플레이어 창 — 창과 함께 지워짐(종료 순서). ToolTip이라 따로 뜨는 창 그대로."""
+    """커서 위 창의 parent는 popup_parent(플레이어) — Mac·Linux는 플레이어 창(창과 함께 지워짐), Windows는 desktop screen이라 Qt가 parent를
+    비움(parent 없는 창 — slider_preview.popup_parent 설명). 어느 쪽이든 따로 뜨는 ToolTip 창."""
     popup = shown_player._hover_popup
-    assert popup.parent() is shown_player and popup.isWindow() and popup.windowFlags() & Qt.ToolTip
+    assert popup.parent() is (None if sys.platform == "win32" else shown_player)
+    assert popup.isWindow() and popup.windowType() == Qt.ToolTip
 
 
 def test_disabled_feature_shows_nothing(shown_player, numbered_clip, monkeypatch, qapp):

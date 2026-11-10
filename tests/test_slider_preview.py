@@ -5,13 +5,15 @@
 QMouseEvent·QEnterEvent를 직접 만들어 QApplication.sendEvent로 보낸다 (QTest.mouseMove는 버튼 상태를 들고 가지 않음).
 """
 
+import sys
+
 import numpy as np
 import pytest
 from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, Qt
 from PyQt5.QtGui import QEnterEvent, QMouseEvent
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QMainWindow, QSlider
+from PyQt5.QtWidgets import QApplication, QMainWindow, QSlider, QWidget
 
 from yesoncheck import error_window, slider_preview
 from yesoncheck.hover_strip import LOG_PREFIX
@@ -21,7 +23,7 @@ from yesoncheck.main_window_styles import (
     OVERLAY_SLIDER_STYLE,
     POSITION_SCROLL_INITIAL_STYLE,
 )
-from yesoncheck.slider_preview import GAP, SliderHoverFilter, SliderPreviewPopup, slider_value_at
+from yesoncheck.slider_preview import GAP, SliderHoverFilter, SliderPreviewPopup, popup_parent, slider_value_at
 from yesoncheck.slider_style import jump_to_click
 
 SHEETS = {"main": POSITION_SCROLL_INITIAL_STYLE, "overlay": OVERLAY_SLIDER_STYLE}
@@ -171,7 +173,7 @@ def test_popup_with_parent_is_a_tooltip_window_owned_by_it(qapp):
     window.show()
     QTest.qWaitForWindowExposed(window)
     popup = SliderPreviewPopup(320, 180, parent=window)
-    assert popup.parent() is window and popup.isWindow() and popup.windowFlags() & Qt.ToolTip
+    assert popup.parent() is window and popup.isWindow() and popup.windowType() == Qt.ToolTip
 
     popup.show_frame("7", None)
     popup.place_above(slider, 350)
@@ -204,7 +206,37 @@ def test_popup_keeps_its_look_under_a_themed_parent(qapp, sheet):
         number = popup.number_label
         assert number.palette().color(number.foregroundRole()).name() == "#ffffff"
         assert number.font().pixelSize() == 22 and number.font().bold()
+        # 라벨 배경도 팝업 배경 그대로 (#1e1e1e — 어두운 테마의 QWidget{background:#232323}가 라벨로 새면 여기서 잡힘): 빈 그림 상자의 가운데,
+        # 번호 라벨의 왼쪽 끝(글자는 가운데라 비어 있는 자리)
+        image_box, number_box = popup.image_label.geometry(), number.geometry()
+        assert image.pixelColor(image_box.center()).name() == "#1e1e1e"
+        assert image.pixelColor(number_box.left() + 2, number_box.center().y()).name() == "#1e1e1e"
     finally:
+        window.close()
+
+
+def test_popup_parent_follows_qt_tooltip_platform_split(qapp, monkeypatch):
+    """popup_parent: Mac·Linux는 창 자신, Windows는 그 창이 있는 화면의 desktop screen 위젯 (qtooltip.cpp와 같은 분기 — 창을 raise하지 않게).
+    Qt 5는 Desktop 종류 parent를 화면 고르기에만 쓰고 parent는 비우므로 Windows의 팝업은 parent 없는 ToolTip 창이 된다 (이 사실을 고정)."""
+    window = QMainWindow()
+    window.show()
+    QTest.qWaitForWindowExposed(window)
+    popup = None
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(sys, "platform", "darwin")
+            assert popup_parent(window) is window
+        with monkeypatch.context() as patch:
+            patch.setattr(sys, "platform", "win32")
+            parent = popup_parent(window)
+        desktop = QApplication.desktop()
+        assert isinstance(parent, QWidget) and parent is not window
+        assert parent is desktop.screen(desktop.screenNumber(window)) and parent.windowType() == Qt.Desktop
+        popup = SliderPreviewPopup(320, 180, parent=parent)
+        assert popup.parent() is None and popup.isWindow() and popup.windowType() == Qt.ToolTip
+    finally:
+        if popup is not None:
+            popup.close()
         window.close()
 
 

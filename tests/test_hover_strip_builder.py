@@ -209,12 +209,15 @@ def test_threads_option_follows_constant(monkeypatch):
     assert command[command.index("-filter_threads") + 1] == "3" and command.index("-filter_threads") < command.index("-i")
 
 
-@pytest.mark.parametrize("evidence", ["status", "drain"])
+@pytest.mark.parametrize("evidence", [
+    pytest.param("status", marks=pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="Windows의 psutil status()는 파이프 쓰기에서 막힌 스레드가 있으면 정지돼 있어도 running — drain 갈래가 동작으로 확인")),
+    "drain",
+])
 def test_pause_suspends_process_and_resume_finishes(qapp, numbered_clip_200, make_builder, evidence):
     """도중 멈춤: 멈춘 뒤로는 한 장도 더 채우지 않고 프로세스가 정지. evidence는 정지를 확인하는 방법 (모듈 설명) — status는 psutil로 본 뒤
-    재개해 끝까지 채우고, drain은 파이프를 비워 동작으로 본 뒤 stop으로 끝냄(시험이 장을 먹었으므로)."""
-    if evidence == "status" and sys.platform == "win32":
-        pytest.skip("Windows의 psutil status()는 파이프 쓰기에서 막힌 스레드가 있으면 정지돼 있어도 running — drain 갈래가 동작으로 확인")
+    재개해 끝까지 채우고(Windows는 건너뜀), drain은 파이프를 비워 동작으로 본 뒤 stop으로 끝냄(시험이 장을 먹었으므로)."""
     plan = plan_for(200, 320, 180)
     strip = HoverStrip(plan)
     worker = make_builder(numbered_clip_200, strip)
