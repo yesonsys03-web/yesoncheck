@@ -21,11 +21,14 @@ psutil.Process(pid).suspend()(POSIX SIGSTOP·Windows NtSuspendProcess), 거짓�
 
 수명: 생성자는 띄우지 않는다 — start()가 run에서 Popen(stdout=PIPE, stderr=PIPE)하고, 띄운 직후 잠금 안에서 paused면 바로 정지한다. stderr는
 데몬 스레드가 끝까지 모은다(안 비우면 파이프가 차서 ffmpeg가 멈춤 — movie_pipe_source._PipeSession과 같은 모양). 끝은 셋 중 하나다.
-- done(채운 장수, 띄운 때부터 초 — 멈춘 시간 포함): 종료 코드 0이고 stderr가 비었을 때(-v error라 무엇이든 적혀 있으면 오류). 계획보다 적게
-  와도(잘린 파일·VFR) done이고 남은 샘플은 빈 채로, 많이 오면 남는 장은 읽어 버리고 done(기록에 '넘침 n장' 한 줄).
-- failed(글): 띄우지 못함·한 장 도중 끊김·종료 코드 ≠ 0·stderr에 글·읽기 오류. 글은 파일·명령·종료 코드·stderr 전문(·트레이스백). 이미 넣은
-  장은 그대로 둔다(그 구간은 보임). 한 장 도중 끊김(몇 바이트만 오고 EOF)은 브리프의 '짧게 끝나면 EOF'보다 보수적으로 failed로 본다 — 스펙
-  §5.3의 실패 목록('한 장 도중 EOF')을 따름. 0바이트에서의 EOF만 정상 끝이다.
+- done(채운 장수, 띄운 때부터 초 — 멈춘 시간 포함): 종료 코드 0이고 장 경계에서 EOF(0바이트에서 끝남)일 때. 계획보다 적게 와도(잘린 파일·
+  VFR) done이고 남은 샘플은 빈 채로, 많이 오면 남는 장은 읽어 버리고 done(기록에 '넘침 n장' 한 줄). 이때 stderr에 글이 있어도 done이다 —
+  잘린 파일(복사·렌더가 진행 중인 NAS 파일)이면 번들 ffmpeg가 오류 수준 글('partial file'·'wrong picture data size'·'Decoding error')을
+  찍고도 종료 코드 0으로 끝나므로, 그 글은 삼키지 않고 기록(stderr)에 'LOG_PREFIX ffmpeg 경고 (종료 코드 0, n장 채움) — 파일' 한 줄과 전문을
+  남기되 창은 띄우지 않는다(스펙 §5.3·§5.7 ② — 처음 글의 'stderr에 글이면 failed'는 그런 파일을 열 때마다 실패 창을 띄웠음).
+- failed(글): 띄우지 못함·한 장 도중 끊김·종료 코드 ≠ 0·예상 못 한 예외(읽기·넣기 오류 포함)만. 글은 파일·명령·종료 코드·stderr 전문
+  (·트레이스백). 이미 넣은 장은 그대로 둔다(그 구간은 보임). 한 장 도중 끊김(몇 바이트만 오고 EOF)은 브리프의 '짧게 끝나면 EOF'보다
+  보수적으로 failed로 본다 — 스펙 §5.3의 실패 목록('한 장 도중 EOF')을 따름. 0바이트에서의 EOF만 정상 끝이다.
 - stop(): 표지를 둔 뒤의 끊김(kill의 종료 코드·끊긴 읽기)은 신호도 기록도 내지 않는다 — done·failed는 잠금 안에서 표지를 보고 내므로
   stop()이 표지를 둔 뒤에는 나가지 않는다. 단 트레이스백이 있는 문제(예상 못 한 예외 — 정리 단계·put의 버그 등)는 stop 뒤라도 신호 없이
   기록(stderr)에 LOG_PREFIX 머리 한 줄과 트레이스백을 남긴다(조용히 사라지지 않게). 끝 신호 두 개를 직접 연결(Qt.DirectConnection)로 받아
@@ -251,7 +254,8 @@ class HoverStripBuilder(QThread):
 
     def _report(self, problem: str | None, returncode: int | None, stderr: str, received: int, started: float,
                 trace: str | None = None) -> None:
-        """끝 신호 하나 (잠금 안). 문제 글이 없고 종료 코드 0·stderr 빔이면 done, 아니면 failed. trace: 예상 못 한 예외의 트레이스백.
+        """끝 신호 하나 (잠금 안). 문제 글이 없고(장 경계의 EOF) 종료 코드 0이면 done — stderr에 글이 있으면 경고 기록(stderr, 창 없음)을
+        남김(모듈 설명: 잘린 파일). 아니면 failed. trace: 예상 못 한 예외의 트레이스백.
         stop()이 표지를 둔 뒤면 신호를 내지 않는다 — 정상 중단(kill로 끊긴 읽기·종료 코드)은 조용히, trace가 있는 문제는 기록(stderr)에 남김."""
         plan = self.strip.plan
         if trace is not None:
@@ -262,15 +266,18 @@ class HoverStripBuilder(QThread):
                     print(f"{LOG_PREFIX} 멈춘 띠 워커에서 예상 못 한 오류가 났습니다 (stop 뒤라 신호 없음) — {self.path}\n{problem}",
                           file=sys.stderr, flush=True)
                 return
-            if problem is None and returncode == 0 and not stderr:
+            if problem is None and returncode == 0:
+                filled = self.strip.filled_count
+                if stderr.strip():  # 삼키지 않음 — 잘린 파일이면 ffmpeg가 오류 줄을 찍고도 0으로 끝남
+                    print(f"{LOG_PREFIX} ffmpeg 경고 (종료 코드 0, {filled}장 채움) — {self.path}\n{stderr.rstrip()}",
+                          file=sys.stderr, flush=True)
                 if received > plan.count:
                     print(f"{LOG_PREFIX} 계획보다 많은 장을 받아 버림: 넘침 {received - plan.count}장 (계획 {plan.count}장) — {self.path}",
                           flush=True)
-                self.done.emit(self.strip.filled_count, time.monotonic() - started)
+                self.done.emit(filled, time.monotonic() - started)
                 return
             if problem is None:
-                problem = (f"ffmpeg가 비정상 종료했습니다 (종료 코드 {returncode})" if returncode != 0
-                           else "ffmpeg가 stderr에 오류를 냈습니다 (종료 코드 0)")
+                problem = f"ffmpeg가 비정상 종료했습니다 (종료 코드 {returncode})"
             code = "없음" if returncode is None else str(returncode)
             self.failed.emit(f"{problem}\n파일: {self.path}\n명령: {' '.join(self.command)}\n종료 코드: {code}\n"
                              f"stderr:\n{stderr.rstrip() or '(없음)'}")

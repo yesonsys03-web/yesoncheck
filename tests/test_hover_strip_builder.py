@@ -18,8 +18,8 @@ import pytest
 from PyQt5.QtCore import Qt
 
 from tests.conftest import write_test_video
-from tests.prores_clips import frame_number, make_numbered_clip
-from yesoncheck import hover_strip, hover_strip_builder
+from tests.prores_clips import frame_number, make_numbered_clip, make_truncated
+from yesoncheck import hover_strip, hover_strip_builder, movie_pipe_source
 from yesoncheck.hover_strip import LOG_PREFIX, HoverStrip, StripPlan, plan_for
 from yesoncheck.hover_strip_builder import STOP_WAIT_MS, HoverStripBuilder, build_command
 
@@ -31,6 +31,14 @@ WAIT_S = WAIT_MS / 1000
 def numbered_clip(tmp_path_factory):
     path = str(tmp_path_factory.mktemp("hover_strip_builder") / "numbered_48.mov")
     make_numbered_clip(path, count=48)
+    return path
+
+
+@pytest.fixture(scope="session")
+def truncated_clip(tmp_path_factory, numbered_clip):
+    """번호 클립 48장을 faststart로 다시 담고 꼬리를 자른 파일 (prores_clips.make_truncated — 헤더는 48장, 데이터는 70%에서 끊김)."""
+    path = str(tmp_path_factory.mktemp("hover_strip_builder") / "truncated_48.mov")
+    make_truncated(numbered_clip, path)
     return path
 
 
@@ -345,6 +353,43 @@ def test_fewer_frames_than_planned_is_done(qapp, numbered_clip, make_builder):
     _finish(qapp, worker)
     assert got.failed == [] and got.done_counts == [48]
     assert strip.has(47) and not strip.has(48)
+
+
+def test_truncated_file_is_done_with_warning_log(qapp, truncated_clip, make_builder, capsys):
+    """잘린 파일(복사·렌더가 진행 중인 NAS 파일처럼 — 헤더는 48장, 데이터는 중간에서 끊김): 번들 ffmpeg는 stderr에 오류 수준 글('partial
+    file'·'wrong picture data size' 등)을 찍고도 종료 코드 0으로 끝난다. 장 경계의 EOF라 failed가 아니라 done(채운 장수 — 스펙 §5.3)이고,
+    stderr 글은 삼키지 않고 기록(stderr)에 경고 머리 한 줄 + ffmpeg 글 전문 (창은 없음 — 신호는 done 하나뿐)."""
+    total = movie_pipe_source.probe_movie(truncated_clip).nb_frames  # 파이프 캡처의 FRAME_COUNT와 같은 출처 (ffprobe — 헤더의 장수)
+    assert total == 48
+    strip = HoverStrip(plan_for(total, 320, 180))
+    worker = make_builder(truncated_clip, strip)
+    got = _Signals(worker)
+    worker.start()
+    _finish(qapp, worker)
+    assert got.failed == [] and len(got.done) == 1
+    filled = got.done_counts[0]
+    assert 1 <= filled < total and filled == strip.filled_count
+    assert _numbers(strip, filled) == list(range(filled)) and not strip.has(filled)  # 채운 장은 앞에서부터 그 번호, 뒤는 빈 채
+    err = capsys.readouterr().err
+    head = f"{LOG_PREFIX} ffmpeg 경고 (종료 코드 0, {filled}장 채움) — {truncated_clip}"
+    assert [line for line in err.splitlines() if line.startswith(LOG_PREFIX)] == [head]
+    ffmpeg_text = err.split(head + "\n", 1)[1]
+    assert "error" in ffmpeg_text.lower() and "prores" in ffmpeg_text  # ffmpeg 자신의 글 (디코더 오류 줄) — 줄이지 않음
+
+
+def test_h264_builds(qapp, tmp_path, make_builder, make_video, capsys):
+    """H.264 mp4 (conftest.make_video — libx264, 소리 트랙 포함, 2초 24fps = 48장 320×240) — 영상 트랙만 끝까지, 경고 기록 없음."""
+    path = make_video(str(tmp_path / "clip_h264.mp4"))
+    total = movie_pipe_source.probe_movie(path).nb_frames
+    assert total == 48
+    strip = HoverStrip(plan_for(total, 320, 240))
+    worker = make_builder(path, strip)
+    got = _Signals(worker)
+    worker.start()
+    _finish(qapp, worker)
+    assert got.failed == [] and got.done_counts == [48]
+    assert strip.filled_count == 48 and strip.image(47).shape == (240, 320, 3)
+    assert _logged(capsys) == []
 
 
 def test_extra_frames_are_dropped(qapp, numbered_clip, make_builder, capsys):
