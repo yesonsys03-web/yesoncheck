@@ -4,7 +4,9 @@
 왜: 슬라이더 위에 커서를 올리면 그 자리의 프레임 그림을 보여 주려면 재생 캡처와 무관한 별도 출처가 필요하다 (재생 캡처로 꺼내면 본화면이
 튀고 스트림·링이 깨짐). 그래서 쉴 때 ffmpeg가 파일 전체를 작게 줄여 RAM에 '띠'로 깔아 두고(hover_strip_builder), 호버는 꺼내 보이기만 한다.
 이 모듈은 그 띠의 크기·장수를 정하고(StripPlan), 만든 그림을 담고(HoverStrip), 만들지 말아야 할 파일을 가르고(skip_reason), 기능을 켜고 끄는
-선택을 prefs.json에 두는(read_enabled·save_enabled) 규칙만 가진다 — 프로세스·스레드·화면은 다른 모듈의 몫이라 Qt 없이 시험한다.
+선택을 prefs.json에 두는(read_enabled·save_enabled) 규칙만 가진다 — 프로세스·스레드·화면은 다른 모듈의 몫이라 Qt 없이 시험한다. 이 기능의
+글 상수(메뉴 글 MENU_TEXT·기록 머리 LOG_PREFIX·설정 창 제목 SETTINGS_TITLE)도 여기 한 곳에 둔다 — Qt 없는 모듈이라 app·믹스인·화면 쪽이 모두
+순환 없이 가져다 씀.
 
 크기 (스펙 §5.2): 그림은 THUMB_WIDTH(320) × THUMB_WIDTH 상자 안에 맞춘다 — THUMB_WIDTH는 이름과 달리 '긴 변의 길이'다. 가로로 긴 영상(W ≥ H)은 폭 320에
 짝수 높이, 세로로 긴 영상(W < H)은 높이 320에 짝수 폭이고, 짧은 변은 비율을 지켜 짝수로 맞춘다. ffmpeg의 scale에는 폭·높이 **둘 다 명시**해 넘긴다 —
@@ -39,6 +41,7 @@ MAX_FILE_BYTES = 4 * 10**9  # 이보다 큰 파일은 띠를 만들지 않음 (o
 PREF_KEY = "slider_thumbnails"
 MENU_TEXT = "슬라이더 썸네일"
 LOG_PREFIX = "[슬라이더 썸네일]"
+SETTINGS_TITLE = "슬라이더 썸네일 설정"  # 설정 창 제목 하나 — 시작 때 읽기 실패(app.load_slider_thumbnails)·메뉴의 저장 실패(player_hover_thumbs)
 
 _enabled = True  # 프로세스 캐시 — app.load_slider_thumbnails가 시작 때 정하고 Settings 메뉴가 바꿈 (windows_display._preferred와 같은 모양)
 

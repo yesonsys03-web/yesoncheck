@@ -248,9 +248,6 @@ def load_display_renderer():
     print(f"[뷰포트] 화면 그리기 설정: {windows_display.preferred()}", flush=True)  # '[표시]'는 GL 그리기 줄 전용 (CLAUDE.md)
 
 
-SLIDER_THUMBS_TITLE = "슬라이더 썸네일 설정"
-
-
 def load_slider_thumbnails():
     """슬라이더 호버 썸네일의 켬/끔 설정을 시작 때 한 번 읽어 hover_strip의 캐시에 둠 — 창(Settings 메뉴 체크)·영상을 열 때 그 캐시를 봄. 깨진 파일·나쁜 값은 기본(켬)으로
     치지 않고 트레이스백·창을 보인 뒤 이 세션은 끔 — 읽지 못한 채 ffmpeg를 돌리지 않음 (Settings에서 다시 켤 수 있음). 파일은 건드리지 않는다. 모든 플랫폼."""
@@ -259,7 +256,7 @@ def load_slider_thumbnails():
     except (user_files.UserFileError, ValueError) as exc:
         traceback.print_exc()
         hover_strip.set_enabled(False)
-        QMessageBox.warning(None, SLIDER_THUMBS_TITLE, f"{exc}\n\n이 세션은 슬라이더 썸네일을 끕니다 — Settings → {hover_strip.MENU_TEXT}에서 다시 켤 수 있습니다")
+        QMessageBox.warning(None, hover_strip.SETTINGS_TITLE, f"{exc}\n\n이 세션은 슬라이더 썸네일을 끕니다 — Settings → {hover_strip.MENU_TEXT}에서 다시 켤 수 있습니다")
     print(f"{hover_strip.LOG_PREFIX} 설정: {'켬' if hover_strip.enabled() else '끔'}", flush=True)
 
 

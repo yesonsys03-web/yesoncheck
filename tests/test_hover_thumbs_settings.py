@@ -26,7 +26,7 @@ from tests.test_sequence_capture import make_seq
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 from yesoncheck import app, hover_strip, windows_display
 from yesoncheck.hover_strip import LOG_PREFIX, MENU_TEXT
-from yesoncheck.player_hover_thumbs import HOVER_TIP, HOVER_TITLE
+from yesoncheck.player_hover_thumbs import HOVER_TIP
 
 SET_OFF_LOG = f"{LOG_PREFIX} 설정: 끔 (Settings 메뉴)"
 SET_ON_LOG = f"{LOG_PREFIX} 설정: 켬 (Settings 메뉴)"
@@ -169,7 +169,7 @@ def test_toggle_on_without_movie_or_with_sequence_builds_nothing(shown_player, t
 
 @pytest.mark.parametrize("error", [OSError("디스크가 가득 참"), TimeoutError("잠금 시간 초과")])
 def test_toggle_save_failure_reverts_check(player_with_clip, monkeypatch, dialogs, capsys, error):
-    """끄려는데 저장 실패(OSError·TimeoutError) → 오류 창 1회(제목 HOVER_TITLE·글 '설정을 저장하지 못해 바꾸지 않았습니다.\\n<원인>'), 트레이스백 기록,
+    """끄려는데 저장 실패(OSError·TimeoutError) → 오류 창 1회(제목 hover_strip.SETTINGS_TITLE·글 '설정을 저장하지 못해 바꾸지 않았습니다.\\n<원인>'), 트레이스백 기록,
     체크는 그대로(켬), 캐시·계획 그대로 — 파일은 만들지 않음."""
     player = player_with_clip
     plan = player._hover_plan
@@ -183,7 +183,7 @@ def test_toggle_save_failure_reverts_check(player_with_clip, monkeypatch, dialog
 
     action.trigger()
 
-    assert [(kind, title) for kind, title, _ in dialogs.messages] == [("critical", HOVER_TITLE)]
+    assert [(kind, title) for kind, title, _ in dialogs.messages] == [("critical", hover_strip.SETTINGS_TITLE)]
     assert dialogs.criticals[0] == f"{SAVE_FAILED_HEAD}{error}"
     assert action.isChecked() and hover_strip.enabled() is True
     assert player._hover_plan is plan and player._hover_path == player.filename_a
@@ -218,7 +218,7 @@ def test_broken_prefs_file_is_reported_and_not_overwritten(player_with_clip, dia
     action.trigger()
 
     assert len(dialogs.criticals) == 1 and dialogs.criticals[0].startswith(SAVE_FAILED_HEAD)
-    assert dialogs.messages[0][:2] == ("critical", HOVER_TITLE)
+    assert dialogs.messages[0][:2] == ("critical", hover_strip.SETTINGS_TITLE)
     assert read_text(path) == "{깨짐"
     assert action.isChecked() and hover_strip.enabled() is True and player._hover_plan is plan
     assert "UserFileError" in capsys.readouterr().err
@@ -304,14 +304,14 @@ def test_startup_reads_pref(dialogs, capsys):
     (json.dumps({hover_strip.PREF_KEY: 1}), "ValueError"),  # 1은 불리언이 아님 (bool이 아닌 int)
 ])
 def test_startup_broken_prefs_warns_and_disables(dialogs, capsys, content, error_name):
-    """깨진 JSON(UserFileError)·불리언이 아닌 값(ValueError) → 경고 창 1회(제목 SLIDER_THUMBS_TITLE, 글 '<원인>\\n\\n이 세션은 …끕니다'), 트레이스백,
+    """깨진 JSON(UserFileError)·불리언이 아닌 값(ValueError) → 경고 창 1회(제목 hover_strip.SETTINGS_TITLE — 메뉴의 저장 실패 창과 같은 상수, 글 '<원인>\\n\\n이 세션은 …끕니다'), 트레이스백,
     enabled() False(기본으로 치지 않음), 파일은 그대로, 끝 줄은 '설정: 끔'."""
     path = write_prefs(content)
 
     app.load_slider_thumbnails()
 
-    assert app.SLIDER_THUMBS_TITLE == "슬라이더 썸네일 설정"
-    assert [(kind, title) for kind, title, _ in dialogs.messages] == [("warning", app.SLIDER_THUMBS_TITLE)]
+    assert hover_strip.SETTINGS_TITLE == "슬라이더 썸네일 설정"
+    assert [(kind, title) for kind, title, _ in dialogs.messages] == [("warning", hover_strip.SETTINGS_TITLE)]
     assert dialogs.warnings[0].endswith(f"\n\n{STARTUP_NOTE}")
     assert hover_strip.enabled() is False
     assert read_text(path) == content

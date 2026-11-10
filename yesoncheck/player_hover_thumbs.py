@@ -57,7 +57,7 @@ from PyQt5.QtWidgets import QMessageBox
 
 from yesoncheck import error_window, hover_strip, hover_strip_builder, user_files, worker_lifecycle
 from yesoncheck.external_tools import ToolNotFoundError
-from yesoncheck.hover_strip import LOG_PREFIX, MENU_TEXT, THUMB_WIDTH
+from yesoncheck.hover_strip import LOG_PREFIX, MENU_TEXT, SETTINGS_TITLE, THUMB_WIDTH
 from yesoncheck.sequence_scan import is_sequence_path
 from yesoncheck.slider_preview import LookupResult, SliderHoverFilter, SliderPreviewPopup
 
@@ -66,7 +66,6 @@ IDLE_S = 0.3  # 재생 캡처의 위치가 이 안에 바뀌었으면 쉬는 때
 TICK_MS = 50  # 쉬는 때 판정 간격 — 띄울 워커가 있거나 돌고 있는 동안만 돎
 BUSY_LOG_S = 5.0  # 워커 없이 이만큼 넘게 바쁘면 진단 기록 한 줄 (계획마다 한 번)
 BUILDER_LABEL = "슬라이더 썸네일 띠"  # release_worker의 기록 이름
-HOVER_TITLE = "슬라이더 썸네일 설정"  # Settings → 슬라이더 썸네일의 저장 실패 창 제목 (app.SLIDER_THUMBS_TITLE의 읽기 실패 창과 같은 제목)
 HOVER_TIP = "슬라이더 위에 커서를 올리면 그 프레임의 작은 그림을 보여 줍니다 — 이 창은 바로, 이미 열린 다른 창은 다음에 켤 때부터"
 
 
@@ -300,7 +299,7 @@ class PlayerHoverThumbsMixin:
                 hover_strip.save_enabled(enabled)
         except (user_files.UserFileError, OSError, TimeoutError) as exc:
             traceback.print_exc()
-            QMessageBox.critical(self, HOVER_TITLE, f"설정을 저장하지 못해 바꾸지 않았습니다.\n{exc}")
+            QMessageBox.critical(self, SETTINGS_TITLE, f"설정을 저장하지 못해 바꾸지 않았습니다.\n{exc}")
             self._sync_hover_thumbs_menu()
             return
         if hover_strip.enabled() == enabled:
