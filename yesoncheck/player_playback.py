@@ -1624,12 +1624,17 @@ class PlayerPlaybackMixin:
                 # 오차가 크면 정확한 위치로 조정 — 드래그가 프레임 캐시에 맞으면 그림만 바꾸고 캡처는 옮기지 않아(그래서 드래그가 즉시 반응함) 이 차이가 남.
                 # 0번부터 순차로 읽지 않고 직접 이동(_precise_seek): 예전 _seek_sequential은 멈춤이 목표 번호에 비례해 25분 영상의 30000번에서 119초 GUI가 멈췄음
                 # (사용자 보고 2026-11-05 — tests/test_drag_release_seek.py)
-                if abs(actual_frame_idx - target_frame_idx) > 5:
+                # 와이프에 B가 있으면 허용 오차 0: 캐시 적중 뒤 캡처(c)는 그림(t)과 다른 자리라 B만 t에 맞추면 update_frame의 update_position_info가 캡처 c 기준으로
+                # 슬라이더·라벨을 c로 되돌려 그림(t)과 어긋나 튀고, A 캡처(c+1)·B 캡처(t+1)가 갈려 이어지는 재생이 |c−t|장 어긋남 — 정밀 이동이 A 캡처·B·슬라이더·라벨을 함께 t로 맞춤
+                wipe_b = bool(self.cap_b and self.videoWidget.wipeEnabled)
+                tolerance = 0 if wipe_b else 5
+                if abs(actual_frame_idx - target_frame_idx) > tolerance:
                     print(f"드래그 완료: 정확한 위치로 조정 {actual_frame_idx} -> {target_frame_idx}")
                     self._precise_seek(target_frame_idx, total_frames)
-                elif self.cap_b and self.videoWidget.wipeEnabled:
-                    # 이동이 없는 놓기(캐시에 안 맞아 캡처가 이미 목표 곁에 있는 드래그)도 B를 맞춤: 드래그 미리보기(_quick_preview_seek)가 B 동기화를 통째로
-                    # 건너뛰어 frame_b가 None이거나 드래그 전 장으로 남으므로, 놓을 때 A가 보여 주는 장(target_frame_idx)에 B를 맞추고 다시 그림 (와이프 B가 검게 남음 — 사용자 보고)
+                elif wipe_b and (self.frame_b is None or max(0, int(self.cap_b.get(cv2.CAP_PROP_POS_FRAMES)) - 1) != target_frame_idx):
+                    # 캡처는 목표에 있으나(캐시 미적중 드래그) B가 없거나 다른 자리: 드래그 미리보기(_quick_preview_seek)가 B 동기화를 통째로 건너뛰어 frame_b가 None이거나
+                    # 드래그 전 장으로 남으므로, 놓을 때 A가 보여 주는 장(target_frame_idx)에 B를 맞추고 다시 그림 (와이프 B가 검게 남음 — 사용자 보고).
+                    # B가 이미 그 자리면(평범한 클릭 — 누를 때 정밀 이동이 맞춤, 오버레이 슬라이더 놓기 — _overlay_slider_final_seek가 맞춤) 다시 읽지도 그리지도 않음
                     self.cap_b.set(cv2.CAP_PROP_POS_FRAMES, target_frame_idx)
                     ret_b, frame_b = self.cap_b.read()
                     self.frame_b = self.process_frame(frame_b) if ret_b and frame_b is not None else None

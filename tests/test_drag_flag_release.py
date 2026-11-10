@@ -13,6 +13,7 @@ B 단언은 놓는 길이 둘:
 - 놓을 때 정확한 위치로 옮기는 이동(_precise_seek)이 도는 드래그 — 마지막 움직임이 프레임 캐시에 맞아 캡처가 5장 넘게 떨어진 채 놓음(test_drag_release_seek와 같은 길).
 - 이동이 안 도는 드래그(캐시 미적중 — 캡처가 이미 목표에 있음): 드래그 미리보기가 B 동기화를 통째로 건너뛰어 frame_b가 None인 채라, 표지를 풀어도 B가 검게 남음.
   놓을 때 B를 A의 장에 맞춰 다시 그려야 함(sync_audio_on_release의 elif) — 이 길의 시험은 A·B에 같은 클립을 열어 두 프레임의 밝기가 같음(같은 장)으로 가름.
+  와이프면 정밀 이동의 허용 오차가 0(캡처와 1~5장 차이로 놓아도 이동 — 슬라이더·라벨·A/B 캡처가 함께 목표로), B가 이미 그 자리면(평범한 클릭·오버레이 슬라이더 놓기) elif도 다시 읽지 않음.
 """
 
 import os
@@ -25,6 +26,7 @@ from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication
 
 from tests.conftest import write_test_video
+from tests.test_drag_release_seek import CountingCapture
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 
 FRAMES = 48
@@ -173,3 +175,72 @@ def test_b_is_resynced_on_release_without_precise_seek(wipe_player, monkeypatch)
     assert player.frame_b is not None
     assert player.frame_b.mean() == pytest.approx(player.frame_a.mean(), abs=2)  # 같은 장 (이웃 장이면 10 차이)
     assert player.is_dragging is False
+
+
+def position(cap):
+    return int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+
+
+def test_narrow_wipe_drag_back_onto_a_cached_frame_keeps_slider_label_and_captures_aligned(wipe_player):
+    """와이프 + 캐시 적중 + 캡처와 5장 차이로 놓기(짧은 클립에서 20 → 25 → 20처럼 좁게 왔다갔다 끌기): 정밀 이동이 도는 허용 오차는 와이프면 0.
+    5장 안이라고 B만 목표에 맞추면 update_frame의 update_position_info가 캡처(25) 기준으로 슬라이더·Current를 25로 되돌려 그림(20)과 어긋나 튀고,
+    A 캡처(25)·B 캡처(20)가 갈려 이어지는 와이프 재생이 5장 어긋남. 정밀 이동은 A 캡처·B·슬라이더·라벨을 함께 20으로 맞춤."""
+    player = wipe_player
+    bar = player.positionScroll
+    bar.setSliderDown(True)
+    for value in (20, 25, 20):  # 20·25는 미적중(캐시에 담김), 마지막 20은 적중 — 캡처는 25에 남고 슬라이더·그림만 20
+        bar.setSliderPosition(value)
+    assert player.cache_hits == 1
+    assert position(player.cap_a) - 1 == 25 and bar.value() == 20  # 전제: 캡처와 5장 차이 — 옛 5장 허용 오차면 이동이 안 도는 놓기
+
+    bar.setSliderDown(False)
+    QApplication.processEvents()
+
+    assert bar.value() == 20
+    assert player.overlaySlider.value() == 20
+    assert player.labelFrameCount.text() == "Current: 21"
+    assert position(player.cap_a) - 1 == 20
+    assert position(player.cap_b) - 1 == 20  # A·B 캡처 정렬 — 이어지는 와이프 재생이 어긋나지 않음
+    assert player.frame_b is not None and player.frame_b.mean() == pytest.approx(player.frame_a.mean(), abs=2)
+
+
+def test_plain_click_release_does_not_reread_or_redraw_b(wipe_player, monkeypatch):
+    """평범한 클릭(누름·놓음만): 누를 때 valueChanged → 정밀 이동이 A·B를 목표에 맞췄으므로 놓을 때 B를 다시 읽지도 그리지도 않음(자리가 같으면 건너뜀)."""
+    player = wipe_player
+    player.cap_b = CountingCapture(player.cap_b)
+    draws = []
+    original = player.videoWidget.updateFrame
+
+    def recording_update_frame(*args, **kwargs):
+        draws.append(args)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(player.videoWidget, "updateFrame", recording_update_frame)
+    slider = player.positionScroll
+    y = slider.height() // 2
+
+    QTest.mousePress(slider, Qt.LeftButton, Qt.NoModifier, QPoint(int(slider.width() * 0.6), y))
+    QApplication.processEvents()
+    assert position(player.cap_b) - 1 == slider.value()  # 전제: 누를 때 이미 B가 그 자리
+    player.cap_b.reset()
+    draws.clear()
+    QTest.mouseRelease(slider, Qt.LeftButton, Qt.NoModifier, QPoint(int(slider.width() * 0.6), y))
+    QApplication.processEvents()
+
+    assert (player.cap_b.reads, player.cap_b.sets) == (0, 0)
+    assert draws == []
+
+
+def test_overlay_slider_release_reads_b_only_once(wipe_player):
+    """오버레이 슬라이더 놓기: _overlay_slider_final_seek가 B를 맞춘 뒤 sync_audio_on_release를 또 부르는데, B가 이미 그 자리라 한 번 더 읽지 않음(읽기·set 각 1번)."""
+    player = wipe_player
+    player.cap_b = CountingCapture(player.cap_b)
+    player.overlaySlider.blockSignals(True)
+    player.overlaySlider.setValue(30)
+    player.overlaySlider.blockSignals(False)
+
+    player.on_overlay_slider_released()
+    QApplication.processEvents()
+
+    assert (player.cap_b.reads, player.cap_b.sets) == (1, 1)
+    assert position(player.cap_b) - 1 == 30
