@@ -4,12 +4,21 @@
 monkeypatch로 바꿔 끼울 수 있게 모듈 값을 부를 때마다 읽는다 (MAX_THUMBS·MAX_FILE_BYTES).
 """
 
+import os
 import sys
 
 import pytest
 
 from yesoncheck import hover_strip, mac_prefs, windows_display
+from yesoncheck.frame_cache_budget import gb
 from yesoncheck.user_files import UserFileError
+
+
+@pytest.fixture(autouse=True)
+def restore_enabled_cache():
+    """set_enabled가 바꾸는 프로세스 캐시를 시험이 끝나면 기본(켬)으로 — 실행 순서·다른 시험에 영향을 남기지 않음."""
+    yield
+    hover_strip.set_enabled(True)
 
 
 # ---------------------------------------------------------------- 띠 계획
@@ -108,14 +117,13 @@ def test_skip_reason_by_file_size(tmp_path, monkeypatch):
         hover_strip.skip_reason(str(tmp_path / "none.mov"))
 
 
-def test_skip_reason_boundary_and_gb_text(tmp_path):
+def test_skip_reason_boundary_and_gb_text(tmp_path, monkeypatch):
+    monkeypatch.setattr(hover_strip, "MAX_FILE_BYTES", 10)  # 작은 파일로 경계를 봄 (큰 파일·구멍 파일은 만들지 않음)
     path = tmp_path / "a.mov"
-    with open(path, "wb") as file:
-        file.truncate(hover_strip.MAX_FILE_BYTES)  # 구멍 파일 — 실제로 디스크를 쓰지 않음
+    path.write_bytes(b"x" * 10)
     assert hover_strip.skip_reason(str(path)) is None  # 상한과 같으면 만든다 (넘을 때만 건너뜀)
-    with open(path, "wb") as file:
-        file.truncate(4_300_000_000)
-    assert hover_strip.skip_reason(str(path)) == "파일 4.3GB > 상한 4.0GB"
+    path.write_bytes(b"x" * 11)
+    assert hover_strip.skip_reason(str(path)) == f"파일 {gb(11)} > 상한 {gb(10)}"  # 1바이트 넘으면 글 (십진 GB — frame_cache_budget.gb)
 
 
 # ---------------------------------------------------------------- 설정
@@ -140,6 +148,14 @@ def test_enabled_pref_rejects_non_bool(tmp_path, text):
     with pytest.raises(ValueError):
         hover_strip.read_enabled(str(path))
     assert path.read_text() == text  # 읽기만 하고 파일은 그대로
+
+
+@pytest.mark.parametrize("bad", ["yes", 1, None])
+def test_save_enabled_rejects_non_bool(tmp_path, bad):
+    path = tmp_path / "prefs.json"
+    with pytest.raises(TypeError):
+        hover_strip.save_enabled(bad, str(path))
+    assert not os.path.exists(path)  # 잘못된 값은 파일을 만들지 않음
 
 
 def test_enabled_pref_broken_file_raises_user_file_error(tmp_path):
@@ -170,16 +186,14 @@ def test_prefs_path_by_platform(monkeypatch, tmp_path):
 
 
 def test_enabled_cache():
-    assert hover_strip.enabled() is True
-    try:
-        hover_strip.set_enabled(False)
-        assert hover_strip.enabled() is False
-        for bad in ("no", 0, None):
-            with pytest.raises(TypeError):
-                hover_strip.set_enabled(bad)
-        assert hover_strip.enabled() is False  # 틀린 값은 캐시를 바꾸지 않음
-    finally:
-        hover_strip.set_enabled(True)
+    assert hover_strip.enabled() is True  # 기본 켬 (끝나면 autouse fixture가 되돌림)
+    hover_strip.set_enabled(False)
+    assert hover_strip.enabled() is False
+    for bad in ("no", 0, None):
+        with pytest.raises(TypeError):
+            hover_strip.set_enabled(bad)
+    assert hover_strip.enabled() is False  # 틀린 값은 캐시를 바꾸지 않음
+    hover_strip.set_enabled(True)
     assert hover_strip.enabled() is True
 
 

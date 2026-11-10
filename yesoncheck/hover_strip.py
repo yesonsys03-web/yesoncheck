@@ -147,7 +147,10 @@ def read_enabled(path: str | None = None) -> bool:
 
 
 def save_enabled(value: bool, path: str | None = None) -> None:
-    """파일에 저장 (그 키만 고침 — 다른 키는 그대로). 깨진 파일은 덮지 않고 UserFileError."""
+    """파일에 저장 (그 키만 고침 — 다른 키는 그대로). 불리언이 아니면 TypeError — read_enabled가 거부할 값을 파일에 쓰지 않음(파일은 그대로).
+    깨진 파일은 덮지 않고 UserFileError."""
+    if not isinstance(value, bool):
+        raise TypeError(f"{PREF_KEY}는 bool이어야 합니다: {value!r}")
     mac_prefs.update_pref(PREF_KEY, value, path or prefs_path())
 
 
