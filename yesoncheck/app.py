@@ -16,18 +16,18 @@ if __package__ in (None, ""):
     sys.path.append(os.path.dirname(os.path.dirname(__file__)))
     from yesoncheck.main_window import VideoPlayer  # type: ignore  # pylint: disable=import-error
     from yesoncheck import (  # type: ignore  # pylint: disable=import-error
-        build_info, default_app, error_window, file_associations, gl_video_item, launch_args, mac_app_events, mac_mounts,
-        mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, qt_messages, timing_log, update_install, user_files,
-        windows_display,
+        build_info, default_app, error_window, file_associations, gl_video_item, hover_strip, launch_args, mac_app_events,
+        mac_mounts, mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, qt_messages, timing_log, update_install,
+        user_files, windows_display,
     )
     from yesoncheck.player_base import EXIT_WAIT_S, wait_for_released_workers  # type: ignore  # pylint: disable=import-error
     from yesoncheck.player_update import BOX_TITLE_PROPERTY  # type: ignore  # pylint: disable=import-error
 else:
     from .main_window import VideoPlayer
     from . import (
-        build_info, default_app, error_window, file_associations, gl_video_item, launch_args, mac_app_events, mac_mounts,
-        mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, qt_messages, timing_log, update_install, user_files,
-        windows_display,
+        build_info, default_app, error_window, file_associations, gl_video_item, hover_strip, launch_args, mac_app_events,
+        mac_mounts, mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, qt_messages, timing_log, update_install,
+        user_files, windows_display,
     )
     from .player_base import EXIT_WAIT_S, wait_for_released_workers
     from .player_update import BOX_TITLE_PROPERTY
@@ -248,6 +248,21 @@ def load_display_renderer():
     print(f"[뷰포트] 화면 그리기 설정: {windows_display.preferred()}", flush=True)  # '[표시]'는 GL 그리기 줄 전용 (CLAUDE.md)
 
 
+SLIDER_THUMBS_TITLE = "슬라이더 썸네일 설정"
+
+
+def load_slider_thumbnails():
+    """슬라이더 호버 썸네일의 켬/끔 설정을 시작 때 한 번 읽어 hover_strip의 캐시에 둠 — 창(Settings 메뉴 체크)·영상을 열 때 그 캐시를 봄. 깨진 파일·나쁜 값은 기본(켬)으로
+    치지 않고 트레이스백·창을 보인 뒤 이 세션은 끔 — 읽지 못한 채 ffmpeg를 돌리지 않음 (Settings에서 다시 켤 수 있음). 파일은 건드리지 않는다. 모든 플랫폼."""
+    try:
+        hover_strip.set_enabled(hover_strip.read_enabled())
+    except (user_files.UserFileError, ValueError) as exc:
+        traceback.print_exc()
+        hover_strip.set_enabled(False)
+        QMessageBox.warning(None, SLIDER_THUMBS_TITLE, f"{exc}\n\n이 세션은 슬라이더 썸네일을 끕니다 — Settings → {hover_strip.MENU_TEXT}에서 다시 켤 수 있습니다")
+    print(f"{hover_strip.LOG_PREFIX} 설정: {'켬' if hover_strip.enabled() else '끔'}", flush=True)
+
+
 def screen_report(screen):
     """시작 로그용 한 줄: 화면의 논리 크기·작업 영역·devicePixelRatio·논리 DPI·Qt 배율 반올림 정책
     (Windows 150%가 2배로 반올림되는지 등을 사용자 로그로 알 수 있게)."""
@@ -380,6 +395,7 @@ def launch(argv=None):
     # (Mac) 재생 디코더 설정(prefs.json)도 시작 때 한 번 읽어 게이트의 캐시에 — native_wanted는 그 캐시만 봄 (깨졌으면 알리고 이 세션은 ffmpeg)
     load_playback_decoder()
     load_display_renderer()  # (Windows) 화면 그리기 설정 — 창(뷰포트)을 만들기 전에
+    load_slider_thumbnails()  # 슬라이더 썸네일 켬/끔 — 창(Settings 메뉴 체크)을 만들기 전에
     # 네이티브 재생 토글(YESONCHECK_MAC_NATIVE)도 같은 이유로 여기서 — 값(native_mode)과 함께 on이 macOS 밖이면 ValueError (native_wanted가
     # 열 때마다 늦게 실패하지 않게)
     mac_native_gate.native_wanted()

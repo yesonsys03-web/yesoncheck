@@ -1390,6 +1390,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
                 self.decoder_actions[name] = action
             self._sync_decoder_menu()
         self._add_display_menu(settings_menu)
+        self._add_hover_thumbs_menu(settings_menu)  # 슬라이더 썸네일 켜기/끄기 (PlayerHoverThumbsMixin)
 
         # 공유 설정 폴더 변경 (Windows: PC마다 고름)
         if paths.IS_WINDOWS:

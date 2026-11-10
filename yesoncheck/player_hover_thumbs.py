@@ -26,6 +26,12 @@ ffmpeg는 파일 전체(NAS)를 읽기 시작하자마자 kill될 뿐이고, 그
 끝 신호(done·failed)는 워커 스레드가 내 GUI 대기열로 온다. 그래서 stop()·release_worker 전에 대기열에 들어간 신호가 다음 파일을 연 뒤에
 도착할 수 있다 — 슬롯은 보낸 쪽(sender)이 지금 워커일 때만 받는다 (옛 워커가 이미 지워졌으면 sender가 None이라 그것도 버림). 실패는
 기록(stderr)에 매번, 오류 창은 파일마다 한 번(_hover_failed_for — 다시 시도하지 않음; 같은 파일을 다시 열어 또 실패해도 기록만).
+
+Settings → 슬라이더 썸네일 (켜기/끄기): create_menu_bar가 _add_hover_thumbs_menu를 화면 그리기 메뉴 바로 뒤에서 부르고(Mac·Windows 모두), 고르면
+set_slider_thumbnails가 hover_strip의 설정 파일(prefs.json)에 저장한 뒤 이 창에 바로 적용한다 (끔 → _hover_thumbs_close, 켬 → 지금 A 영상의 띠를
+다시 엶). 읽기·쓰기 규칙은 hover_strip의 것이고 이 모듈은 부르기만 한다. 체크는 파일이 아니라 이 프로세스의 캐시(hover_strip.enabled — 이 창이 실제로
+하는 일)를 따른다: 창마다 프로세스라 다른 창이 파일을 고쳤어도 이 창은 그 창이 다음에 켤 때부터 따른다. 저장 실패는 기록 + 창 한 번 + 체크 되돌림
+(깨진 파일을 덮지 않음). 시작 때 설정을 읽는 쪽은 app.load_slider_thumbnails.
 """
 
 import sys
@@ -34,8 +40,9 @@ import traceback
 
 import cv2
 from PyQt5.QtCore import QTimer
+from PyQt5.QtWidgets import QMessageBox
 
-from yesoncheck import error_window, hover_strip, hover_strip_builder, worker_lifecycle
+from yesoncheck import error_window, hover_strip, hover_strip_builder, user_files, worker_lifecycle
 from yesoncheck.external_tools import ToolNotFoundError
 from yesoncheck.hover_strip import LOG_PREFIX, MENU_TEXT, THUMB_WIDTH
 from yesoncheck.sequence_scan import is_sequence_path
@@ -45,6 +52,8 @@ START_DELAY_S = 0.5  # 열린 뒤 이만큼 지나야 워커를 띄움 (모듈 �
 IDLE_S = 0.3  # 재생 캡처의 위치가 이 안에 바뀌었으면 쉬는 때가 아님
 TICK_MS = 50  # 쉬는 때 판정 간격 — 띄울 워커가 있거나 돌고 있는 동안만 돎
 BUILDER_LABEL = "슬라이더 썸네일 띠"  # release_worker의 기록 이름
+HOVER_TITLE = "슬라이더 썸네일 설정"  # Settings → 슬라이더 썸네일의 저장 실패 창 제목 (app.SLIDER_THUMBS_TITLE의 읽기 실패 창과 같은 제목)
+HOVER_TIP = "슬라이더 위에 커서를 올리면 그 프레임의 작은 그림을 보여 줍니다 — 이 창은 바로, 이미 열린 다른 창은 다음에 켤 때부터"
 
 
 class PlayerHoverThumbsMixin:
@@ -218,3 +227,51 @@ class PlayerHoverThumbsMixin:
             return str(frame + 1), None
         sample = strip.plan.sample_for(frame)
         return str(frame + 1), strip.image(sample) if strip.has(sample) else None
+
+    def _add_hover_thumbs_menu(self, settings_menu) -> None:
+        """Settings → 슬라이더 썸네일 — 체크 가능한 항목 하나 (Mac·Windows 모두). 툴팁이 보이게 하고 체크는 지금 캐시에 맞춤.
+        create_menu_bar가 화면 그리기 메뉴(_add_display_menu) 바로 뒤에서 부름 — 창을 만드는 중이라 아직 _init_hover_thumbs 전일 수 있어 여기서는 항목만 만듦."""
+        settings_menu.setToolTipsVisible(True)
+        self.hover_thumbs_action = settings_menu.addAction(MENU_TEXT)
+        self.hover_thumbs_action.setCheckable(True)
+        self.hover_thumbs_action.setToolTip(HOVER_TIP)
+        self.hover_thumbs_action.triggered.connect(lambda checked: self.set_slider_thumbnails(checked))
+        self._sync_hover_thumbs_menu()
+
+    def _sync_hover_thumbs_menu(self) -> None:
+        """체크를 이 프로세스의 캐시(hover_strip.enabled)에 맞춤 — 메뉴를 만들 때, 고른 뒤, 저장 실패로 되돌릴 때."""
+        self.hover_thumbs_action.setChecked(hover_strip.enabled())
+
+    def set_slider_thumbnails(self, enabled: bool) -> None:
+        """메뉴에서 고른 켬/끔을 prefs.json에 저장하고 이 창에 바로 적용 (모듈 설명).
+        - 저장: 파일이 이미 그 값이면 쓰지 않음(창마다 프로세스라 다른 창이 먼저 저장했을 수 있음 — 이 창은 아래에서 그래도 따름). 파일의 값이 나쁘면(불리언이
+          아님) 트레이스백을 기록하고 사용자가 고른 값으로 고침 — 시작 알림이 약속한 '다시 켤 수 있음'이 성립하려면 필요(명시적 선택이라 지어낸 값이 아님).
+          저장 실패(깨진 파일·쓰기 실패·잠금 시간 초과)는 기록 + 창 한 번 + 체크 되돌림, 캐시·띠는 그대로.
+        - 적용: 이 창이 이미 그 상태면 체크만 맞춤. 아니면 캐시를 바꾸고 기록 한 줄 — 끔은 띠를 버리고(워커·ffmpeg 정지), 켬은 A에 열린 영상이 있으면 그 영상의
+          계획을 다시 엶(워커는 쉬는 때 틱이 띄움 — 시퀀스·크기 상한은 _hover_thumbs_open이 가름)."""
+        try:
+            try:
+                saved = hover_strip.read_enabled()
+            except ValueError:
+                traceback.print_exc()
+                saved = None
+            if saved != enabled:
+                hover_strip.save_enabled(enabled)
+        except (user_files.UserFileError, OSError, TimeoutError) as exc:
+            traceback.print_exc()
+            QMessageBox.critical(self, HOVER_TITLE, f"설정을 저장하지 못해 바꾸지 않았습니다.\n{exc}")
+            self._sync_hover_thumbs_menu()
+            return
+        if hover_strip.enabled() == enabled:
+            self._sync_hover_thumbs_menu()
+            return
+        hover_strip.set_enabled(enabled)
+        print(f"{LOG_PREFIX} 설정: {'켬' if enabled else '끔'} (Settings 메뉴)", flush=True)
+        if not enabled:
+            self._hover_thumbs_close()
+        else:
+            cap = self.cap_a
+            if cap is not None and cap.isOpened():
+                self._hover_thumbs_open(self.filename_a, int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
+                                        int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+        self._sync_hover_thumbs_menu()

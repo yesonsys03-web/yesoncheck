@@ -501,11 +501,15 @@ class _StopLaunch(Exception):
 
 
 def launch_until_window(monkeypatch):
-    """app.launch를 창을 만드는 줄에서 멈춰 돌리고, 그 사이 mac_native_gate.native_wanted()가 돌려준 값들을 돌려줌."""
+    """app.launch를 창을 만드는 줄에서 멈춰 돌리고, 그 사이 mac_native_gate.native_wanted()가 돌려준 값들을 돌려줌.
+    슬라이더 썸네일 설정(app.load_slider_thumbnails)은 같은 prefs.json을 모든 플랫폼에서 읽고 깨졌으면 자기 창을 따로 띄우므로(tests/test_hover_thumbs_settings.py가
+    봄) 여기서는 끔 — 이 모듈의 시험은 디코더 설정만 봄: '창 1회'·'macOS가 아니면 읽지 않음' 단언이 그 로더의 읽기·창과 섞이지 않게."""
     from yesoncheck import app as app_module
 
     def stop_at_window(**kwargs):
         raise _StopLaunch
+
+    monkeypatch.setattr(app_module, "load_slider_thumbnails", lambda: None)
 
     real_wanted = mac_native_gate.native_wanted
     wanted = []
