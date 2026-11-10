@@ -21,7 +21,7 @@ from typing import Callable, Optional, Tuple
 import numpy as np
 from PyQt5.QtCore import QEvent, QObject, QPoint, Qt
 from PyQt5.QtGui import QGuiApplication, QImage, QPixmap
-from PyQt5.QtWidgets import QLabel, QSlider, QStyle, QStyleOptionSlider, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QLabel, QSlider, QStyle, QStyleOptionSlider, QVBoxLayout, QWidget
 
 from yesoncheck import error_window
 from yesoncheck.hover_strip import LOG_PREFIX
@@ -32,7 +32,9 @@ ERROR_CONTEXT = "슬라이더 호버 처리 중 오류"  # eventFilter 예외의
 
 LookupResult = Optional[Tuple[str, Optional[np.ndarray]]]
 
-# 인라인 스타일만 — main_window_styles.py의 시트는 건드리지 않는다. 창은 부모 없는 최상위 창이라 앱 창의 시트가 내려오지도 않음
+# 인라인 스타일만 — main_window_styles.py의 시트는 건드리지 않는다. parent가 플레이어 창이면(Mac·Linux — popup_parent) 앱 창의 시트가 내려오지만, 여기서 정한
+# 속성(배경·테두리·글자 색·크기·굵기)은 이 시트가 가까워 이긴다 — 내려오는 것은 정하지 않은 글꼴 종류뿐(창의 다른 글자와 같은 목록, 어두운·
+# 밝은 테마 모두 같음 — 시험이 두 테마에서 배경·테두리·글자 색을 확인)
 _POPUP_STYLE = """
 #sliderPreviewPopup { background: #1e1e1e; border: 1px solid #8a8a8a; }
 #sliderPreviewImage { background: transparent; border: none; }
@@ -56,13 +58,31 @@ def slider_value_at(slider: QSlider, x: int) -> int:
     return QStyle.sliderValueFromPosition(slider.minimum(), slider.maximum(), pos, span, opt.upsideDown)
 
 
+def popup_parent(window: QWidget) -> QWidget:
+    """SliderPreviewPopup에 줄 parent — Qt5 QToolTip(qtooltip.cpp)과 같은 플랫폼 분기.
+
+    Windows: 그 창이 있는 화면의 desktop screen 위젯. qtooltip.cpp의 Win32 주석대로 위젯을 parent로 쓰면 툴팁이 뜰 때 그 창이 앞으로
+    올라온다(raise) — 가려진·비활성 창의 슬라이더에 호버만 해도 창이 튀어나오면 안 된다. 단 Qt 5의 QWidget은 Desktop 종류 parent를 화면을
+    고르는 데만 쓰고 parent는 비운다(실측: 팝업의 parent()가 None — QToolTip의 Win32 QTipLabel도 같음). 그래서 Windows의 팝업은 parent 없는
+    최상위 창이고 Python이 가진다(창과 함께 지워지지 않음 — 그래서 창을 닫을 때 부른 쪽이 바로 지운다: player_hover_thumbs._hover_thumbs_destroy).
+    그 밖(Mac·Linux): window 자신 — 창과 함께 지워짐. sys.platform은 부를 때 읽는다(시험이 바꿔 끼움)."""
+    if sys.platform == "win32":
+        desktop = QApplication.desktop()
+        return desktop.screen(desktop.screenNumber(window))
+    return window
+
+
 class SliderPreviewPopup(QWidget):
     """커서 위에 뜨는 작은 창 — 그림(고정 크기 상자) 아래 번호. 포커스를 가져가지 않는다 (ToolTip 창 + 활성화 없이 보임 + 포커스 없음).
 
-    그림이 없으면(None) 상자는 비우고 크기는 그대로 둔다 — 아직 안 만든 자리에서도 번호는 보이고 창이 들쭉날쭉 변하지 않는다."""
+    그림이 없으면(None) 상자는 비우고 크기는 그대로 둔다 — 아직 안 만든 자리에서도 번호는 보이고 창이 들쭉날쭉 변하지 않는다.
 
-    def __init__(self, thumb_width: int, thumb_height: int):
-        super().__init__(None, Qt.ToolTip | Qt.FramelessWindowHint)
+    parent: popup_parent(창)로 고를 것 (플랫폼 분기 — 위의 popup_parent). Qt.ToolTip은 창 종류 플래그라 parent가 있어도 따로 뜨는 최상위 창이고
+    (isWindow 그대로) place_above의 move는 그대로 화면 좌표다. 위젯 parent가 있으면 그 창이 지워질 때 함께 지워진다 — parent 없는 최상위 창은
+    인터프리터가 끝날 때 QApplication보다 늦게 지워져 종료 순서가 꼬일 수 있다는 리뷰 가설(이 Mac 종료 세그폴트 플레이크 18/24 → 7/24로 줄었음)."""
+
+    def __init__(self, thumb_width: int, thumb_height: int, parent: Optional[QWidget] = None):
+        super().__init__(parent, Qt.ToolTip | Qt.FramelessWindowHint)
         self.setObjectName("sliderPreviewPopup")
         self.setAttribute(Qt.WA_StyledBackground, True)  # QWidget 자체는 시트의 배경·테두리를 이 속성이 있어야 그림
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
@@ -135,7 +155,7 @@ class SliderHoverFilter(QObject):
     lookup(value)는 **슬라이더 값**을 받아 None(숨김) 또는 (번호 글, (h, w, 3) uint8 RGB 그림|None)을 돌려준다 — 값 → 프레임 변환은 부른 쪽의 몫.
     슬라이더가 창 계층에 들어간 뒤에 만들 것 (slider.window()에도 걸어 창이 비활성이 되면 숨기므로).
     수명 주의: 호출부가 이 필터의 참조를 쥐거나 parent를 줄 것 — Qt는 설치된 이벤트 필터를 붙잡아 주지 않는다
-    (parent=None으로 만들고 변수에 안 담으면 필터가 지워져 호버가 오류 없이 죽는다)."""
+    (parent=None으로 만들고 변수에 안 담으면 필터가 지워져 호버가 오류 없이 죽는다). 창을 지우기 전에 detach()로 떼고 창 참조를 끊을 것."""
 
     def __init__(
         self,
@@ -150,12 +170,25 @@ class SliderHoverFilter(QObject):
         self._popup = popup
         self._reported = False  # eventFilter 예외를 창으로 알렸음 (처음 한 번만 — 모듈 설명)
         self._drawn = None  # 마지막으로 그린 (번호 글, 그림 데이터 주소|None) — 같으면 다시 그리지 않음 (_show_at)
+        self._window = slider.window()  # 설치한 창 (detach가 같은 창에서 뗌)
         slider.setMouseTracking(True)  # 버튼을 안 눌러도 MouseMove가 와야 함
         slider.installEventFilter(self)
-        slider.window().installEventFilter(self)
+        self._window.installEventFilter(self)
+
+    def detach(self) -> None:
+        """생성자가 설치한 두 곳(슬라이더·그때의 slider.window())에서 떼고 창 참조를 끊음 — 그 뒤로 eventFilter는 아무것도 안 하고 False
+        (지운 창을 만지지 않게). 여러 번 불러도 됨. 창을 닫을 때(player_hover_thumbs._hover_thumbs_destroy) 창을 지우기 전에 부름."""
+        if self._popup is None:
+            return
+        self._slider.removeEventFilter(self)
+        self._window.removeEventFilter(self)
+        self._popup = None
 
     def eventFilter(self, watched, event):
-        """슬라이더의 Enter·MouseMove → 보이기/갱신, Leave·MouseButtonPress·Hide와 창의 WindowDeactivate → 숨기기. 늘 False (기본 처리 그대로)."""
+        """슬라이더의 Enter·MouseMove → 보이기/갱신, Leave·MouseButtonPress·Hide와 창의 WindowDeactivate → 숨기기. 늘 False (기본 처리 그대로).
+        detach() 뒤에는 아무것도 하지 않음."""
+        if self._popup is None:
+            return False
         try:
             kind = event.type()
             if kind == QEvent.WindowDeactivate:
@@ -166,7 +199,8 @@ class SliderHoverFilter(QObject):
                 elif kind in (QEvent.Leave, QEvent.MouseButtonPress, QEvent.Hide):
                     self._popup.hide()
         except BaseException as exc:
-            self._popup.hide()  # 낡은 그림이 남지 않게 (오류는 아래에서 보임)
+            if self._popup is not None:
+                self._popup.hide()  # 낡은 그림이 남지 않게 (오류는 아래에서 보임)
             if not self._reported:
                 self._reported = True
                 error_window.report_from_handler(LOG_PREFIX, ERROR_CONTEXT)

@@ -713,6 +713,57 @@ def test_missing_ffmpeg_reports_once_and_stops_tick(player_with_clip, numbered_c
     assert capsys.readouterr().err.count(f"{LOG_PREFIX} 띠를 만들지 못했습니다") == 1
 
 
+@pytest.mark.parametrize("parent_kind", ["this_platform", "win32"])
+def test_close_detaches_filters_and_deletes_popup(new_player, numbered_clip, tmp_path, monkeypatch, capsys, parent_kind):
+    """창을 닫으면(_release_resources_on_close → _hover_thumbs_destroy) 두 필터를 떼고 커서 위 창을 바로 지움 — 닫힌 슬라이더에 호버·창
+    비활성이 와도 lookup이 불리지 않고 예외·창이 없음. win32: popup_parent가 Windows 갈래(desktop screen — Qt가 parent를 비워 parent 없는
+    창)여도 지워짐(이 길이 Windows의 유일한 정리). 다시 불러도 되고, 지운 뒤 _hover_thumbs_open은 아무것도 하지 않음."""
+    if parent_kind == "win32":
+        real_popup_parent = player_hover_thumbs.popup_parent
+
+        def windows_popup_parent(window):
+            with pytest.MonkeyPatch.context() as patch:  # popup_parent만 Windows 갈래로 (플레이어의 다른 코드는 이 플랫폼 그대로)
+                patch.setattr(sys, "platform", "win32")
+                return real_popup_parent(window)
+
+        monkeypatch.setattr(player_hover_thumbs, "popup_parent", windows_popup_parent)
+    player = new_player(make_config(str(tmp_path), {}))
+    player.resize(1200, 800)
+    player.show()
+    QTest.qWaitForWindowExposed(player)
+    assert player.open_file("A", numbered_clip) is True
+    popup, filters = player._hover_popup, list(player._hover_filters)
+    assert popup.parent() is (None if parent_kind == "win32" or sys.platform == "win32" else player)
+    seen = []
+    for hover_filter in filters:
+        real_lookup = hover_filter._lookup
+        hover_filter._lookup = lambda value, real=real_lookup: seen.append(value) or real(value)
+    hover(player.positionScroll, player.positionScroll.width() // 2)
+    assert popup.isVisible() and seen  # Enter·MouseMove 각각 한 번
+    calls = len(seen)
+
+    player.close()
+    assert sip.isdeleted(popup)
+    assert player._hover_popup is None and player._hover_filters == [] and player._hover_plan is None
+    for slider in (player.positionScroll, player.overlaySlider):
+        hover(slider, slider.width() // 3)
+    QApplication.sendEvent(player, QEvent(QEvent.WindowDeactivate))
+    QApplication.processEvents()
+    assert len(seen) == calls  # 떼어진 필터 — lookup이 더 불리지 않음
+    player._hover_thumbs_destroy()  # 여러 번 불러도 됨
+    player._hover_thumbs_open(numbered_clip, CLIP_COUNT, 320, 180)  # 지운 뒤에는 아무것도
+    assert player._hover_plan is None and not player._hover_timer.isActive()
+    assert "슬라이더 호버 처리 중 오류" not in capsys.readouterr().err
+
+
+def test_popup_is_owned_by_the_player(shown_player):
+    """커서 위 창의 parent는 popup_parent(플레이어) — Mac·Linux는 플레이어 창(창과 함께 지워짐), Windows는 desktop screen이라 Qt가 parent를
+    비움(parent 없는 창 — slider_preview.popup_parent 설명). 어느 쪽이든 따로 뜨는 ToolTip 창."""
+    popup = shown_player._hover_popup
+    assert popup.parent() is (None if sys.platform == "win32" else shown_player)
+    assert popup.isWindow() and popup.windowType() == Qt.ToolTip
+
+
 def test_disabled_feature_shows_nothing(shown_player, numbered_clip, monkeypatch, qapp):
     """기능을 끄면 계획도 워커도 없고 호버에 창이 뜨지 않음. 예전 'Position' 툴팁도 없음 (창이 그 자리를 대신함 — 꺼도 되살리지 않음)."""
     player = shown_player

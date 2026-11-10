@@ -5,17 +5,25 @@
 QMouseEvent·QEnterEvent를 직접 만들어 QApplication.sendEvent로 보낸다 (QTest.mouseMove는 버튼 상태를 들고 가지 않음).
 """
 
+import sys
+
 import numpy as np
 import pytest
+from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, Qt
 from PyQt5.QtGui import QEnterEvent, QMouseEvent
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QSlider
+from PyQt5.QtWidgets import QApplication, QMainWindow, QSlider, QWidget
 
 from yesoncheck import error_window, slider_preview
 from yesoncheck.hover_strip import LOG_PREFIX
-from yesoncheck.main_window_styles import OVERLAY_SLIDER_STYLE, POSITION_SCROLL_INITIAL_STYLE
-from yesoncheck.slider_preview import GAP, SliderHoverFilter, SliderPreviewPopup, slider_value_at
+from yesoncheck.main_window_styles import (
+    DARK_STYLESHEET,
+    LIGHT_STYLESHEET,
+    OVERLAY_SLIDER_STYLE,
+    POSITION_SCROLL_INITIAL_STYLE,
+)
+from yesoncheck.slider_preview import ERROR_CONTEXT, GAP, SliderHoverFilter, SliderPreviewPopup, popup_parent, slider_value_at
 from yesoncheck.slider_style import jump_to_click
 
 SHEETS = {"main": POSITION_SCROLL_INITIAL_STYLE, "overlay": OVERLAY_SLIDER_STYLE}
@@ -153,6 +161,85 @@ def test_popup_set_thumb_size_resizes_for_a_new_plan(qapp, popup):
     assert (popup.image_label.pixmap().width(), popup.image_label.pixmap().height()) == (180, 320)
 
 
+def test_popup_with_parent_is_a_tooltip_window_owned_by_it(qapp):
+    """parent를 주면 그 창이 가지지만(창이 지워지면 함께 지워짐; 종료 순서 안정은 가설 — 이 Mac 플레이크 18/24 → 7/24) 여전히 따로 뜨는 ToolTip 최상위 창이고, place_above는 그대로
+    화면 좌표로 놓는다 (커서 x에 가로 가운데, 아래 끝은 슬라이더 위 끝에서 GAP 위)."""
+    window = QMainWindow()
+    slider = QSlider(Qt.Horizontal)
+    slider.setRange(0, MAX_VALUE)
+    window.setCentralWidget(slider)
+    window.resize(700, 120)
+    window.move(40, 400)
+    window.show()
+    QTest.qWaitForWindowExposed(window)
+    popup = SliderPreviewPopup(320, 180, parent=window)
+    assert popup.parent() is window and popup.isWindow() and popup.windowType() == Qt.ToolTip
+
+    popup.show_frame("7", None)
+    popup.place_above(slider, 350)
+    popup.show()
+    qapp.processEvents()
+    slider_top_left = slider.mapToGlobal(QPoint(0, 0))
+    assert popup.x() == slider.mapToGlobal(QPoint(350, 0)).x() - popup.width() // 2
+    assert popup.y() == slider_top_left.y() - GAP - popup.height()
+
+    window.close()
+    window.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    assert sip.isdeleted(window) and sip.isdeleted(popup)
+
+
+@pytest.mark.parametrize("sheet", [DARK_STYLESHEET, LIGHT_STYLESHEET], ids=["dark", "light"])
+def test_popup_keeps_its_look_under_a_themed_parent(qapp, sheet):
+    """parent 창의 테마 시트가 내려와도 창의 모양(배경·테두리·번호의 색·크기·굵기)은 이 창의 시트 그대로 — 어두운·밝은 테마 모두 같은 어두운 창."""
+    window = QMainWindow()
+    window.setStyleSheet(sheet)
+    window.show()
+    QTest.qWaitForWindowExposed(window)
+    popup = SliderPreviewPopup(320, 180, parent=window)
+    try:
+        popup.show_frame("12", None)
+        popup.show()
+        qapp.processEvents()
+        image = popup.grab().toImage()
+        assert (image.pixelColor(0, 0).name(), image.pixelColor(3, 3).name()) == ("#8a8a8a", "#1e1e1e")  # 테두리·배경
+        number = popup.number_label
+        assert number.palette().color(number.foregroundRole()).name() == "#ffffff"
+        assert number.font().pixelSize() == 22 and number.font().bold()
+        # 라벨 배경도 팝업 배경 그대로 (#1e1e1e — 어두운 테마의 QWidget{background:#232323}가 라벨로 새면 여기서 잡힘): 빈 그림 상자의 가운데,
+        # 번호 라벨의 왼쪽 끝(글자는 가운데라 비어 있는 자리)
+        image_box, number_box = popup.image_label.geometry(), number.geometry()
+        assert image.pixelColor(image_box.center()).name() == "#1e1e1e"
+        assert image.pixelColor(number_box.left() + 2, number_box.center().y()).name() == "#1e1e1e"
+    finally:
+        window.close()
+
+
+def test_popup_parent_follows_qt_tooltip_platform_split(qapp, monkeypatch):
+    """popup_parent: Mac·Linux는 창 자신, Windows는 그 창이 있는 화면의 desktop screen 위젯 (qtooltip.cpp와 같은 분기 — 창을 raise하지 않게).
+    Qt 5는 Desktop 종류 parent를 화면 고르기에만 쓰고 parent는 비우므로 Windows의 팝업은 parent 없는 ToolTip 창이 된다 (이 사실을 고정)."""
+    window = QMainWindow()
+    window.show()
+    QTest.qWaitForWindowExposed(window)
+    popup = None
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(sys, "platform", "darwin")
+            assert popup_parent(window) is window
+        with monkeypatch.context() as patch:
+            patch.setattr(sys, "platform", "win32")
+            parent = popup_parent(window)
+        desktop = QApplication.desktop()
+        assert isinstance(parent, QWidget) and parent is not window
+        assert parent is desktop.screen(desktop.screenNumber(window)) and parent.windowType() == Qt.Desktop
+        popup = SliderPreviewPopup(320, 180, parent=parent)
+        assert popup.parent() is None and popup.isWindow() and popup.windowType() == Qt.ToolTip
+    finally:
+        if popup is not None:
+            popup.close()
+        window.close()
+
+
 def test_popup_resizes_to_fit_a_wider_number_text(qapp, styled_slider):
     """번호 글이 그림 폭보다 넓으면 show_frame에서 창이 늘고 (place_above·show 사이에 크기가 안 변해 가운데 맞춤이 유지됨), 짧은 글이면 다시 줄어든다."""
     slider = styled_slider("main")
@@ -285,6 +372,27 @@ def test_filter_shows_hides_and_calls_lookup(qapp, styled_slider, popup):
     slider.hide()  # 슬라이더가 숨으면 창도 (탭·창 전환)
     qapp.processEvents()
     assert not popup.isVisible()
+    del hover
+
+
+def test_detached_filter_leaves_slider_and_window_alone(qapp, styled_slider, popup, capsys):
+    """detach() 뒤: 슬라이더·창 둘 다에서 떼어져 호버·창 비활성에 lookup도 창도 건드리지 않음 — 창을 지운 뒤 만지지 않게. 직접 불러도 False,
+    여러 번 불러도 됨."""
+    slider = styled_slider("main")
+    seen = []
+    hover = SliderHoverFilter(slider, lambda value: seen.append(value) or (str(value), None), popup, slider)
+    _send_move(slider, 450)
+    assert popup.isVisible() and len(seen) == 1
+    popup.hide()
+
+    hover.detach()
+    hover.detach()
+    _send_enter(slider, 300)
+    _send_move(slider, 300)
+    _send_plain(slider.window(), QEvent.WindowDeactivate)
+    assert seen == [slider_value_at(slider, 450)] and not popup.isVisible()
+    assert hover.eventFilter(slider, QEvent(QEvent.WindowDeactivate)) is False
+    assert ERROR_CONTEXT not in capsys.readouterr().err
     del hover
 
 
