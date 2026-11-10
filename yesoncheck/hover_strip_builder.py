@@ -20,7 +20,7 @@ AccessDenied 등 — 와 OSError: Windows에서 끝나 가는 프로세스의 Nt
 디코더 스레드 FFMPEG_THREADS(-threads 1 — 입력 옵션, -i 앞)와 필터 스레드 FFMPEG_FILTER_THREADS(-filter_threads 1 — 전역 옵션, -i 앞).
 -threads는 **디코더** 스레드만 묶는다 — -vf scale(4K → 320 축소 + rgb24 변환)은 따로 CPU 수만큼 slice 스레드를 쓰므로(이 Mac 16코어,
 번들 ffmpeg 9.0.2 실측: 프로세스 스레드 기본 68개, -threads 2만이면 54개, -filter_threads 1 -threads 2면 24개, 둘 다 1이면 22개 — 나머지는
-ffmpeg 자신의 구성 요소 스레드) 필터 쪽 손잡이가 -filter_threads다. 까닭(측정 — CLAUDE.md 2026-11-10): 띠 워커를 띄운 지 0.5초 안에 4K
+ffmpeg 자신의 구성 요소 스레드(미확인)) 필터 쪽 손잡이가 -filter_threads다. 까닭(측정 — CLAUDE.md 2026-11-10): 띠 워커를 띄운 지 0.5초 안에 4K
 재생을 시작하면 Play 뒤 첫 1~2초(때로 중간)에 끊김이 났고(정지는 그때 이미 걸려 있음), 기본 스레딩(16)과 -threads 2 모두 켬이 끔의 범위를
 넘었다 — Play 직전에 여러 코어로 4K 장을 한꺼번에 디코드·축소하는 버스트가 원인으로 의심되어(미확인) 1코어로 묶는다.
 
