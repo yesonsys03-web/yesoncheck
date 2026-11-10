@@ -217,6 +217,35 @@ def test_paused_before_spawn_suspends_right_after_spawn(qapp, numbered_clip_200,
     assert _numbers(strip, 200) == list(range(200))
 
 
+def test_paused_same_value_takes_no_lock(make_builder):
+    """paused setter는 값이 바뀔 때만 잠금을 잡고 psutil을 부름 — 같은 값이면 아무것도 하지 않음. 플레이어는 재생 중 틱(50ms)마다 True를
+    넣으므로 그때마다 SIGSTOP을 다시 보내거나 워커 스레드(잠금 안에서 psutil·기록을 부를 수 있음)와 잠금을 다투지 않게. 띄우지 않은
+    워커라 프로세스 없음 — 잠금 잡기만 셈."""
+    worker = make_builder("not_started.mov", HoverStrip(plan_for(48, 320, 180)))
+    acquired = []
+
+    class _CountingLock:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __enter__(self):
+            acquired.append(True)
+            return self._inner.__enter__()
+
+        def __exit__(self, *exc_info):
+            return self._inner.__exit__(*exc_info)
+
+    worker._lock = _CountingLock(worker._lock)
+    worker.paused = False  # 처음 값과 같음
+    assert acquired == []
+    worker.paused = True
+    worker.paused = True
+    assert len(acquired) == 1 and worker.paused is True
+    worker.paused = False
+    worker.paused = False
+    assert len(acquired) == 2 and worker.paused is False
+
+
 def _logged(capsys):
     """기록(stdout·stderr) 중 이 기능의 머리로 시작하는 줄."""
     captured = capsys.readouterr()

@@ -130,7 +130,12 @@ class HoverStripBuilder(QThread):
 
     @paused.setter
     def paused(self, value: bool) -> None:
-        """멈춤 표지. 바뀔 때만 — 프로세스가 돌고 있으면 바로 정지·재개 (플레이어가 50ms마다 같은 값을 넣어도 psutil은 부르지 않음)."""
+        """멈춤 표지. 값이 바뀔 때만 잠금을 잡고 — 프로세스가 돌고 있으면 바로 정지·재개. 같은 값이면 아무것도 하지 않음(잠금도 psutil도):
+        플레이어가 재생 중 틱마다 True를 넣어도 SIGSTOP을 다시 보내지 않고 워커 스레드(잠금 안에서 psutil·기록을 부름)와 잠금을 다투지
+        않는다. 잠금 밖의 비교가 안전한 까닭: _paused를 쓰는 곳은 이 setter뿐이라 부르는 쪽이 마지막에 쓴 값을 본다 — 잠금 안에서 한 번 더
+        봐서 두 스레드가 불러도 신호를 두 번 보내지 않음."""
+        if value == self._paused:
+            return
         with self._lock:
             if value == self._paused:
                 return
