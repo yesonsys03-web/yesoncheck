@@ -10,6 +10,7 @@ stop(정지된 프로세스·읽기에서 막힌 스레드 포함), 실패 글, 
 """
 
 import socket
+import threading
 import time
 
 import psutil
@@ -193,7 +194,13 @@ def test_paused_before_spawn_suspends_right_after_spawn(qapp, numbered_clip_200,
     assert _numbers(strip, 200) == list(range(200))
 
 
-def test_stop_kills_process_and_thread(qapp, numbered_clip, make_builder):
+def _logged(capsys):
+    """기록(stdout·stderr) 중 이 기능의 머리로 시작하는 줄."""
+    captured = capsys.readouterr()
+    return [line for line in (captured.out + captured.err).splitlines() if line.startswith(LOG_PREFIX)]
+
+
+def test_stop_kills_process_and_thread(qapp, numbered_clip, make_builder, capsys):
     worker = make_builder(numbered_clip, HoverStrip(plan_for(48, 320, 180)))
     got = _Signals(worker)
     worker.start()
@@ -203,9 +210,10 @@ def test_stop_kills_process_and_thread(qapp, numbered_clip, make_builder):
     worker.stop()  # 두 번 불러도 됨
     _pump(qapp, 0.1)
     assert got.done == [] and got.failed == []
+    assert _logged(capsys) == []  # 일부러 끊은 것(kill의 종료 코드·끊긴 읽기)은 조용히
 
 
-def test_stop_while_paused_kills_process(qapp, numbered_clip_200, make_builder):
+def test_stop_while_paused_kills_process(qapp, numbered_clip_200, make_builder, capsys):
     worker = make_builder(numbered_clip_200, HoverStrip(plan_for(200, 320, 180)))
     got = _Signals(worker)
     worker.paused = True
@@ -217,9 +225,10 @@ def test_stop_while_paused_kills_process(qapp, numbered_clip_200, make_builder):
     assert not psutil.pid_exists(pid)
     _pump(qapp, 0.1)
     assert got.done == [] and got.failed == []
+    assert _logged(capsys) == []
 
 
-def test_stop_while_reading_kills_blocked_process(qapp, make_builder):
+def test_stop_while_reading_kills_blocked_process(qapp, make_builder, capsys):
     """입력이 오지 않는 ffmpeg(받기만 하고 아무것도 보내지 않는 TCP 입력) — 읽기 스레드가 stdout에서 막힌 채(멈춤 아님) stop하면 kill로
     끊겨 스레드가 끝나고 프로세스는 거둬짐. GUI 스레드는 STOP_WAIT_MS를 넘게 막히지 않음."""
     with socket.socket() as server:
@@ -240,6 +249,7 @@ def test_stop_while_reading_kills_blocked_process(qapp, make_builder):
         assert not worker.isRunning() and not psutil.pid_exists(pid)
     _pump(qapp, 0.1)
     assert got.done == [] and got.failed == [] and strip.filled_count == 0
+    assert _logged(capsys) == []
 
 
 def test_eof_while_paused_resumes_before_reaping(qapp, make_builder, monkeypatch):
@@ -273,6 +283,34 @@ def test_eof_while_paused_resumes_before_reaping(qapp, make_builder, monkeypatch
     _finish(qapp, worker)
     assert calls == [("suspend", worker.pid), ("resume", worker.pid)]
     assert got.done == [] and len(got.failed) == 1  # 빈 입력은 ffmpeg 오류 (종료 코드 ≠ 0)
+
+
+def test_unexpected_error_after_stop_is_logged_without_signal(qapp, numbered_clip, make_builder, monkeypatch, capsys):
+    """stop() 뒤에 난 예상 못 한 예외(여기서는 put의 버그 흉내)는 신호는 내지 않되 기록(stderr)에 머리 한 줄과 트레이스백을 남긴다 —
+    조용히 사라지지 않게."""
+    strip = HoverStrip(plan_for(48, 320, 180))
+    worker = make_builder(numbered_clip, strip)
+    got = _Signals(worker)
+    entered = threading.Event()
+
+    def put_failing_after_stop(i, data):  # 워커 스레드: stop()이 프로세스를 거둘 때까지 기다렸다가 예외 (공개된 상태만 봄 — pid)
+        entered.set()
+        deadline = time.monotonic() + WAIT_S
+        while psutil.pid_exists(worker.pid) and time.monotonic() < deadline:
+            time.sleep(0.005)
+        raise RuntimeError("시험: stop 뒤 put 오류")
+
+    monkeypatch.setattr(strip, "put", put_failing_after_stop)
+    worker.start()
+    _pump_until(qapp, entered.is_set, "첫 put")
+    worker.stop()
+    assert not worker.isRunning()
+    _pump(qapp, 0.1)
+    assert got.done == [] and got.failed == []
+    err = capsys.readouterr().err
+    log = [line for line in err.splitlines() if line.startswith(LOG_PREFIX)]
+    assert len(log) == 1 and numbered_clip in log[0]
+    assert "Traceback (most recent call last)" in err and "RuntimeError: 시험: stop 뒤 put 오류" in err
 
 
 def test_missing_file_fails_with_stderr(qapp, tmp_path, make_builder):

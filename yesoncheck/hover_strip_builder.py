@@ -21,10 +21,13 @@ psutil.Process(pid).suspend()(POSIX SIGSTOP·Windows NtSuspendProcess), 거짓�
 - done(채운 장수, 띄운 때부터 초 — 멈춘 시간 포함): 종료 코드 0이고 stderr가 비었을 때(-v error라 무엇이든 적혀 있으면 오류). 계획보다 적게
   와도(잘린 파일·VFR) done이고 남은 샘플은 빈 채로, 많이 오면 남는 장은 읽어 버리고 done(기록에 '넘침 n장' 한 줄).
 - failed(글): 띄우지 못함·한 장 도중 끊김·종료 코드 ≠ 0·stderr에 글·읽기 오류. 글은 파일·명령·종료 코드·stderr 전문(·트레이스백). 이미 넣은
-  장은 그대로 둔다(그 구간은 보임).
-- stop(): 표지를 둔 뒤의 끊김(kill의 종료 코드·닫힌 파이프)은 신호를 내지 않는다 — done·failed는 잠금 안에서 표지를 보고 내므로 stop()이
-  표지를 둔 뒤에는 나가지 않는다. 그래서 이 두 신호를 직접 연결(Qt.DirectConnection)로 받아 그 안에서 paused·stop을 부르면 안 된다(잠금을
-  다시 잡음) — 플레이어는 GUI 스레드의 대기열 연결로 받는다. progress는 잠금 밖에서 낸다(묶음 알림일 뿐 — stop 직후 하나가 더 올 수 있음).
+  장은 그대로 둔다(그 구간은 보임). 한 장 도중 끊김(몇 바이트만 오고 EOF)은 브리프의 '짧게 끝나면 EOF'보다 보수적으로 failed로 본다 — 스펙
+  §5.3의 실패 목록('한 장 도중 EOF')을 따름. 0바이트에서의 EOF만 정상 끝이다.
+- stop(): 표지를 둔 뒤의 끊김(kill의 종료 코드·끊긴 읽기)은 신호도 기록도 내지 않는다 — done·failed는 잠금 안에서 표지를 보고 내므로
+  stop()이 표지를 둔 뒤에는 나가지 않는다. 단 트레이스백이 있는 문제(예상 못 한 예외 — 정리 단계·put의 버그 등)는 stop 뒤라도 신호 없이
+  기록(stderr)에 LOG_PREFIX 머리 한 줄과 트레이스백을 남긴다(조용히 사라지지 않게). 끝 신호 두 개를 직접 연결(Qt.DirectConnection)로 받아
+  그 안에서 paused·stop을 부르면 안 된다(잠금을 다시 잡음) — 플레이어는 GUI 스레드의 대기열 연결로 받는다. progress는 잠금 밖에서 낸다(묶음
+  알림일 뿐 — stop 직후 하나가 더 올 수 있음).
 샘플 i(ffmpeg가 낸 i번째 장 — select면 원본 i×step)는 한 번만 put한다 (HoverStrip.put은 행을 다 쓴 뒤 표시하므로, 같은 행을 다시 쓰면 GUI가
 덮어쓰는 중인 행을 읽을 수 있음).
 
@@ -119,12 +122,13 @@ class HoverStripBuilder(QThread):
                 self._signal_process(value)
 
     def stop(self) -> None:
-        """일부러 끝냄 (GUI 스레드, 여러 번 불러도 됨): 표지 → kill(정지돼 있어도 먹힘) → 거두기 → stdout 닫기 → 스레드 끝 대기.
+        """일부러 끝냄 (GUI 스레드, 여러 번 불러도 됨): 표지 → kill(정지돼 있어도 먹힘) → 거두기 → 스레드 끝 대기.
 
         거두기와 스레드 끝은 각각 STOP_WAIT_MS까지만 기다린다 — 넘으면 기록을 남기고 돌아간다(GUI를 막지 않음; 워커 스레드가 프로세스를
-        끝까지 기다려 거두고, 부른 쪽은 worker_lifecycle.release_worker로 붙잡아 둔다). stdout은 거둔 뒤에 닫는다 — 읽기 스레드가 readinto
-        안에 있으면 닫기가 그 읽기가 끝나기를 기다리는데, 그 읽기는 프로세스가 죽어야 끝나므로. 표지를 둔 뒤로는 done·failed를 내지 않는다
-        (그 전에 낸 신호가 GUI의 대기열에 남아 있을 수는 있음 — 부른 쪽이 release_worker의 blockSignals 등으로 다룸)."""
+        끝까지 기다려 거두고, 부른 쪽은 worker_lifecycle.release_worker로 붙잡아 둔다). stdout은 여기서 닫지 않고 워커 스레드가 닫는다(브리프의
+        'stdout 닫기'와 다름): 프로세스가 죽으면 읽기는 EOF로 바로 끝나므로 닫을 까닭이 없고, 여기서 닫으면 ① 읽기 스레드가 readinto 안에
+        있을 때 닫기가 그 읽기를 기다리고 ② 표지 검사와 readinto 사이에 닫히면 정상 중단이 ValueError 트레이스백이 되어 '예상 못 한 오류'
+        기록으로 섞인다. 표지를 둔 뒤로는 done·failed를 내지 않는다(그 전에 낸 신호가 GUI의 대기열에 남아 있을 수는 있음 — 부른 쪽 몫)."""
         with self._lock:
             self._stopped = True
             self._suspendable = False
@@ -136,8 +140,7 @@ class HoverStripBuilder(QThread):
             except subprocess.TimeoutExpired:
                 print(f"{LOG_PREFIX} kill한 ffmpeg가 {STOP_WAIT_MS}ms 안에 끝나지 않았습니다 (pid {process.pid}) — 워커 스레드가 끝까지 "
                       f"기다려 거둡니다: {self.path}", file=sys.stderr, flush=True)
-                return
-            process.stdout.close()
+                return  # 안 죽는 프로세스면 읽기 스레드도 막혀 있음 — 스레드를 더 기다리지 않음
         if not self.wait(STOP_WAIT_MS):
             print(f"{LOG_PREFIX} 띠 워커 스레드가 {STOP_WAIT_MS}ms 안에 끝나지 않았습니다: {self.path}", file=sys.stderr, flush=True)
 
@@ -146,37 +149,37 @@ class HoverStripBuilder(QThread):
         started = time.monotonic()
         try:
             self._build(started)
-        except Exception:  # 정리 단계의 예상 못 한 오류 (_build가 프로세스는 이미 거둠) — 삼키지 않고 failed로
-            self._report(f"띠 워커가 예외로 끝났습니다.\n{traceback.format_exc()}", None, "", 0, started)
+        except Exception:  # 정리 단계의 예상 못 한 오류 (_build가 프로세스는 이미 거둠) — 삼키지 않고 failed로 (stop 뒤면 기록으로)
+            self._report("띠 워커가 예외로 끝났습니다.", None, "", 0, started, trace=traceback.format_exc())
 
     def _build(self, started: float) -> None:
         try:
             process = subprocess.Popen(self.command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                        **subprocess_kwargs())
         except OSError:
-            self._report(f"ffmpeg를 띄우지 못했습니다.\n{traceback.format_exc()}", None, "", 0, started)
+            self._report("ffmpeg를 띄우지 못했습니다.", None, "", 0, started, trace=traceback.format_exc())
             return
         stderr_chunks = []
         stderr_reader = threading.Thread(target=_drain, args=(process.stderr, stderr_chunks), name="hover-strip-stderr",
                                          daemon=True)
-        received, problem = 0, None
+        received, problem, trace = 0, None, None
         try:
             stderr_reader.start()
             self._attach(process)
             received, problem = self._read_frames(process.stdout)
-        except Exception:  # 읽기 오류 (stop()이 stdout을 닫은 뒤의 ValueError도 — 그때는 _report가 신호를 내지 않음)
-            problem = f"ffmpeg 출력을 읽다 오류가 났습니다.\n{traceback.format_exc()}"
+        except Exception:  # 읽기·넣기 오류 (예상 못 한 예외 — stop 뒤라도 기록에 남음)
+            problem, trace = "ffmpeg 출력을 읽다 오류가 났습니다.", traceback.format_exc()
         try:
             self._end_reading(clean=problem is None)
         except Exception:  # 재개 중 예상 못 한 오류 — 정지된 채 거두기를 기다리지 않게 아래에서 kill
-            problem = f"ffmpeg를 재개하지 못했습니다.\n{traceback.format_exc()}"
+            problem, trace = "ffmpeg를 재개하지 못했습니다.", traceback.format_exc()
         finally:
             if problem is not None:
                 process.kill()  # 실패면 남은 출력을 기다리지 않음 (정지돼 있어도 먹힘). stop()이면 stop()·_attach가 이미 kill
             process.stdout.close()
             process.wait()
             stderr_reader.join()
-        self._report(problem, process.returncode, decode_output(b"".join(stderr_chunks)), received, started)
+        self._report(problem, process.returncode, decode_output(b"".join(stderr_chunks)), received, started, trace=trace)
 
     def _attach(self, process: subprocess.Popen) -> None:
         """띄운 직후 (잠금 안): 프로세스를 붙임. 이미 stop()이 불렸으면 바로 kill, 멈춤 표지가 서 있으면 바로 정지."""
@@ -239,11 +242,18 @@ class HoverStripBuilder(QThread):
             print(f"{LOG_PREFIX} 정지/재개 실패 — {action}, pid {pid}: {type(exc).__name__}: {exc} ({fallback}): {self.path}",
                   file=sys.stderr, flush=True)
 
-    def _report(self, problem: str | None, returncode: int | None, stderr: str, received: int, started: float) -> None:
-        """끝 신호 하나 (잠금 안 — stop()이 표지를 둔 뒤면 아무것도 내지 않음). 문제 글이 없고 종료 코드 0·stderr 빔이면 done, 아니면 failed."""
+    def _report(self, problem: str | None, returncode: int | None, stderr: str, received: int, started: float,
+                trace: str | None = None) -> None:
+        """끝 신호 하나 (잠금 안). 문제 글이 없고 종료 코드 0·stderr 빔이면 done, 아니면 failed. trace: 예상 못 한 예외의 트레이스백.
+        stop()이 표지를 둔 뒤면 신호를 내지 않는다 — 정상 중단(kill로 끊긴 읽기·종료 코드)은 조용히, trace가 있는 문제는 기록(stderr)에 남김."""
         plan = self.strip.plan
+        if trace is not None:
+            problem = f"{problem}\n{trace.rstrip()}"
         with self._lock:
             if self._stopped:
+                if trace is not None:
+                    print(f"{LOG_PREFIX} 멈춘 띠 워커에서 예상 못 한 오류가 났습니다 (stop 뒤라 신호 없음) — {self.path}\n{problem}",
+                          file=sys.stderr, flush=True)
                 return
             if problem is None and returncode == 0 and not stderr:
                 if received > plan.count:
