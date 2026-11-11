@@ -173,9 +173,9 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         self.cache_hits = 0
         self.cache_misses = 0
         
-        # 성능 최적화 설정
-        self.performance_mode = 'auto'  # 'auto', 'speed', 'quality'
-        self.skip_frame_processing = False  # 초고속 모드
+        # 드래그 미리보기 값(cache_size·frame_skip_threshold·drag_update_interval)과 performance_mode는 고정 — Settings의
+        # '4K 성능 모드'는 뺌(2026-11-12: 같은 이름의 처리기가 둘이라 고른 모드가 적용된 적이 없었음). 이 값이 모든 창이 늘 쓰던 값
+        self.performance_mode = 'auto'  # optimize_for_4k가 읽음 — 늘 'auto'
         self.preview_mode = False  # 드래그 중 프리뷰 모드
         self.frame_skip_threshold = 5  # 프레임 스킵 임계값
         
@@ -250,6 +250,8 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         self._playlist_played_any = False  # 이번 선택 재생에서 연 영상이 있음 (없으면 끝날 때 보던 영상을 멈추지 않음)
         self._playlist_resolving = False  # 선택 재생이 다음 영상을 정하는 중 (그동안 영상이 끝나도 또 진행하지 않음)
         self.current_item = None
+        # 색 변환(BGR → RGB)은 늘 CPU — Settings의 'GPU Acceleration'은 뺌(2026-11-12: 고른 값이 적용된 적이 없었고, OpenCL 변환은
+        # CPU보다 느림 — 이 Mac 실측 4K 2.8ms 대 25ms). process_frame·optimize_for_4k의 GPU 갈래는 이 값이 False라 타지 않음
         self.use_gpu = False
         self.gpu_backend = None
         self.workComboBox.currentIndexChanged.connect(self.update_season_list)
@@ -365,25 +367,6 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         self.videoWidget.streamPaintFailed.connect(self._on_stream_paint_failed)  # (Mac) 네이티브 그리기 첫 실패 → 이 창만 ffmpeg
         self.videoWidget.roiSelectionFinished.connect(self.on_roi_selected)
         self.init_annotation_system()
-
-        self.gpuComboBox = QComboBox()
-        self.gpuComboBox.addItem("CPU")
-        # cv2 lazy import (GPU 옵션 확인용)
-        import cv2
-        if cv2.cuda.getCudaEnabledDeviceCount() > 0:
-            self.gpuComboBox.addItem("NVIDIA (CUDA)")
-        if cv2.ocl.haveOpenCL():
-            self.gpuComboBox.addItem("AMD (OpenCL)")
-        self.gpuComboBox.currentIndexChanged.connect(self.change_gpu_backend)
-
-        # 4K 성능 최적화 모드 선택 추가
-        performanceLabel = QLabel("4K 성능 모드:")
-        self.performanceComboBox = QComboBox()
-        self.performanceComboBox.addItem("자동 (Auto)")
-        self.performanceComboBox.addItem("속도 우선 (Speed)")
-        self.performanceComboBox.addItem("극한 속도 (Ultra)")
-        self.performanceComboBox.addItem("품질 우선 (Quality)")
-        self.performanceComboBox.currentIndexChanged.connect(self.change_performance_mode)
 
         workLabel = QLabel("Yeson 작품")
         workLabel.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -603,7 +586,6 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         self.playSelectedPauseButton = QPushButton('Play/Pause Selected')
         self.playSelectedPauseButton.clicked.connect(self.toggle_play_pause_selected)
         self.playSelectedPauseButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.gpuLabel = QLabel("GPU Acceleration:")
         
         # OCR 기능을 접을 수 있는 그룹박스로 구성 (기본 접힌 상태)
         # 1. ROI 설정 그룹 (lazy import)
@@ -682,7 +664,6 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         controlLayoutMiddle.addWidget(self.wipeCheckBox); controlLayoutMiddle.addWidget(self.wipeXButton)
         controlLayoutMiddle.addWidget(self.wipeYButton); controlLayoutMiddle.addWidget(self.playSelectedButton)
         controlLayoutMiddle.addWidget(self.playSelectedPauseButton)
-        # GPU Acceleration과 4K 성능 모드는 UI에서 제거 (메뉴바로 이동)
         controlLayoutMiddle.addWidget(workLabel); controlLayoutMiddle.addWidget(self.workComboBox)
         controlLayoutMiddle.addWidget(self.seasonComboBox); controlLayoutMiddle.addWidget(self.jobComboBox)
         controlLayoutMiddle.setContentsMargins(0,0,0,0)
@@ -900,7 +881,6 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         # 모든 주요 위젯들의 focusPolicy를 Qt.NoFocus로 설정 (전역 단축키 방해 방지)
         self.positionScroll.setFocusPolicy(Qt.NoFocus)
         self.volumeSlider.setFocusPolicy(Qt.NoFocus)
-        self.gpuComboBox.setFocusPolicy(Qt.NoFocus)
         self.workComboBox.setFocusPolicy(Qt.NoFocus)
         self.seasonComboBox.setFocusPolicy(Qt.NoFocus)
         self.jobComboBox.setFocusPolicy(Qt.NoFocus)
@@ -925,7 +905,6 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         self.labelFrameCount.setFocusPolicy(Qt.NoFocus)
         self.labelTotalFrames.setFocusPolicy(Qt.NoFocus)
         self.timeLabel.setFocusPolicy(Qt.NoFocus)
-        self.gpuLabel.setFocusPolicy(Qt.NoFocus)
         workLabel.setFocusPolicy(Qt.NoFocus)
         volumeLabel.setFocusPolicy(Qt.NoFocus)
         self.frameRateLabel.setFocusPolicy(Qt.NoFocus)
@@ -1349,34 +1328,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         # Settings 메뉴
         settings_menu = menubar.addMenu('&Settings')
         
-        # GPU Acceleration 서브메뉴
-        gpu_menu = settings_menu.addMenu('GPU Acceleration')
-        self.gpu_action_group = []
-        
-        # CPU 옵션
-        cpu_action = gpu_menu.addAction('CPU')
-        cpu_action.setCheckable(True)
-        cpu_action.setChecked(True)
-        cpu_action.triggered.connect(lambda: self.set_gpu_mode(0))
-        self.gpu_action_group.append(cpu_action)
-        
-        # NVIDIA (CUDA) 옵션 (lazy import)
-        import cv2
-        if cv2.cuda.getCudaEnabledDeviceCount() > 0:
-            cuda_action = gpu_menu.addAction('NVIDIA (CUDA)')
-            cuda_action.setCheckable(True)
-            cuda_action.triggered.connect(lambda: self.set_gpu_mode(1))
-            self.gpu_action_group.append(cuda_action)
-        
-        # AMD (OpenCL) 옵션 (lazy import)
-        import cv2
-        if cv2.ocl.haveOpenCL():
-            opencl_action = gpu_menu.addAction('AMD (OpenCL)')
-            opencl_action.setCheckable(True)
-            opencl_action.triggered.connect(lambda: self.set_gpu_mode(2))
-            self.gpu_action_group.append(opencl_action)
-        
-        # 재생 디코더 서브메뉴 (Mac만 — VideoToolbox는 macOS에만 있음; Windows·Linux 메뉴는 그대로). 라디오는 GPU 서브메뉴처럼 맞춤 함수가 체크를 정함
+        # 재생 디코더 서브메뉴 (Mac만 — VideoToolbox는 macOS에만 있음; Windows·Linux 메뉴는 그대로). 라디오의 체크는 맞춤 함수(_sync_decoder_menu)가 정함
         self.decoder_action_group = []  # 항목 차례(mac_native_gate.DECODERS) — Mac이 아니면 빈 채
         self.decoder_actions = {}  # 디코더 이름 → 항목
         if sys.platform == "darwin":
@@ -1397,25 +1349,6 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
             shared_config_action = settings_menu.addAction('공유 설정 폴더 변경...')
             shared_config_action.triggered.connect(lambda: self.choose_shared_config_dir())
 
-        # 4K 성능 모드 서브메뉴
-        performance_menu = settings_menu.addMenu('4K 성능 모드')
-        self.performance_action_group = []
-        
-        performance_modes = [
-            ('자동 (Auto)', 0),
-            ('속도 우선 (Speed)', 1),
-            ('극한 속도 (Ultra)', 2),
-            ('품질 우선 (Quality)', 3)
-        ]
-        
-        for name, index in performance_modes:
-            action = performance_menu.addAction(name)
-            action.setCheckable(True)
-            if index == 0:
-                action.setChecked(True)
-            action.triggered.connect(lambda checked, idx=index: self.set_performance_mode(idx))
-            self.performance_action_group.append(action)
-        
         # Help 메뉴
         help_menu = menubar.addMenu('&Help')
         
@@ -1445,16 +1378,6 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         # About 액션
         about_action = help_menu.addAction('정보')
         about_action.triggered.connect(self.show_about)
-    
-    def set_gpu_mode(self, index):
-        """GPU 모드를 설정합니다."""
-        # 라디오 버튼처럼 동작하도록 다른 액션들의 체크 해제
-        for i, action in enumerate(self.gpu_action_group):
-            action.setChecked(i == index)
-        
-        # ComboBox 업데이트 (change_gpu_backend 메서드가 자동으로 호출됨)
-        if hasattr(self, 'gpuComboBox'):
-            self.gpuComboBox.setCurrentIndex(index)
     
     def set_playback_decoder(self, name: str) -> None:
         """(Mac) Settings → 재생 디코더 (Mac)에서 고른 디코더(mac_native_gate.DECODERS — videotoolbox·ffmpeg)를 이 Mac의 설정 파일에 저장하고 이 창에 바로 적용
@@ -1660,16 +1583,6 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
             action.setEnabled(enabled)
             action.setToolTip(tips[name])
 
-    def set_performance_mode(self, index):
-        """성능 모드를 설정합니다."""
-        # 라디오 버튼처럼 동작하도록 다른 액션들의 체크 해제
-        for i, action in enumerate(self.performance_action_group):
-            action.setChecked(i == index)
-        
-        # ComboBox 업데이트 (change_performance_mode 메서드가 자동으로 호출됨)
-        if hasattr(self, 'performanceComboBox'):
-            self.performanceComboBox.setCurrentIndex(index)
-    
     def show_help(self):
         """Help → 사용법(F1)·Help 단추: 사용법 매뉴얼을 엶 — 기능별 쪽·화면 그림·단축키 표·업데이트 내역이 든 HTML 한 파일을
         만들어 이 PC의 기본 프로그램(웹 브라우저)으로 (`manual_open`; 글 `manual_content`·`release_notes`, 그림 `manual_images/`).
