@@ -306,6 +306,20 @@ def test_pause_suspends_process_and_resume_finishes(qapp, numbered_clip_200, mak
     assert _numbers(strip, 200) == list(range(200))
 
 
+def test_stop_before_start_spawns_nothing(qapp, numbered_clip, h264_gop12, make_builder, monkeypatch, capsys):
+    """start 전에 stop했으면 run은 프로세스를 하나도 띄우지 않음 — 짧은 파일(정확한 띠만)도, 긴 파일(헤더 ffprobe부터)도. 신호·기록 없음."""
+    monkeypatch.setattr(hover_strip, "MAX_THUMBS", 50)
+    for path, total in ((numbered_clip, 48), (h264_gop12, 200)):
+        worker = make_builder(path, HoverStrip(plan_for(total, 320, 180)))
+        got = _Signals(worker)
+        worker.stop()
+        worker.start()
+        _finish(qapp, worker)
+        assert worker.pids == [] and worker.pid is None, path
+        assert got.done == [] and got.failed == [] and got.coarse == []
+    assert _logged(capsys) == []
+
+
 def test_paused_before_spawn_suspends_right_after_spawn(qapp, numbered_clip_200, make_builder):
     strip = HoverStrip(plan_for(200, 320, 180))
     worker = make_builder(numbered_clip_200, strip)
@@ -361,12 +375,14 @@ def _logged(capsys):
 
 
 def test_stop_kills_process_and_thread(qapp, numbered_clip, make_builder, capsys):
+    """띄우자마자 stop: 스레드가 끝나고 띄운 프로세스가 있으면 거둠(좀비 없음). stop이 run의 검사보다 먼저면 ffmpeg를 아예 띄우지 않음(2026-11-11 —
+    그래서 pid가 없을 수도 있음; 띄운 뒤의 kill은 test_stop_while_paused·test_stop_while_reading이 늘 봄)."""
     worker = make_builder(numbered_clip, HoverStrip(plan_for(48, 320, 180)))
     got = _Signals(worker)
     worker.start()
     worker.stop()
     assert not worker.isRunning()
-    assert worker.pid is not None and not psutil.pid_exists(worker.pid)  # kill 뒤 거둠 — 좀비 없음
+    assert [pid for pid in worker.pids if psutil.pid_exists(pid)] == []  # kill 뒤 거둠 — 좀비 없음
     worker.stop()  # 두 번 불러도 됨
     _pump(qapp, 0.1)
     assert got.done == [] and got.failed == []
@@ -939,9 +955,55 @@ def test_pause_and_stop_during_keyframe_scan(qapp, make_builder, capsys):
         worker.stop()
         assert time.monotonic() - started < 2 * STOP_WAIT_MS / 1000
         assert not worker.isRunning() and [pid for pid in worker.pids if psutil.pid_exists(pid)] == []
+        assert len(worker.pids) == 1  # 헤더 ffprobe뿐 — stop 뒤에는 정확한 ffmpeg를 띄우지 않음
     _pump(qapp, 0.1)
     assert got.done == [] and got.failed == [] and got.coarse == [] and worker.coarse_strip is None and strip.filled_count == 0
     assert _logged(capsys) == []
+
+
+@pytest.mark.parametrize("case", ["partial_json", "traceback"])
+def test_stop_right_after_keyframe_scan(qapp, h264_gop12, make_builder, monkeypatch, capsys, case):
+    """패킷 ffprobe가 끝나는 순간 stop이 오면: 읽다 끊긴 JSON(partial_json — stop이 읽기를 멈춰 반쪽만 받음)을 해석하지 않고 조용히 빠져나옴
+    ('예상 못 한 예외'로 거짓 기록하지 않음), 트레이스백이 있는 문제(traceback)는 정확한 띠와 같은 머리 '멈춘 띠 워커에서 예상 못 한 오류'로
+    기록하고 신호는 없음. 어느 쪽이든 그 뒤 거친·정확한 ffmpeg를 띄우지 않음. 그 순간은 지금 프로세스를 띄우는 _run_pass를 감싸 만듦 —
+    진짜 ffprobe가 끝난 뒤 다른 스레드의 stop()이 표지를 둘 때까지 기다렸다가, 반쪽 출력 또는 읽기 오류를 돌려줌."""
+    monkeypatch.setattr(hover_strip, "MAX_THUMBS", 50)
+    worker = make_builder(h264_gop12, HoverStrip(plan_for(200, 320, 180)))
+    got = _Signals(worker)
+    real_run_pass = worker._run_pass
+    stoppers = []
+
+    def run_pass_then_stop(command, consume, tool):  # 워커 스레드
+        result = real_run_pass(command, consume, tool)
+        if "packet=pts_time,flags" not in command:
+            return result
+        stopper = threading.Thread(target=worker.stop, name="test-stopper")
+        stopper.start()
+        stoppers.append(stopper)
+        deadline = time.monotonic() + WAIT_S
+        while not worker._stopped and time.monotonic() < deadline:  # stop()이 표지를 둘 때까지 (잠금 다음 첫 줄)
+            time.sleep(0.001)
+        problem, returncode, stderr, out, trace = result
+        if case == "partial_json":
+            return None, 0, stderr, out[:len(out) // 2], None
+        return ("ffprobe 출력을 읽다 오류가 났습니다.", returncode, stderr, None,
+                "Traceback (most recent call last):\n  File \"시험\"\nRuntimeError: 시험: 읽기 오류\n")
+
+    monkeypatch.setattr(worker, "_run_pass", run_pass_then_stop)
+    worker.start()
+    _finish(qapp, worker)
+    for stopper in stoppers:
+        stopper.join(WAIT_S)
+    assert len(stoppers) == 1 and not stoppers[0].is_alive()
+    assert len(worker.pids) == 2  # 헤더·패킷 ffprobe뿐 — stop 뒤에 거친·정확한 ffmpeg를 띄우지 않음
+    assert got.done == [] and got.failed == [] and got.coarse == [] and worker.coarse_strip is None
+    err = capsys.readouterr().err
+    logged = [line for line in err.splitlines() if line.startswith(LOG_PREFIX)]
+    if case == "partial_json":
+        assert logged == []
+    else:
+        assert logged == [f"{LOG_PREFIX} 멈춘 띠 워커에서 예상 못 한 오류가 났습니다 (stop 뒤라 신호 없음) — {h264_gop12}"]
+        assert "RuntimeError: 시험: 읽기 오류" in err
 
 
 def test_stop_during_coarse_pass_drops_coarse_strip(qapp, h264_gop12, make_builder, monkeypatch, capsys):
@@ -958,6 +1020,7 @@ def test_stop_during_coarse_pass_drops_coarse_strip(qapp, h264_gop12, make_build
     worker.stop()
     assert not worker.isRunning() and [pid for pid in worker.pids if psutil.pid_exists(pid)] == []
     assert worker.coarse_strip is None
+    assert len(worker.pids) == 3  # 헤더·패킷 ffprobe → 거친 ffmpeg — stop 뒤에는 정확한 ffmpeg를 띄우지 않음
     _pump(qapp, 0.1)
     assert got.done == [] and got.failed == [] and got.coarse == [] and strip.filled_count == 0
     logged = _logged(capsys)

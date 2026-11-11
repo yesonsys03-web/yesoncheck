@@ -133,6 +133,10 @@ def _drain(stream, chunks: list) -> None:
         stream.close()
 
 
+class _Stopped(Exception):
+    """거친 패스에서 stop()을 본 뒤 조용히 빠져나옴 (RuntimeError 등 '실패'와 섞이지 않게 따로 — hover_keyframes를 지나 _coarse_pass까지)."""
+
+
 class HoverStripBuilder(QThread):
     """띠 저장소를 채우는 워커 (거친 띠 → 정확한 띠 — 모듈 설명). 생성·start·paused·stop은 GUI 스레드, run은 워커 스레드.
 
@@ -191,8 +195,8 @@ class HoverStripBuilder(QThread):
         'stdout 닫기'와 다름): 프로세스가 죽으면 읽기는 EOF로 바로 끝나므로 닫을 까닭이 없고, 여기서 닫으면 ① 읽기 스레드가 readinto 안에
         있을 때 닫기가 그 읽기를 기다리고 ② 표지 검사와 readinto 사이에 닫히면 정상 중단이 ValueError 트레이스백이 되어 '예상 못 한 오류'
         기록으로 섞인다. 표지를 둔 뒤로는 done·failed·coarse_done을 내지 않는다(그 전에 낸 신호가 GUI의 대기열에 남아 있을 수는 있음 — 부른 쪽
-        몫). 거친 띠도 놓는다(coarse_strip = None — 워커는 표지를 본 뒤로 다시 대입하지 않음). 어느 패스든 지금 프로세스를 끝낸다 — 그 뒤의 패스는
-        띄우자마자 _attach가 kill한다."""
+        몫). 거친 띠도 놓는다(coarse_strip = None — 워커는 표지를 본 뒤로 다시 대입하지 않음). 어느 패스든 지금 프로세스를 끝내고, 그 뒤의 패스는
+        띄우지 않는다(run·거친 패스가 띄우기 전에 표지를 봄 — 그 검사와 띄우기 사이에 온 stop이면 _attach가 바로 kill)."""
         with self._lock:
             self._stopped = True
             self._suspendable = False
@@ -215,12 +219,15 @@ class HoverStripBuilder(QThread):
         started = time.monotonic()
         try:
             self._coarse_pass(started)
+            if self._stopped:  # stop 뒤에는 정확한 패스를 띄우지 않음 (stop() 설명)
+                return
             self._build(started)
         except Exception:  # 정리 단계의 예상 못 한 오류 (_run_pass가 프로세스는 이미 거둠) — 삼키지 않고 failed로 (stop 뒤면 기록으로)
             self._report("띠 워커가 예외로 끝났습니다.", None, "", 0, started, trace=traceback.format_exc())
 
     def _build(self, started: float) -> None:
-        """② 정확한 띠 — 끝 신호 하나(_report). stop() 뒤라도 띄우고(_attach가 바로 kill) 조용히 끝남 (예전 그대로)."""
+        """② 정확한 띠 — 끝 신호 하나(_report). stop() 뒤면 run이 부르지 않음 — run의 검사와 띄우기 사이에 온 stop이면 _attach가 바로 kill하고
+        조용히 끝남."""
         try:
             problem, returncode, stderr, received, trace = self._run_pass(
                 self.command, lambda stdout: self._read_frames(stdout, self.strip, progress=True), "ffmpeg")
@@ -237,8 +244,13 @@ class HoverStripBuilder(QThread):
             return  # 간격 1 — 정확한 띠가 곧 모든 장이라 생각하지 않음 (ffprobe·기록 없음)
         try:
             problem = self._build_coarse(started, plan)
+        except _Stopped:  # stop()이 표지를 둠 — 조용히 (트레이스백이 있는 문제는 빠져나오기 전에 기록함)
+            return
         except Exception:  # 예상 못 한 예외 (깨진 ffprobe JSON·put의 버그 등)
             problem = f"거친 띠 패스가 예외로 끝났습니다.\n{traceback.format_exc().rstrip()}"
+            if self._stopped:  # stop 뒤라도 트레이스백은 남김 — 정확한 띠와 같은 머리, 신호 없음
+                self._log_after_stop(problem)
+                return
         if problem is None:
             return
         with self._lock:
@@ -249,6 +261,8 @@ class HoverStripBuilder(QThread):
         """거친 패스 본문 → 기록할 문제 글(사유 전문), 또는 None(다 채워 coarse_done을 냄·건너뜀(기록 한 줄)·stop으로 멈춤). 헤더를 먼저 읽어
         all-intra 코덱·모르는 속도면 패킷 스캔(파일 전체 읽기) 없이 건너뜀 (hover_keyframes 설명)."""
         frames = None
+        if self._stopped:  # stop 뒤에는 ffprobe도 띄우지 않음
+            return None
         try:
             ffprobe = self._ffprobe if self._ffprobe is not None else ffprobe_path()
             header = hover_keyframes.probe_header(ffprobe, self.path, run=self._run_probe)
@@ -277,8 +291,10 @@ class HoverStripBuilder(QThread):
                 command, lambda stdout: self._read_frames(stdout, strip, progress=False), "ffmpeg")
         except OSError:
             return f"거친 띠 ffmpeg를 띄우지 못했습니다.\n명령: {' '.join(command)}\n{traceback.format_exc().rstrip()}"
-        if self._stopped:  # 일부러 멈춤 — 조용히 (트레이스백이 있는 문제만 기록)
-            return None if trace is None else f"{problem}\n{trace.rstrip()}"
+        if self._stopped:  # 일부러 멈춤 — 조용히 (트레이스백이 있는 문제만 정확한 띠와 같은 머리로 기록)
+            if trace is not None:
+                self._log_after_stop(f"{problem}\n{trace.rstrip()}")
+            return None
         if problem is None and returncode == 0 and received == strip.count:
             if stderr.strip():  # 삼키지 않음 (정확한 띠의 경고와 같은 규칙 — 창 없음)
                 print(f"{LOG_PREFIX} 거친 띠 ffmpeg 경고 (종료 코드 0, {strip.filled_count}장 채움) — {self.path}\n{stderr.rstrip()}",
@@ -296,9 +312,14 @@ class HoverStripBuilder(QThread):
         return f"{problem}\n명령: {' '.join(command)}\n종료 코드: {returncode}\nstderr:\n{stderr.rstrip() or '(없음)'}"
 
     def _run_probe(self, command: list[str]) -> tuple[int, bytes, str]:
-        """scan_keyframes의 run — ffprobe도 지금 프로세스로(_run_pass — 멈춤·stop이 먹게) 띄워 stdout을 끝까지 읽음 → (종료 코드, stdout,
-        stderr 글). 읽다 예외가 나면 트레이스백째 RuntimeError (거친 띠만 건너뜀)."""
+        """probe_header·scan_keyframes의 run — ffprobe도 지금 프로세스로(_run_pass — 멈춤·stop이 먹게) 띄워 stdout을 끝까지 읽음 → (종료 코드,
+        stdout, stderr 글). stop() 뒤면 _Stopped로 빠져나옴 — stop이 읽기를 멈춰 반쪽만 받은 JSON을 해석해 '예상 못 한 예외'로 거짓 기록하지
+        않게(트레이스백이 있는 문제는 먼저 정확한 띠와 같은 머리로 기록). 읽다 예외가 나면 트레이스백째 RuntimeError (거친 띠만 건너뜀)."""
         problem, returncode, stderr, out, trace = self._run_pass(command, self._read_all, "ffprobe")
+        if self._stopped:
+            if trace is not None:
+                self._log_after_stop(f"{problem}\n{trace.rstrip()}")
+            raise _Stopped
         if problem is not None:
             raise RuntimeError(f"{problem}\n{(trace or '').rstrip()}")
         return returncode, out, stderr
@@ -408,6 +429,10 @@ class HoverStripBuilder(QThread):
             print(f"{LOG_PREFIX} 정지/재개 실패 — {action}, pid {pid}: {type(exc).__name__}: {exc} ({fallback}): {self.path}",
                   file=sys.stderr, flush=True)
 
+    def _log_after_stop(self, text: str) -> None:
+        """stop() 뒤의 트레이스백이 있는 문제 — 신호 없이 기록(stderr)에 머리 한 줄과 글 전문 (조용히 사라지지 않게; 모든 패스가 같은 머리)."""
+        print(f"{LOG_PREFIX} 멈춘 띠 워커에서 예상 못 한 오류가 났습니다 (stop 뒤라 신호 없음) — {self.path}\n{text}", file=sys.stderr, flush=True)
+
     def _report(self, problem: str | None, returncode: int | None, stderr: str, received: int, started: float,
                 trace: str | None = None) -> None:
         """끝 신호 하나 (잠금 안). 문제 글이 없고(장 경계의 EOF) 종료 코드 0이면 done — stderr에 글이 있으면 경고 기록(stderr, 창 없음)을
@@ -419,8 +444,7 @@ class HoverStripBuilder(QThread):
         with self._lock:
             if self._stopped:
                 if trace is not None:
-                    print(f"{LOG_PREFIX} 멈춘 띠 워커에서 예상 못 한 오류가 났습니다 (stop 뒤라 신호 없음) — {self.path}\n{problem}",
-                          file=sys.stderr, flush=True)
+                    self._log_after_stop(problem)
                 return
             if problem is None and returncode == 0:
                 filled = self.strip.filled_count
