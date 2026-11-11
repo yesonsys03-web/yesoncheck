@@ -263,6 +263,20 @@ YesonCheck는 **창 하나가 앱 하나**입니다. 창을 더 열면 앱이 �
   - 설치하지 않은 복사본(폴더째 복사한 빌드 등)을 켜면 그 계정의 "연결 프로그램" 항목이 그 복사본을 가리키도록 바뀝니다.
     설치한 YesonCheck를 다시 켜면 설치한 쪽으로 돌아옵니다.
 
+## 사용법 매뉴얼 (Help → 사용법 · F1)
+앱 안의 **Help → 사용법**(F1, 가운데 패널의 **Help** 단추)을 누르면 사용법 매뉴얼이 **웹 브라우저**에서 열립니다. 인터넷 연결은 필요 없습니다.
+
+- **기능별 쪽**: 왼쪽 목차에서 기능을 고르면 그 쪽만 보입니다 — 시작하기 · 단축키 · 재생과 탐색 · 화면 보기 · A/B 비교(와이프) · 사이드바 ·
+  작품·폴더·북마크 · 이미지 시퀀스 · 수정 사항 주석 · OCR·컷 감지 · 설정 · 여러 창·기본 앱 · 업데이트 · ProRes·4K 재생 · 문제 해결.
+- **화면 그림**: 쪽마다 실제 앱 화면을 찍은 그림이 있고, 그림 위의 번호와 아래 설명의 번호가 짝입니다. 그림을 누르면 크게 보입니다.
+  그림은 설명용으로 그린 합성 영상으로 찍은 것입니다.
+- **단축키**: '단축키' 쪽에 메인 창·목록·OCR 검토 창·북마크 창의 키를 모두 표로 모았습니다(한글 자판의 같은 키 포함).
+- **업데이트 내역**: 맨 아래 쪽에 버전마다 바뀐 점이 있고, 지금 쓰는 버전에 표시가 붙습니다.
+- **찾기**: 목차 위의 칸에 낱말을 넣으면 그 낱말이 든 쪽만 목차에 남습니다. 그 옆 단추로 밝게·어둡게를 바꿉니다.
+- 매뉴얼은 파일 하나(`YesonCheck_manual.html`)라 다른 사람에게 보내거나 인쇄할 수 있습니다. 열 때마다 이 PC의 사용자 폴더
+  (Mac `~/Library/Caches/YesonCheck/manual`, Windows `%LOCALAPPDATA%\YesonCheck\manual`)에 새로 씁니다.
+- 열지 못하면(파일을 여는 기본 프로그램이 없는 PC 등) 오류 창에 이유가 보입니다.
+
 ## PyInstaller 번들 생성
 - Intel / Apple Silicon 빌드, 몬터레이(macOS 12.3) 지원 조건은 [BUILD.md](BUILD.md)를 참고하세요.
 - **원클릭**: 터미널에서 `./build_app.sh` 실행 또는 앱 메뉴 **Help → 실행 및 빌드** → **📦 macOS 앱 빌드**.
@@ -314,6 +328,7 @@ YesonCheck는 **창 하나가 앱 하나**입니다. 창을 더 열면 앱이 �
 - **ProRes 빠른 재생**: Mac(Intel·Apple Silicon)은 ProRes(HDR 제외)를 Mac의 디코더(VideoToolbox)로 열어 GPU에 곧바로 그림, Windows는 앱에 들어 있는 ffmpeg로 — 속도는 재생이 끝날 때마다 앱 기록의 `[측정]` 줄 (위 'ProRes 영상 빠른 재생')
 - **재생 디코더 (Mac)**: Settings → 재생 디코더 (Mac)에서 `VideoToolbox (기본)`·`ffmpeg (예전 방식)` — 이 Mac에만 저장, 고르면 보던 영상에 바로 적용 (위 'Mac의 ProRes 재생')
 - **슬라이더 호버 썸네일**: 슬라이더 위에 커서를 올리면 그 프레임의 그림과 번호 — 쉬는 동안 뒤에서 만들고, 끄기는 Settings → 슬라이더 썸네일 (위 '슬라이더 위 미리보기')
+- **사용법 매뉴얼**: Help → 사용법(F1) — 기능별 쪽·화면 그림·단축키 표·업데이트 내역이 든 매뉴얼이 브라우저에서 열림 (위 '사용법 매뉴얼')
 
 ## 프로젝트 구조 요약
 ```
@@ -351,6 +366,11 @@ yesoncheck/
 ├─ player_review.py   # OCR 결과 검토 및 편집 다이얼로그 (WebSocket 서버 포함)
 ├─ web_info.py        # 웹UI HTML 생성 및 WebSocket 통신
 ├─ video_widget.py   # 맞춤형 영상 뷰어 및 인터랙션
+├─ manual_content.py # 사용법 매뉴얼의 글 — 기능별 쪽 (Qt 없음)
+├─ release_notes.py  # 버전별 바뀐 점 — 매뉴얼의 '업데이트 내역'과 배포 노트의 한 출처 (Qt 없음)
+├─ manual_html.py    # 매뉴얼을 HTML 한 파일로 (Qt 없음)
+├─ manual_open.py    # 매뉴얼을 쓰고 브라우저로 열기 (Help → 사용법)
+├─ manual_images/    # 매뉴얼의 화면 그림 (tools/make_manual_screenshots.py가 합성 영상으로 찍음)
 ├─ workers.py        # 아래 워커 모듈을 한곳에서 다시 내보내는 호환용 모듈
 ├─ ocr_worker.py     # OCR 분석 워커(OCRWorker)
 ├─ ocr_export_worker.py # OCR 구간 내보내기 워커
