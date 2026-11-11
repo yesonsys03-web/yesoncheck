@@ -13,6 +13,10 @@ WriteFile에서 막힌 ffmpeg 스레드가 있으면 정지돼 있어도 running
 맞게 보임). 그래서 도중 멈춤 시험은 확인 방법을 매개변수로 둘 다 둔다 — evidence="status"(psutil status — Windows에서는 틀린 확인이라
 건너뜀)와 evidence="drain"(동작으로: 파이프를 비워 봐서(_drain_pipe) 한 장도 더 오지 않고, 비우는 도우미가 read1에서 막혀 살아 있음 — 정지된
 ffmpeg는 어느 OS에서나 새 장을 주지 않으므로 모든 OS에서 돎).
+
+거친 띠(키프레임만 — 스펙 2026-11-11 §3)는 GOP 12의 번호 H.264(prores_clips.make_numbered_h264 — 키프레임 번호가 range(0, n, 12)이고 그림에서
+번호가 읽힘)에 MAX_THUMBS를 줄여 간격 > 1로 본다. 워커 하나가 프로세스를 여럿(ffprobe → 거친 ffmpeg → 정확한 ffmpeg) 띄우므로 make_builder는
+pids 전부가 끝났는지 확인한다. coarse_done·done 순간의 상태는 직접 연결로 받아 워커 스레드에서 그대로 적는다.
 """
 
 import socket
@@ -26,10 +30,10 @@ import pytest
 from PyQt5.QtCore import Qt
 
 from tests.conftest import write_test_video
-from tests.prores_clips import frame_number, make_numbered_clip, make_truncated
-from yesoncheck import hover_strip, hover_strip_builder, movie_pipe_source
+from tests.prores_clips import frame_number, make_numbered_clip, make_numbered_h264, make_truncated
+from yesoncheck import external_tools, hover_keyframes, hover_strip, hover_strip_builder, movie_pipe_source
 from yesoncheck.hover_strip import LOG_PREFIX, HoverStrip, StripPlan, plan_for
-from yesoncheck.hover_strip_builder import STOP_WAIT_MS, HoverStripBuilder, build_command
+from yesoncheck.hover_strip_builder import STOP_WAIT_MS, HoverStripBuilder, build_coarse_command, build_command
 
 WAIT_MS = 10_000  # 스레드 끝·신호를 기다리는 한도 — 넘으면 멈춘 것으로 보고 실패
 WAIT_S = WAIT_MS / 1000
@@ -57,13 +61,24 @@ def numbered_clip_200(tmp_path_factory):
     return path
 
 
+@pytest.fixture(scope="session")
+def h264_gop12(tmp_path_factory):
+    """번호 H.264 200장, 키프레임 0·12·…·192 (17장 — 200 ≥ 17 × 4라 거친 띠 조건을 넘음)."""
+    path = str(tmp_path_factory.mktemp("hover_strip_builder") / "numbered_gop12.mp4")
+    make_numbered_h264(path, count=200, gop=12)
+    return path
+
+
+H264_KEYFRAMES = list(range(0, 200, 12))
+
+
 @pytest.fixture
 def make_builder():
-    """워커를 만들고, 시험이 끝나면(실패해도) stop — 스레드가 끝나고 ffmpeg가 거둬졌는지 확인."""
+    """워커를 만들고, 시험이 끝나면(실패해도) stop — 스레드가 끝나고 띄운 프로세스(ffprobe·거친 ffmpeg·정확한 ffmpeg) 모두 거둬졌는지 확인."""
     made = []
 
-    def make(path, strip):
-        worker = HoverStripBuilder(path, strip)
+    def make(path, strip, **kwargs):
+        worker = HoverStripBuilder(path, strip, **kwargs)
         made.append(worker)
         return worker
 
@@ -72,16 +87,18 @@ def make_builder():
         worker.stop()
         assert not worker.isRunning()
         assert worker.pid is None or not psutil.pid_exists(worker.pid)
+        assert [pid for pid in worker.pids if psutil.pid_exists(pid)] == [], f"남은 프로세스: {worker.pids}"
 
 
 class _Signals:
     """워커의 세 신호를 리스트로 받음 (GUI 스레드 — processEvents가 전달)."""
 
     def __init__(self, worker):
-        self.progress, self.done, self.failed = [], [], []
+        self.progress, self.done, self.failed, self.coarse = [], [], [], []
         worker.progress.connect(lambda filled: self.progress.append(filled))
         worker.done.connect(lambda filled, seconds: self.done.append((filled, seconds)))
         worker.failed.connect(lambda text: self.failed.append(text))
+        worker.coarse_done.connect(lambda filled, seconds: self.coarse.append((filled, seconds)))
 
     @property
     def done_counts(self):
@@ -565,3 +582,310 @@ def test_suspend_failure_logs_and_only_stops_reading(qapp, numbered_clip_200, ma
     assert len(lines) == 2
     assert f"정지, pid {worker.pid}: {type(suspend_error(worker.pid)).__name__}: " in lines[0]
     assert f"재개, pid {worker.pid}: {type(resume_error(worker.pid)).__name__}: " in lines[1]
+
+
+# ---------------------------------------------------------------- 거친 띠 (키프레임만 — 스펙 2026-11-11 §3)
+
+
+def test_coarse_command_shape():
+    """거친 패스 명령: -skip_frame nokey는 입력(디코더) 옵션이라 -i 앞(디코더 스레드 -threads 바로 앞), 스레드 규칙은 정확한 띠와 같음(4K는
+    1코어, Full HD 이하는 옵션 없음), 키프레임을 m장마다 고를 때만 select (n은 디코드된 장 — 키프레임만 셈)."""
+    big = StripPlan(total=14_400, step=29, count=497, width=320, height=180, source_width=3840, source_height=2160)
+    assert build_coarse_command("/opt/ffmpeg", "/clips/a b.mov", big, 1) == [
+        "/opt/ffmpeg", "-nostdin", "-v", "error", "-filter_threads", "1", "-skip_frame", "nokey", "-threads", "1", "-i", "/clips/a b.mov",
+        "-map", "0:V:0", "-fps_mode", "passthrough", "-vf", "scale=320:180", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
+    ]
+    small = StripPlan(total=32_553, step=66, count=494, width=320, height=180, source_width=1280, source_height=720)
+    assert build_coarse_command("ffmpeg", "x.mp4", small, 3) == [
+        "ffmpeg", "-nostdin", "-v", "error", "-skip_frame", "nokey", "-i", "x.mp4", "-map", "0:V:0", "-fps_mode", "passthrough",
+        "-vf", "select=not(mod(n\\,3)),scale=320:180", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
+    ]
+
+
+def _coarse_snapshots(worker, strip):
+    """coarse_done·done을 직접 연결로 받아(워커 스레드 — 신호를 낸 그 순간) 그때의 거친 띠·정확한 띠 상태를 적음."""
+    seen = {}
+
+    def on_coarse(filled, seconds):
+        seen["coarse"] = (filled, worker.coarse_strip, strip.filled_count)
+
+    def on_done(filled, seconds):
+        seen["done"] = worker.coarse_strip
+
+    worker.coarse_done.connect(on_coarse, Qt.DirectConnection)
+    worker.done.connect(on_done, Qt.DirectConnection)
+    return seen
+
+
+def _log_lines(text, head):
+    return [line for line in text.splitlines() if line.startswith(f"{LOG_PREFIX} {head}")]
+
+
+def _put_then_pause(monkeypatch, worker, paused_at):
+    """거친 띠의 첫 put 뒤에 워커 스레드에서 바로 멈춤을 세움 — 320×180 17장은 순식간이라 끝나기 전에 걸림을 보장."""
+    real_put = hover_keyframes.KeyframeStrip.put
+
+    def put_then_pause(self, j, data):  # 워커 스레드
+        real_put(self, j, data)
+        if not paused_at:
+            paused_at.append(j)
+            worker.paused = True
+
+    monkeypatch.setattr(hover_keyframes.KeyframeStrip, "put", put_then_pause)
+
+
+def test_coarse_strip_fills_keyframes_first_then_exact_strip(qapp, h264_gop12, make_builder, monkeypatch, capsys):
+    """긴 H.264(간격 > 1): ffprobe로 키프레임을 읽어 거친 띠를 먼저 다 채우고(coarse_done — 그때 정확한 띠는 0장) 정확한 띠를 이어 채우며,
+    done을 내기 전에 거친 띠를 버림. 거친 띠의 j번째 그림은 키프레임 frames[j] (그림에 실린 번호), 번호 목록은 GOP 12 그대로."""
+    monkeypatch.setattr(hover_strip, "MAX_THUMBS", 50)  # 200장 → 간격 4, 50장
+    plan = plan_for(200, 320, 180)
+    assert (plan.step, plan.count) == (4, 50)
+    strip = HoverStrip(plan)
+    worker = make_builder(h264_gop12, strip)
+    got = _Signals(worker)
+    seen = _coarse_snapshots(worker, strip)
+    assert worker.coarse_strip is None and worker.coarse_command is None  # 띄우기 전
+    worker.start()
+    _finish(qapp, worker)
+    assert got.failed == [] and got.done_counts == [50] and len(got.coarse) == 1
+    filled, coarse, exact_then = seen["coarse"]
+    assert coarse.frames == tuple(H264_KEYFRAMES) and filled == coarse.filled_count == coarse.count == 17
+    assert exact_then == 0  # 거친 띠가 먼저
+    assert [frame_number(coarse.image(j)) for j in range(coarse.count)] == H264_KEYFRAMES
+    assert seen["done"] is None and worker.coarse_strip is None  # done 전에 버림
+    assert _numbers(strip, 50) == list(range(0, 200, 4))
+    assert 0 < got.coarse[0][1] <= got.done[0][1]  # 초는 둘 다 워커를 띄운 때부터
+    assert worker.coarse_count == 17 and "-skip_frame" in worker.coarse_command and "-skip_frame" not in worker.command
+    assert len(worker.pids) == 3  # ffprobe → 거친 ffmpeg → 정확한 ffmpeg
+    captured = capsys.readouterr()
+    assert _log_lines(captured.out, "거친 띠") == [f"{LOG_PREFIX} 거친 띠 먼저: 키프레임 17장(간격 1, 전체 200장) — {h264_gop12}"]
+    assert _log_lines(captured.err, "") == []  # 경고·실패 없음
+
+
+def test_coarse_strip_subsamples_many_keyframes(qapp, h264_gop12, make_builder, monkeypatch, capsys):
+    """키프레임이 MAX_COARSE를 넘으면 m = ceil(K / 최대)마다 하나 — select=not(mod(n,m))로 고른 출력과 목록 frames[::m]이 짝 (그림 번호로 확인)."""
+    monkeypatch.setattr(hover_strip, "MAX_THUMBS", 50)
+    monkeypatch.setattr(hover_keyframes, "MAX_COARSE", 5)  # 17장 → 간격 4, 5장
+    strip = HoverStrip(plan_for(200, 320, 180))
+    worker = make_builder(h264_gop12, strip)
+    got = _Signals(worker)
+    seen = _coarse_snapshots(worker, strip)
+    worker.start()
+    _finish(qapp, worker)
+    assert got.failed == [] and got.done_counts == [50] and len(got.coarse) == 1
+    coarse = seen["coarse"][1]
+    assert coarse.frames == tuple(H264_KEYFRAMES[::4]) == (0, 48, 96, 144, 192)
+    assert [frame_number(coarse.image(j)) for j in range(5)] == [0, 48, 96, 144, 192]
+    assert "select=not(mod(n\\,4)),scale=320:180" in worker.coarse_command
+    assert f"{LOG_PREFIX} 거친 띠 먼저: 키프레임 5장(간격 4, 전체 200장) — {h264_gop12}" in capsys.readouterr().out
+
+
+def test_coarse_strip_on_h264_with_audio_track(qapp, tmp_path, make_builder, make_video, monkeypatch, capsys):
+    """소리 트랙이 있는 H.264 mp4(conftest.make_video, 10초 240장, GOP 12): 키프레임 목록은 영상 패킷만(V:0) — 20장, 소리 패킷은 세지 않음."""
+    path = make_video(str(tmp_path / "gop12_audio.mp4"), seconds=10,
+                      video_args=["-g", "12", "-keyint_min", "12", "-sc_threshold", "0"])
+    total = movie_pipe_source.probe_movie(path).nb_frames
+    assert total == 240
+    assert hover_keyframes.scan_keyframes(external_tools.ffprobe_path(), path) == (list(range(0, 240, 12)), 240)
+    monkeypatch.setattr(hover_strip, "MAX_THUMBS", 48)  # 간격 5, 48장
+    strip = HoverStrip(plan_for(total, 320, 240))
+    worker = make_builder(path, strip)
+    got = _Signals(worker)
+    seen = _coarse_snapshots(worker, strip)
+    worker.start()
+    _finish(qapp, worker)
+    assert got.failed == [] and got.done_counts == [48] and [filled for filled, _ in got.coarse] == [20]
+    coarse = seen["coarse"][1]
+    assert coarse.frames == tuple(range(0, 240, 12)) and coarse.image(19).shape == (240, 320, 3)
+    assert _log_lines(capsys.readouterr().err, "") == []
+
+
+def test_all_intra_prores_skips_coarse_strip(qapp, numbered_clip_200, make_builder, monkeypatch, capsys):
+    """all-intra ProRes(모든 장이 키프레임 — K × 4 > 전체): 기록 한 줄 '거친 띠 건너뜀' 뒤 정확한 띠만 (거친 ffmpeg 없음, coarse_strip은 늘 None)."""
+    monkeypatch.setattr(hover_strip, "MAX_THUMBS", 50)
+    strip = HoverStrip(plan_for(200, 320, 180))
+    worker = make_builder(numbered_clip_200, strip)
+    got = _Signals(worker)
+    during = []
+    worker.progress.connect(lambda filled: during.append(worker.coarse_strip), Qt.DirectConnection)
+    worker.start()
+    _finish(qapp, worker)
+    assert got.failed == [] and got.done_counts == [50] and got.coarse == []
+    assert during and set(during) == {None} and worker.coarse_strip is None and worker.coarse_command is None
+    assert _numbers(strip, 50) == list(range(0, 200, 4))
+    assert len(worker.pids) == 2  # ffprobe → 정확한 ffmpeg
+    lines = _log_lines(capsys.readouterr().out, "거친 띠")
+    assert len(lines) == 1 and lines[0].startswith(f"{LOG_PREFIX} 거친 띠 건너뜀: 키프레임 200장 × 4 > 전체 200장")
+    assert lines[0].endswith(f" — {numbered_clip_200}")
+
+
+def test_short_file_runs_no_keyframe_scan(qapp, numbered_clip, make_builder, capsys):
+    """간격 1(500장 이하)은 거친 띠를 생각하지 않음 — ffprobe도 띄우지 않고 기록 줄도 없음 (정확한 띠가 곧 모든 장)."""
+    strip = HoverStrip(plan_for(48, 320, 180))
+    worker = make_builder(numbered_clip, strip)
+    got = _Signals(worker)
+    worker.start()
+    _finish(qapp, worker)
+    assert got.done_counts == [48] and got.coarse == [] and len(worker.pids) == 1 and worker.coarse_command is None
+    assert _logged(capsys) == []
+
+
+@pytest.mark.parametrize("ffprobe_kind", ["missing_file", "exits_nonzero", "not_found"])
+def test_keyframe_scan_failure_logs_and_exact_strip_completes(qapp, tmp_path, h264_gop12, make_builder, monkeypatch, capsys,
+                                                              ffprobe_kind):
+    """ffprobe 실패(실행 파일이 없음 — OSError, 0이 아닌 종료 코드 — RuntimeError, 찾지 못함 — ToolNotFoundError): 거친 띠만 건너뜀 —
+    기록(stderr) 한 줄 + 사유 전문, 실패 신호 없음(그래서 플레이어의 오류 창도 없음), 정확한 띠는 끝까지."""
+    monkeypatch.setattr(hover_strip, "MAX_THUMBS", 50)
+    kwargs = {}
+    if ffprobe_kind == "missing_file":
+        kwargs["ffprobe"] = str(tmp_path / "no_such_ffprobe")
+    elif ffprobe_kind == "exits_nonzero":
+        kwargs["ffprobe"] = external_tools.ffmpeg_path()  # ffmpeg는 ffprobe의 옵션(-select_streams)을 모름 → 0이 아닌 코드
+    else:
+        def no_ffprobe():
+            raise external_tools.ToolNotFoundError("시험: ffprobe 없음")
+
+        monkeypatch.setattr(hover_strip_builder, "ffprobe_path", no_ffprobe)
+    strip = HoverStrip(plan_for(200, 320, 180))
+    worker = make_builder(h264_gop12, strip, **kwargs)
+    got = _Signals(worker)
+    worker.start()
+    _finish(qapp, worker)
+    assert got.failed == [] and got.done_counts == [50] and got.coarse == [] and worker.coarse_strip is None
+    assert _numbers(strip, 50) == list(range(0, 200, 4))
+    err = capsys.readouterr().err
+    head = f"{LOG_PREFIX} 거친 띠를 만들지 못했습니다(정확한 띠는 계속) — {h264_gop12}"
+    assert _log_lines(err, "") == [head]
+    reason = err.split(head + "\n", 1)[1]
+    expected = {"missing_file": "no_such_ffprobe", "exits_nonzero": "종료 코드", "not_found": "ToolNotFoundError: 시험: ffprobe 없음"}
+    assert expected[ffprobe_kind] in reason
+
+
+@pytest.mark.parametrize("change", ["extra", "missing"])
+def test_coarse_count_mismatch_discards_coarse_strip(qapp, h264_gop12, make_builder, monkeypatch, capsys, change):
+    """키프레임 패스의 출력 장수가 목록과 다르면(목록이 하나 많음·적음) 번호를 믿을 수 없어 거친 띠를 버림 — coarse_done 없음, 기록(stderr)
+    한 줄 + 사유(두 장수), 창 없음, 정확한 띠는 끝까지. 많이 온 장은 읽어 버림."""
+    monkeypatch.setattr(hover_strip, "MAX_THUMBS", 50)
+    real_scan = hover_keyframes.scan_keyframes
+
+    def changed_scan(*args, **kwargs):
+        frames, packets = real_scan(*args, **kwargs)
+        return (frames + [199] if change == "extra" else frames[:-1]), packets
+
+    monkeypatch.setattr(hover_keyframes, "scan_keyframes", changed_scan)
+    strip = HoverStrip(plan_for(200, 320, 180))
+    worker = make_builder(h264_gop12, strip)
+    got = _Signals(worker)
+    seen = _coarse_snapshots(worker, strip)
+    worker.start()
+    _finish(qapp, worker)
+    assert got.failed == [] and got.done_counts == [50] and got.coarse == [] and "coarse" not in seen
+    assert worker.coarse_strip is None and seen["done"] is None
+    listed = 18 if change == "extra" else 16
+    err = capsys.readouterr().err
+    head = f"{LOG_PREFIX} 거친 띠를 만들지 못했습니다(정확한 띠는 계속) — {h264_gop12}"
+    assert _log_lines(err, "") == [head]
+    assert f"출력 17장 ≠ 키프레임 목록 {listed}장" in err and " ".join(worker.coarse_command) in err
+
+
+def test_coarse_ffmpeg_error_logs_and_exact_strip_completes(qapp, h264_gop12, make_builder, monkeypatch, capsys):
+    """거친 ffmpeg가 0이 아닌 코드로 끝나면(여기서는 모르는 옵션) 기록(stderr) 한 줄 + 종료 코드·ffmpeg 글, 거친 띠는 버림, 정확한 띠는 끝까지."""
+    monkeypatch.setattr(hover_strip, "MAX_THUMBS", 50)
+    real_coarse = hover_strip_builder.build_coarse_command
+    monkeypatch.setattr(hover_strip_builder, "build_coarse_command",
+                        lambda *args: (lambda cmd: cmd[:2] + ["-no_such_option_for_test"] + cmd[2:])(real_coarse(*args)))
+    strip = HoverStrip(plan_for(200, 320, 180))
+    worker = make_builder(h264_gop12, strip)
+    got = _Signals(worker)
+    worker.start()
+    _finish(qapp, worker)
+    assert got.failed == [] and got.done_counts == [50] and got.coarse == [] and worker.coarse_strip is None
+    err = capsys.readouterr().err
+    assert len(_log_lines(err, "거친 띠를 만들지 못했습니다(정확한 띠는 계속)")) == 1
+    assert "종료 코드" in err and "no_such_option_for_test" in err
+
+
+def test_unexpected_error_in_coarse_pass_logs_traceback_and_continues(qapp, h264_gop12, make_builder, monkeypatch, capsys):
+    """거친 패스의 예상 못 한 예외(여기서는 subsample의 버그 흉내)는 트레이스백째 기록(stderr)하고 정확한 띠로 넘어감 — 실패 신호·창 없음."""
+    monkeypatch.setattr(hover_strip, "MAX_THUMBS", 50)
+
+    def broken_subsample(frames, max_count):
+        raise KeyError("시험: subsample 버그")
+
+    monkeypatch.setattr(hover_keyframes, "subsample", broken_subsample)
+    strip = HoverStrip(plan_for(200, 320, 180))
+    worker = make_builder(h264_gop12, strip)
+    got = _Signals(worker)
+    worker.start()
+    _finish(qapp, worker)
+    assert got.failed == [] and got.done_counts == [50] and got.coarse == [] and worker.coarse_strip is None
+    err = capsys.readouterr().err
+    assert len(_log_lines(err, "거친 띠를 만들지 못했습니다(정확한 띠는 계속)")) == 1
+    assert "Traceback (most recent call last)" in err and "KeyError: '시험: subsample 버그'" in err
+
+
+def test_pause_during_coarse_pass_suspends_and_resume_finishes(qapp, h264_gop12, make_builder, monkeypatch):
+    """거친 패스 도중의 멈춤: 그 패스의 ffmpeg(지금 프로세스)가 정지하고 더 채우지 않음(정확한 띠도 시작하지 않음). 재개하면 거친 띠 → 정확한
+    띠 끝까지."""
+    monkeypatch.setattr(hover_strip, "MAX_THUMBS", 50)
+    strip = HoverStrip(plan_for(200, 320, 180))
+    worker = make_builder(h264_gop12, strip)
+    got = _Signals(worker)
+    paused_at = []
+    _put_then_pause(monkeypatch, worker, paused_at)
+    worker.start()
+    _pump_until(qapp, lambda: paused_at, "거친 띠의 첫 장")
+    _pump(qapp, 0.3)
+    coarse = worker.coarse_strip
+    n1 = coarse.filled_count
+    _pump(qapp, 0.5)
+    assert coarse.filled_count == n1 == 1 and strip.filled_count == 0 and got.coarse == [] and got.done == []
+    assert worker.pid == worker.pids[1] and psutil.pid_exists(worker.pid)  # 지금 프로세스 = 거친 ffmpeg (ffprobe 다음)
+    if sys.platform != "win32":  # Windows status()는 파이프 쓰기에서 막힌 스레드가 있으면 running으로 보임 (모듈 설명)
+        assert _is_stopped(worker.pid)
+    worker.paused = False
+    _finish(qapp, worker)
+    assert got.failed == [] and [filled for filled, _ in got.coarse] == [17] and got.done_counts == [50]
+
+
+def test_pause_and_stop_during_keyframe_scan(qapp, make_builder, capsys):
+    """키프레임 스캔(ffprobe) 도중에도 멈춤·stop이 지금 프로세스에 먹음: 받기만 하고 아무것도 보내지 않는 TCP 입력이라 ffprobe가 기다리는
+    중 — 띄우기 전에 세운 멈춤은 띄운 직후 정지, stop은 kill·거두기 뒤 스레드 끝(정확한 ffmpeg는 띄우자마자 kill), 신호도 기록도 없음."""
+    with socket.socket() as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        strip = HoverStrip(plan_for(1000, 320, 180))  # 간격 2 — 거친 띠를 생각함
+        worker = make_builder(f"tcp://127.0.0.1:{server.getsockname()[1]}", strip)
+        got = _Signals(worker)
+        worker.paused = True
+        worker.start()
+        _pump_until(qapp, lambda: worker.pid is not None, "ffprobe 띄움")
+        _pump(qapp, 0.3)
+        assert worker.pids == [worker.pid] and _is_stopped(worker.pid)  # 아직 ffprobe — 띄운 직후 정지
+        started = time.monotonic()
+        worker.stop()
+        assert time.monotonic() - started < 2 * STOP_WAIT_MS / 1000
+        assert not worker.isRunning() and [pid for pid in worker.pids if psutil.pid_exists(pid)] == []
+    _pump(qapp, 0.1)
+    assert got.done == [] and got.failed == [] and got.coarse == [] and worker.coarse_strip is None and strip.filled_count == 0
+    assert _logged(capsys) == []
+
+
+def test_stop_during_coarse_pass_drops_coarse_strip(qapp, h264_gop12, make_builder, monkeypatch, capsys):
+    """거친 패스 도중 stop: 프로세스·스레드가 끝나고 거친 띠를 놓음(coarse_strip None), 신호 없음 — 기록은 '거친 띠 먼저' 한 줄뿐."""
+    monkeypatch.setattr(hover_strip, "MAX_THUMBS", 50)
+    strip = HoverStrip(plan_for(200, 320, 180))
+    worker = make_builder(h264_gop12, strip)
+    got = _Signals(worker)
+    paused_at = []
+    _put_then_pause(monkeypatch, worker, paused_at)
+    worker.start()
+    _pump_until(qapp, lambda: paused_at, "거친 띠의 첫 장")
+    assert worker.coarse_strip is not None
+    worker.stop()
+    assert not worker.isRunning() and [pid for pid in worker.pids if psutil.pid_exists(pid)] == []
+    assert worker.coarse_strip is None
+    _pump(qapp, 0.1)
+    assert got.done == [] and got.failed == [] and got.coarse == [] and strip.filled_count == 0
+    logged = _logged(capsys)
+    assert len(logged) == 1 and logged[0].startswith(f"{LOG_PREFIX} 거친 띠 먼저:")

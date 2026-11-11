@@ -1,9 +1,20 @@
 # -*- coding: utf-8 -*-
-"""슬라이더 호버 썸네일의 띠를 만드는 워커 (HoverStripBuilder — QThread 하나와 그 ffmpeg 프로세스 하나). 화면(위젯) 없음.
+"""슬라이더 호버 썸네일의 띠를 만드는 워커 (HoverStripBuilder — QThread 하나와 차례로 띄우는 프로세스들). 화면(위젯) 없음.
 
 번들 ffmpeg가 파일 전체를 띠 크기(hover_strip.StripPlan)의 rgb24 원시 프레임으로 줄여 stdout으로 내보내고, 이 워커가 한 장씩 받아 띠 저장소
 (hover_strip.HoverStrip)에 넣는다. 재생 캡처(cap_a)는 건드리지 않는다 — 따로 띄운 프로세스가 파일을 따로 연다. 띄우는 때·멈추는 때는 부르는
 쪽(플레이어의 쉬는 때 판정)이 정하고, 워커는 띄워진 뒤 paused 표지만 본다.
+
+패스 둘 (스펙 2026-11-11 §3): 한 run 안에서 차례로 ① 키프레임 거친 띠 — 긴 파일(간격 step > 1)이면 ffprobe 한 번으로 키프레임 번호를 읽고
+(hover_keyframes.scan_keyframes) 키프레임이 드물면(hover_keyframes.coarse_wanted — 전체의 1/4 이하) -skip_frame nokey로 키프레임만 디코드해
+거친 띠(hover_keyframes.KeyframeStrip)를 채움 ② 정확한 띠 — 지금 그대로. 거친 띠는 정확한 띠보다 훨씬 빨리 차므로(22.6분 720p H.264
+애니매틱: 키프레임만 10.2초 대 전부 18.8초 — 이 Mac 실측) 그동안 호버가 거친 그림을 보이고, 정확한 띠가 끝나면 버린다(coarse_strip = None을
+done 앞에). 공개: coarse_strip은 목록·표시 배열을 다 만든 저장소를 속성 하나로 한 번 대입(그 전·버린 뒤·정확한 띠 완성 뒤·stop 뒤 None — GUI는
+조회마다 그 참조만 읽음), 다 채우면 coarse_done(채운 장수, 띄운 때부터 초). 거친 띠는 보조라 어느 실패(ffprobe 실패·찾지 못함, 거친 ffmpeg의
+종료 코드 ≠ 0·한 장 도중 끊김·출력 장수 ≠ 목록 장수·예상 못 한 예외)도 failed(창)를 내지 않고 기록(stderr) 'LOG_PREFIX 거친 띠를 만들지
+못했습니다(정확한 띠는 계속) — 파일' 한 줄과 사유 전문만 남긴 뒤 거친 띠를 버리고 정확한 띠로 넘어간다 — 장수가 다르면 j번째 출력이 목록의 j번째라는
+짝을 믿을 수 없어서. 간격 1(500장 이하)이면 거친 띠를 생각하지 않는다(ffprobe도 기록 줄도 없음 — 정확한 띠가 곧 모든 장). paused·stop()·
+_suspendable·stderr 비우기는 패스와 상관없이 지금 도는 프로세스(_process — ffprobe도)에 그대로 적용된다(_run_pass가 패스마다 바꿈).
 
 왜 stdout 파이프로 충분한가 (스펙 §5.3): 전송은 stdout 파이프로 충분하다 — 장당 173KB(320×180×3; 어떤 비율이든 320×320 상자 안이라 최대
 307KB)이고 쉴 때만 읽는다. 파이프 소스(movie_pipe_source)가 소켓으로 옮긴 까닭은 4K 한 장 25MB가 64KB씩 수백 번의 read로 들어오며 재생 중인
@@ -26,8 +37,9 @@ ffmpeg 자신의 구성 요소 스레드(미확인)) 필터 쪽 손잡이가 -fi
 재생을 시작하면 Play 뒤 첫 1~2초(때로 중간)에 끊김이 났고(정지는 그때 이미 걸려 있음), 기본 스레딩(16)과 -threads 2 모두 켬이 끔의 범위를
 넘었다 — Play 직전에 여러 코어로 4K 장을 한꺼번에 디코드·축소하는 버스트가 원인으로 의심되어(미확인) 1코어로 묶는다.
 
-수명: 생성자는 띄우지 않는다 — start()가 run에서 Popen(stdout=PIPE, stderr=PIPE)하고, 띄운 직후 잠금 안에서 paused면 바로 정지한다. stderr는
-데몬 스레드가 끝까지 모은다(안 비우면 파이프가 차서 ffmpeg가 멈춤 — movie_pipe_source._PipeSession과 같은 모양). 끝은 셋 중 하나다.
+수명: 생성자는 띄우지 않는다 — start()가 run에서 프로세스마다 Popen(stdout=PIPE, stderr=PIPE)하고(_run_pass), 띄운 직후 잠금 안에서 paused면
+바로 정지한다. stderr는 데몬 스레드가 끝까지 모은다(안 비우면 파이프가 차서 ffmpeg가 멈춤 — movie_pipe_source._PipeSession과 같은 모양).
+정확한 띠의 끝은 셋 중 하나다 (거친 띠의 끝은 위 '패스 둘').
 - done(채운 장수, 띄운 때부터 초 — 멈춘 시간 포함): 종료 코드 0이고 장 경계에서 EOF(0바이트에서 끝남)일 때. 계획보다 적게 와도(잘린 파일·
   VFR) done이고 남은 샘플은 빈 채로, 많이 오면 남는 장은 읽어 버리고 done(기록에 '넘침 n장' 한 줄). 이때 stderr에 글이 있어도 done이다 —
   잘린 파일(복사·렌더가 진행 중인 NAS 파일)이면 번들 ffmpeg가 오류 수준 글('partial file'·'wrong picture data size'·'Decoding error')을
@@ -44,7 +56,7 @@ ffmpeg 자신의 구성 요소 스레드(미확인)) 필터 쪽 손잡이가 -fi
 샘플 i(ffmpeg가 낸 i번째 장 — select면 원본 i×step)는 한 번만 put한다 (HoverStrip.put은 행을 다 쓴 뒤 표시하므로, 같은 행을 다시 쓰면 GUI가
 덮어쓰는 중인 행을 읽을 수 있음).
 
-잠금(_lock)이 지키는 것: _paused·_stopped·_process·_suspendable. _suspendable은 프로세스를 정지·재개해도 되는 동안(띄운 직후부터 읽기가
+잠금(_lock)이 지키는 것: _paused·_stopped·_process·_suspendable·pids, 그리고 coarse_strip의 대입(GUI는 잠금 없이 참조만 읽음). _suspendable은 프로세스를 정지·재개해도 되는 동안(띄운 직후부터 읽기가
 끝날 때까지)만 참이다 — 읽기가 끝난 뒤(EOF·실패·stop)에는 정지·재개하지 않아, 끝나 가는 프로세스를 정지해 거두기(wait)가 막히거나 거둔 뒤
 다른 프로세스가 물려받은 PID를 건드리지 않는다. 정상 EOF인데 멈춤 표지가 서 있으면(마지막 장을 받는 사이 정지됨) 거두기 전에 재개한다.
 """
@@ -58,8 +70,9 @@ import traceback
 import psutil
 from PyQt5.QtCore import QThread, pyqtSignal
 
-from yesoncheck.external_tools import decode_output, ffmpeg_path, subprocess_kwargs
-from yesoncheck.hover_strip import LOG_PREFIX, HoverStrip, StripPlan, thread_limits
+from yesoncheck import hover_keyframes
+from yesoncheck.external_tools import ToolNotFoundError, decode_output, ffmpeg_path, ffprobe_path, subprocess_kwargs
+from yesoncheck.hover_strip import LOG_PREFIX, HoverStrip, ImageRows, StripPlan, thread_limits
 
 POLL_S = 0.05  # 멈춘 동안 표지를 다시 보는 간격 (초)
 BATCH_S = 0.05  # progress 묶음 간격 (초) — 또는 BATCH_FRAMES장마다, 먼저 오는 쪽 (GUI 신호 폭주 방지)
@@ -78,13 +91,25 @@ def build_command(ffmpeg: str, path: str, plan: StripPlan) -> list[str]:
     구분자로 읽히지 않게 하는 필터 파서용 (셸 따옴표 아님). 스레드 옵션은 원본 크기로 hover_strip.thread_limits가 고르고(Full HD 이하면 없음),
     값은 두 상수를 호출 때 읽음(시험의 monkeypatch가 닿게): 필터 스레드(-filter_threads, 전역)를 앞에, 디코더 스레드(-threads, 입력 옵션)를
     -i 바로 앞에 — -threads는 디코더만 묶음(모듈 설명)."""
+    return _strip_command(ffmpeg, path, plan, plan.step, ())
+
+
+def build_coarse_command(ffmpeg: str, path: str, plan: StripPlan, every: int) -> list[str]:
+    """키프레임만의 거친 띠 명령 — build_command와 같은 모양에 -skip_frame nokey(디코더 옵션이라 -i 앞 — 디코더 스레드 바로 앞)를 더하고,
+    every > 1이면 select로 키프레임 every장마다 하나 (n은 디코드된 장 — -skip_frame 뒤라 키프레임만 셈; 목록은 hover_keyframes.subsample이 같은
+    규칙 frames[::every]로 줄임). 스레드 규칙도 같음 (hover_strip.thread_limits)."""
+    return _strip_command(ffmpeg, path, plan, every, ("-skip_frame", "nokey"))
+
+
+def _strip_command(ffmpeg: str, path: str, plan: StripPlan, every: int, input_options) -> list[str]:
+    """두 명령의 공통 모양: [필터 스레드] [입력 옵션] [디코더 스레드] -i 파일 … -vf [select,]scale … rgb24 pipe:1."""
     scale = f"scale={plan.width}:{plan.height}"
-    vf = scale if plan.step == 1 else f"select=not(mod(n\\,{plan.step})),{scale}"
+    vf = scale if every == 1 else f"select=not(mod(n\\,{every})),{scale}"
     decoder, filters = thread_limits(plan, FFMPEG_THREADS, FFMPEG_FILTER_THREADS)
     filter_threads = [] if filters is None else ["-filter_threads", str(filters)]
     threads = [] if decoder is None else ["-threads", str(decoder)]
-    return [ffmpeg, "-nostdin", "-v", "error", *filter_threads, *threads, "-i", path, "-map", "0:V:0", "-fps_mode", "passthrough",
-            "-vf", vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]
+    return [ffmpeg, "-nostdin", "-v", "error", *filter_threads, *input_options, *threads, "-i", path, "-map", "0:V:0",
+            "-fps_mode", "passthrough", "-vf", vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]
 
 
 def _read_full(stream, view: memoryview) -> int:
@@ -108,21 +133,30 @@ def _drain(stream, chunks: list) -> None:
 
 
 class HoverStripBuilder(QThread):
-    """ffmpeg 하나로 띠 저장소를 채우는 워커. 생성·start·paused·stop은 GUI 스레드, run은 워커 스레드.
+    """띠 저장소를 채우는 워커 (거친 띠 → 정확한 띠 — 모듈 설명). 생성·start·paused·stop은 GUI 스레드, run은 워커 스레드.
 
     path: 영상 파일, strip: 채울 저장소(계획은 strip.plan), ffmpeg: 실행 파일(None이면 external_tools.ffmpeg_path() — 없으면 생성자가
-    ToolNotFoundError). command·pid(띄운 뒤)는 기록·시험용."""
+    ToolNotFoundError), ffprobe: 키프레임 스캔의 실행 파일(None이면 거친 패스 때 external_tools.ffprobe_path() — 없으면 거친 띠만 건너뜀).
+    coarse_strip: 지금 보일 거친 띠(GUI가 조회마다 읽음 — 모듈 설명), coarse_count: 거친 띠의 장수(공개한 뒤 그대로 — 기록용).
+    command(정확한 띠)·coarse_command(거친 띠 — 만들 때만)·pid(지금·마지막 프로세스)·pids(띄운 차례대로 모든 프로세스)는 기록·시험용."""
 
-    progress = pyqtSignal(int)  # 채운 장수 (BATCH_S마다 또는 BATCH_FRAMES장마다)
+    progress = pyqtSignal(int)  # 정확한 띠의 채운 장수 (BATCH_S마다 또는 BATCH_FRAMES장마다)
     done = pyqtSignal(int, float)  # 채운 장수, 띄운 때부터 초
     failed = pyqtSignal(str)  # 파일·명령·종료 코드·stderr 전문·트레이스백
+    coarse_done = pyqtSignal(int, float)  # 거친 띠를 다 채움: 채운 장수(= coarse_count), 띄운 때부터 초
 
-    def __init__(self, path: str, strip: HoverStrip, ffmpeg: str | None = None, parent=None):
+    def __init__(self, path: str, strip: HoverStrip, ffmpeg: str | None = None, parent=None, ffprobe: str | None = None):
         super().__init__(parent)
         self.path = path
         self.strip = strip
-        self.command = build_command(ffmpeg if ffmpeg is not None else ffmpeg_path(), path, strip.plan)
+        self._ffmpeg = ffmpeg if ffmpeg is not None else ffmpeg_path()
+        self._ffprobe = ffprobe
+        self.command = build_command(self._ffmpeg, path, strip.plan)
+        self.coarse_command: list[str] | None = None
+        self.coarse_strip: hover_keyframes.KeyframeStrip | None = None
+        self.coarse_count = 0
         self.pid: int | None = None
+        self.pids: list[int] = []
         self._lock = threading.Lock()
         self._paused = False
         self._stopped = False
@@ -155,10 +189,13 @@ class HoverStripBuilder(QThread):
         끝까지 기다려 거두고, 부른 쪽은 worker_lifecycle.release_worker로 붙잡아 둔다). stdout은 여기서 닫지 않고 워커 스레드가 닫는다(브리프의
         'stdout 닫기'와 다름): 프로세스가 죽으면 읽기는 EOF로 바로 끝나므로 닫을 까닭이 없고, 여기서 닫으면 ① 읽기 스레드가 readinto 안에
         있을 때 닫기가 그 읽기를 기다리고 ② 표지 검사와 readinto 사이에 닫히면 정상 중단이 ValueError 트레이스백이 되어 '예상 못 한 오류'
-        기록으로 섞인다. 표지를 둔 뒤로는 done·failed를 내지 않는다(그 전에 낸 신호가 GUI의 대기열에 남아 있을 수는 있음 — 부른 쪽 몫)."""
+        기록으로 섞인다. 표지를 둔 뒤로는 done·failed·coarse_done을 내지 않는다(그 전에 낸 신호가 GUI의 대기열에 남아 있을 수는 있음 — 부른 쪽
+        몫). 거친 띠도 놓는다(coarse_strip = None — 워커는 표지를 본 뒤로 다시 대입하지 않음). 어느 패스든 지금 프로세스를 끝낸다 — 그 뒤의 패스는
+        띄우자마자 _attach가 kill한다."""
         with self._lock:
             self._stopped = True
             self._suspendable = False
+            self.coarse_strip = None
             process = self._process
         if process is not None:
             process.kill()  # 이미 거둔 프로세스면 아무것도 안 함
@@ -172,47 +209,127 @@ class HoverStripBuilder(QThread):
             print(f"{LOG_PREFIX} 띠 워커 스레드가 {STOP_WAIT_MS}ms 안에 끝나지 않았습니다: {self.path}", file=sys.stderr, flush=True)
 
     def run(self) -> None:
-        """워커 스레드 본문. 예외를 밖으로 내지 않는다(QThread.run에서 새면 PyQt5가 프로세스를 끝냄) — 모두 failed의 글로."""
+        """워커 스레드 본문 — ① 거친 띠(조건이 맞을 때) ② 정확한 띠. 예외를 밖으로 내지 않는다(QThread.run에서 새면 PyQt5가 프로세스를
+        끝냄) — 거친 패스는 스스로 기록하고, 나머지는 모두 failed의 글로."""
         started = time.monotonic()
         try:
+            self._coarse_pass(started)
             self._build(started)
-        except Exception:  # 정리 단계의 예상 못 한 오류 (_build가 프로세스는 이미 거둠) — 삼키지 않고 failed로 (stop 뒤면 기록으로)
+        except Exception:  # 정리 단계의 예상 못 한 오류 (_run_pass가 프로세스는 이미 거둠) — 삼키지 않고 failed로 (stop 뒤면 기록으로)
             self._report("띠 워커가 예외로 끝났습니다.", None, "", 0, started, trace=traceback.format_exc())
 
     def _build(self, started: float) -> None:
+        """② 정확한 띠 — 끝 신호 하나(_report). stop() 뒤라도 띄우고(_attach가 바로 kill) 조용히 끝남 (예전 그대로)."""
         try:
-            process = subprocess.Popen(self.command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                       **subprocess_kwargs())
+            problem, returncode, stderr, received, trace = self._run_pass(
+                self.command, lambda stdout: self._read_frames(stdout, self.strip, progress=True), "ffmpeg")
         except OSError:
             self._report("ffmpeg를 띄우지 못했습니다.", None, "", 0, started, trace=traceback.format_exc())
             return
+        self._report(problem, returncode, stderr, received or 0, started, trace=trace)
+
+    def _coarse_pass(self, started: float) -> None:
+        """① 키프레임 거친 띠 (모듈 설명 '패스 둘'). 간격 1이면 아무것도 안 함. 실패는 창 없이 기록(stderr) 한 줄 + 사유 전문 뒤 거친 띠를
+        버리고 돌아감 — 예외를 내지 않음(예상 못 한 예외는 트레이스백째 기록, stop 뒤라도)."""
+        plan = self.strip.plan
+        if hover_keyframes.coarse_wanted(plan.total, plan.step) is not None:
+            return  # 간격 1 — 정확한 띠가 곧 모든 장이라 생각하지 않음 (ffprobe·기록 없음)
+        try:
+            problem = self._build_coarse(started, plan)
+        except Exception:  # 예상 못 한 예외 (깨진 ffprobe JSON·put의 버그 등)
+            problem = f"거친 띠 패스가 예외로 끝났습니다.\n{traceback.format_exc().rstrip()}"
+        if problem is None:
+            return
+        with self._lock:
+            self.coarse_strip = None  # 덜 찼거나 번호를 믿을 수 없는 거친 띠는 버림
+        print(f"{LOG_PREFIX} 거친 띠를 만들지 못했습니다(정확한 띠는 계속) — {self.path}\n{problem}", file=sys.stderr, flush=True)
+
+    def _build_coarse(self, started: float, plan: StripPlan) -> str | None:
+        """거친 패스 본문 → 기록할 문제 글(사유 전문), 또는 None(다 채워 coarse_done을 냄·키프레임이 많아 건너뜀(기록 한 줄)·stop으로 멈춤)."""
+        try:
+            ffprobe = self._ffprobe if self._ffprobe is not None else ffprobe_path()
+            frames, _packets = hover_keyframes.scan_keyframes(ffprobe, self.path, run=self._run_probe)
+        except (ToolNotFoundError, OSError, RuntimeError) as exc:  # ffprobe 없음·못 띄움·실패(kill 포함)·번호를 정할 수 없음
+            return None if self._stopped else f"키프레임 목록을 읽지 못했습니다 — {type(exc).__name__}: {exc}"
+        if self._stopped:
+            return None
+        reason = hover_keyframes.coarse_wanted(plan.total, plan.step, len(frames))
+        if reason is not None:
+            print(f"{LOG_PREFIX} 거친 띠 건너뜀: {reason} — {self.path}", flush=True)
+            return None
+        frames, every = hover_keyframes.subsample(frames, hover_keyframes.MAX_COARSE)
+        strip = hover_keyframes.KeyframeStrip(frames, plan.width, plan.height)
+        command = build_coarse_command(self._ffmpeg, self.path, plan, every)
+        with self._lock:  # 목록·표시 배열을 다 만든 뒤 한 번에 공개 (stop 뒤면 공개하지 않음)
+            if self._stopped:
+                return None
+            self.coarse_command, self.coarse_count, self.coarse_strip = command, strip.count, strip
+        print(f"{LOG_PREFIX} 거친 띠 먼저: 키프레임 {strip.count}장(간격 {every}, 전체 {plan.total}장) — {self.path}", flush=True)
+        try:
+            problem, returncode, stderr, received, trace = self._run_pass(
+                command, lambda stdout: self._read_frames(stdout, strip, progress=False), "ffmpeg")
+        except OSError:
+            return f"거친 띠 ffmpeg를 띄우지 못했습니다.\n명령: {' '.join(command)}\n{traceback.format_exc().rstrip()}"
+        if self._stopped:  # 일부러 멈춤 — 조용히 (트레이스백이 있는 문제만 기록)
+            return None if trace is None else f"{problem}\n{trace.rstrip()}"
+        if problem is None and returncode == 0 and received == strip.count:
+            if stderr.strip():  # 삼키지 않음 (정확한 띠의 경고와 같은 규칙 — 창 없음)
+                print(f"{LOG_PREFIX} 거친 띠 ffmpeg 경고 (종료 코드 0, {strip.filled_count}장 채움) — {self.path}\n{stderr.rstrip()}",
+                      file=sys.stderr, flush=True)
+            with self._lock:
+                if not self._stopped:
+                    self.coarse_done.emit(strip.filled_count, time.monotonic() - started)
+            return None
+        if problem is None:
+            problem = (f"ffmpeg가 비정상 종료했습니다 (종료 코드 {returncode}, 출력 {received}장 / 키프레임 목록 {strip.count}장)"
+                       if returncode != 0 else
+                       f"출력 {received}장 ≠ 키프레임 목록 {strip.count}장 — j번째 출력이 목록의 j번째라는 짝을 믿을 수 없어 채운 것을 버림")
+        if trace is not None:
+            problem = f"{problem}\n{trace.rstrip()}"
+        return f"{problem}\n명령: {' '.join(command)}\n종료 코드: {returncode}\nstderr:\n{stderr.rstrip() or '(없음)'}"
+
+    def _run_probe(self, command: list[str]) -> tuple[int, bytes, str]:
+        """scan_keyframes의 run — ffprobe도 지금 프로세스로(_run_pass — 멈춤·stop이 먹게) 띄워 stdout을 끝까지 읽음 → (종료 코드, stdout,
+        stderr 글). 읽다 예외가 나면 트레이스백째 RuntimeError (거친 띠만 건너뜀)."""
+        problem, returncode, stderr, out, trace = self._run_pass(command, self._read_all, "ffprobe")
+        if problem is not None:
+            raise RuntimeError(f"{problem}\n{(trace or '').rstrip()}")
+        return returncode, out, stderr
+
+    def _run_pass(self, command: list[str], consume, tool: str):
+        """프로세스 하나를 띄워(지금 프로세스 — 멈춤·stop이 먹음) stdout을 consume(stdout) → (값, 문제 글|None)으로 읽고 거둠 →
+        (문제 글|None, 종료 코드, stderr 글, 값|None, 트레이스백|None). 못 띄우면 Popen의 OSError 그대로. 문제가 있으면 남은 출력을 기다리지 않고
+        kill(정지돼 있어도 먹힘 — stop()이면 stop()·_attach가 이미 kill). tool: 문제 글의 이름."""
+        process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   **subprocess_kwargs())
         stderr_chunks = []
         stderr_reader = threading.Thread(target=_drain, args=(process.stderr, stderr_chunks), name="hover-strip-stderr",
                                          daemon=True)
-        received, problem, trace = 0, None, None
+        value, problem, trace = None, None, None
         try:
             stderr_reader.start()
             self._attach(process)
-            received, problem = self._read_frames(process.stdout)
+            value, problem = consume(process.stdout)
         except Exception:  # 읽기·넣기 오류 (예상 못 한 예외 — stop 뒤라도 기록에 남음)
-            problem, trace = "ffmpeg 출력을 읽다 오류가 났습니다.", traceback.format_exc()
+            problem, trace = f"{tool} 출력을 읽다 오류가 났습니다.", traceback.format_exc()
         try:
             self._end_reading(clean=problem is None)
         except Exception:  # 재개 중 예상 못 한 오류 — 정지된 채 거두기를 기다리지 않게 아래에서 kill
-            problem, trace = "ffmpeg를 재개하지 못했습니다.", traceback.format_exc()
+            problem, trace = f"{tool}를 재개하지 못했습니다.", traceback.format_exc()
         finally:
             if problem is not None:
-                process.kill()  # 실패면 남은 출력을 기다리지 않음 (정지돼 있어도 먹힘). stop()이면 stop()·_attach가 이미 kill
+                process.kill()
             process.stdout.close()
             process.wait()
             stderr_reader.join()
-        self._report(problem, process.returncode, decode_output(b"".join(stderr_chunks)), received, started, trace=trace)
+        return problem, process.returncode, decode_output(b"".join(stderr_chunks)), value, trace
 
     def _attach(self, process: subprocess.Popen) -> None:
-        """띄운 직후 (잠금 안): 프로세스를 붙임. 이미 stop()이 불렸으면 바로 kill, 멈춤 표지가 서 있으면 바로 정지."""
+        """띄운 직후 (잠금 안): 지금 프로세스로 붙임. 이미 stop()이 불렸으면 바로 kill, 멈춤 표지가 서 있으면 바로 정지."""
         with self._lock:
             self._process = process
             self.pid = process.pid
+            self.pids.append(process.pid)
             if self._stopped:
                 process.kill()
                 return
@@ -220,11 +337,11 @@ class HoverStripBuilder(QThread):
             if self._paused:
                 self._signal_process(True)
 
-    def _read_frames(self, stdout) -> tuple[int, str | None]:
-        """EOF까지 한 장(plan.frame_bytes)씩 읽어 샘플 0, 1, 2…에 넣음 → (ffmpeg가 낸 장수, 문제 글 또는 None). 계획 장수를 넘는 장은
-        읽어 버림. 멈춤 표지가 서 있는 동안은 읽지 않음(POLL_S마다 다시 봄), stop()이면 바로 끝."""
-        plan = self.strip.plan
-        view = memoryview(bytearray(plan.frame_bytes))
+    def _read_frames(self, stdout, store: ImageRows, progress: bool) -> tuple[int, str | None]:
+        """EOF까지 한 장(store.frame_bytes)씩 읽어 행 0, 1, 2…에 넣음 → (ffmpeg가 낸 장수, 문제 글 또는 None). 저장소 장수를 넘는 장은
+        읽어 버림. 멈춤 표지가 서 있는 동안은 읽지 않음(POLL_S마다 다시 봄), stop()이면 바로 끝. progress: 정확한 띠면 progress 신호를 냄."""
+        frame_bytes = store.frame_bytes
+        view = memoryview(bytearray(frame_bytes))
         received = 0
         reported, reported_at = 0, time.monotonic()
         while not self._stopped:
@@ -232,19 +349,34 @@ class HoverStripBuilder(QThread):
                 time.sleep(POLL_S)
                 continue
             got = _read_full(stdout, view)
-            if got < plan.frame_bytes:
+            if got < frame_bytes:
                 if got:
-                    return received, f"한 장 도중에 출력이 끊겼습니다 ({got}/{plan.frame_bytes}바이트 — {received}장을 받은 뒤)"
+                    return received, f"한 장 도중에 출력이 끊겼습니다 ({got}/{frame_bytes}바이트 — {received}장을 받은 뒤)"
                 return received, None
-            if received < plan.count:
-                self.strip.put(received, view)
+            if received < store.count:
+                store.put(received, view)
             received += 1
-            filled = min(received, plan.count)
+            if not progress:
+                continue
+            filled = min(received, store.count)
             now = time.monotonic()
             if filled > reported and (filled - reported >= BATCH_FRAMES or now - reported_at >= BATCH_S):
                 self.progress.emit(filled)
                 reported, reported_at = filled, now
         return received, None
+
+    def _read_all(self, stdout) -> tuple[bytes, None]:
+        """(ffprobe) EOF까지 stdout을 모음 → (바이트, None). 멈춤 표지가 서 있는 동안은 읽지 않음, stop()이면 바로 끝 (모은 데까지)."""
+        chunks = []
+        while not self._stopped:
+            if self._paused:
+                time.sleep(POLL_S)
+                continue
+            chunk = stdout.read1(_STDERR_CHUNK)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks), None
 
     def _end_reading(self, clean: bool) -> None:
         """읽기 끝 (잠금 안): 이제부터 정지·재개하지 않음. 정상 EOF인데 멈춤 표지가 서 있으면 재개 — 마지막 장을 받는 사이 정지된 ffmpeg가
@@ -291,6 +423,7 @@ class HoverStripBuilder(QThread):
                 if received > plan.count:
                     print(f"{LOG_PREFIX} 계획보다 많은 장을 받아 버림: 넘침 {received - plan.count}장 (계획 {plan.count}장) — {self.path}",
                           flush=True)
+                self.coarse_strip = None  # 정확한 띠가 다 참 — 거친 띠는 버림 (done을 내기 전에)
                 self.done.emit(filled, time.monotonic() - started)
                 return
             if problem is None:
