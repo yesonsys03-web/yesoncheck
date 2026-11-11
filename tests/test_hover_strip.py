@@ -80,19 +80,21 @@ def test_plan_keeps_source_size():
 
 
 @pytest.mark.parametrize("size,expected", [
-    ((1920, 1080), (None, None)),  # Full HD 그대로 — 묶지 않음 (ffmpeg 기본)
-    ((1280, 720), (None, None)),
-    ((1080, 1920), (None, None)),  # 세로 Full HD도 화소 수가 같음
+    ((1280, 720), (None, None)),  # 720p 그대로 — 묶지 않음 (ffmpeg 기본)
+    ((720, 1280), (None, None)),  # 세로 720p도 화소 수가 같음
+    ((640, 360), (None, None)),
     ((320, 180), (None, None)),
-    ((1921, 1080), (1, 1)),  # Full HD보다 한 화소 줄이라도 크면 지금처럼 1코어
-    ((1920, 1081), (1, 1)),
+    ((1281, 720), (1, 1)),  # 720p보다 한 화소 줄이라도 크면 1코어
+    ((1280, 721), (1, 1)),
+    ((1920, 1080), (1, 1)),  # 1080p는 1코어 그대로 (Ruling 24 — 측정에서 켬이 끔의 범위 밖)
+    ((1080, 1920), (1, 1)),
     ((3840, 2160), (1, 1)),
     ((2160, 3840), (1, 1)),
 ])
 def test_thread_limits_by_source_pixels(size, expected):
-    """원본 화소 수가 SINGLE_THREAD_ABOVE_PIXELS(1920×1080)보다 많으면 부른 쪽의 값(큰 파일의 디코더·필터 스레드), 그 이하면 (None, None) —
-    옵션을 넣지 않음. 4K는 지금 명령 그대로라 측정된 설정이 바뀌지 않음."""
-    assert hover_strip.SINGLE_THREAD_ABOVE_PIXELS == 1920 * 1080
+    """원본 화소 수가 SINGLE_THREAD_ABOVE_PIXELS(1280×720)보다 많으면 부른 쪽의 값(큰 파일의 디코더·필터 스레드), 그 이하면 (None, None) —
+    옵션을 넣지 않음. 1080p·4K는 지금 명령 그대로라 측정된 설정이 바뀌지 않음."""
+    assert hover_strip.SINGLE_THREAD_ABOVE_PIXELS == 1280 * 720
     plan = hover_strip.plan_for(48, *size)
     assert hover_strip.thread_limits(plan, 1, 1) == expected
 
@@ -102,11 +104,11 @@ def test_thread_limits_passes_caller_values_and_reads_threshold_at_call_time(mon
     plan_4k = hover_strip.plan_for(48, 3840, 2160)
     assert hover_strip.thread_limits(plan_4k, 4, 3) == (4, 3)
     assert hover_strip.thread_limits(plan_4k, None, 2) == (None, 2)
-    plan_hd = hover_strip.plan_for(48, 1920, 1080)
-    assert hover_strip.thread_limits(plan_hd, 4, 3) == (None, None)
-    monkeypatch.setattr(hover_strip, "SINGLE_THREAD_ABOVE_PIXELS", 1280 * 720)
-    assert hover_strip.thread_limits(plan_hd, 4, 3) == (4, 3)
-    assert hover_strip.thread_limits(hover_strip.plan_for(48, 1280, 720), 4, 3) == (None, None)
+    plan_720 = hover_strip.plan_for(48, 1280, 720)
+    assert hover_strip.thread_limits(plan_720, 4, 3) == (None, None)
+    monkeypatch.setattr(hover_strip, "SINGLE_THREAD_ABOVE_PIXELS", 640 * 360)
+    assert hover_strip.thread_limits(plan_720, 4, 3) == (4, 3)
+    assert hover_strip.thread_limits(hover_strip.plan_for(48, 640, 360), 4, 3) == (None, None)
 
 
 # ---------------------------------------------------------------- 띠 저장소

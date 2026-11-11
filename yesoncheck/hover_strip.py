@@ -21,11 +21,13 @@
 수십 GB짜리 긴 ProRes가 NAS에서 통째로 다시 읽히는 것을 막지 못한다 — os.stat 크기가 MAX_FILE_BYTES(사용자 결정 "크기 상한", 숫자는 제 결정)를
 넘으면 띠를 만들지 않는다 (실패가 아니라 규칙 — 번호 + 빈 상자만 보임).
 
-띠 ffmpeg의 스레드 (thread_limits — 스펙 2026-11-11 §2): 원본 화소가 SINGLE_THREAD_ABOVE_PIXELS(1920×1080)보다 많은 파일(4K 등)만 디코더·필터
-스레드를 묶는다(값은 hover_strip_builder의 두 상수 — 1코어). 1코어는 4K ProRes 4444에서 Play 직전 여러 코어로 4K 장을 한꺼번에 디코드·축소하는
-버스트를 막으려고 측정 뒤 넣은 것이고(2026-11-10 1·2차 게이트 실패 → Ruling 14), Full HD 이하 파일은 장당 일이 1/4 이하라 그 버스트가 재생을
-흔든다는 근거가 없다 — 그래서 옵션을 넣지 않아(ffmpeg 기본, 이 Mac은 CPU 수만큼) 긴 720p 애니매틱(22.6분 32,553장)의 띠가 67.0초 → 18.8초
-(이 Mac 실측). 4K 명령은 글자 그대로라 측정된 설정이 바뀌지 않는다. 그래서 계획은 그림 크기와 함께 원본 크기(source_width·source_height)도 든다.
+띠 ffmpeg의 스레드 (thread_limits — 스펙 2026-11-11 §2, 임계는 Ruling 24): 원본 화소가 SINGLE_THREAD_ABOVE_PIXELS(1280×720)보다 많은 파일
+(1080p·4K)은 디코더·필터 스레드를 묶는다(값은 hover_strip_builder의 두 상수 — 1코어). 1코어는 4K ProRes 4444에서 Play 직전 여러 코어로 4K 장을
+한꺼번에 디코드·축소하는 버스트를 막으려고 측정 뒤 넣은 것이고(2026-11-10 1·2차 게이트 실패 → Ruling 14), 1080p도 측정에서 불통과였다(1080p
+ProRes 422 HQ 334장 켬·끔 각 9판 — 끔 최대간격 44~62ms·끊김 0/9, 켬은 2판이 89·124ms로 끔의 범위 밖; 그때 ffmpeg는 이미 정지돼 CPU 0).
+720p 이하는 통과(720p H.264 721장 켬·끔 각 3판 — 켬 45·67·76ms가 끔 44~91ms의 범위 안)라 옵션을 넣지 않아(ffmpeg 기본, 이 Mac은 CPU 수만큼)
+긴 720p 애니매틱(22.6분 32,553장)의 띠가 67.0초 → 18.8초(이 Mac 실측). 1080p·4K 명령은 글자 그대로라 측정된 설정이 바뀌지 않는다. 그래서 계획은
+그림 크기와 함께 원본 크기(source_width·source_height)도 든다.
 
 상수는 시험이 monkeypatch로 바꿔 끼울 수 있게 함수가 부를 때마다 모듈 값으로 읽는다 (기본 인자로 굳히지 않음). 설정 키 slider_thumbnails는
 Mac은 mac_prefs, Windows는 windows_display의 위치에 두며(prefs_path), 읽기·쓰기 규칙은 mac_prefs의 것을 그대로 쓴다: 없으면 기본 켬, 깨진
@@ -44,7 +46,7 @@ from yesoncheck.frame_cache_budget import gb
 THUMB_WIDTH = 320  # 그림의 긴 변 (논리 px — 가로 영상은 폭, 세로 영상은 높이) — 키우면 메모리가 제곱으로 늘어남
 MAX_THUMBS = 500  # 띠의 최대 장수
 MAX_FILE_BYTES = 4 * 10**9  # 이보다 큰 파일은 띠를 만들지 않음 (os.stat 크기)
-SINGLE_THREAD_ABOVE_PIXELS = 1920 * 1080  # 원본 화소가 이보다 많은 파일만 띠 ffmpeg의 스레드를 묶음 (thread_limits — 모듈 설명)
+SINGLE_THREAD_ABOVE_PIXELS = 1280 * 720  # 원본 화소가 이보다 많은 파일(1080p·4K)은 띠 ffmpeg의 스레드를 묶음 (thread_limits — 모듈 설명, Ruling 24)
 PREF_KEY = "slider_thumbnails"
 MENU_TEXT = "슬라이더 썸네일"
 LOG_PREFIX = "[슬라이더 썸네일]"

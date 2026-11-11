@@ -198,7 +198,8 @@ def test_sampled_plan_picks_every_step(qapp, numbered_clip, make_builder, monkey
 
 
 def test_command_shape():
-    """4K 원본(Full HD보다 큼)의 명령 — 1코어로 묶은 지금 명령과 글자 그대로 (측정된 4K 설정이 바뀌지 않음, hover_strip.thread_limits)."""
+    """4K 원본(720p보다 큼)의 명령 — 1코어로 묶은 지금 명령과 글자 그대로 (측정된 4K 설정이 바뀌지 않음, hover_strip.thread_limits).
+    1080p 원본도 같은 옵션 (Ruling 24)."""
     every = StripPlan(total=48, step=1, count=48, width=320, height=180, source_width=3840, source_height=2160)
     assert build_command("/opt/ffmpeg", "/clips/a b.mov", every) == [
         "/opt/ffmpeg", "-nostdin", "-v", "error", "-filter_threads", "1", "-threads", "1", "-i", "/clips/a b.mov", "-map", "0:V:0",
@@ -211,12 +212,14 @@ def test_command_shape():
     assert vf == "select=not(mod(n\\,29)),scale=180:320" and vf.count("\\") == 1
     assert len(command) == len(build_command("ffmpeg", "x.mov", every))
     assert command[4:8] == ["-filter_threads", "1", "-threads", "1"]
+    full_hd = StripPlan(total=48, step=1, count=48, width=320, height=180, source_width=1920, source_height=1080)
+    assert build_command("/opt/ffmpeg", "/clips/a b.mov", full_hd) == build_command("/opt/ffmpeg", "/clips/a b.mov", every)
 
 
-@pytest.mark.parametrize("source", [(1920, 1080), (1280, 720), (1080, 1920), (320, 180)])
-def test_full_hd_or_smaller_source_has_no_thread_options(source):
-    """원본이 Full HD 이하면 스레드 옵션을 넣지 않음(ffmpeg 기본 — 이 Mac은 CPU 수만큼): 긴 720p 애니매틱의 띠가 1코어로 67초 걸리던 것
-    (스펙 2026-11-11 §2). 나머지 명령은 4K의 것에서 그 네 토큰만 빠진 것."""
+@pytest.mark.parametrize("source", [(1280, 720), (720, 1280), (640, 360), (320, 180)])
+def test_720p_or_smaller_source_has_no_thread_options(source):
+    """원본이 720p 이하면 스레드 옵션을 넣지 않음(ffmpeg 기본 — 이 Mac은 CPU 수만큼): 긴 720p 애니매틱의 띠가 1코어로 67초 걸리던 것
+    (스펙 2026-11-11 §2, 임계는 Ruling 24 — 1080p는 측정에서 불통과라 1코어 그대로). 나머지 명령은 4K의 것에서 그 네 토큰만 빠진 것."""
     plan = StripPlan(total=48, step=1, count=48, width=320, height=180, source_width=source[0], source_height=source[1])
     command = build_command("ffmpeg", "x.mov", plan)
     assert "-threads" not in command and "-filter_threads" not in command
@@ -225,7 +228,7 @@ def test_full_hd_or_smaller_source_has_no_thread_options(source):
 
 
 def test_threads_option_follows_constant(monkeypatch):
-    """(Full HD보다 큰 원본) 디코더 스레드(-threads — 입력 옵션)·필터 스레드(-filter_threads — 전역 옵션)는 두 상수를 호출 때 읽음.
+    """(720p보다 큰 원본) 디코더 스레드(-threads — 입력 옵션)·필터 스레드(-filter_threads — 전역 옵션)는 두 상수를 호출 때 읽음.
     None이면 그 옵션 자체가 없음."""
     every = StripPlan(total=48, step=1, count=48, width=320, height=180, source_width=3840, source_height=2160)
     monkeypatch.setattr(hover_strip_builder, "FFMPEG_THREADS", None)  # 끄면 ffmpeg 기본 — 옵션 자체가 없음
