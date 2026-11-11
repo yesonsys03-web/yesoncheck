@@ -963,9 +963,16 @@ def test_unexpected_error_in_coarse_pass_logs_traceback_and_continues(qapp, h264
     assert "Traceback (most recent call last)" in err and "KeyError: '시험: subsample 버그'" in err
 
 
-def test_pause_during_coarse_pass_suspends_and_resume_finishes(qapp, h264_gop12, make_builder, monkeypatch):
-    """거친 패스 도중의 멈춤: 그 패스의 ffmpeg(지금 프로세스)가 정지하고 더 채우지 않음(정확한 띠도 시작하지 않음). 재개하면 거친 띠 → 정확한
-    띠 끝까지."""
+@pytest.mark.parametrize("evidence", [
+    pytest.param("status", marks=pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="Windows의 psutil status()는 파이프 쓰기에서 막힌 스레드가 있으면 정지돼 있어도 running — drain 갈래가 동작으로 확인")),
+    "drain",
+])
+def test_pause_during_coarse_pass_suspends_and_resume_finishes(qapp, h264_gop12, make_builder, monkeypatch, evidence):
+    """거친 패스 도중의 멈춤: 그 패스의 ffmpeg(지금 프로세스)가 정지하고 더 채우지 않음(정확한 띠도 시작하지 않음). 정지 확인은 정확한 띠의
+    도중 멈춤 시험과 같은 두 갈래(모듈 설명) — status는 psutil 상태 뒤 재개해 거친 띠 → 정확한 띠 끝까지(Windows는 건너뜀), drain은 파이프를
+    비워 봐서 한 장도 더 오지 않음(모든 OS) 뒤 stop으로 끝냄(시험이 장을 먹었으므로)."""
     monkeypatch.setattr(hover_strip, "MAX_THUMBS", 50)
     strip = HoverStrip(plan_for(200, 320, 180))
     worker = make_builder(h264_gop12, strip)
@@ -980,8 +987,19 @@ def test_pause_during_coarse_pass_suspends_and_resume_finishes(qapp, h264_gop12,
     _pump(qapp, 0.5)
     assert coarse.filled_count == n1 == 1 and strip.filled_count == 0 and got.coarse == [] and got.done == []
     assert worker.pid == worker.pids[2] and psutil.pid_exists(worker.pid)  # 지금 프로세스 = 거친 ffmpeg (헤더·패킷 ffprobe 다음)
-    if sys.platform != "win32":  # Windows status()는 파이프 쓰기에서 막힌 스레드가 있으면 running으로 보임 (모듈 설명)
-        assert _is_stopped(worker.pid)
+    if evidence == "drain":
+        pid, frame_bytes = worker.pid, strip.plan.frame_bytes
+        drained, drainer, errors = _drain_pipe(worker._process.stdout, frame_bytes, 0.5)
+        assert drained < frame_bytes, f"정지된 거친 ffmpeg에서 {drained}바이트가 옴 (한 장 {frame_bytes}바이트)"
+        assert drainer.is_alive(), f"파이프를 비우는 도우미가 끝났습니다 (EOF 또는 오류 — {drained}바이트): {errors}"
+        worker.stop()
+        drainer.join(STOP_WAIT_MS / 1000)
+        assert not worker.isRunning() and not psutil.pid_exists(pid)
+        assert not drainer.is_alive() and errors == []
+        _pump(qapp, 0.1)
+        assert got.done == [] and got.failed == [] and got.coarse == []
+        return
+    assert _is_stopped(worker.pid)
     worker.paused = False
     _finish(qapp, worker)
     assert got.failed == [] and [filled for filled, _ in got.coarse] == [17] and got.done_counts == [50]
