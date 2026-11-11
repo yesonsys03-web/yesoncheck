@@ -5,9 +5,10 @@
 (hover_strip.HoverStrip)에 넣는다. 재생 캡처(cap_a)는 건드리지 않는다 — 따로 띄운 프로세스가 파일을 따로 연다. 띄우는 때·멈추는 때는 부르는
 쪽(플레이어의 쉬는 때 판정)이 정하고, 워커는 띄워진 뒤 paused 표지만 본다.
 
-패스 둘 (스펙 2026-11-11 §3): 한 run 안에서 차례로 ① 키프레임 거친 띠 — 긴 파일(간격 step > 1)이면 ffprobe 한 번으로 키프레임 번호를 읽고
-(hover_keyframes.scan_keyframes) 키프레임이 드물면(hover_keyframes.coarse_wanted — 전체의 1/4 이하) -skip_frame nokey로 키프레임만 디코드해
-거친 띠(hover_keyframes.KeyframeStrip)를 채움 ② 정확한 띠 — 지금 그대로. 거친 띠는 정확한 띠보다 훨씬 빨리 차므로(22.6분 720p H.264
+패스 둘 (스펙 2026-11-11 §3): 한 run 안에서 차례로 ① 키프레임 거친 띠 — 긴 파일(간격 step > 1)이면 헤더 ffprobe(hover_keyframes.probe_header —
+패킷 없이 코덱·속도만)로 all-intra 코덱·모르는 속도를 먼저 거르고(건너뜀 한 줄), 그 밖이면 패킷 ffprobe로 키프레임 번호를 읽어
+(hover_keyframes.scan_keyframes — 버림(D) 패킷 제외) 키프레임이 드물면(hover_keyframes.coarse_wanted — 전체의 1/4 이하) -skip_frame nokey로
+키프레임만 디코드해 거친 띠(hover_keyframes.KeyframeStrip)를 채움 ② 정확한 띠 — 지금 그대로. 거친 띠는 정확한 띠보다 훨씬 빨리 차므로(22.6분 720p H.264
 애니매틱: 키프레임만 10.2초 대 전부 18.8초 — 이 Mac 실측) 그동안 호버가 거친 그림을 보이고, 정확한 띠가 끝나면 버린다(coarse_strip = None을
 done 앞에). 공개: coarse_strip은 목록·표시 배열을 다 만든 저장소를 속성 하나로 한 번 대입(그 전·버린 뒤·정확한 띠 완성 뒤·stop 뒤 None — GUI는
 조회마다 그 참조만 읽음; 정확한 띠가 실패(failed)하면 그대로 둠 — 이미 채운 장처럼 계속 보임), 다 채우면 coarse_done(채운 장수, 띄운 때부터 초). 거친 띠는 보조라 어느 실패(ffprobe 실패·찾지 못함, 거친 ffmpeg의
@@ -245,15 +246,21 @@ class HoverStripBuilder(QThread):
         print(f"{LOG_PREFIX} 거친 띠를 만들지 못했습니다(정확한 띠는 계속) — {self.path}\n{problem}", file=sys.stderr, flush=True)
 
     def _build_coarse(self, started: float, plan: StripPlan) -> str | None:
-        """거친 패스 본문 → 기록할 문제 글(사유 전문), 또는 None(다 채워 coarse_done을 냄·키프레임이 많아 건너뜀(기록 한 줄)·stop으로 멈춤)."""
+        """거친 패스 본문 → 기록할 문제 글(사유 전문), 또는 None(다 채워 coarse_done을 냄·건너뜀(기록 한 줄)·stop으로 멈춤). 헤더를 먼저 읽어
+        all-intra 코덱·모르는 속도면 패킷 스캔(파일 전체 읽기) 없이 건너뜀 (hover_keyframes 설명)."""
+        frames = None
         try:
             ffprobe = self._ffprobe if self._ffprobe is not None else ffprobe_path()
-            frames, _packets = hover_keyframes.scan_keyframes(ffprobe, self.path, run=self._run_probe)
+            header = hover_keyframes.probe_header(ffprobe, self.path, run=self._run_probe)
+            reason = hover_keyframes.header_skip_reason(header)
+            if reason is None and not self._stopped:
+                frames, _packets = hover_keyframes.scan_keyframes(ffprobe, self.path, header, run=self._run_probe)
         except (ToolNotFoundError, OSError, RuntimeError) as exc:  # ffprobe 없음·못 띄움·실패(kill 포함)·번호를 정할 수 없음
             return None if self._stopped else f"키프레임 목록을 읽지 못했습니다 — {type(exc).__name__}: {exc}"
         if self._stopped:
             return None
-        reason = hover_keyframes.coarse_wanted(plan.total, plan.step, len(frames))
+        if reason is None:
+            reason = hover_keyframes.coarse_wanted(plan.total, plan.step, len(frames))
         if reason is not None:
             print(f"{LOG_PREFIX} 거친 띠 건너뜀: {reason} — {self.path}", flush=True)
             return None
