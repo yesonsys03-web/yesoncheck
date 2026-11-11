@@ -900,7 +900,7 @@ def test_long_h264_builds_coarse_then_exact_strip(shown_player, h264_long, real_
     finished = [line for line in lines if line.startswith(f"{LOG_PREFIX} 띠 완성: 50/50장 ")]
     assert start in lines and len(finished) == 1
     if ffprobe == "works":
-        first = f"{LOG_PREFIX} 거친 띠 먼저: 키프레임 17장(간격 1, 전체 200장) — {h264_long}"
+        first = f"{LOG_PREFIX} 거친 띠 먼저: 키프레임 17장 → 17장(간격 1, 전체 200장) — {h264_long}"
         coarse_done = [line for line in lines if line.startswith(f"{LOG_PREFIX} 거친 띠 완성: 17/17장 ")]
         assert len(coarse_done) == 1 and coarse_done[0].endswith(f"초 — {h264_long}")
         assert lines.index(start) < lines.index(first) < lines.index(coarse_done[0]) < lines.index(finished[0])

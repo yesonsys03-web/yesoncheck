@@ -95,15 +95,17 @@ def build_command(ffmpeg: str, path: str, plan: StripPlan) -> list[str]:
     return _strip_command(ffmpeg, path, plan, plan.step, ())
 
 
-def build_coarse_command(ffmpeg: str, path: str, plan: StripPlan, every: int) -> list[str]:
-    """키프레임만의 거친 띠 명령 — build_command와 같은 모양에 -skip_frame nokey(디코더 옵션이라 -i 앞 — 디코더 스레드 바로 앞)를 더하고,
-    every > 1이면 select로 키프레임 every장마다 하나 (n은 디코드된 장 — -skip_frame 뒤라 키프레임만 셈; 목록은 hover_keyframes.subsample이 같은
-    규칙 frames[::every]로 줄임). 스레드 규칙도 같음 (hover_strip.thread_limits)."""
-    return _strip_command(ffmpeg, path, plan, every, ("-skip_frame", "nokey"))
+def build_coarse_command(ffmpeg: str, path: str, plan: StripPlan) -> list[str]:
+    """키프레임만의 거친 띠 명령 — build_command와 같은 모양에 -skip_frame nokey(디코더 옵션이라 -i 앞 — 디코더 스레드 바로 앞)를 더하고 select는
+    넣지 않음: 키프레임 전부(K장)를 내고, 워커가 m장마다 하나만 거친 띠에 넣음(_read_frames의 every — 목록은 hover_keyframes.subsample이 같은 규칙
+    frames[::m]으로 줄임; 스펙 §3.2의 select와 다름 — 디코드 비용은 같고 파이프 전송만 K장, 장수 검사가 받은 수 == K로 정확해짐). 스레드 규칙도
+    같음 (hover_strip.thread_limits)."""
+    return _strip_command(ffmpeg, path, plan, 1, ("-skip_frame", "nokey"))
 
 
 def _strip_command(ffmpeg: str, path: str, plan: StripPlan, every: int, input_options) -> list[str]:
-    """두 명령의 공통 모양: [필터 스레드] [입력 옵션] [디코더 스레드] -i 파일 … -vf [select,]scale … rgb24 pipe:1."""
+    """두 명령의 공통 모양: [필터 스레드] [입력 옵션] [디코더 스레드] -i 파일 … -vf [select,]scale … rgb24 pipe:1 (select는 every > 1일 때 —
+    정확한 띠의 간격)."""
     scale = f"scale={plan.width}:{plan.height}"
     vf = scale if every == 1 else f"select=not(mod(n\\,{every})),{scale}"
     decoder, filters = thread_limits(plan, FFMPEG_THREADS, FFMPEG_FILTER_THREADS)
@@ -278,24 +280,26 @@ class HoverStripBuilder(QThread):
         if reason is not None:
             print(f"{LOG_PREFIX} 거친 띠 건너뜀: {reason} — {self.path}", flush=True)
             return None
-        frames, every = hover_keyframes.subsample(frames, hover_keyframes.MAX_COARSE)
-        strip = hover_keyframes.KeyframeStrip(frames, plan.width, plan.height)
-        command = build_coarse_command(self._ffmpeg, self.path, plan, every)
+        keyframes = len(frames)  # ffmpeg가 낼 장수 K (줄이기 전 — 장수 검사의 기준)
+        rows, every = hover_keyframes.subsample(frames, hover_keyframes.MAX_COARSE)
+        strip = hover_keyframes.KeyframeStrip(rows, plan.width, plan.height)
+        command = build_coarse_command(self._ffmpeg, self.path, plan)
         with self._lock:  # 목록·표시 배열을 다 만든 뒤 한 번에 공개 (stop 뒤면 공개하지 않음)
             if self._stopped:
                 return None
             self.coarse_command, self.coarse_count, self.coarse_strip = command, strip.count, strip
-        print(f"{LOG_PREFIX} 거친 띠 먼저: 키프레임 {strip.count}장(간격 {every}, 전체 {plan.total}장) — {self.path}", flush=True)
+        print(f"{LOG_PREFIX} 거친 띠 먼저: 키프레임 {keyframes}장 → {strip.count}장(간격 {every}, 전체 {plan.total}장) — {self.path}",
+              flush=True)
         try:
             problem, returncode, stderr, received, trace = self._run_pass(
-                command, lambda stdout: self._read_frames(stdout, strip, progress=False), "ffmpeg")
+                command, lambda stdout: self._read_frames(stdout, strip, progress=False, every=every, limit=keyframes), "ffmpeg")
         except OSError:
             return f"거친 띠 ffmpeg를 띄우지 못했습니다.\n명령: {' '.join(command)}\n{traceback.format_exc().rstrip()}"
         if self._stopped:  # 일부러 멈춤 — 조용히 (트레이스백이 있는 문제만 정확한 띠와 같은 머리로 기록)
             if trace is not None:
                 self._log_after_stop(f"{problem}\n{trace.rstrip()}")
             return None
-        if problem is None and returncode == 0 and received == strip.count:
+        if problem is None and returncode == 0 and received == keyframes:
             if stderr.strip():  # 삼키지 않음 (정확한 띠의 경고와 같은 규칙 — 창 없음)
                 print(f"{LOG_PREFIX} 거친 띠 ffmpeg 경고 (종료 코드 0, {strip.filled_count}장 채움) — {self.path}\n{stderr.rstrip()}",
                       file=sys.stderr, flush=True)
@@ -304,9 +308,9 @@ class HoverStripBuilder(QThread):
                     self.coarse_done.emit(strip.filled_count, time.monotonic() - started)
             return None
         if problem is None:
-            problem = (f"ffmpeg가 비정상 종료했습니다 (종료 코드 {returncode}, 출력 {received}장 / 키프레임 목록 {strip.count}장)"
+            problem = (f"ffmpeg가 비정상 종료했습니다 (종료 코드 {returncode}, 출력 {received}장 / 키프레임 목록 {keyframes}장)"
                        if returncode != 0 else
-                       f"출력 {received}장 ≠ 키프레임 목록 {strip.count}장 — j번째 출력이 목록의 j번째라는 짝을 믿을 수 없어 채운 것을 버림")
+                       f"출력 {received}장 ≠ 키프레임 목록 {keyframes}장 — j번째 출력이 목록의 j번째라는 짝을 믿을 수 없어 채운 것을 버림")
         if trace is not None:
             problem = f"{problem}\n{trace.rstrip()}"
         return f"{problem}\n명령: {' '.join(command)}\n종료 코드: {returncode}\nstderr:\n{stderr.rstrip() or '(없음)'}"
@@ -365,9 +369,12 @@ class HoverStripBuilder(QThread):
             if self._paused:
                 self._signal_process(True)
 
-    def _read_frames(self, stdout, store: ImageRows, progress: bool) -> tuple[int, str | None]:
-        """EOF까지 한 장(store.frame_bytes)씩 읽어 행 0, 1, 2…에 넣음 → (ffmpeg가 낸 장수, 문제 글 또는 None). 저장소 장수를 넘는 장은
-        읽어 버림. 멈춤 표지가 서 있는 동안은 읽지 않음(POLL_S마다 다시 봄), stop()이면 바로 끝. progress: 정확한 띠면 progress 신호를 냄."""
+    def _read_frames(self, stdout, store: ImageRows, progress: bool, every: int = 1,
+                     limit: int | None = None) -> tuple[int, str | None]:
+        """EOF까지 한 장(store.frame_bytes)씩 읽어 받은 i번째 장 중 i % every == 0인 장을 행 i // every에 넣음 → (ffmpeg가 낸 장수, 문제 글 또는
+        None). 저장소 장수를 넘는 장은 읽어 버림. limit: 이 장수를 넘는 장이 오면 그 자리에서 문제로 끊음(거친 띠 — 번호를 믿을 수 없으니 EOF까지
+        디코드하지 않음; 부른 쪽이 kill). 멈춤 표지가 서 있는 동안은 읽지 않음(POLL_S마다 다시 봄), stop()이면 바로 끝. progress: 정확한 띠면
+        progress 신호를 냄."""
         frame_bytes = store.frame_bytes
         view = memoryview(bytearray(frame_bytes))
         received = 0
@@ -381,8 +388,11 @@ class HoverStripBuilder(QThread):
                 if got:
                     return received, f"한 장 도중에 출력이 끊겼습니다 ({got}/{frame_bytes}바이트 — {received}장을 받은 뒤)"
                 return received, None
-            if received < store.count:
-                store.put(received, view)
+            if limit is not None and received >= limit:
+                return received + 1, (f"출력이 키프레임 목록 {limit}장을 넘었습니다 ({received + 1}장째에서 끊음) — j번째 출력이 목록의 j번째라는 "
+                                      f"짝을 믿을 수 없어 채운 것을 버림")
+            if received % every == 0 and received // every < store.count:
+                store.put(received // every, view)
             received += 1
             if not progress:
                 continue

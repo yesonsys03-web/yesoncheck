@@ -620,17 +620,17 @@ def test_suspend_failure_logs_and_only_stops_reading(qapp, numbered_clip_200, ma
 
 
 def test_coarse_command_shape():
-    """거친 패스 명령: -skip_frame nokey는 입력(디코더) 옵션이라 -i 앞(디코더 스레드 -threads 바로 앞), 스레드 규칙은 정확한 띠와 같음(4K는
-    1코어, Full HD 이하는 옵션 없음), 키프레임을 m장마다 고를 때만 select (n은 디코드된 장 — 키프레임만 셈)."""
+    """거친 패스 명령: -skip_frame nokey는 입력(디코더) 옵션이라 -i 앞(디코더 스레드 -threads 바로 앞), 스레드 규칙은 정확한 띠와 같음(1080p·4K는
+    1코어, 720p 이하는 옵션 없음). select는 없음 — 키프레임 전부를 받아 워커가 m장마다 하나만 넣음(스펙 §3.2의 select와 다름)."""
     big = StripPlan(total=14_400, step=29, count=497, width=320, height=180, source_width=3840, source_height=2160)
-    assert build_coarse_command("/opt/ffmpeg", "/clips/a b.mov", big, 1) == [
+    assert build_coarse_command("/opt/ffmpeg", "/clips/a b.mov", big) == [
         "/opt/ffmpeg", "-nostdin", "-v", "error", "-filter_threads", "1", "-skip_frame", "nokey", "-threads", "1", "-i", "/clips/a b.mov",
         "-map", "0:V:0", "-fps_mode", "passthrough", "-vf", "scale=320:180", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
     ]
     small = StripPlan(total=32_553, step=66, count=494, width=320, height=180, source_width=1280, source_height=720)
-    assert build_coarse_command("ffmpeg", "x.mp4", small, 3) == [
+    assert build_coarse_command("ffmpeg", "x.mp4", small) == [
         "ffmpeg", "-nostdin", "-v", "error", "-skip_frame", "nokey", "-i", "x.mp4", "-map", "0:V:0", "-fps_mode", "passthrough",
-        "-vf", "select=not(mod(n\\,3)),scale=320:180", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
+        "-vf", "scale=320:180", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
     ]
 
 
@@ -690,12 +690,13 @@ def test_coarse_strip_fills_keyframes_first_then_exact_strip(qapp, h264_gop12, m
     assert worker.coarse_count == 17 and "-skip_frame" in worker.coarse_command and "-skip_frame" not in worker.command
     assert len(worker.pids) == 4  # 헤더 ffprobe → 패킷 ffprobe → 거친 ffmpeg → 정확한 ffmpeg
     captured = capsys.readouterr()
-    assert _log_lines(captured.out, "거친 띠") == [f"{LOG_PREFIX} 거친 띠 먼저: 키프레임 17장(간격 1, 전체 200장) — {h264_gop12}"]
+    assert _log_lines(captured.out, "거친 띠") == [f"{LOG_PREFIX} 거친 띠 먼저: 키프레임 17장 → 17장(간격 1, 전체 200장) — {h264_gop12}"]
     assert _log_lines(captured.err, "") == []  # 경고·실패 없음
 
 
 def test_coarse_strip_subsamples_many_keyframes(qapp, h264_gop12, make_builder, monkeypatch, capsys):
-    """키프레임이 MAX_COARSE를 넘으면 m = ceil(K / 최대)마다 하나 — select=not(mod(n,m))로 고른 출력과 목록 frames[::m]이 짝 (그림 번호로 확인)."""
+    """키프레임이 MAX_COARSE를 넘으면 m = ceil(K / 최대)마다 하나 — ffmpeg는 키프레임 전부(K장)를 내고 워커가 i % m == 0인 장만 넣어 목록
+    frames[::m]과 짝 (그림 번호로 확인). 장수 검사는 받은 수 == K(줄이기 전)."""
     monkeypatch.setattr(hover_strip, "MAX_THUMBS", 50)
     monkeypatch.setattr(hover_keyframes, "MAX_COARSE", 5)  # 17장 → 간격 4, 5장
     strip = HoverStrip(plan_for(200, 320, 180))
@@ -708,8 +709,8 @@ def test_coarse_strip_subsamples_many_keyframes(qapp, h264_gop12, make_builder, 
     coarse = seen["coarse"][1]
     assert coarse.frames == tuple(H264_KEYFRAMES[::4]) == (0, 48, 96, 144, 192)
     assert [frame_number(coarse.image(j)) for j in range(5)] == [0, 48, 96, 144, 192]
-    assert "select=not(mod(n\\,4)),scale=320:180" in worker.coarse_command
-    assert f"{LOG_PREFIX} 거친 띠 먼저: 키프레임 5장(간격 4, 전체 200장) — {h264_gop12}" in capsys.readouterr().out
+    assert "select" not in " ".join(worker.coarse_command) and worker.coarse_count == 5
+    assert f"{LOG_PREFIX} 거친 띠 먼저: 키프레임 17장 → 5장(간격 4, 전체 200장) — {h264_gop12}" in capsys.readouterr().out
 
 
 def test_coarse_strip_on_h264_with_audio_track(qapp, tmp_path, make_builder, make_video, monkeypatch, capsys):
@@ -850,16 +851,17 @@ def test_keyframe_scan_failure_logs_and_exact_strip_completes(qapp, tmp_path, h2
     assert expected[ffprobe_kind] in reason
 
 
-@pytest.mark.parametrize("change", ["extra", "missing"])
+@pytest.mark.parametrize("change", ["extra", "missing", "far_fewer"])
 def test_coarse_count_mismatch_discards_coarse_strip(qapp, h264_gop12, make_builder, monkeypatch, capsys, change):
-    """키프레임 패스의 출력 장수가 목록과 다르면(목록이 하나 많음·적음) 번호를 믿을 수 없어 거친 띠를 버림 — coarse_done 없음, 기록(stderr)
-    한 줄 + 사유(두 장수), 창 없음, 정확한 띠는 끝까지. 많이 온 장은 읽어 버림."""
+    """키프레임 패스의 출력 장수가 목록과 다르면 번호를 믿을 수 없어 거친 띠를 버림 — coarse_done 없음, 기록(stderr) 한 줄 + 사유(두 장수),
+    창 없음, 정확한 띠는 끝까지. 목록보다 적게 오면(extra — 목록이 하나 많음) EOF에서 알고, 목록을 넘으면(missing·far_fewer) 넘는 그 장에서 끊음
+    (kill — EOF까지 디코드하지 않음; far_fewer는 목록 2장이라 3장째에서 끊기고 ffmpeg는 남은 장을 못 쓴 채 죽음)."""
     monkeypatch.setattr(hover_strip, "MAX_THUMBS", 50)
     real_scan = hover_keyframes.scan_keyframes
 
     def changed_scan(*args, **kwargs):
         frames, packets = real_scan(*args, **kwargs)
-        return (frames + [199] if change == "extra" else frames[:-1]), packets
+        return {"extra": frames + [199], "missing": frames[:-1], "far_fewer": frames[:2]}[change], packets
 
     monkeypatch.setattr(hover_keyframes, "scan_keyframes", changed_scan)
     strip = HoverStrip(plan_for(200, 320, 180))
@@ -870,11 +872,16 @@ def test_coarse_count_mismatch_discards_coarse_strip(qapp, h264_gop12, make_buil
     _finish(qapp, worker)
     assert got.failed == [] and got.done_counts == [50] and got.coarse == [] and "coarse" not in seen
     assert worker.coarse_strip is None and seen["done"] is None
-    listed = 18 if change == "extra" else 16
     err = capsys.readouterr().err
     head = f"{LOG_PREFIX} 거친 띠를 만들지 못했습니다(정확한 띠는 계속) — {h264_gop12}"
-    assert _log_lines(err, "") == [head]
-    assert f"출력 17장 ≠ 키프레임 목록 {listed}장" in err and " ".join(worker.coarse_command) in err
+    assert _log_lines(err, "") == [head] and " ".join(worker.coarse_command) in err
+    if change == "extra":
+        assert "출력 17장 ≠ 키프레임 목록 18장" in err
+    else:
+        listed = {"missing": 16, "far_fewer": 2}[change]
+        assert f"출력이 키프레임 목록 {listed}장을 넘었습니다 ({listed + 1}장째에서 끊음)" in err
+    if change == "far_fewer":  # 남은 14장을 쓰지 못한 채 kill — 정상 종료(0)일 수 없음
+        assert "종료 코드: 0\n" not in err
 
 
 def test_coarse_ffmpeg_error_logs_and_exact_strip_completes(qapp, h264_gop12, make_builder, monkeypatch, capsys):
