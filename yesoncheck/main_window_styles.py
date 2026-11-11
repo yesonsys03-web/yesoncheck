@@ -7,6 +7,10 @@
 """
 
 # 어두운 테마 — 창을 만들 때 걸고 set_dark_theme가 다시 검
+# 두 시트의 `QPushButton#collapsibleToggle`은 접는 상자(player_timeline.CollapsibleBox) 머리 단추의 **색**(바탕·테두리·글자) — 위젯에
+# 직접 넣으면 테마를 바꿔도 남으므로(2026-11-12 전에는 밝은 테마에서도 어두운 머리) 창 시트에 둠. 어두운 쪽 값은 그때의 인라인 시트 그대로.
+# 모양(정렬·안쪽 여백·굵기·모서리)은 위젯 자신의 시트에 남김: 가운데 열 컨테이너의 시트(QPushButton 좌우 여백 6px)가 창 시트보다
+# 가까워, 여백을 여기 두면 그쪽이 이겨 글자가 2px 밀림(화면 비교로 잡음)
 DARK_STYLESHEET = """
 QMainWindow, QWidget {
     background: #232323;
@@ -38,6 +42,17 @@ QPushButton:disabled {
     background: #232323;
     border: 1px solid #444;
     color: #555;
+}
+QPushButton#collapsibleToggle {
+    background: #2d2d2d;
+    border: 1px solid #444;
+    color: #ffae00;
+}
+QPushButton#collapsibleToggle:hover {
+    background: #3d3d3d;
+}
+QPushButton#collapsibleToggle:checked {
+    background: #3d3d3d;
 }
 QComboBox {
     background: #2d2d2d;
@@ -165,18 +180,19 @@ QMessageBox {
 }
 """
 
-# 밝은 테마 — set_light_theme가 걺
+# 밝은 테마 — set_light_theme가 걺. **QMainWindow 규칙은 QWidget 규칙 뒤에**: 창 자신도 QWidget이라 같은 무게의 두 규칙 중 뒤의 것이
+# 이김 — 2026-11-12 전에는 차례가 반대라 창 바탕이 투명(아무것도 안 칠함)이었고 Mac의 GL 화면에서 그 자리가 검게 나왔음
 LIGHT_STYLESHEET = """
+QWidget {
+    background: transparent;
+    color: #2c3e50;
+    font-family: 'Segoe UI', 'Malgun Gothic', Arial, sans-serif;
+}
 QMainWindow {
     background: #fafafa;
     color: #2c3e50;
     font-family: 'Segoe UI', 'Malgun Gothic', Arial, sans-serif;
     font-size: 12px;
-}
-QWidget {
-    background: transparent;
-    color: #2c3e50;
-    font-family: 'Segoe UI', 'Malgun Gothic', Arial, sans-serif;
 }
 QPushButton {
     background: #ffffff;
@@ -200,6 +216,17 @@ QPushButton:disabled {
     background: #f8f9fa;
     border: 1px solid #e9ecef;
     color: #adb5bd;
+}
+QPushButton#collapsibleToggle {
+    background: #e9ecef;
+    border: 1px solid #ced4da;
+    color: #2c3e50;
+}
+QPushButton#collapsibleToggle:hover {
+    background: #dee2e6;
+}
+QPushButton#collapsibleToggle:checked {
+    background: #dee2e6;
 }
 QComboBox {
     background: #ffffff;
@@ -527,8 +554,9 @@ VOLUME_SLIDER_STYLE = """
         """
 
 
-# OCR 분석 방식 라벨과 패턴 라벨 (둘이 같은 글자)
-OCR_OPTION_LABEL_STYLE = "color: #e0e0e0; padding: 2px;"
+# OCR 분석 방식 라벨과 패턴 라벨 (둘이 같은 글자). 글자색은 넣지 않음 — 테마 시트의 QLabel 색을 따름(어두운 #e0e0e0·밝은 #2c3e50;
+# 2026-11-12 전에는 #e0e0e0 고정이라 밝은 테마에서 거의 안 보였음)
+OCR_OPTION_LABEL_STYLE = "padding: 2px;"
 
 
 # 사이드바 버튼: bookmarkButton

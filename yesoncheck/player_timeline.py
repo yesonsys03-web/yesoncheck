@@ -36,23 +36,10 @@ class CollapsibleBox(QWidget):
         self.toggle_button = QPushButton(title)
         self.toggle_button.setCheckable(True)
         self.toggle_button.setChecked(True)
-        self.toggle_button.setStyleSheet("""
-            QPushButton {
-                text-align: left;
-                padding: 8px;
-                background: #2d2d2d;
-                border: 1px solid #444;
-                color: #ffae00;
-                font-weight: bold;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background: #3d3d3d;
-            }
-            QPushButton:checked {
-                background: #3d3d3d;
-            }
-        """)
+        # 색(바탕·테두리·글자)은 창의 테마 시트가 정함(main_window_styles의 QPushButton#collapsibleToggle — 어두운·밝은 테마마다):
+        # 여기서 색을 직접 넣으면 창 시트보다 우선이라 테마를 바꿔도 남음. 테마와 상관없는 모양만 여기에
+        self.toggle_button.setObjectName("collapsibleToggle")
+        self.toggle_button.setStyleSheet("QPushButton { text-align: left; padding: 8px; font-weight: bold; border-radius: 4px; }")
         self.toggle_button.clicked.connect(self.toggle)
         
         self.content_area = QWidget()
