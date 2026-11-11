@@ -892,6 +892,13 @@ def test_keyframe_scan_failure_logs_and_exact_strip_completes(qapp, tmp_path, h2
     reason = err.split(head + "\n", 1)[1]
     expected = {"missing_file": "no_such_ffprobe", "exits_nonzero": "종료 코드", "not_found": "ToolNotFoundError: 시험: ffprobe 없음"}
     assert expected[ffprobe_kind] in reason and reason.startswith("헤더·키프레임 목록을 읽지 못했습니다 — ")
+    # 어느 ffprobe 명령이 실패했는지는 예외 글과 별개로 '명령:' 한 줄 (Windows의 FileNotFoundError 글에는 경로가 없음 — [WinError 2]) — 찾지 못함은
+    # 띄울 명령이 없으므로 줄도 없음
+    if ffprobe_kind == "not_found":
+        assert "명령: " not in reason
+    else:
+        command = hover_keyframes.header_command(kwargs["ffprobe"], h264_gop12)
+        assert reason.count("명령: ") == 1 and f"명령: {' '.join(command)}" in reason
 
 
 @pytest.mark.parametrize("change", ["extra", "missing", "far_fewer"])

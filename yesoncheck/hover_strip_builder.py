@@ -164,6 +164,7 @@ class HoverStripBuilder(QThread):
         self._ffprobe = ffprobe
         self.command = build_command(self._ffmpeg, path, strip.plan)  # 코덱을 모를 때의 명령 — 긴 파일은 run이 헤더를 읽은 뒤 다시 정함
         self.codec: str | None = None  # 헤더 ffprobe의 codec_name (긴 파일만 읽음 — 모르면 None; 스레드 규칙)
+        self._probe_command: list[str] | None = None  # 마지막으로 띄운(띄우려던) ffprobe 명령 — 거친 띠 실패 기록용 (_run_probe가 둠)
         self.coarse_command: list[str] | None = None
         self.coarse_strip: hover_keyframes.KeyframeStrip | None = None
         self.coarse_count = 0
@@ -280,7 +281,15 @@ class HoverStripBuilder(QThread):
             if reason is None and not self._stopped:
                 frames, _packets = hover_keyframes.scan_keyframes(ffprobe, self.path, header, run=self._run_probe)
         except (ToolNotFoundError, OSError, RuntimeError) as exc:  # ffprobe 없음·못 띄움·실패(kill 포함)·번호를 정할 수 없음
-            return None if self._stopped else f"헤더·키프레임 목록을 읽지 못했습니다 — {type(exc).__name__}: {exc}"
+            if self._stopped:
+                return None
+            text = f"헤더·키프레임 목록을 읽지 못했습니다 — {type(exc).__name__}: {exc}"
+            # 어느 ffprobe 명령이 실패했는지는 예외 글과 별개로 한 줄 (정확한 띠 실패 글의 '명령:'과 같은 모양) — 못 띄움(OSError)은 Windows 글에
+            # 경로가 없고([WinError 2]), 해석 실패(영상 트랙 없음·pts 없음)도 명령을 싣지 않음. 0이 아닌 종료 코드의 글은 이미 실어 다시 붙이지 않음
+            command = self._probe_command
+            if command is not None and f"명령: {' '.join(command)}" not in text:
+                text += f"\n명령: {' '.join(command)}"
+            return text
         if self._stopped:
             return None
         if reason is None:
@@ -327,6 +336,7 @@ class HoverStripBuilder(QThread):
         """probe_header·scan_keyframes의 run — ffprobe도 지금 프로세스로(_run_pass — 멈춤·stop이 먹게) 띄워 stdout을 끝까지 읽음 → (종료 코드,
         stdout, stderr 글). stop() 뒤면 _Stopped로 빠져나옴 — stop이 읽기를 멈춰 반쪽만 받은 JSON을 해석해 '예상 못 한 예외'로 거짓 기록하지
         않게(트레이스백이 있는 문제는 먼저 정확한 띠와 같은 머리로 기록). 읽다 예외가 나면 트레이스백째 RuntimeError (거친 띠만 건너뜀)."""
+        self._probe_command = command
         problem, returncode, stderr, out, trace = self._run_pass(command, self._read_all, "ffprobe")
         if self._stopped:
             if trace is not None:

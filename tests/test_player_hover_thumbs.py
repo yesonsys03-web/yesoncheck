@@ -910,6 +910,8 @@ def test_long_h264_builds_coarse_then_exact_strip(shown_player, h264_long, real_
         head = f"{LOG_PREFIX} 거친 띠를 만들지 못했습니다(정확한 띠는 계속) — {h264_long}"
         assert [line for line in captured.err.splitlines() if line.startswith(LOG_PREFIX)] == [head]
         assert "no_such_ffprobe" in captured.err
+        command = hover_keyframes.header_command(str(tmp_path / "no_such_ffprobe"), h264_long)
+        assert f"명령: {' '.join(command)}" in captured.err  # 어느 OS에서든 실패한 ffprobe 경로가 기록에 (Windows 예외 글에는 없음)
     assert shown == [] and dialogs.messages == []
 
     slider, popup = player.positionScroll, player._hover_popup
