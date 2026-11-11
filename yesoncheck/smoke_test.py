@@ -122,6 +122,17 @@ def write_prores_clip(path):
     return path
 
 
+def manual_written(folder):
+    """사용법 매뉴얼(Help → 사용법)을 folder에 써 봄 → 기록할 내용. 빌드한 앱에 매뉴얼 그림(spec의 manual_images)이 하나라도
+    빠졌으면 여기서 FileNotFoundError — 사용자가 F1을 누를 때가 아니라 빌드 확인에서 드러나게. 브라우저는 열지 않음."""
+    from yesoncheck import manual_html, manual_open
+
+    path = manual_open.write(folder)
+    size = os.path.getsize(path)
+    assert size > 0, path
+    return {"path": path, "bytes": size, "images": len(manual_html.image_names())}
+
+
 def prores_pipe_open(workdir):
     """ProRes 영상을 open_any_capture로 열면 ffmpeg 파이프 캡처(FFmpegPipeCapture)가 오고 읽기·탐색·닫기가 되는지 → 기록할 내용.
 
@@ -646,6 +657,7 @@ def run(workdir):
         check("병합", merge)
         check("주석 내보내기", annotation_export)
     check("ProRes 파이프 열기", lambda: prores_pipe_open(workdir))
+    check("사용법 매뉴얼", lambda: manual_written(os.path.join(out_dir, "manual")))
     check("OCR", ocr)
     check("애니매틱2 (TransNetV2)", animatic2)
     check("OCR 모델 폴더", ocr_model_dir)

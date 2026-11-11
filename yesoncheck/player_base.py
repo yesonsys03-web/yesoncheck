@@ -45,8 +45,8 @@ from PyQt5.QtWidgets import (
 
 from yesoncheck.video_widget import VIEWPORT_ENV, CustomVideoWidget
 from yesoncheck import bookmarks, build_info, default_app, error_window, external_tools, file_associations, \
-    instance_link, instances, mac_native_gate, mac_prefs, media_player_log, paths, timing_log, user_files, video_list, \
-    windows_display
+    instance_link, instances, mac_native_gate, mac_prefs, manual_open, media_player_log, paths, timing_log, user_files, \
+    video_list, windows_display
 from yesoncheck.movie_pipe_source import movie_source_mode
 from yesoncheck.user_files import UserFileError
 from yesoncheck.main_window_styles import (
@@ -1671,149 +1671,15 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
             self.performanceComboBox.setCurrentIndex(index)
     
     def show_help(self):
-        """도움말을 표시합니다."""
-        today_str = korean_date(datetime.date.today())
-        help_text = f"""
-<h2>Yeson Checker 사용법</h2>
-<p><b>애니매틱 자르기 버전</b> - {today_str}까지 기록</p>
-
-<h3>📹 비디오 재생</h3>
-<ul>
-<li><b>Open Video A/B</b>: 동영상 파일을 엽니다</li>
-<li><b>Play/Pause</b>: 재생/일시정지</li>
-<li><b>Stop</b>: 정지</li>
-<li><b>Previous/Next Frame</b>: 이전/다음 프레임으로 이동 (화살표 키)</li>
-<li><b>Full Screen</b>: 전체화면 전환 (F11)</li>
-</ul>
-
-<h3>📝 OCR 기능 상세 설명</h3>
-
-<h4>1️⃣ ROI 설정 그룹</h4>
-<ul>
-<li><b>OCR ROI 지정</b>: 동영상에서 텍스트를 인식할 영역을 드래그로 지정합니다</li>
-<li><b>ROI 초기화</b>: 지정한 ROI 영역을 제거합니다</li>
-<li><b>ROI 트래킹 활성화</b>: 텍스트가 이동할 때 ROI 영역이 자동으로 따라갑니다</li>
-</ul>
-
-<h4>2️⃣ OCR 분석 그룹</h4>
-<ul>
-    <li><b>OCR 분석 방식</b>:
-  <ul>
-    <li><b>Titmouse</b>: 일반 텍스트에 적합한 기본 모드</li>
-    <li><b>King</b>: 빨간색 텍스트 등 특수 색상 텍스트에 최적화된 모드</li>
-    <li><b>Bento</b>: 작은 텍스트 및 특수 패턴 인식 최적화 (예: Seq 02A_S09 - Panel 6)</li>
-  </ul>
-</li>
-<li><b>OCR 구간 추출</b>: 전체 동영상에서 텍스트를 자동으로 인식하고 구간별로 분류합니다</li>
-<li><b>선택 구간 분석</b>: 현재 프레임 범위만 분석하여 기존 결과에 병합합니다</li>
-</ul>
-
-<h4>3️⃣ 결과 관리 그룹</h4>
-<ul>
-<li><b>OCR 오픈</b>: 분석한 결과를 검토 창에서 확인하고 편집합니다</li>
-<li><b>OCR 저장</b>: 현재 분석 결과를 JSON 파일로 저장합니다</li>
-<li><b>OCR 로드</b>: 저장한 분석 결과를 불러옵니다</li>
-</ul>
-
-<h4>📊 OCR 결과 검토 창 기능</h4>
-<ul>
-<li><b>텍스트 편집</b>: ROI 텍스트와 편집 텍스트를 직접 수정할 수 있습니다</li>
-<li><b>구간 병합</b>: 여러 구간을 선택하여 하나로 합칠 수 있습니다 (D 또는 ㅇ 키)</li>
-<li><b>구간 삭제</b>: 불필요한 구간을 제거할 수 있습니다</li>
-<li><b>전체 내보내기</b>: 모든 구간을 개별 동영상 파일로 추출합니다 (R 또는 ㄱ 키)</li>
-<li><b>선택 항목 내보내기</b>: 선택한 구간만 동영상 파일로 추출합니다</li>
-<li><b>사운드 옵션</b>: 내보낼 때 오디오 포함 여부를 선택할 수 있습니다</li>
-</ul>
-
-<h4>💡 OCR 사용 팁</h4>
-<ul>
-<li>빨간색 텍스트는 <b>King</b> 모드를 사용하세요</li>
-<li>작은 텍스트나 특수 패턴(예: Seq 02A_S09 - Panel 6)은 <b>Bento</b> 모드를 사용하세요</li>
-<li>텍스트가 이동하는 경우 <b>ROI 트래킹</b>을 활성화하세요</li>
-<li>분석 후 병합 표시(노란색)된 유사 구간은 병합하여 정리하세요</li>
-<li>구간 길이는 프레임 단위로 표시됩니다</li>
-</ul>
-
-<h3>✏️ 수정 사항 주석 (영상에 메모 남기기)</h3>
-<p>영상의 특정 장면에 <b>“여기 고쳐주세요”</b> 같은 메모를 그림·글자로 남기는 기능입니다. 유튜브 댓글 대신, 영상 위에 직접 표시하는 느낌이라고 생각하면 됩니다.</p>
-
-<h4>1️⃣ 준비하기</h4>
-<ul>
-<li>먼저 <b>Open Video A</b>로 동영상을 엽니다.</li>
-<li>왼쪽(또는 사이드) 컨트롤에서 <b>▶ 수정 사항 주석</b> 칸을 펼칩니다.</li>
-<li><b>주석 모드</b> 버튼을 눌러 켭니다. (다시 누르면 꺼집니다)</li>
-<li>켜져 있는 동안에는 <b>버튼이 빨간색</b>이 되고, 영상 오른쪽 위에 <b>주석 모드</b> 배지가 보이며, 커서가 <b>십자형</b>이 됩니다 — 주석 모드인지 한눈에 알 수 있습니다.</li>
-</ul>
-
-<h4>2️⃣ 주석 그리기</h4>
-<ul>
-<li><b>도구</b>에서 원하는 것을 고릅니다:
-  <ul>
-    <li><b>텍스트</b> — 글자로 메모 (예: “배경 색 바꿔주세요”)</li>
-    <li><b>사각형</b> — 네모로 영역 표시</li>
-    <li><b>타원</b> — 동그란/타원으로 표시</li>
-    <li><b>선</b> — 직선으로 가리키기</li>
-    <li><b>화살표</b> — 화살표로 “여기!” 표시</li>
-  </ul>
-</li>
-<li><b>색상</b>으로 빨강·노랑 등 색을 고릅니다.</li>
-<li>영상 위에서 <b>마우스로 드래그</b>하면 도형이 그려집니다.</li>
-<li><b>텍스트</b>는 클릭한 뒤, 나오는 창에 글을 입력합니다. (글 입력 창은 <b>텍스트</b> 도구에서만 뜨고, 도형 도구에서는 드래그 없이 클릭만 하면 아무것도 그려지지 않습니다)</li>
-<li><b>표시 프레임 (시작 ~ 끝)</b>: 주석이 몇 번 프레임부터 몇 번까지 보일지 정합니다. 시작과 끝을 같게 하면 <b>한 프레임만</b> 보입니다.</li>
-</ul>
-
-<h4>3️⃣ 주석 고치기·지우기</h4>
-<ul>
-<li>이미 그린 주석을 <b>클릭</b>하면 노란 점(핸들)이 나옵니다. 드래그해서 <b>위치 이동</b>이나 <b>크기 조절</b>이 됩니다.</li>
-<li>아래 <b>목록</b>에서 주석을 고른 뒤 <b>선택 주석 삭제</b>로 하나만 지울 수 있습니다.</li>
-<li><b>현재 프레임에 보이는 주석 전체 삭제</b>는 지금 화면에 보이는 주석을 한 번에 지웁니다.</li>
-<li>목록에서 주석을 고르면 <b>표시 프레임</b> 숫자를 바꿔서 보이는 구간을 나중에도 수정할 수 있습니다.</li>
-</ul>
-
-<h4>4️⃣ 저장과 보내기</h4>
-<ul>
-<li>주석은 <b>자동 저장</b>됩니다. 동영상 파일 옆 <b>.yesoncheck</b> 폴더에 JSON 파일로 들어갑니다.</li>
-<li>같은 영상을 다시 열면 예전에 남긴 주석이 <b>자동으로 불러와집니다</b>.</li>
-<li><b>보내기 저장 폴더 선택</b>으로 결과 파일을 둘 폴더를 정합니다.</li>
-<li><b>주석 포함 영상보내기</b>를 누르면, 주석이 영상에 박힌 새 파일(mp4 등)이 만들어집니다. 다른 사람에게 보낼 때 유용합니다.</li>
-</ul>
-
-<h4>💡 주석 사용 팁</h4>
-<ul>
-<li>주석은 <b>프레임 구간</b>마다 표시됩니다. 예: 시작 10, 끝 50이면 10~50번 프레임에서 계속 보입니다.</li>
-<li><b>OCR ROI 지정</b>과 <b>주석 모드</b>는 동시에 켤 수 없습니다. 하나를 끄고 다른 것을 켜세요.</li>
-<li>텍스트 크기·선 굵기는 위쪽 숫자로 바꿀 수 있고, 목록에서 주석을 고르면 그 주석에도 적용됩니다.</li>
-</ul>
-
-<h3>⌨️ 단축키</h3>
-<ul>
-<li><b>Space</b>: 재생/일시정지</li>
-<li><b>←/→</b>: 이전/다음 프레임</li>
-<li><b>F11</b>: 전체화면</li>
-<li><b>F1</b>: 도움말</li>
-<li><b>F5</b>: 사이드바 목록 다시 읽기 (새로고침 — 창으로 돌아올 때도 저절로). 썸네일 모드면 다시 렌더링한 영상의 썸네일도 다시 만듦</li>
-<li><b>N (ㅜ)</b>: 가운데 컨트롤 패널 보이기/숨기기</li>
-<li><b>D (ㅇ)</b>: 선택 구간 병합 (OCR 결과 검토 창)</li>
-<li><b>R (ㄱ)</b>: 전체 내보내기 (OCR 결과 검토 창)</li>
-</ul>
-
-<h3>⚙️ 설정 (상단 메뉴바)</h3>
-<ul>
-<li><b>Settings → GPU Acceleration</b>: CPU, NVIDIA (CUDA), AMD (OpenCL) 선택</li>
-<li><b>Settings → 4K 성능 모드</b>: 자동, 속도 우선, 극한 속도, 품질 우선 선택</li>
-</ul>
-        """
-        
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle('Yeson Checker 사용법')
-        msg_box.setTextFormat(Qt.RichText)
-        msg_box.setText(help_text)
-        msg_box.setIcon(QMessageBox.Information)
-        
-        # 메시지 박스 크기 조정 (내용이 길어서 스크롤 가능하도록)
-        msg_box.setStyleSheet("QLabel{min-width: 700px; min-height: 500px;}")
-        
-        msg_box.exec_()
+        """Help → 사용법(F1)·Help 단추: 사용법 매뉴얼을 엶 — 기능별 쪽·화면 그림·단축키 표·업데이트 내역이 든 HTML 한 파일을
+        만들어 이 PC의 기본 프로그램(웹 브라우저)으로 (`manual_open`; 글 `manual_content`·`release_notes`, 그림 `manual_images/`).
+        열지 못하면(그림이 빌드에서 빠짐·쓸 수 없음·열 프로그램 없음) 트레이스백째 오류 창."""
+        try:
+            path = manual_open.open_manual()
+        except Exception:
+            error_window.show_unexpected(manual_open.LOG_PREFIX, manual_open.OPEN_FAILED_TEXT)
+            return
+        print(f"{manual_open.LOG_PREFIX} 매뉴얼을 엶: {path}", flush=True)
 
     def require_ffmpeg(self):
         """ffmpeg 경로. 찾지 못하면 오류 창을 띄우고 None."""

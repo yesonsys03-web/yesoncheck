@@ -196,7 +196,12 @@ git 저장소가 아닌 폴더(직접 복사한 폴더)에서는 버전을 정�
 
 배포 도구 `tools/release.py`가 합니다(`~/coding/p310_tf/bin/python tools/release.py <명령>`):
 
-1. **`prepare`**: `main`에 있는 커밋인지·작업 폴더가 깨끗한지·NAS에 쓸 수 있는지·`gh` 로그인을 확인 → 다음 배포
+0. **바뀐 점을 먼저 저장소에**: `yesoncheck/release_notes.py`의 `RELEASES` 맨 위에 이번 버전의 항목(버전·날짜·요약·묶음)을
+   더해 `main`에 넣습니다 — 앱의 사용법 매뉴얼(Help → 사용법)의 '업데이트 내역'에 이 글이 보입니다. 그리고 배포 노트 파일을
+   거기서 뽑습니다: `~/coding/p310_tf/bin/python -m yesoncheck.release_notes X.Y.Z > notes.md` (그 버전의 항목이 없으면 오류로 멈춤).
+   매뉴얼·GitHub Release·업데이트 알림의 [바뀐 점]이 같은 글이 됩니다. 화면이 바뀌었으면 매뉴얼 그림도 다시 찍습니다
+   (`tools/make_manual_screenshots.py`).
+1. **`prepare`**(`--notes-file notes.md`): `main`에 있는 커밋인지·작업 폴더가 깨끗한지·NAS에 쓸 수 있는지·`gh` 로그인을 확인 → 다음 배포
    번호를 정함(가장 큰 `v*` 태그의 끝자리 +1, 큰 변경이면 `--minor`로 가운데 +1·끝 0) → 바뀐 점을 메시지로 담은
    주석 태그 `vX.Y.Z`를 푸시 → 이 태그로 CI(4·5절의 세 빌드: Windows, Mac Intel, Mac Apple Silicon)가 시작됩니다.
 2. CI가 끝나기를 기다립니다 — 세 빌드 모두 성공해야 합니다(Windows 빌드가 가장 오래 걸려 약 1시간 안팎).

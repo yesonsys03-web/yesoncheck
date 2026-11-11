@@ -83,6 +83,37 @@ def _fake_replace_failing(times, counter):
     return replace
 
 
+def test_write_text_atomic_writes_utf8_and_keeps_line_endings_as_given(tmp_path):
+    """글 파일(사용법 매뉴얼)용 — JSON 쓰기와 같은 길, 줄 끝은 글에 든 그대로(Windows에서도 \\r\\n으로 바꾸지 않음)."""
+    path = str(tmp_path / "새 폴더" / "글.html")
+    user_files.write_text_atomic(path, "첫 줄\n둘째 줄\r\n끝")
+    with open(path, "rb") as fh:
+        assert fh.read() == "첫 줄\n둘째 줄\r\n끝".encode("utf-8")
+    assert _list_dir(tmp_path / "새 폴더") == ["글.html"]
+
+
+def test_write_text_atomic_retries_then_gives_up_on_windows(tmp_path, monkeypatch):
+    path = str(tmp_path / "글.html")
+    user_files.write_text_atomic(path, "앞 글")
+    calls, sleeps = [], []
+    monkeypatch.setattr(user_files, "_IS_WINDOWS", True)
+    monkeypatch.setattr(user_files, "_replace", _fake_replace_failing(2, calls))
+    monkeypatch.setattr(user_files, "_sleep", sleeps.append)
+    user_files.write_text_atomic(path, "새 글")  # 브라우저·백신이 잠깐 잡고 있던 파일
+    assert len(calls) == 3 and sleeps == [0.1, 0.1]
+    with open(path, encoding="utf-8") as fh:
+        assert fh.read() == "새 글"
+
+    calls.clear()
+    monkeypatch.setattr(user_files, "_replace", _fake_replace_failing(10**6, calls))
+    with pytest.raises(PermissionError):
+        user_files.write_text_atomic(path, "못 쓰는 글")
+    assert len(calls) == 21
+    with open(path, encoding="utf-8") as fh:
+        assert fh.read() == "새 글"  # 앞 파일 그대로
+    assert _list_dir(tmp_path) == ["글.html"]  # 임시 파일이 남지 않음
+
+
 def test_write_json_atomic_retries_permission_error_on_windows(tmp_path, monkeypatch):
     path = str(tmp_path / "data.json")
     write_json_atomic(path, {"old": True})

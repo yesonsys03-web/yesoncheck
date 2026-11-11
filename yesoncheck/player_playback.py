@@ -17,11 +17,9 @@ from PyQt5.QtMultimedia import QMediaContent, QMediaPlayer
 from PyQt5.QtWidgets import (
     QApplication,
     QDialog,
-    QDialogButtonBox,
     QFileDialog,
     QMessageBox,
     QProgressDialog,
-    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -2646,143 +2644,6 @@ class PlayerPlaybackMixin:
         msg_box.setText(msg)
         msg_box.exec_()
         msg_box.deleteLater()
-
-    def show_help(self):
-        """단축키 도움말을 표시합니다"""
-        help_text = """
-<h2>🎬 Yeson Video Player - 단축키 도움말</h2>
-
-<h3>📁 파일 관리</h3>
-• <b>드래그앤드롭</b>: 파일을 윈도우나 사이드바에 드래그하여 로드<br>
-• <b>단일 파일</b>: Video A에 자동 로드<br>
-• <b>두 개 파일</b>: Video A와 B에 각각 로드<br>
-• <b>여러 파일</b>: 사이드바에 추가<br>
-• <b>All 탭</b>: 영상·시퀀스를 한 목록에 (시퀀스 글자는 하늘색) — 선택 재생은 <b>mov만</b> 이어서 재생(시퀀스 건너뜀),
-  우클릭 → <b>Mov만 모두 선택</b>
-
-<h3>▶️ 재생 제어</h3>
-• <b>Space</b>: 재생/일시정지<br>
-• <b>Enter</b>: 선택된 파일들 순차 재생<br>
-• <b>\\</b>: 선택된 파일들 재생/일시정지<br>
-• <b>← →</b>: 이전/다음 프레임<br>
-• <b>마우스 휠</b>: 1프레임씩 이동
-
-<h3>🔍 줌 및 뷰</h3>
-• <b>+ / 2</b>: 마우스 커서 위치 중심으로 줌 인<br>
-• <b>- / 1</b>: 마우스 커서 위치 중심으로 줌 아웃<br>
-• <b>Ctrl + 휠</b>: 마우스 커서 위치 중심으로 줌 인/아웃<br>
-• <b>3</b>: 화면에 맞춤<br>
-• <b>4</b>: 원본 크기<br>
-• <b>마우스 드래그</b>: 줌 상태에서 화면 이동
-
-<h3>🖥️ 화면 모드</h3>
-• <b>F</b>: 전체화면 전환 (UI 포함)<br>
-• <b>Shift + F</b>: 동영상만 전체화면 (UI 숨김)<br>
-• <b>V</b>: 컨트롤 패널 표시/숨김<br>
-• <b>N</b>: 가운데 컨트롤 패널만 표시/숨김 (파일 목록·영상은 그대로)
-
-<h3>🎛️ 테마 전환</h3>
-• <b>T</b>: 테마 전환
-
-<h3>📝 OCR 기능</h3>
-
-<h4>▶ ROI 설정</h4>
-• <b>OCR ROI 지정</b>: 동영상에서 텍스트 인식 영역을 드래그로 지정<br>
-• <b>ROI 초기화</b>: 지정한 ROI 영역 제거<br>
-• <b>ROI 트래킹</b>: 텍스트가 이동할 때 ROI가 자동으로 추적
-
-<h4>▶ OCR 분석</h4>
-• <b>분석 방식</b>: Titmouse(일반), King(빨간색 텍스트 최적화)<br>
-• <b>OCR 구간 추출</b>: 전체 동영상 자동 인식 및 구간 분류<br>
-• <b>선택 구간 분석</b>: 현재 프레임 범위만 분석하여 결과 병합
-
-<h4>▶ 결과 관리</h4>
-• <b>OCR 오픈</b>: 분석 결과 검토 창 열기<br>
-• <b>OCR 저장</b>: JSON 파일로 결과 저장<br>
-• <b>OCR 로드</b>: 저장된 결과 불러오기
-
-<h4>▶ OCR 검토 창</h4>
-• <b>D (ㅇ)</b>: 선택 구간 병합<br>
-• <b>R (ㄱ)</b>: 전체 내보내기<br>
-• <b>텍스트 편집</b>: ROI/편집 텍스트 직접 수정<br>
-• <b>사운드 옵션</b>: 내보낼 때 오디오 포함 여부 선택
-
-<h4>💡 OCR 팁</h4>
-• 빨간색 텍스트는 King 모드 사용<br>
-• 텍스트 이동 시 ROI 트래킹 활성화<br>
-• 노란색 표시된 유사 구간은 병합 권장<br>
-• 구간 길이는 프레임 단위로 표시
-
-<h3>✏️ 수정 사항 주석</h3>
-<p>영상 위에 “여기 고쳐주세요” 같은 메모를 그림·글자로 남기는 기능입니다.</p>
-
-<h4>▶ 시작하기</h4>
-• <b>Open Video A</b>로 동영상을 연 뒤, <b>▶ 수정 사항 주석</b> 칸을 펼칩니다<br>
-• <b>주석 모드</b> 버튼을 켜면 그리기가 시작됩니다<br>
-• 켜진 동안 <b>버튼이 빨간색</b>, 영상 오른쪽 위에 <b>주석 모드</b> 배지, 커서는 <b>십자형</b>
-
-<h4>▶ 그리는 방법</h4>
-• <b>도구</b>: 텍스트 / 사각형 / 타원 / 선 / 화살표 중 선택<br>
-• <b>색상</b>: 빨강, 노랑 등 원하는 색 선택<br>
-• 도형은 영상 위에서 <b>드래그</b>, 텍스트는 <b>클릭</b> 후 글 입력<br>
-• 글 입력 창은 <b>텍스트</b> 도구에서만 — 도형 도구에서 드래그 없는 클릭은 무시<br>
-• <b>표시 프레임 (시작~끝)</b>: 주석이 보일 프레임 범위 (같으면 한 프레임만)<br>
-• <b>텍스트 크기</b>, <b>선 굵기</b> 숫자로 조절
-
-<h4>▶ 고치기·지우기</h4>
-• 그린 주석을 <b>클릭</b> → 노란 점으로 <b>이동·크기 조절</b><br>
-• <b>선택 주석 삭제</b>: 목록에서 고른 주석 하나 삭제<br>
-• <b>현재 프레임에 보이는 주석 전체 삭제</b>: 지금 화면에 보이는 주석 전부 삭제<br>
-• 목록에서 주석 선택 후 <b>표시 프레임</b> 숫자 변경 가능
-
-<h4>▶ 저장·보내기</h4>
-• 주석은 <b>자동 저장</b> (동영상 옆 <b>.yesoncheck</b> 폴더)<br>
-• 같은 영상을 다시 열면 주석이 <b>자동으로 복구</b><br>
-• <b>보내기 저장 폴더 선택</b> → <b>주석 포함 영상보내기</b>로 주석이 박힌 새 영상 파일 생성
-
-<h4>💡 주석 팁</h4>
-• 주석은 <b>프레임 구간</b>으로 표시 (예: 10~50번 프레임 동안 계속 보임)<br>
-• <b>OCR ROI 지정</b>과 <b>주석 모드</b>는 동시 사용 불가
-
-<h3>🎛️ 기타</h3>
-• <b>B</b>: 파일 프레임 오버레이 표시/숨김<br>
-• <b>우클릭</b>: 사이드바에서 컨텍스트 메뉴
-
-<h3>🎛️ 썸네일 모드</h3>
-• <b>썸네일 모드</b>: Thumb 버튼 클릭(시간이 걸립니다)<br>
-• <b>R / ㄱ</b>: 선택된 파일들의 썸네일 재생성
-
-<h3>⚙️ 설정 (상단 메뉴바)</h3>
-• <b>Settings → GPU Acceleration</b>: CPU, NVIDIA(CUDA), AMD(OpenCL)<br>
-• <b>Settings → 4K 성능 모드</b>: 자동, 속도 우선, 극한 속도, 품질 우선
-
-<h3>💡 유용한 팁</h3>
-• 슬라이더를 드래그하여 빠른 위치 이동<br>
-• 사이드바에서 파일 선택 후 Enter로 순차 재생<br>
-• 와이프 효과로 두 비디오 비교 가능<br>
-• GPU 가속으로 성능 향상<br>
-• Shift+F로 깔끔한 동영상 감상 모드
-        """
-        
-        # 스크롤 가능한 커스텀 다이얼로그 생성
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Yeson Checker - 사용법")
-        dialog.resize(800, 600)
-        
-        layout = QVBoxLayout(dialog)
-        
-        # QTextBrowser 사용 (자동 스크롤, HTML 렌더링)
-        text_browser = QTextBrowser()
-        text_browser.setHtml(help_text)
-        text_browser.setOpenExternalLinks(False)
-        layout.addWidget(text_browser)
-        
-        # OK 버튼
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok)
-        button_box.accepted.connect(dialog.accept)
-        layout.addWidget(button_box)
-        
-        dialog.exec_()
 
     def change_performance_mode(self, index):
         """4K 성능 모드 변경"""

@@ -73,6 +73,20 @@ for _name in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):
         raise SystemExit(f"[spec] {_name}가 없습니다: {_path}")
     license_datas.append((_path, '.'))
 
+# 사용법 매뉴얼(Help → 사용법)의 그림: yesoncheck/manual_images/*.png를 앱의 manual_images/에 넣음 — yesoncheck/manual_open.py가
+# sys._MEIPASS/manual_images에서 읽어 HTML에 넣음. 매뉴얼 글이 쓰는 그림이 하나라도 없으면 여기서 멈춤 (F1을 눌러서야 드러나지 않게).
+MANUAL_IMAGES_DIR = os.path.join(project_root, 'yesoncheck', 'manual_images')
+sys.path.insert(0, project_root)
+from yesoncheck import manual_html as _manual_html
+sys.path.pop(0)
+manual_datas = []
+for _name in _manual_html.image_names():
+    _path = os.path.join(MANUAL_IMAGES_DIR, _name + '.png')
+    if not os.path.isfile(_path):
+        raise SystemExit(f"[spec] 사용법 매뉴얼의 그림이 없습니다: {_path} (tools/make_manual_screenshots.py)")
+    manual_datas.append((_path, 'manual_images'))
+print(f"[spec] 사용법 매뉴얼 그림: {len(manual_datas)}개 ({MANUAL_IMAGES_DIR})")
+
 # 빌드 정보(버전·커밋·빌드 시각·플랫폼): tools/write_build_info.py가 PyInstaller 앞에 만든 build/build_info.json을
 # 앱 맨 위에 넣음 (Mac: Contents/Resources, Windows: _internal — yesoncheck/build_info.py가 sys._MEIPASS에서 읽음).
 # 같은 버전의 X.Y.Z 부분을 Mac 번들 Info.plist와 Windows exe 파일 버전 정보에도 넣음 (아래 BUNDLE·EXE)
@@ -248,7 +262,7 @@ a = Analysis(
         (os.path.join(p310_site_packages, 'paddleocr'), 'paddleocr'),
         # apted 모듈 추가 (PaddleOCR 분석에 필수)
         (os.path.join(project_root, 'apted'), 'apted'),
-    ] + paddle_tree_datas + [(BUILD_INFO_PATH, '.')] + cv2_datas + transnet_datas + license_datas + scenedetect_datas + paddleocr_datas + paddle_datas + skimage_datas + imageio_datas + cython_datas + ([] if IS_WINDOWS else [('Info.plist', '.')])
+    ] + paddle_tree_datas + [(BUILD_INFO_PATH, '.')] + manual_datas + cv2_datas + transnet_datas + license_datas + scenedetect_datas + paddleocr_datas + paddle_datas + skimage_datas + imageio_datas + cython_datas + ([] if IS_WINDOWS else [('Info.plist', '.')])
     # 업데이트 도우미 (플랫폼마다 하나): 앱이 끝난 뒤 새 버전으로 바꾸고 다시 켬 — Mac은 새 앱으로 바꾸기(sh),
     # Windows는 설치 폴더를 백업 이름으로 바꾼 뒤 조용히 설치(ps1). 소스와 같은 상대 위치(<맨 위>/yesoncheck/)에 넣음
     # — update_install._bundled_file이 sys._MEIPASS/yesoncheck/에서 찾아 업데이트 상태 폴더로 복사해 실행

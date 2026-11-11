@@ -215,9 +215,9 @@ class EnglishWindowsDate(datetime.date):
         return super().strftime(fmt)
 
 
-@pytest.mark.parametrize("show", ["show_about", "show_help"])
-def test_about_and_help_dates_do_not_depend_on_windows_locale(monkeypatch, qapp, show):
-    """정보·도움말 창의 날짜(…까지 기록)는 한글을 strftime에 넘기지 않음 — 영어 Windows에서 창이 열리지 않던 문제."""
+def test_about_date_does_not_depend_on_windows_locale(monkeypatch, qapp):
+    """정보 창의 날짜(…까지 기록)는 한글을 strftime에 넘기지 않음 — 영어 Windows에서 창이 열리지 않던 문제.
+    (사용법은 이제 날짜가 없는 매뉴얼을 브라우저로 엶 — tests/test_manual_open.py)"""
     from PyQt5.QtWidgets import QMessageBox
 
     from yesoncheck import player_base
@@ -225,9 +225,7 @@ def test_about_and_help_dates_do_not_depend_on_windows_locale(monkeypatch, qapp,
     shown = []
     monkeypatch.setattr(player_base, "datetime", types.SimpleNamespace(date=EnglishWindowsDate))
     monkeypatch.setattr(QMessageBox, "about", lambda parent, title, text: shown.append(text))
-    monkeypatch.setattr(QMessageBox, "setText", lambda box, text: shown.append(text))
-    monkeypatch.setattr(QMessageBox, "exec_", lambda box: 0)
-    getattr(player_base.VideoPlayerBase, show)(None)
+    player_base.VideoPlayerBase.show_about(None)
     assert len(shown) == 1 and "2026년 10월 20일까지 기록" in shown[0]
 
 
