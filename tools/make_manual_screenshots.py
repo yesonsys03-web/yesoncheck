@@ -716,8 +716,8 @@ def shot_review(st):
         Callout(2, label("프리뷰 영상"), "ro"),
         Callout(3, label("타임라인"), "ro"),
         Callout(4, widget_rect(dialog, tables[0]), "tl"),
-        Callout(5, union(dialog, dialog.mergeButton, dialog.redoButton), "t"),
-        Callout(6, union(dialog, dialog.exportSelectedButton, dialog.exportModeComboBox), "t"),
+        Callout(5, union(dialog, dialog.mergeButton, dialog.redoButton), "tr"),
+        Callout(6, union(dialog, dialog.exportSelectedButton, dialog.exportModeComboBox), "r"),
     ])
 
 
