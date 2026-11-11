@@ -84,9 +84,15 @@ def test_plan_keeps_source_size():
     ((1280, 720), "prores", (None, None)),
     ((720, 1280), "h264", (None, None)),  # 세로 720p도 화소 수가 같음
     ((320, 180), None, (None, None)),
-    ((1920, 1080), "h264", (None, None)),  # 1080p 이하 long-GOP 코덱(코덱을 앎) — 묶지 않음 (1080p H.264 게이트 통과)
-    ((1080, 1920), "hevc", (None, None)),
+    ((1920, 1080), "h264", (None, None)),  # 1080p 이하 허용 목록 코덱(h264 — 재생 게이트를 잰 것만) — 묶지 않음 (1080p H.264 게이트 통과)
+    ((1080, 1920), "h264", (None, None)),
     ((1281, 720), "h264", (None, None)),
+    ((1920, 1080), "hevc", (1, 1)),  # 목록 밖 long-GOP는 1코어 (Ruling 26 — 양성 증거로만 켬: 재생 게이트를 안 잼)
+    ((1080, 1920), "vp9", (1, 1)),
+    ((1920, 1080), "av1", (1, 1)),
+    ((1281, 720), "hevc", (1, 1)),
+    ((1920, 1080), "cfhd", (1, 1)),  # ALL_INTRA_CODECS 목록 밖의 all-intra도 (막는 목록이던 때의 구멍)
+    ((1280, 720), "hevc", (None, None)),  # 720p 이하는 어느 코덱이든 묶지 않음
     ((1920, 1080), "prores", (1, 1)),  # all-intra는 720p보다 크면 1코어 (1080p ProRes 게이트 불통과)
     ((1920, 1080), "dnxhd", (1, 1)),
     ((1281, 720), "prores", (1, 1)),
@@ -99,17 +105,20 @@ def test_plan_keeps_source_size():
     ((2160, 3840), None, (1, 1)),
 ])
 def test_thread_limits_by_source_pixels_and_codec(size, codec, expected):
-    """스레드 규칙(Ruling 25): 원본 화소 ≤ SINGLE_THREAD_ABOVE_PIXELS(1280×720)면 (None, None), ≤ INTER_CODEC_FULL_THREADS_MAX_PIXELS(1920×1080)이고
-    코덱을 알며 ALL_INTRA_CODECS가 아니면 (None, None), 그 밖은 부른 쪽의 값(큰 파일의 디코더·필터 스레드 — 1코어)."""
+    """스레드 규칙(Ruling 25·26): 원본 화소 ≤ SINGLE_THREAD_ABOVE_PIXELS(1280×720)면 (None, None), ≤ INTER_CODEC_FULL_THREADS_MAX_PIXELS(1920×1080)이고
+    코덱이 LONG_GOP_FULL_THREADS_CODECS(허용 목록 — 재생 게이트를 잰 h264만)에 있으면 (None, None), 그 밖은 부른 쪽의 값(큰 파일의 디코더·필터 스레드 —
+    1코어)."""
     assert hover_strip.SINGLE_THREAD_ABOVE_PIXELS == 1280 * 720
     assert hover_strip.INTER_CODEC_FULL_THREADS_MAX_PIXELS == 1920 * 1080
+    assert hover_strip.LONG_GOP_FULL_THREADS_CODECS == {"h264"}
     assert hover_strip.ALL_INTRA_CODECS == {"prores", "dnxhd", "mjpeg", "rawvideo"}
     plan = hover_strip.plan_for(48, *size)
     assert hover_strip.thread_limits(plan, 1, 1, codec) == expected
 
 
 def test_all_intra_codecs_is_one_constant():
-    """all-intra 코덱 집합은 하나 — 스레드 규칙(hover_strip)과 거친 띠 건너뜀(hover_keyframes)이 같은 객체를 씀."""
+    """all-intra 코덱 집합은 hover_strip에 하나 — 거친 띠 건너뜀(hover_keyframes)이 같은 객체를 씀 (스레드 규칙은 허용 목록
+    LONG_GOP_FULL_THREADS_CODECS를 봄 — Ruling 26)."""
     from yesoncheck import hover_keyframes
 
     assert hover_keyframes.ALL_INTRA_CODECS is hover_strip.ALL_INTRA_CODECS

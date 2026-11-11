@@ -25,9 +25,10 @@
 직전 여러 코어로 4K 장을 한꺼번에 디코드·축소하는 버스트를 막으려고 측정 뒤 넣은 것이다(2026-11-10 1·2차 게이트 실패 → Ruling 14). 그 뒤 재생
 게이트(켬이 끔의 범위 안인지 — 이 Mac)로 나눈 규칙: ① 원본 화소 ≤ SINGLE_THREAD_ABOVE_PIXELS(1280×720)면 어느 코덱이든 옵션 없음(ffmpeg 기본 —
 이 Mac은 CPU 수만큼; 720p H.264 721장 켬·끔 각 3판: 켬 45·67·76ms가 끔 44~91ms 안 — 통과) ② ≤ INTER_CODEC_FULL_THREADS_MAX_PIXELS(1920×1080)이고
-코덱을 알며 ALL_INTRA_CODECS가 아니면 옵션 없음(1080p H.264 — KOTH 애니매틱 30초 클립 켬·끔 각 3판: 켬 62·65·48ms가 끔 50~84ms 안 — 통과)
-③ 그 밖은 1코어 — all-intra가 720p보다 크면(1080p ProRes 422 HQ 334장 켬·끔 각 9판: 끔 최대간격 44~62ms·끊김 0/9, 켬은 2판이 89·124ms로 끔의
-범위 밖 — 불통과; 그때 ffmpeg는 이미 정지돼 CPU 0), 코덱을 모르면(짧은 파일은 헤더를 읽지 않음 — 짧은 1080p ProRes 샷이 바로 그 불통과 파일),
+코덱이 허용 목록 LONG_GOP_FULL_THREADS_CODECS(h264 — 재생 게이트를 잰 코덱만; 프로젝트 원칙 '양성 증거로만 켬', Ruling 26)에 있으면 옵션 없음(1080p
+H.264 — KOTH 애니매틱 30초 클립 켬·끔 각 3판: 켬 62·65·48ms가 끔 50~84ms 안 — 통과) ③ 그 밖은 1코어 — 목록 밖 코덱이 720p보다 크면(hevc·vp9·
+av1은 안 잼; all-intra는 1080p ProRes 422 HQ 334장 켬·끔 각 9판: 끔 최대간격 44~62ms·끊김 0/9, 켬은 2판이 89·124ms로 끔의
+범위 밖 — 불통과; 그때 ffmpeg는 이미 정지돼 CPU 0; 막는 목록이던 때는 ALL_INTRA_CODECS 밖의 all-intra가 1080p에서 기본 스레드로 갔음), 코덱을 모르면(짧은 파일은 헤더를 읽지 않음 — 짧은 1080p ProRes 샷이 바로 그 불통과 파일),
 1080p보다 크면(4K 측정값 그대로). 얻는 것: 긴 720p 애니매틱(22.6분 32,553장) 띠 67.0초 → 18.8초, 긴 1080p H.264 애니매틱(KOTH 35,693장) 82.2초 →
 24.6초(이 Mac 실측). 1080p ProRes·4K 명령은 글자 그대로라 측정된 설정이 바뀌지 않는다. 그래서 계획은 그림 크기와 함께 원본 크기
 (source_width·source_height)도 들고, 코덱은 부른 쪽(워커 — 헤더 ffprobe)이 넘긴다.
@@ -50,8 +51,9 @@ THUMB_WIDTH = 320  # 그림의 긴 변 (논리 px — 가로 영상은 폭, 세�
 MAX_THUMBS = 500  # 띠의 최대 장수
 MAX_FILE_BYTES = 4 * 10**9  # 이보다 큰 파일은 띠를 만들지 않음 (os.stat 크기)
 SINGLE_THREAD_ABOVE_PIXELS = 1280 * 720  # 원본 화소가 이 이하면 띠 ffmpeg의 스레드를 묶지 않음 — 어느 코덱이든 (thread_limits — 모듈 설명)
-INTER_CODEC_FULL_THREADS_MAX_PIXELS = 1920 * 1080  # 이 이하이고 코덱을 알며 all-intra가 아니면 묶지 않음 (Ruling 25)
-ALL_INTRA_CODECS = frozenset({"prores", "dnxhd", "mjpeg", "rawvideo"})  # 모든 장이 키프레임인 코덱 — 스레드 규칙·거친 띠 건너뜀(hover_keyframes)이 함께 씀
+INTER_CODEC_FULL_THREADS_MAX_PIXELS = 1920 * 1080  # 이 이하이고 코덱이 LONG_GOP_FULL_THREADS_CODECS에 있으면 묶지 않음 (Ruling 25·26)
+LONG_GOP_FULL_THREADS_CODECS = frozenset({"h264"})  # 허용 목록 — 1080p 재생 게이트를 잰 코덱만 (양성 증거로만 켬, Ruling 26)
+ALL_INTRA_CODECS = frozenset({"prores", "dnxhd", "mjpeg", "rawvideo"})  # 모든 장이 키프레임인 코덱 — 거친 띠 건너뜀(hover_keyframes)
 PREF_KEY = "slider_thumbnails"
 MENU_TEXT = "슬라이더 썸네일"
 LOG_PREFIX = "[슬라이더 썸네일]"
@@ -112,11 +114,11 @@ def thread_limits(plan: StripPlan, decoder: int | None, filters: int | None,
                   codec: str | None = None) -> tuple[int | None, int | None]:
     """띠 ffmpeg의 (디코더 스레드, 필터 스레드) — (None, None)이면 옵션을 넣지 않음(ffmpeg 기본), 아니면 부른 쪽의 값(큰 파일의 값) 그대로.
     원본 화소 ≤ SINGLE_THREAD_ABOVE_PIXELS면 (None, None); ≤ INTER_CODEC_FULL_THREADS_MAX_PIXELS이고 codec(헤더의 codec_name — 모르면 None)이
-    ALL_INTRA_CODECS가 아니면 (None, None); 그 밖은 부른 쪽의 값. 문턱은 부를 때마다 모듈 값으로 읽음 (모듈 설명)."""
+    LONG_GOP_FULL_THREADS_CODECS(허용 목록)에 있으면 (None, None); 그 밖은 부른 쪽의 값. 문턱·목록은 부를 때마다 모듈 값으로 읽음 (모듈 설명)."""
     pixels = plan.source_width * plan.source_height
     if pixels <= SINGLE_THREAD_ABOVE_PIXELS:
         return None, None
-    if pixels <= INTER_CODEC_FULL_THREADS_MAX_PIXELS and codec is not None and codec not in ALL_INTRA_CODECS:
+    if pixels <= INTER_CODEC_FULL_THREADS_MAX_PIXELS and codec in LONG_GOP_FULL_THREADS_CODECS:
         return None, None
     return decoder, filters
 

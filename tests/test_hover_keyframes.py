@@ -98,6 +98,7 @@ def test_header_failure_raises_runtime_error_with_stderr():
         probe_header("/opt/ffprobe", "x.mov", run=run)
     text = str(caught.value)
     assert "종료 코드 1" in text and "x.mov: No such file or directory" in text and "/opt/ffprobe -v error" in text
+    assert text.startswith("ffprobe로 헤더를 읽지 못했습니다 ")
 
 
 # ---------------------------------------------------------------- 키프레임 목록 (패킷 JSON)
@@ -144,6 +145,7 @@ def test_scan_failure_raises_runtime_error_with_stderr():
     with pytest.raises(RuntimeError) as caught:
         scan_keyframes("/opt/ffprobe", "x.mov", H264, run=run)
     assert "종료 코드 1" in str(caught.value) and "x.mov: No such file or directory" in str(caught.value)
+    assert str(caught.value).startswith("ffprobe로 키프레임을 읽지 못했습니다 ")
 
 
 @pytest.mark.parametrize("packet", [{"flags": "K__"}, {"pts_time": "N/A", "flags": "K__"}])

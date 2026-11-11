@@ -28,11 +28,11 @@ psutil.Process(pid).suspend()(POSIX SIGSTOP·Windows NtSuspendProcess), 거짓�
 그대로 먹는다(SIGKILL·TerminateProcess) — stop()은 정지 여부와 상관없이 kill한다. 정지·재개가 실패하면(psutil.Error 전부 — NoSuchProcess·
 AccessDenied 등 — 와 OSError: Windows에서 끝나 가는 프로세스의 NtSuspendProcess는 psutil이 감싸지 않은 OSError로 올 수 있음) 기록 한 줄을
 남기고 읽기만 멈추는(또는 잇는) 방식으로 둔다 — 조용히 넘기지 않고, GUI 틱 슬롯(paused setter)이나 워커 스레드로 올려 실패로 만들지도 않는다.
-1080p보다 큰 원본(4K 등)·720p보다 큰 all-intra(1080p ProRes 등)·코덱을 모르는 720p보다 큰 원본의 띠 ffmpeg는 디코드·축소를 1코어로 묶는다(스펙
+1080p보다 큰 원본(4K 등)·720p보다 크고 허용 목록(h264) 밖 코덱(1080p ProRes 등)·코덱을 모르는 720p보다 큰 원본의 띠 ffmpeg는 디코드·축소를 1코어로 묶는다(스펙
 §5.3 — 쉴 때만 돌므로 느려도 됨, 이 Mac 4K 334장 쉴 때 약 38초(이 Mac 실측 — 쉴 때만)): 디코더 스레드 FFMPEG_THREADS(-threads 1 — 입력 옵션,
--i 앞)와 필터 스레드 FFMPEG_FILTER_THREADS(-filter_threads 1 — 전역 옵션, -i 앞). 720p 이하 원본, 그리고 1080p 이하이고 헤더로 코덱을 안
-long-GOP(H.264 등)는 두 옵션을 넣지 않는다(ffmpeg 기본 — hover_strip.thread_limits, Ruling 24·25: 재생 게이트 — 720p·1080p H.264 통과, 1080p
-ProRes 불통과; 긴 720p 애니매틱 67.0초 → 18.8초, 긴 1080p H.264 애니매틱 82.2초 → 24.6초 실측). 코덱은 긴 파일(간격 > 1)이면 run이 헤더
+-i 앞)와 필터 스레드 FFMPEG_FILTER_THREADS(-filter_threads 1 — 전역 옵션, -i 앞). 720p 이하 원본, 그리고 1080p 이하이고 헤더로 안 코덱이
+허용 목록(hover_strip.LONG_GOP_FULL_THREADS_CODECS — h264, 재생 게이트를 잰 코덱만)에 있는 원본은 두 옵션을 넣지 않는다(ffmpeg 기본 —
+hover_strip.thread_limits, Ruling 24·25·26: 재생 게이트 — 720p·1080p H.264 통과, 1080p ProRes 불통과; 긴 720p 애니매틱 67.0초 → 18.8초, 긴 1080p H.264 애니매틱 82.2초 → 24.6초 실측). 코덱은 긴 파일(간격 > 1)이면 run이 헤더
 ffprobe로 늘 알아내고(codec — 거친 띠를 만들든 말든) 정확한 띠 명령(command)을 그 코덱으로 다시 정한다; 짧은 파일은 헤더를 읽지 않아 코덱을
 모름(1080p ProRes·4K 명령은 글자 그대로).
 -threads는 **디코더** 스레드만 묶는다 — -vf scale(4K → 320 축소 + rgb24 변환)은 따로 CPU 수만큼 slice 스레드를 쓰므로(이 Mac 16코어,
@@ -93,7 +93,7 @@ def build_command(ffmpeg: str, path: str, plan: StripPlan, codec: str | None = N
     """띠 하나를 만드는 ffmpeg 명령 (인자 리스트 그대로 — 셸 없음). -map 0:V:0(대문자 — attached_pic 제외)·-fps_mode passthrough(복제
     금지)는 파이프 소스와 같은 이유. 간격이 1이면 scale만, 아니면 select로 step장마다 하나 — 쉼표 앞의 역슬래시는 select 식의 쉼표가 필터
     구분자로 읽히지 않게 하는 필터 파서용 (셸 따옴표 아님). 스레드 옵션은 원본 크기·codec(헤더의 codec_name — 모르면 None)으로
-    hover_strip.thread_limits가 고르고(720p 이하·1080p 이하 long-GOP면 없음),
+    hover_strip.thread_limits가 고르고(720p 이하·1080p 이하 h264면 없음),
     값은 두 상수를 호출 때 읽음(시험의 monkeypatch가 닿게): 필터 스레드(-filter_threads, 전역)를 앞에, 디코더 스레드(-threads, 입력 옵션)를
     -i 바로 앞에 — -threads는 디코더만 묶음(모듈 설명)."""
     return _strip_command(ffmpeg, path, plan, plan.step, (), codec)
@@ -280,7 +280,7 @@ class HoverStripBuilder(QThread):
             if reason is None and not self._stopped:
                 frames, _packets = hover_keyframes.scan_keyframes(ffprobe, self.path, header, run=self._run_probe)
         except (ToolNotFoundError, OSError, RuntimeError) as exc:  # ffprobe 없음·못 띄움·실패(kill 포함)·번호를 정할 수 없음
-            return None if self._stopped else f"키프레임 목록을 읽지 못했습니다 — {type(exc).__name__}: {exc}"
+            return None if self._stopped else f"헤더·키프레임 목록을 읽지 못했습니다 — {type(exc).__name__}: {exc}"
         if self._stopped:
             return None
         if reason is None:

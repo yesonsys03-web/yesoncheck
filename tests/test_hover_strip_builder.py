@@ -891,7 +891,7 @@ def test_keyframe_scan_failure_logs_and_exact_strip_completes(qapp, tmp_path, h2
     assert _log_lines(err, "") == [head]
     reason = err.split(head + "\n", 1)[1]
     expected = {"missing_file": "no_such_ffprobe", "exits_nonzero": "종료 코드", "not_found": "ToolNotFoundError: 시험: ffprobe 없음"}
-    assert expected[ffprobe_kind] in reason
+    assert expected[ffprobe_kind] in reason and reason.startswith("헤더·키프레임 목록을 읽지 못했습니다 — ")
 
 
 @pytest.mark.parametrize("change", ["extra", "missing", "far_fewer"])

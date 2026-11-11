@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 
 from yesoncheck.external_tools import MAX_FRAME_RATE, decode_output, subprocess_kwargs
-from yesoncheck.hover_strip import ALL_INTRA_CODECS, ImageRows  # ALL_INTRA_CODECS — 스레드 규칙(hover_strip.thread_limits)과 같은 상수 하나
+from yesoncheck.hover_strip import ALL_INTRA_CODECS, ImageRows  # ALL_INTRA_CODECS — hover_strip에 둔 상수 하나 (헤더만 보고 건너뜀)
 
 MAX_COARSE = 1000  # 거친 띠의 최대 장수 — 키프레임이 더 많으면 m장마다 하나 (subsample)
 KEYFRAME_RATIO = 4  # 키프레임이 전체의 1/이 값 이하일 때만 거친 띠를 만듦 (coarse_wanted)
@@ -72,10 +72,11 @@ def _run(command: list[str]) -> tuple[int, bytes, str]:
 
 
 def _probe(command: list[str], path: str, what: str, run) -> dict:
-    """ffprobe를 run으로 돌려 JSON → dict. 0이 아닌 코드는 RuntimeError(파일·명령·종료 코드·stderr 전문), 깨진 JSON은 json의 ValueError 그대로."""
+    """ffprobe를 run으로 돌려 JSON → dict. what: 오류 글의 목적어(조사까지 — '헤더를'·'키프레임을'). 0이 아닌 코드는 RuntimeError(파일·명령·종료
+    코드·stderr 전문), 깨진 JSON은 json의 ValueError 그대로."""
     returncode, out, err = (run or _run)(command)
     if returncode != 0:
-        raise RuntimeError(f"ffprobe로 {what}을 읽지 못했습니다 (종료 코드 {returncode}): {path}\n명령: {' '.join(command)}\n"
+        raise RuntimeError(f"ffprobe로 {what} 읽지 못했습니다 (종료 코드 {returncode}): {path}\n명령: {' '.join(command)}\n"
                            f"stderr:\n{err.rstrip() or '(없음)'}")
     return json.loads(decode_output(out))
 
@@ -101,7 +102,7 @@ def header_from_probe(info: dict) -> StreamHeader:
 
 def probe_header(ffprobe: str, path: str, run=None) -> StreamHeader:
     """path의 헤더 (header_command 한 번 — 파일을 다 읽지 않음). 실패는 _probe의 RuntimeError·ValueError, 영상 트랙 없음도 RuntimeError."""
-    return header_from_probe(_probe(header_command(ffprobe, path), path, "헤더", run))
+    return header_from_probe(_probe(header_command(ffprobe, path), path, "헤더를", run))
 
 
 def header_skip_reason(header: StreamHeader) -> str | None:
@@ -134,7 +135,7 @@ def keyframes_from_packets(info: dict, header: StreamHeader) -> tuple[list[int],
 def scan_keyframes(ffprobe: str, path: str, header: StreamHeader, run=None) -> tuple[list[int], int]:
     """path의 (정렬한 키프레임 번호, 버리지 않는 영상 패킷 수) — packets_command 한 번(파일 전체를 읽음), 번호는 header의 속도·시작으로.
     실패는 _probe의 RuntimeError·ValueError, 번호를 정할 수 없으면 keyframes_from_packets의 RuntimeError."""
-    return keyframes_from_packets(_probe(packets_command(ffprobe, path), path, "키프레임", run), header)
+    return keyframes_from_packets(_probe(packets_command(ffprobe, path), path, "키프레임을", run), header)
 
 
 def coarse_wanted(total: int, step: int, keyframes: int | None = None) -> str | None:
