@@ -449,6 +449,16 @@ def make_truncated(src, path, cut_ratio=0.7):
         f.write(data[:int(len(data) * cut_ratio)])
 
 
+def make_numbered_h264(path, count=200, gop=12):
+    """번호 H.264 (libx264, 4:2:0, 24fps, 320x180) — 키프레임(IDR)이 gop장마다 정확히 (-keyint_min·-sc_threshold 0: 장면 전환으로 더 넣지 않음),
+    B 프레임은 기본대로(패킷 pts가 디코드 순서로 뒤섞임). 거친 띠 시험용 — 키프레임 번호가 range(0, count, gop)이고 그림의 번호가 frame_number로
+    읽힘. 만든 뒤 cv2로 읽어 번호열이 range(count)인지 검증 (실패하면 ValueError)."""
+    run_ffmpeg(["-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", f"{WIDTH}x{HEIGHT}", "-framerate", "24", "-i", "pipe:0",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-g", str(gop), "-keyint_min", str(gop), "-sc_threshold", "0", path],
+               "번호 H.264 클립 인코드", stdin_bytes=_numbered_raw(count, "yuv420p"))
+    _verify_numbered(path, count)
+
+
 def make_vfr_h264(path):
     """가변 프레임 레이트 H.264 (게이트 음성용) — 10장마다 한 프레임이 2배 길이로 머묾 (인코더 시간 단위가 1/24라 정수 프레임 간격)."""
     run_ffmpeg(["-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", f"{WIDTH}x{HEIGHT}", "-framerate", "24", "-i", "pipe:0",

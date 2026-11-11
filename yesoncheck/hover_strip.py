@@ -117,31 +117,42 @@ def skip_reason(path: str) -> str | None:
     return None
 
 
-class HoverStrip:
-    """띠 저장소 — (count, h, w, 3) uint8 배열 하나(연속)와 장마다 채움 표시. 쓰는 쪽은 워커 스레드, 읽는 쪽은 GUI 스레드.
+class ImageRows:
+    """그림 행 저장소 — (count, h, w, 3) uint8 배열 하나(연속)와 행마다 채움 표시. 쓰는 쪽은 워커 스레드, 읽는 쪽은 GUI 스레드.
+    띠(HoverStrip — 행 i = 샘플 i)와 키프레임 거친 띠(hover_keyframes.KeyframeStrip — 행 j = 키프레임 j)가 함께 씀.
 
-    행 단위로만 쓰므로 잠금은 없다. 단 채움 표시는 행에 바이트를 다 복사한 **뒤**에 둔다 — GUI가 반쯤 쓴 행을 보지 않게."""
+    행 단위로만 쓰므로 잠금은 없다. 단 채움 표시는 행에 바이트를 다 복사한 **뒤**에 둔다 — GUI가 반쯤 쓴 행을 보지 않게. 같은 행은 한 번만
+    put한다(다시 쓰면 GUI가 덮어쓰는 중인 행을 읽을 수 있음 — 워커가 지킴). ROW_NAME: 오류 글의 행 이름."""
 
-    def __init__(self, plan: StripPlan):
-        self.plan = plan
-        self._frames = np.empty((plan.count, plan.height, plan.width, 3), dtype=np.uint8)
-        self._filled = bytearray(plan.count)
+    ROW_NAME = "샘플"
+
+    def __init__(self, count: int, width: int, height: int):
+        self.count = count
+        self.width = width
+        self.height = height
+        self._frames = np.empty((count, height, width, 3), dtype=np.uint8)
+        self._filled = bytearray(count)
+
+    @property
+    def frame_bytes(self) -> int:
+        """그림 한 장의 바이트 (rgb24 — ffmpeg rawvideo의 한 장과 같은 크기)."""
+        return self.width * self.height * 3
 
     def put(self, i: int, data) -> None:
-        """샘플 i의 그림을 복사해 넣음. 길이가 plan.frame_bytes와 다르면 ValueError (채움 표시 없음)."""
+        """행 i의 그림을 복사해 넣음. 길이가 frame_bytes와 다르면 ValueError (채움 표시 없음)."""
         view = memoryview(data)
-        if view.nbytes != self.plan.frame_bytes:
-            raise ValueError(f"그림 한 장은 {self.plan.frame_bytes}바이트여야 합니다: {view.nbytes}바이트 (샘플 {i})")
-        self._frames[i] = np.frombuffer(view, dtype=np.uint8).reshape(self.plan.height, self.plan.width, 3)
+        if view.nbytes != self.frame_bytes:
+            raise ValueError(f"그림 한 장은 {self.frame_bytes}바이트여야 합니다: {view.nbytes}바이트 ({self.ROW_NAME} {i})")
+        self._frames[i] = np.frombuffer(view, dtype=np.uint8).reshape(self.height, self.width, 3)
         self._filled[i] = 1
 
     def has(self, i: int) -> bool:
         return bool(self._filled[i])
 
     def image(self, i: int) -> np.ndarray:
-        """샘플 i의 (h, w, 3) 뷰 (복사 아님). 아직 채우지 않았으면 LookupError."""
+        """행 i의 (h, w, 3) 뷰 (복사 아님). 아직 채우지 않았으면 LookupError."""
         if not self._filled[i]:
-            raise LookupError(f"샘플 {i}는 아직 채우지 않았습니다 ({self.filled_count}/{self.plan.count}장)")
+            raise LookupError(f"{self.ROW_NAME} {i}는 아직 채우지 않았습니다 ({self.filled_count}/{self.count}장)")
         return self._frames[i]
 
     @property
@@ -151,6 +162,14 @@ class HoverStrip:
     @property
     def nbytes(self) -> int:
         return self._frames.nbytes
+
+
+class HoverStrip(ImageRows):
+    """띠 저장소 — 계획(plan)의 장수·그림 크기의 그림 행 (행 i = 샘플 i = 원본 plan.source_frame(i))."""
+
+    def __init__(self, plan: StripPlan):
+        super().__init__(plan.count, plan.width, plan.height)
+        self.plan = plan
 
 
 def prefs_path() -> str:
