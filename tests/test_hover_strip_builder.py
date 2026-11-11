@@ -226,7 +226,11 @@ def test_command_shape():
     assert len(command) == len(build_command("ffmpeg", "x.mov", every))
     assert command[4:8] == ["-filter_threads", "1", "-threads", "1"]
     full_hd = StripPlan(total=48, step=1, count=48, width=320, height=180, source_width=1920, source_height=1080)
-    assert build_command("/opt/ffmpeg", "/clips/a b.mov", full_hd) == build_command("/opt/ffmpeg", "/clips/a b.mov", every)
+    assert build_command("/opt/ffmpeg", "/clips/a b.mov", full_hd) == build_command("/opt/ffmpeg", "/clips/a b.mov", every)  # 코덱 모름
+    assert build_command("/opt/ffmpeg", "/clips/a b.mov", full_hd, "prores") == build_command("/opt/ffmpeg", "/clips/a b.mov", every)
+    assert build_command("/opt/ffmpeg", "/clips/a b.mov", every, "h264") == build_command("/opt/ffmpeg", "/clips/a b.mov", every)  # 4K
+    inter = build_command("/opt/ffmpeg", "/clips/a b.mov", full_hd, "h264")  # 1080p 이하 long-GOP (Ruling 25)
+    assert "-threads" not in inter and "-filter_threads" not in inter
 
 
 @pytest.mark.parametrize("source", [(1280, 720), (720, 1280), (640, 360), (320, 180)])
@@ -236,8 +240,47 @@ def test_720p_or_smaller_source_has_no_thread_options(source):
     plan = StripPlan(total=48, step=1, count=48, width=320, height=180, source_width=source[0], source_height=source[1])
     command = build_command("ffmpeg", "x.mov", plan)
     assert "-threads" not in command and "-filter_threads" not in command
+    assert build_command("ffmpeg", "x.mov", plan, "prores") == command  # 720p 이하는 all-intra도
+    assert build_coarse_command("ffmpeg", "x.mov", plan, "h264") == build_coarse_command("ffmpeg", "x.mov", plan)
     big = StripPlan(total=48, step=1, count=48, width=320, height=180, source_width=3840, source_height=2160)
     assert command == [arg for i, arg in enumerate(build_command("ffmpeg", "x.mov", big)) if i not in (4, 5, 6, 7)]
+
+
+@pytest.mark.parametrize("clip, total, codec_known, expect_threads", [
+    ("h264_gop12", 200, True, False),  # 긴 1080p H.264 — 헤더로 코덱을 알아 두 명령 모두 옵션 없음 (Ruling 25)
+    ("numbered_clip_200", 200, True, True),  # 긴 1080p ProRes — all-intra라 1코어 (거친 띠도 건너뜀)
+    ("numbered_clip", 48, False, True),  # 짧은 1080p — 헤더를 읽지 않아 코덱을 모름 → 1코어
+])
+def test_worker_picks_threads_from_header_codec(qapp, request, make_builder, monkeypatch, clip, total, codec_known, expect_threads):
+    """워커는 긴 파일(간격 > 1)이면 거친 띠 조건과 상관없이 헤더 ffprobe로 코덱을 알아내 정확한 띠·거친 띠 명령의 스레드를 정함 (Ruling 25).
+    계획의 원본 크기만 1920×1080으로 둠(스레드 규칙은 계획을 봄 — 클립 자체는 320×180)."""
+    monkeypatch.setattr(hover_strip, "MAX_THUMBS", 50)
+    path = request.getfixturevalue(clip)
+    strip = HoverStrip(plan_for(total, 1920, 1080))
+    worker = make_builder(path, strip)
+    assert "-threads" in worker.command  # 띄우기 전 — 코덱을 모름
+    got = _Signals(worker)
+    worker.start()
+    _finish(qapp, worker)
+    assert got.failed == [] and len(got.done) == 1
+    assert worker.codec == ({"h264_gop12": "h264", "numbered_clip_200": "prores"}.get(clip) if codec_known else None)
+    for command in (worker.command, worker.coarse_command):
+        if command is not None:
+            assert ("-threads" in command and "-filter_threads" in command) == expect_threads, command
+    assert (worker.coarse_command is not None) == (clip == "h264_gop12")
+
+
+def test_header_failure_keeps_single_thread(qapp, tmp_path, h264_gop12, make_builder, monkeypatch, capsys):
+    """헤더 ffprobe가 실패하면 코덱을 모르므로 720p보다 큰 원본은 1코어 그대로 (거친 띠 실패 기록 한 줄, 정확한 띠는 끝까지)."""
+    monkeypatch.setattr(hover_strip, "MAX_THUMBS", 50)
+    strip = HoverStrip(plan_for(200, 1920, 1080))
+    worker = make_builder(h264_gop12, strip, ffprobe=str(tmp_path / "no_such_ffprobe"))
+    got = _Signals(worker)
+    worker.start()
+    _finish(qapp, worker)
+    assert got.failed == [] and got.done_counts == [50] and worker.codec is None
+    assert "-threads" in worker.command and "-filter_threads" in worker.command
+    assert len(_log_lines(capsys.readouterr().err, "거친 띠를 만들지 못했습니다(정확한 띠는 계속)")) == 1
 
 
 def test_threads_option_follows_constant(monkeypatch):

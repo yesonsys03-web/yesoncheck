@@ -36,11 +36,10 @@ from dataclasses import dataclass
 from fractions import Fraction
 
 from yesoncheck.external_tools import MAX_FRAME_RATE, decode_output, subprocess_kwargs
-from yesoncheck.hover_strip import ImageRows
+from yesoncheck.hover_strip import ALL_INTRA_CODECS, ImageRows  # ALL_INTRA_CODECS — 스레드 규칙(hover_strip.thread_limits)과 같은 상수 하나
 
 MAX_COARSE = 1000  # 거친 띠의 최대 장수 — 키프레임이 더 많으면 m장마다 하나 (subsample)
 KEYFRAME_RATIO = 4  # 키프레임이 전체의 1/이 값 이하일 때만 거친 띠를 만듦 (coarse_wanted)
-ALL_INTRA_CODECS = frozenset({"prores", "dnxhd", "mjpeg", "rawvideo"})  # 모든 장이 키프레임인 코덱 — 헤더만 보고 건너뜀
 _HEADER_ENTRIES = "stream=codec_name,r_frame_rate,start_time"
 _PACKET_ENTRIES = "packet=pts_time,flags"
 

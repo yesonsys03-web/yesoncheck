@@ -28,10 +28,13 @@ psutil.Process(pid).suspend()(POSIX SIGSTOP·Windows NtSuspendProcess), 거짓�
 그대로 먹는다(SIGKILL·TerminateProcess) — stop()은 정지 여부와 상관없이 kill한다. 정지·재개가 실패하면(psutil.Error 전부 — NoSuchProcess·
 AccessDenied 등 — 와 OSError: Windows에서 끝나 가는 프로세스의 NtSuspendProcess는 psutil이 감싸지 않은 OSError로 올 수 있음) 기록 한 줄을
 남기고 읽기만 멈추는(또는 잇는) 방식으로 둔다 — 조용히 넘기지 않고, GUI 틱 슬롯(paused setter)이나 워커 스레드로 올려 실패로 만들지도 않는다.
-원본이 720p보다 큰 파일(1080p·4K)의 띠 ffmpeg는 디코드·축소를 1코어로 묶는다(스펙 §5.3 — 쉴 때만 돌므로 느려도 됨, 이 Mac 4K 334장 쉴 때
-약 38초(이 Mac 실측 — 쉴 때만)): 디코더 스레드 FFMPEG_THREADS(-threads 1 — 입력 옵션, -i 앞)와 필터 스레드 FFMPEG_FILTER_THREADS
-(-filter_threads 1 — 전역 옵션, -i 앞). 720p 이하 원본은 두 옵션을 넣지 않는다(ffmpeg 기본 — hover_strip.thread_limits: 2026-11-11, 긴 720p
-애니매틱 67.0초 → 18.8초 실측; 1080p는 측정에서 불통과라 1코어 그대로 — Ruling 24; 1080p·4K 명령은 글자 그대로).
+1080p보다 큰 원본(4K 등)·720p보다 큰 all-intra(1080p ProRes 등)·코덱을 모르는 720p보다 큰 원본의 띠 ffmpeg는 디코드·축소를 1코어로 묶는다(스펙
+§5.3 — 쉴 때만 돌므로 느려도 됨, 이 Mac 4K 334장 쉴 때 약 38초(이 Mac 실측 — 쉴 때만)): 디코더 스레드 FFMPEG_THREADS(-threads 1 — 입력 옵션,
+-i 앞)와 필터 스레드 FFMPEG_FILTER_THREADS(-filter_threads 1 — 전역 옵션, -i 앞). 720p 이하 원본, 그리고 1080p 이하이고 헤더로 코덱을 안
+long-GOP(H.264 등)는 두 옵션을 넣지 않는다(ffmpeg 기본 — hover_strip.thread_limits, Ruling 24·25: 재생 게이트 — 720p·1080p H.264 통과, 1080p
+ProRes 불통과; 긴 720p 애니매틱 67.0초 → 18.8초, 긴 1080p H.264 애니매틱 82.2초 → 24.6초 실측). 코덱은 긴 파일(간격 > 1)이면 run이 헤더
+ffprobe로 늘 알아내고(codec — 거친 띠를 만들든 말든) 정확한 띠 명령(command)을 그 코덱으로 다시 정한다; 짧은 파일은 헤더를 읽지 않아 코덱을
+모름(1080p ProRes·4K 명령은 글자 그대로).
 -threads는 **디코더** 스레드만 묶는다 — -vf scale(4K → 320 축소 + rgb24 변환)은 따로 CPU 수만큼 slice 스레드를 쓰므로(이 Mac 16코어,
 번들 ffmpeg 9.0.2 실측: 프로세스 스레드 기본 68개, -threads 2만이면 54개, -filter_threads 1 -threads 2면 24개, 둘 다 1이면 22개 — 나머지는
 ffmpeg 자신의 구성 요소 스레드(미확인)) 필터 쪽 손잡이가 -filter_threads다. 까닭(측정 — CLAUDE.md 2026-11-10): 띠 워커를 띄운 지 0.5초 안에 4K
@@ -80,35 +83,36 @@ BATCH_S = 0.05  # progress 묶음 간격 (초) — 또는 BATCH_FRAMES장마다,
 BATCH_FRAMES = 10
 STOP_WAIT_MS = 2000  # stop()이 kill한 프로세스를 거두고, 스레드 끝을 기다리는 최대 시간 (각각)
 _STDERR_CHUNK = 65536
-# 원본이 720p보다 큰 파일의 띠 ffmpeg 스레드 (모듈 설명 — hover_strip.thread_limits가 고름; 720p 이하·None이면 그 옵션을 넣지 않아
-# ffmpeg 기본: 이 Mac은 디코더·필터 모두 CPU 수만큼)
+# 묶을 때의 띠 ffmpeg 스레드 (모듈 설명 — 묶을지는 hover_strip.thread_limits가 원본 크기·코덱으로 고름; 묶지 않거나 None이면 그 옵션을 넣지
+# 않아 ffmpeg 기본: 이 Mac은 디코더·필터 모두 CPU 수만큼)
 FFMPEG_THREADS: int | None = 1  # 디코더 스레드 (-threads — 입력 옵션이라 -i 바로 앞). 필터(-vf scale)는 묶지 않음
 FFMPEG_FILTER_THREADS: int | None = 1  # 필터 스레드 (-filter_threads — 전역 옵션, -i 앞). -vf scale의 slice 스레드를 묶음
 
 
-def build_command(ffmpeg: str, path: str, plan: StripPlan) -> list[str]:
+def build_command(ffmpeg: str, path: str, plan: StripPlan, codec: str | None = None) -> list[str]:
     """띠 하나를 만드는 ffmpeg 명령 (인자 리스트 그대로 — 셸 없음). -map 0:V:0(대문자 — attached_pic 제외)·-fps_mode passthrough(복제
     금지)는 파이프 소스와 같은 이유. 간격이 1이면 scale만, 아니면 select로 step장마다 하나 — 쉼표 앞의 역슬래시는 select 식의 쉼표가 필터
-    구분자로 읽히지 않게 하는 필터 파서용 (셸 따옴표 아님). 스레드 옵션은 원본 크기로 hover_strip.thread_limits가 고르고(720p 이하면 없음),
+    구분자로 읽히지 않게 하는 필터 파서용 (셸 따옴표 아님). 스레드 옵션은 원본 크기·codec(헤더의 codec_name — 모르면 None)으로
+    hover_strip.thread_limits가 고르고(720p 이하·1080p 이하 long-GOP면 없음),
     값은 두 상수를 호출 때 읽음(시험의 monkeypatch가 닿게): 필터 스레드(-filter_threads, 전역)를 앞에, 디코더 스레드(-threads, 입력 옵션)를
     -i 바로 앞에 — -threads는 디코더만 묶음(모듈 설명)."""
-    return _strip_command(ffmpeg, path, plan, plan.step, ())
+    return _strip_command(ffmpeg, path, plan, plan.step, (), codec)
 
 
-def build_coarse_command(ffmpeg: str, path: str, plan: StripPlan) -> list[str]:
+def build_coarse_command(ffmpeg: str, path: str, plan: StripPlan, codec: str | None = None) -> list[str]:
     """키프레임만의 거친 띠 명령 — build_command와 같은 모양에 -skip_frame nokey(디코더 옵션이라 -i 앞 — 디코더 스레드 바로 앞)를 더하고 select는
     넣지 않음: 키프레임 전부(K장)를 내고, 워커가 m장마다 하나만 거친 띠에 넣음(_read_frames의 every — 목록은 hover_keyframes.subsample이 같은 규칙
     frames[::m]으로 줄임; 스펙 §3.2의 select와 다름 — 디코드 비용은 같고 파이프 전송만 K장, 장수 검사가 받은 수 == K로 정확해짐). 스레드 규칙도
     같음 (hover_strip.thread_limits)."""
-    return _strip_command(ffmpeg, path, plan, 1, ("-skip_frame", "nokey"))
+    return _strip_command(ffmpeg, path, plan, 1, ("-skip_frame", "nokey"), codec)
 
 
-def _strip_command(ffmpeg: str, path: str, plan: StripPlan, every: int, input_options) -> list[str]:
+def _strip_command(ffmpeg: str, path: str, plan: StripPlan, every: int, input_options, codec: str | None) -> list[str]:
     """두 명령의 공통 모양: [필터 스레드] [입력 옵션] [디코더 스레드] -i 파일 … -vf [select,]scale … rgb24 pipe:1 (select는 every > 1일 때 —
     정확한 띠의 간격)."""
     scale = f"scale={plan.width}:{plan.height}"
     vf = scale if every == 1 else f"select=not(mod(n\\,{every})),{scale}"
-    decoder, filters = thread_limits(plan, FFMPEG_THREADS, FFMPEG_FILTER_THREADS)
+    decoder, filters = thread_limits(plan, FFMPEG_THREADS, FFMPEG_FILTER_THREADS, codec)
     filter_threads = [] if filters is None else ["-filter_threads", str(filters)]
     threads = [] if decoder is None else ["-threads", str(decoder)]
     return [ffmpeg, "-nostdin", "-v", "error", *filter_threads, *input_options, *threads, "-i", path, "-map", "0:V:0",
@@ -158,7 +162,8 @@ class HoverStripBuilder(QThread):
         self.strip = strip
         self._ffmpeg = ffmpeg if ffmpeg is not None else ffmpeg_path()
         self._ffprobe = ffprobe
-        self.command = build_command(self._ffmpeg, path, strip.plan)
+        self.command = build_command(self._ffmpeg, path, strip.plan)  # 코덱을 모를 때의 명령 — 긴 파일은 run이 헤더를 읽은 뒤 다시 정함
+        self.codec: str | None = None  # 헤더 ffprobe의 codec_name (긴 파일만 읽음 — 모르면 None; 스레드 규칙)
         self.coarse_command: list[str] | None = None
         self.coarse_strip: hover_keyframes.KeyframeStrip | None = None
         self.coarse_count = 0
@@ -223,6 +228,8 @@ class HoverStripBuilder(QThread):
             self._coarse_pass(started)
             if self._stopped:  # stop 뒤에는 정확한 패스를 띄우지 않음 (stop() 설명)
                 return
+            if self.codec is not None:  # 헤더로 코덱을 알았으면 스레드 규칙을 다시 (Ruling 25 — hover_strip.thread_limits)
+                self.command = build_command(self._ffmpeg, self.path, self.strip.plan, self.codec)
             self._build(started)
         except Exception:  # 정리 단계의 예상 못 한 오류 (_run_pass가 프로세스는 이미 거둠) — 삼키지 않고 failed로 (stop 뒤면 기록으로)
             self._report("띠 워커가 예외로 끝났습니다.", None, "", 0, started, trace=traceback.format_exc())
@@ -268,6 +275,7 @@ class HoverStripBuilder(QThread):
         try:
             ffprobe = self._ffprobe if self._ffprobe is not None else ffprobe_path()
             header = hover_keyframes.probe_header(ffprobe, self.path, run=self._run_probe)
+            self.codec = header.codec or None  # 거친 띠를 만들든 말든 — 정확한 띠의 스레드 규칙에도 씀 (run)
             reason = hover_keyframes.header_skip_reason(header)
             if reason is None and not self._stopped:
                 frames, _packets = hover_keyframes.scan_keyframes(ffprobe, self.path, header, run=self._run_probe)
@@ -283,7 +291,7 @@ class HoverStripBuilder(QThread):
         keyframes = len(frames)  # ffmpeg가 낼 장수 K (줄이기 전 — 장수 검사의 기준)
         rows, every = hover_keyframes.subsample(frames, hover_keyframes.MAX_COARSE)
         strip = hover_keyframes.KeyframeStrip(rows, plan.width, plan.height)
-        command = build_coarse_command(self._ffmpeg, self.path, plan)
+        command = build_coarse_command(self._ffmpeg, self.path, plan, self.codec)
         with self._lock:  # 목록·표시 배열을 다 만든 뒤 한 번에 공개 (stop 뒤면 공개하지 않음)
             if self._stopped:
                 return None
