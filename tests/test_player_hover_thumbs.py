@@ -26,10 +26,10 @@ from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication
 
 from tests.conftest import write_test_video
-from tests.prores_clips import frame_number, make_numbered_clip
+from tests.prores_clips import frame_number, make_numbered_clip, make_numbered_h264
 from tests.test_sequence_capture import make_seq
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
-from yesoncheck import error_window, external_tools, hover_strip, hover_strip_builder, player_hover_thumbs
+from yesoncheck import error_window, external_tools, hover_keyframes, hover_strip, hover_strip_builder, player_hover_thumbs
 from yesoncheck.hover_strip import LOG_PREFIX, MENU_TEXT
 from yesoncheck.slider_preview import slider_value_at
 
@@ -59,6 +59,14 @@ def mp4_clip(tmp_path_factory):
     return write_test_video(str(tmp_path_factory.mktemp("hover_mp4") / "clip.mp4"), frames=24)
 
 
+@pytest.fixture(scope="session")
+def h264_long(tmp_path_factory):
+    """번호 H.264 200장, 키프레임 0·12·…·192 (17장) — MAX_THUMBS를 줄이면 간격 > 1이라 거친 띠를 먼저 만듦."""
+    path = str(tmp_path_factory.mktemp("hover_h264") / "numbered_gop12.mp4")
+    make_numbered_h264(path, count=200, gop=12)
+    return path
+
+
 # ---------------------------------------------------------------- 워커 기록·대역
 
 @pytest.fixture(autouse=True)
@@ -78,6 +86,8 @@ def real_builders(monkeypatch):
         assert sip.isdeleted(builder) or not builder.isRunning(), f"창을 닫았는데 띠 워커가 돌고 있습니다: {builder.path}"
         if builder.pid is not None:
             assert not psutil.pid_exists(builder.pid), f"창을 닫았는데 띠 ffmpeg(pid {builder.pid})가 남았습니다"
+        left = [pid for pid in builder.pids if psutil.pid_exists(pid)]  # 거친 띠의 ffprobe·ffmpeg까지
+        assert left == [], f"창을 닫았는데 띠 워커의 프로세스가 남았습니다: {left}"
 
 
 class FakeBuilder(QObject):
@@ -86,11 +96,14 @@ class FakeBuilder(QObject):
     progress = pyqtSignal(int)
     done = pyqtSignal(int, float)
     failed = pyqtSignal(str)
+    coarse_done = pyqtSignal(int, float)
 
     def __init__(self, path, strip, ffmpeg=None, parent=None):
         super().__init__(parent)
         self.path = path
         self.strip = strip
+        self.coarse_strip = None  # 시험이 꽂음 (진짜 워커는 키프레임 거친 띠를 공개하는 속성)
+        self.coarse_count = 0
         self.paused = False
         self.started = False
         self.stopped = False
@@ -794,3 +807,113 @@ def test_single_frame_movie_shows_1(shown_player, tmp_path, capsys):
     hover(slider, slider.width() - 1)
     assert popup.number_label.text() == "1" and frame_number(popup_image(popup)) == 0
     assert "슬라이더 호버 처리 중 오류" not in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------- 키프레임 거친 띠 (스펙 2026-11-11 §3)
+
+
+def _flat(strip, j, value):
+    strip.put(j, bytes([value]) * strip.frame_bytes)
+
+
+def test_lookup_falls_back_to_coarse_strip(fake_builders, player_with_clip, numbered_clip, qapp):
+    """조회(_hover_entry): 정확한 띠의 샘플이 차 있으면 그것, 아니면 지금 워커의 거친 띠에서 가장 가까운 키프레임이 차 있으면 그것, 아니면 빈 상자.
+    워커가 없거나 거친 띠가 없으면 빈 상자. 번호는 늘 프레임 + 1. 창(호버)도 같은 그림."""
+    player = player_with_clip
+    assert player._hover_builder is None  # 열린 직후 (START_DELAY_S 전) — 워커 없음
+    assert player._hover_entry(13) == ("14", None)
+    wait_until(lambda: len(fake_builders) == 1, 3, "워커를 띄우지 않았습니다")
+    builder = fake_builders[0]
+    assert player._hover_entry(13) == ("14", None)  # 거친 띠 없음
+
+    coarse = hover_keyframes.KeyframeStrip([0, 12, 24, 36], 320, 180)
+    _flat(coarse, 0, 10)
+    _flat(coarse, 1, 60)
+    builder.coarse_strip = coarse
+    number, image = player._hover_entry(13)
+    assert number == "14" and image is not None and int(image[0, 0, 0]) == 60  # 가장 가까운 키프레임 12 (행 1)
+    assert player._hover_entry(30) == ("31", None)  # 24·36 같은 거리 → 앞쪽 24(행 2) — 아직 안 참
+    _flat(coarse, 2, 110)
+    assert int(player._hover_entry(30)[1][0, 0, 0]) == 110
+
+    strip = player._hover_strip
+    _flat(strip, 13, 200)  # 정확한 샘플이 차면 그것이 먼저
+    assert int(player._hover_entry(13)[1][0, 0, 0]) == 200
+
+    _flat(coarse, 3, 160)
+    slider, popup = player.positionScroll, player._hover_popup
+    for x in sample_xs(slider):
+        hover(slider, x)
+        frame = int(popup.number_label.text()) - 1
+        shown = popup_image(popup)
+        if strip.has(frame):
+            expected = strip.image(frame)
+        else:
+            expected = coarse.image(coarse.nearest(frame))
+        assert shown is not None and np.array_equal(shown, expected), (x, frame)
+
+    builder.coarse_strip = None  # 워커가 버리면(정확한 띠 완성 등) 다시 빈 상자
+    assert player._hover_entry(30) == ("31", None)
+
+
+def test_coarse_done_logs_one_line_and_ignores_replaced_builder(fake_builders, player_with_clip, numbered_clip, second_clip, capsys):
+    """coarse_done → 기록 한 줄 '거친 띠 완성: <채운>/<장수>장 <초>초 — <파일>' (장수는 워커의 coarse_count). 옛 워커가 놓이기 전에 낸 신호는 버림."""
+    player = player_with_clip
+    wait_until(lambda: len(fake_builders) == 1, 3, "워커를 띄우지 않았습니다")
+    builder = fake_builders[0]
+    builder.coarse_count = 17
+    capsys.readouterr()
+    builder.coarse_done.emit(17, 2.5)
+    QApplication.processEvents()
+    out = capsys.readouterr().out
+    assert [line for line in out.splitlines() if "거친 띠" in line] == [f"{LOG_PREFIX} 거친 띠 완성: 17/17장 2.5초 — {numbered_clip}"]
+    assert player._hover_timer.isActive()  # 거친 띠는 끝이 아님 — 정확한 띠를 위해 틱은 그대로
+
+    assert player.open_file("A", second_clip) is True
+    builder.blockSignals(False)  # release_worker가 막은 것을 풂 — 막기 전에 대기열에 들어간 신호를 흉내 냄
+    builder.coarse_done.emit(17, 3.0)
+    QApplication.processEvents()
+    assert "거친 띠" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("ffprobe", ["works", "missing"])
+def test_long_h264_builds_coarse_then_exact_strip(shown_player, h264_long, real_builders, monkeypatch, tmp_path, dialogs, capsys,
+                                                  ffprobe):
+    """진짜 워커로 긴 H.264(간격 > 1): 기록이 '띠 만들기 시작' → '거친 띠 먼저' → '거친 띠 완성' → '띠 완성' 차례, 다 만든 뒤 거친 띠는 버려져
+    호버는 정확한 띠의 그림. ffprobe가 없으면(missing) 기록(stderr) 한 줄 뒤 정확한 띠만 — 어느 쪽도 오류 창 없음."""
+    monkeypatch.setattr(hover_strip, "MAX_THUMBS", 50)  # 200장 → 간격 4, 50장
+    if ffprobe == "missing":
+        monkeypatch.setattr(hover_strip_builder, "ffprobe_path", lambda: str(tmp_path / "no_such_ffprobe"))
+    shown = []
+    monkeypatch.setattr(error_window, "show_error", lambda *args: shown.append(args))
+    player = shown_player
+    assert player.open_file("A", h264_long) is True
+    plan = player._hover_plan
+    assert (plan.total, plan.step, plan.count) == (200, 4, 50)
+    wait_until(lambda: strip_done(player), WAIT_S, "띠를 다 만들지 못했습니다")
+    builder = player._hover_builder
+    assert len(real_builders) == 1 and builder.coarse_strip is None
+
+    captured = capsys.readouterr()
+    lines = [line for line in captured.out.splitlines() if line.startswith(LOG_PREFIX)]
+    start = f"{LOG_PREFIX} 띠 만들기 시작: 50장(간격 4, 전체 200장) 320×180 — {h264_long}"
+    finished = [line for line in lines if line.startswith(f"{LOG_PREFIX} 띠 완성: 50/50장 ")]
+    assert start in lines and len(finished) == 1
+    if ffprobe == "works":
+        first = f"{LOG_PREFIX} 거친 띠 먼저: 키프레임 17장(간격 1, 전체 200장) — {h264_long}"
+        coarse_done = [line for line in lines if line.startswith(f"{LOG_PREFIX} 거친 띠 완성: 17/17장 ")]
+        assert len(coarse_done) == 1 and coarse_done[0].endswith(f"초 — {h264_long}")
+        assert lines.index(start) < lines.index(first) < lines.index(coarse_done[0]) < lines.index(finished[0])
+        assert len(builder.pids) == 3
+    else:
+        assert not any("거친 띠 먼저" in line or "거친 띠 완성" in line for line in lines)
+        head = f"{LOG_PREFIX} 거친 띠를 만들지 못했습니다(정확한 띠는 계속) — {h264_long}"
+        assert [line for line in captured.err.splitlines() if line.startswith(LOG_PREFIX)] == [head]
+        assert "no_such_ffprobe" in captured.err
+    assert shown == [] and dialogs.messages == []
+
+    slider, popup = player.positionScroll, player._hover_popup
+    for x in sample_xs(slider):
+        hover(slider, x)
+        frame = int(popup.number_label.text()) - 1
+        assert frame_number(popup_image(popup)) == plan.source_frame(plan.sample_for(frame)), x

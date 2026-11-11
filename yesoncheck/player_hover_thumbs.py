@@ -35,7 +35,12 @@ ffmpeg는 파일 전체(NAS)를 읽기 시작하자마자 kill될 뿐이고, 그
 겹치지 않게: 그 안에 Play하면 워커를 띄우지 않은 채 재생이 시작된다(측정에서 끊김은 띄운 지 0.5초 안에 Play한 판에서 났음). 띠를 만들지
 않는 파일(크기 상한 — hover_strip.skip_reason)은 계획만 두고 저장소·타이머는 만들지 않는다 (호버는 번호 + 빈 상자).
 
-끝 신호(done·failed)는 워커 스레드가 내 GUI 대기열로 온다. 그래서 stop()·release_worker 전에 대기열에 들어간 신호가 다음 파일을 연 뒤에
+긴 파일의 키프레임 거친 띠 (스펙 2026-11-11 §3): 워커는 간격 > 1이면 키프레임만의 거친 띠를 먼저 채운다(hover_strip_builder 설명). 조회
+(_hover_entry)는 정확한 띠의 샘플이 차 있으면 그것, 아니면 지금 워커의 coarse_strip에서 가장 가까운 키프레임이 차 있으면 그것, 아니면 빈 상자 —
+정확한 띠가 앞에서부터 차므로 앞부분은 정확한 그림, 뒷부분은 거친 그림이 섞여 보인다(의도 — 둘 다 같은 크기). 거친 띠를 다 채우면(coarse_done)
+기록 한 줄만 남기고 틱은 그대로 둔다(정확한 띠가 아직이라). 거친 띠의 실패는 워커가 창 없이 기록만 한다 — 여기로 failed가 오지 않음.
+
+끝 신호(done·failed·coarse_done)는 워커 스레드가 내 GUI 대기열로 온다. 그래서 stop()·release_worker 전에 대기열에 들어간 신호가 다음 파일을 연 뒤에
 도착할 수 있다 — 슬롯은 보낸 쪽(sender)이 지금 워커일 때만 받는다 (옛 워커가 이미 지워졌으면 sender가 None이라 그것도 버림). 실패는
 기록(stderr)에 매번, 오류 창은 파일마다 한 번(_hover_failed_for — 이 창이 떠 있는 동안 실패한 파일을 모두 기억하는 set이라 실패하는 두
 파일을 오가도 창이 다시 뜨지 않음; 다시 시도하지 않음; 같은 파일을 다시 열어 또 실패해도 기록만).
@@ -212,6 +217,7 @@ class PlayerHoverThumbsMixin:
             return
         worker.done.connect(self._hover_on_done)
         worker.failed.connect(self._hover_on_failed)
+        worker.coarse_done.connect(self._hover_on_coarse_done)
         self._hover_builder = worker
         worker.start()
 
@@ -226,6 +232,12 @@ class PlayerHoverThumbsMixin:
             return
         print(f"{LOG_PREFIX} 띠 완성: {filled}/{self._hover_plan.count}장 {seconds:.1f}초 — {self._hover_path}", flush=True)
         self._hover_timer.stop()
+
+    def _hover_on_coarse_done(self, filled: int, seconds: float) -> None:
+        """워커가 키프레임 거친 띠를 다 채움: 기록 한 줄만 (틱은 그대로 — 정확한 띠가 아직)."""
+        if not self._hover_from_current_builder():
+            return
+        print(f"{LOG_PREFIX} 거친 띠 완성: {filled}/{self._hover_builder.coarse_count}장 {seconds:.1f}초 — {self._hover_path}", flush=True)
 
     def _hover_on_failed(self, text: str) -> None:
         """워커 실패 (text: 파일·명령·종료 코드·stderr 전문·트레이스백)."""
@@ -283,12 +295,22 @@ class PlayerHoverThumbsMixin:
         return self._hover_entry(frame)
 
     def _hover_entry(self, frame: int) -> LookupResult:
-        """프레임(0-based) → (번호 글 = 프레임 + 1 — 'Current:' 라벨과 같음, 가장 가까운 샘플의 그림 — 아직 없거나 저장소가 없으면 None)."""
+        """프레임(0-based) → (번호 글 = 프레임 + 1 — 'Current:' 라벨과 같음, 그림). 그림은 정확한 띠에서 가장 가까운 샘플이 차 있으면 그것,
+        아니면 지금 워커의 거친 띠(coarse_strip — 워커가 버리면 None)에서 가장 가까운 키프레임이 차 있으면 그것, 아니면 None(빈 상자 — 저장소가
+        없을 때도). 거친 띠는 참조를 한 번 읽어 씀(워커가 그사이 None으로 바꿔도 이 조회는 쥔 참조로 끝남)."""
         strip = self._hover_strip
         if strip is None:
             return str(frame + 1), None
         sample = strip.plan.sample_for(frame)
-        return str(frame + 1), strip.image(sample) if strip.has(sample) else None
+        if strip.has(sample):
+            return str(frame + 1), strip.image(sample)
+        worker = self._hover_builder
+        coarse = None if worker is None else worker.coarse_strip
+        if coarse is not None:
+            row = coarse.nearest(frame)
+            if coarse.has(row):
+                return str(frame + 1), coarse.image(row)
+        return str(frame + 1), None
 
     def _add_hover_thumbs_menu(self, settings_menu) -> None:
         """Settings → 슬라이더 썸네일 — 체크 가능한 항목 하나 (Mac·Windows 모두). 툴팁이 보이게 하고 체크는 지금 캐시에 맞춤.
