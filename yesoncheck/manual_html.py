@@ -5,7 +5,11 @@
 왼쪽 목차에서 기능을 고르면 그 쪽만 보이고(주소 `#쪽` 또는 `#쪽/닻`), 스크립트가 꺼진 브라우저에서는 모든 쪽이 이어서 보임.
 
 만들 때 확인하는 것(틀리면 ValueError — 조용히 넘기지 않음): 모르는 쪽·닻을 가리키는 링크, 모르는 블록 종류,
-같은 쪽 안의 겹치는 닻, 목차 묶음에 없는 쪽. 그림이 없으면 `load_image`가 낸 예외가 그대로 올라옴.
+같은 쪽 안의 겹치는 닻, 목차 묶음에 없는 쪽, 짝이 안 맞는 `**`·`` ` ``, 빈 키. 그림이 없으면 `load_image`가 낸 예외가 그대로 올라옴.
+
+글 안의 표시는 **원문에서** 왼쪽부터 토큰으로 나눠 조각마다 escape함(escape한 글에 정규식을 걸면 `{<}`가 두 번 escape되고
+코드 안의 `**`가 굵게로 바뀜): `` `코드` `` 안은 글자 그대로, `**굵게**` 안은 다시 나눔, `[[쪽/닻|글]]`의 글과 `{키}`는 글자 그대로.
+쪽 안의 절 주소는 id와 같은 `#쪽--닻` — 스크립트가 꺼져 있어도 그 자리로 감.
 """
 import base64
 import html
@@ -20,10 +24,13 @@ PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 CURRENT_BADGE = "지금 버전"
 CALLOUT_LABELS = {"note": "참고", "tip": "팁", "warn": "주의"}
 
-LINK_RE = re.compile(r"\[\[([a-z_]+)(?:/([a-z0-9_.]+))?(?:\|([^\]]+))?\]\]")
-BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
-CODE_RE = re.compile(r"`([^`]+)`")
-KEY_RE = re.compile(r"\{([^{}]+)\}")
+_CODE = r"`(?P<code>[^`]+)`"
+_LINK = r"\[\[(?P<page>[a-z_]+)(?:/(?P<anchor>[a-z0-9_.]+))?(?:\|(?P<label>[^\]]+))?\]\]"
+_BOLD = r"\*\*(?P<bold>.+?)\*\*"
+_KEY = r"\{(?P<key>[^{}]+)\}"
+TOKEN_RE = re.compile("|".join((_CODE, _LINK, _BOLD, _KEY)))
+TOKEN_NO_KEYS_RE = re.compile("|".join((_CODE, _LINK, _BOLD)))  # 업데이트 내역: {}를 키로 보지 않음
+KEY_SPLIT_RE = re.compile(r"\+(?=.)")  # "Shift+F" → Shift, F — 끝의 +("Ctrl++")는 더하기 키로 남김
 HANGUL_KEY_RE = re.compile(r"^(.+?) \((.)\)$")  # "F (ㄹ)" → 키와 한글 자판의 같은 키
 
 
@@ -32,6 +39,11 @@ def png_size(data, name):
     if len(data) < 24 or data[:8] != PNG_MAGIC or data[12:16] != b"IHDR":
         raise ValueError(f"PNG가 아닌 그림입니다: {name}")
     return struct.unpack(">II", data[16:24])
+
+
+def target(page, anchor=None):
+    """쪽(과 그 안의 절)의 주소 = 그 요소의 id — `쪽` 또는 `쪽--닻`."""
+    return page if anchor is None else f"{page}--{anchor}"
 
 
 class _Builder:
@@ -60,23 +72,37 @@ class _Builder:
     # ---- 글 안의 표시
 
     def inline(self, text, keys=True):
-        out = html.escape(text, quote=False)
+        pattern = TOKEN_RE if keys else TOKEN_NO_KEYS_RE
+        out, at = [], 0
+        for match in pattern.finditer(text):
+            out.append(self._plain(text[at:match.start()], text))
+            at = match.end()
+            if match.group("code") is not None:
+                out.append(f"<code>{html.escape(match.group('code'), quote=False)}</code>")
+            elif match.group("page") is not None:
+                out.append(self._link(match))
+            elif match.group("bold") is not None:
+                out.append(f"<strong>{self.inline(match.group('bold'), keys)}</strong>")
+            else:
+                out.append(self.key(match.group("key")))
+        out.append(self._plain(text[at:], text))
+        return "".join(out)
 
-        def link(match):
-            page, anchor, label = match.groups()
-            if page not in self.titles:
-                raise ValueError(f"모르는 쪽을 가리키는 링크: {match.group(0)}")
-            if anchor is not None and anchor not in self.anchors[page]:
-                raise ValueError(f"모르는 닻을 가리키는 링크: {match.group(0)}")
-            target = page if anchor is None else f"{page}/{anchor}"
-            return f'<a class="xref" href="#{target}">{label or self.titles[page]}</a>'
+    @staticmethod
+    def _plain(piece, whole):
+        """표시가 아닌 글 조각 — 짝이 안 맞아 남은 `**`·`` ` ``는 깨진 글이므로 멈춤."""
+        if "**" in piece or "`" in piece:
+            raise ValueError(f"짝이 안 맞는 ** 또는 ` 표시: {whole!r}")
+        return html.escape(piece, quote=False)
 
-        out = LINK_RE.sub(link, out)
-        out = CODE_RE.sub(r"<code>\1</code>", out)
-        out = BOLD_RE.sub(r"<strong>\1</strong>", out)
-        if keys:
-            out = KEY_RE.sub(lambda match: self.key(match.group(1)), out)
-        return out
+    def _link(self, match):
+        page, anchor, label = match.group("page"), match.group("anchor"), match.group("label")
+        if page not in self.titles:
+            raise ValueError(f"모르는 쪽을 가리키는 링크: {match.group(0)}")
+        if anchor is not None and anchor not in self.anchors[page]:
+            raise ValueError(f"모르는 닻을 가리키는 링크: {match.group(0)}")
+        text = html.escape(self.titles[page] if label is None else label, quote=False)
+        return f'<a class="xref" href="#{target(page, anchor)}">{text}</a>'
 
     @staticmethod
     def key(spec):
@@ -85,9 +111,26 @@ class _Builder:
         match = HANGUL_KEY_RE.match(spec)
         if match:
             spec, hangul = match.group(1), f'<span class="hangul">{html.escape(match.group(2))}</span>'
-        parts = [spec] if spec == "+" else spec.split("+")
+        parts = KEY_SPLIT_RE.split(spec)
+        if not all(parts) or any(len(part) > 1 and part.endswith("+") for part in parts):  # "+F"·"Ctrl+"
+            raise ValueError(f"빈 키가 있는 키 표시: {spec!r}")
         caps = '<span class="plus">+</span>'.join(f"<kbd>{html.escape(part)}</kbd>" for part in parts)
         return f'<span class="keycombo">{caps}{hangul}</span>'
+
+    def text_only(self, text):
+        """표시를 벗긴 평문 (그림의 alt 글) — 코드·굵게·키는 그 안의 글, 링크는 보이는 글."""
+        out, at = [], 0
+        for match in TOKEN_RE.finditer(text):
+            out.append(text[at:match.start()])
+            at = match.end()
+            if match.group("page") is not None:
+                out.append(match.group("label") or self.titles.get(match.group("page"), ""))
+            elif match.group("bold") is not None:
+                out.append(self.text_only(match.group("bold")))
+            else:
+                out.append(match.group("code") or match.group("key"))
+        out.append(text[at:])
+        return "".join(out)
 
     def key_cell(self, spec):
         specs = (spec,) if isinstance(spec, str) else spec
@@ -108,14 +151,14 @@ class _Builder:
                         for number, text in enumerate(legend, 1))
         legend_html = f'<ol class="legend">{items}</ol>' if legend else ""
         return (f'<figure class="{" ".join(classes)}"><div class="shot"><img src="{source}" width="{shown_w}" height="{shown_h}" '
-                f'alt="{html.escape(caption, quote=True)}" loading="lazy"><figcaption>{self.inline(caption)}</figcaption></div>'
+                f'alt="{html.escape(self.text_only(caption), quote=True)}" loading="lazy"><figcaption>{self.inline(caption)}</figcaption></div>'
                 f"{legend_html}</figure>")
 
     def block(self, page, block):
         kind = block[0]
         if kind == "h":
             _kind, title, anchor = block
-            return f'<h2 id="{page.key}--{anchor}">{self.inline(title)}</h2>'
+            return f'<h2 id="{target(page.key, anchor)}">{self.inline(title)}</h2>'
         if kind == "p":
             return f"<p>{self.inline(block[1])}</p>"
         if kind == "fig":
@@ -150,15 +193,16 @@ class _Builder:
         chips = ""
         if len(sections) >= 3:
             chips = '<div class="onpage">' + "".join(
-                f'<a href="#{page.key}/{anchor}">{self.inline(title)}</a>' for anchor, title in sections) + "</div>"
+                f'<a href="#{target(page.key, anchor)}">{self.inline(title)}</a>' for anchor, title in sections) + "</div>"
         body = "".join(self.block(page, block) for block in page.blocks)
         return (f'<section class="page" id="{page.key}"><header><div class="crumb">{html.escape(page.group)}</div>'
                 f"<h1>{html.escape(page.title)}</h1><p class=\"lead\">{self.inline(page.lead)}</p>{chips}</header>{body}</section>")
 
     def releases_section(self):
         key = manual_content.RELEASES_KEY
-        chips = '<div class="onpage">' + "".join(
-            f'<a href="#{key}/v{release.version}">{release.version}</a>' for release in release_notes.RELEASES) + "</div>"
+        links = "".join(f'<a href="#{target(key, "v" + release.version)}">{release.version}</a>'
+                        for release in release_notes.RELEASES)
+        chips = f'<div class="onpage">{links}</div>'
         articles = []
         for release in release_notes.RELEASES:
             badge = f'<span class="badge">{CURRENT_BADGE}</span>' if release.version == self.current_version else ""
@@ -168,7 +212,7 @@ class _Builder:
                 heading = f"<h3>{self.inline(title, keys=False)}</h3>" if title else ""
                 groups.append(heading + "<ul>" + "".join(f"<li>{self.inline(item, keys=False)}</li>" for item in items) + "</ul>")
             articles.append(
-                f'<article class="release"><h2 id="{key}--v{release.version}">{release.version}{badge}{date}</h2>'
+                f'<article class="release"><h2 id="{target(key, "v" + release.version)}">{release.version}{badge}{date}</h2>'
                 f'<p class="summary">{self.inline(release.summary, keys=False)}</p>{"".join(groups)}</article>')
         return (f'<section class="page" id="{key}"><header><div class="crumb">{manual_content.RELEASES_GROUP}</div>'
                 f"<h1>{manual_content.RELEASES_TITLE}</h1><p class=\"lead\">{manual_content.RELEASES_LEAD}</p>{chips}</header>"
@@ -236,7 +280,6 @@ CSS = """
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {""" + _DARK + """} }
 :root[data-theme="dark"] {""" + _DARK + """}
 * { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
 body { margin:0; background:var(--bg); color:var(--text); line-height:1.72; font-size:15px;
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Malgun Gothic","Apple SD Gothic Neo","Noto Sans KR",sans-serif;
   -webkit-font-smoothing:antialiased; word-break:keep-all; overflow-wrap:anywhere; }
@@ -384,15 +427,21 @@ SCRIPT = r"""
     next.textContent = at < order.length - 1 ? titleOf(order[at + 1]) + ' →' : '';
     next.setAttribute('href', at < order.length - 1 ? '#' + order[at + 1] : '#');
     document.title = titleOf(key) + ' — YesonCheck 사용법';
-    var target = anchor ? document.getElementById(key + '--' + anchor) : null;
-    if (target) target.scrollIntoView(); else window.scrollTo(0, 0);
+    var section = anchor ? document.getElementById(key + '--' + anchor) : null;
+    if (section) section.scrollIntoView(); else window.scrollTo(0, 0);
   }
   function route() {
-    var hash = decodeURIComponent(location.hash.replace(/^#/, ''));
-    var cut = hash.indexOf('/');
-    show(cut < 0 ? hash : hash.slice(0, cut), cut < 0 ? null : hash.slice(cut + 1));
+    var hash = location.hash.replace(/^#/, '');
+    try { hash = decodeURIComponent(hash); } catch (e) { hash = ''; }  // 깨진 주소는 모르는 쪽처럼 첫 쪽으로
+    var cut = hash.indexOf('--');
+    show(cut < 0 ? hash : hash.slice(0, cut), cut < 0 ? null : hash.slice(cut + 2));
   }
   window.addEventListener('hashchange', route);
+  // 지금 주소와 같은 링크를 다시 누르면 hashchange가 오지 않으므로 직접 그 자리로
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest ? e.target.closest('a[href^="#"]') : null;
+    if (a && a.getAttribute('href') === location.hash) route();
+  });
   route();
 
   // 찾기: 글에 낱말이 모두 들어 있는 쪽만 목차에 남김, Enter는 첫 쪽으로

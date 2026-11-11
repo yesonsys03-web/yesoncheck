@@ -82,12 +82,22 @@ def write_json_atomic(path: str, data, indent: int | None = 2) -> None:
     쓰다 실패하면 임시 파일을 지우고 원래 예외를 그대로 올린다 (원래 파일은 그대로). indent=None이면 한 줄.
     파일 권한은 이미 있는 파일이면 그 권한을, 새 파일이면 open()과 같은 0o666 & ~umask를 준다 (좁아지지 않음).
     """
+    _write_atomic(path, lambda fh: json.dump(data, fh, ensure_ascii=False, indent=indent), newline=None)
+
+
+def write_text_atomic(path: str, text: str) -> None:
+    """text를 UTF-8로 path에 씀 — write_json_atomic과 같은 방법(같은 폴더의 임시 파일 + os.replace, Windows는 대상이 열려 있으면
+    다시 시도, 실패하면 임시 파일을 지우고 원래 예외를 그대로). 줄 끝은 글에 든 그대로(플랫폼에 맞춰 바꾸지 않음)."""
+    _write_atomic(path, lambda fh: fh.write(text), newline="")
+
+
+def _write_atomic(path, write, newline):
     folder = os.path.dirname(os.path.abspath(path))  # 폴더 없이 파일 이름만 줘도 됨
     os.makedirs(folder, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(dir=folder, prefix=".tmp-")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, ensure_ascii=False, indent=indent)
+        with os.fdopen(fd, "w", encoding="utf-8", newline=newline) as fh:
+            write(fh)
         _match_target_mode(tmp_path, path)
         _replace_with_retry(tmp_path, path)
     except Exception:

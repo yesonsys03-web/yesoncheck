@@ -6,7 +6,7 @@ import types
 
 import pytest
 
-from yesoncheck import build_info, manual_html, manual_open
+from yesoncheck import build_info, manual_html, manual_open, user_files
 from yesoncheck.build_info import BuildInfo
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -47,6 +47,8 @@ def test_write_makes_one_complete_file(tmp_path):
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
     assert text.startswith("<!DOCTYPE html>") and text.rstrip().endswith("</html>")
+    with open(path, "rb") as fh:
+        assert b"\r\n" not in fh.read()  # 줄 끝을 플랫폼에 맞춰 바꾸지 않음 (어느 OS에서 써도 같은 파일)
     assert f"버전 {build_info.SOURCE_VERSION}" in text  # 소스 실행
 
 
@@ -66,11 +68,33 @@ def test_write_failure_leaves_no_half_file_and_raises(tmp_path, monkeypatch):
     def refuse(src, dst):
         raise PermissionError("바꿔 끼울 수 없음")
 
-    monkeypatch.setattr(manual_open.os, "replace", refuse)
+    monkeypatch.setattr(user_files, "_IS_WINDOWS", False)
+    monkeypatch.setattr(user_files, "_replace", refuse)
     with pytest.raises(PermissionError, match="바꿔 끼울 수 없음"):
         manual_open.write(str(tmp_path))
     assert os.listdir(tmp_path) == [manual_open.FILE_NAME]
     assert (tmp_path / manual_open.FILE_NAME).read_text(encoding="utf-8") == "앞서 쓴 글"
+
+
+def test_write_retries_on_windows_while_another_program_holds_the_old_file(tmp_path, monkeypatch):
+    """Windows: 브라우저·백신이 앞서 쓴 매뉴얼을 잠깐 잡고 있어도 F1이 오류 창으로 끝나지 않음 (user_files의 다시 시도)."""
+    (tmp_path / manual_open.FILE_NAME).write_text("앞서 쓴 글", encoding="utf-8")
+    calls = []
+
+    def busy_twice(src, dst):
+        calls.append(dst)
+        if len(calls) <= 2:
+            raise PermissionError(13, "다른 프로세스가 열어 두고 있음", dst)
+        os.replace(src, dst)
+
+    monkeypatch.setattr(user_files, "_IS_WINDOWS", True)
+    monkeypatch.setattr(user_files, "_sleep", lambda seconds: None)
+    monkeypatch.setattr(user_files, "_replace", busy_twice)
+    path = manual_open.write(str(tmp_path))
+    assert len(calls) == 3
+    with open(path, encoding="utf-8") as fh:
+        assert fh.read().startswith("<!DOCTYPE html>")
+    assert os.listdir(tmp_path) == [manual_open.FILE_NAME]
 
 
 def test_write_does_not_hide_a_missing_image(tmp_path, monkeypatch):
@@ -186,14 +210,21 @@ def test_show_help_failure_shows_the_error_window_with_the_traceback(monkeypatch
     assert captured.out == ""
 
 
-def test_help_menu_and_button_are_wired_to_show_help():
-    """Help → 사용법(F1)과 Help 단추가 이 메서드를 부름 (글자로 확인 — 창을 만들지 않음)."""
-    with open(os.path.join(ROOT, "yesoncheck", "player_base.py"), encoding="utf-8") as fh:
-        text = fh.read()
-    assert "help_action = help_menu.addAction('사용법')" in text
-    assert "help_action.setShortcut('F1')" in text
-    assert "help_action.triggered.connect(self.show_help)" in text
-    assert "helpButton.clicked.connect(self.show_help)" in text
+def test_help_menu_item_opens_the_manual_with_f1(qapp, monkeypatch):
+    """Help → 사용법(F1)이 매뉴얼을 엶 — 진짜 창의 메뉴 항목을 눌러 봄. (가운데 패널의 Help 단추는 예전에 화면에서 빠졌음.)"""
+    from yesoncheck import main_window, player_base
+
+    calls = []
+    monkeypatch.setattr(player_base.manual_open, "open_manual", lambda: calls.append(1) or "/tmp/manual.html")
+    player = main_window.VideoPlayer()
+    try:
+        help_menu = [action.menu() for action in player.menuBar().actions() if action.text() == "&Help"][0]
+        item = [action for action in help_menu.actions() if action.text() == "사용법"][0]
+        assert item.shortcut().toString() == "F1"
+        item.trigger()
+        assert calls == [1]
+    finally:
+        player.close()
 
 
 # ---------------------------------------------------------------- 빌드한 앱의 확인 (smoke)

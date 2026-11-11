@@ -36,6 +36,7 @@ BADGE_COLOR = "#ff2d6f"
 BADGE_RADIUS = 12
 GUTTER_COLOR = "#232323"  # 어두운 테마의 창 배경 (main_window_styles)
 GUTTER = 40
+WORK_PREFIX = "yc_manual_"  # 작업 폴더 /tmp/yc_manual_…
 MEDIA_LINK = "/tmp/MyShow"  # 창에 보이는 경로(미디어 정보·주석 저장 자리)가 임시 폴더 이름 없이 /tmp/MyShow/… 가 되게 거는 링크
 SHOT_TIMEOUT_S = 300
 
@@ -351,7 +352,7 @@ def shot_overview(st):
     st.open_job(player)
     image = st.grab(player)
     st.save("overview", image, [
-        Callout(1, menu_titles_rect(player), "r", False),
+        Callout(1, menu_titles_rect(player), "ro", False),
         Callout(2, sidebar_column(player), "tl", True),
         Callout(3, widget_rect(player, middle_panel(player)), "tl", True),
         Callout(4, widget_rect(player, player.videoWidget), "tl", True),
@@ -516,9 +517,12 @@ def shot_seq_tab(st):
     st.pump()
     player.seek_to_frame(7)
     image = st.grab(player)
+    from PyQt5.QtCore import QRect
+
+    rows = widget_rect(player, player.seq_sidebar)
     st.save("seq_tab", image, [
         Callout(1, widget_rect(player, player.sidebar_tabs.tabBar()), "ro"),
-        Callout(2, widget_rect(player, player.seq_sidebar), "r"),
+        Callout(2, QRect(rows.left(), rows.top() + 110, rows.width(), 2), "c"),  # 목록 안, 항목 글자 아래 빈 곳
         Callout(3, widget_rect(player, player.sidebar_count_label), "r"),
         Callout(4, widget_rect(player, player.filenameLabel), "t"),
     ])
@@ -612,13 +616,13 @@ def shot_annotation(st):
 
     badges = [w for w in player.videoWidget.findChildren(QLabel) if w.text() == "주석 모드" and w.isVisible()]
     sc.require(len(badges) == 1, f"'주석 모드' 배지가 하나가 아님: {len(badges)}")
-    mark = video_point(player, (sun_x + 86) / manual_media.WIDTH, 100 / manual_media.HEIGHT)
+    mark = video_point(player, 0.585, 0.37)  # 화살표의 시작 점(노란 점이 보이는 주석) 옆
     st.save("annotation", image, [
         seen(1, player.annotationModeButton),
         seen(2, player.annotationToolCombo, player.annotationColorCombo),
         seen(3, player.annotationFontSizeSpin, player.annotationRangeEndSpin),
         seen(4, player.annotationListWidget),
-        Callout(5, QRect(mark.x() + 14, mark.y(), 2, 2), "c"),
+        Callout(5, QRect(mark.x() - 26, mark.y() + 8, 2, 2), "c"),
         Callout(6, widget_rect(player, badges[0]), "lo"),
     ])
 
@@ -900,6 +904,11 @@ def run_shot(args):
     os._exit(0)
 
 
+def own_link(path):
+    """path가 이 도구가 건 링크인지 — /tmp/yc_manual_… 아래를 가리키는 심볼릭 링크만 (남의 것은 지우지 않음)."""
+    return os.path.islink(path) and os.readlink(path).startswith(os.path.join("/tmp", WORK_PREFIX))
+
+
 def prepare_work(work, media_root):
     config = os.path.join(work, "share", ".yesoncheck")
     for folder in (os.path.join(work, "home"), config, os.path.join(work, "instances")):
@@ -923,9 +932,11 @@ def main(argv=None):
     out = os.path.abspath(args.out)
     os.makedirs(out, exist_ok=True)
     names = args.shot or list(SHOTS)
-    if os.path.lexists(MEDIA_LINK) and not os.path.islink(MEDIA_LINK):
-        raise SystemExit(f"{MEDIA_LINK}가 이미 있고 링크가 아님 — 옮기거나 지운 뒤 다시 돌릴 것")
-    base = tempfile.mkdtemp(prefix="yc_manual_", dir="/tmp")
+    if sys.platform == "win32":
+        raise SystemExit("이 도구는 Mac·Linux에서만 돕니다 (/tmp와 심볼릭 링크를 씀 — 그림은 Mac에서 찍어 저장소에 넣음)")
+    if os.path.lexists(MEDIA_LINK) and not own_link(MEDIA_LINK):
+        raise SystemExit(f"{MEDIA_LINK}가 이미 있고 이 도구가 건 링크가 아님 — 옮기거나 지운 뒤 다시 돌릴 것")
+    base = tempfile.mkdtemp(prefix=WORK_PREFIX, dir="/tmp")
     failed = []
     try:
         media_root = os.path.join(base, "_media")
@@ -935,7 +946,7 @@ def main(argv=None):
         for name in names:
             work = os.path.join(base, name)
             prepare_work(work, media_root)
-            if os.path.islink(MEDIA_LINK):
+            if own_link(MEDIA_LINK):
                 os.remove(MEDIA_LINK)
             os.symlink(os.path.join(work, "MyShow"), MEDIA_LINK)
             env = sc.child_environment(work, ROOT)
@@ -950,7 +961,7 @@ def main(argv=None):
                 continue
             print(f"{name}: {saved[-1][6:]} {time.monotonic() - started:.1f}초", flush=True)
     finally:
-        if os.path.islink(MEDIA_LINK):
+        if own_link(MEDIA_LINK):
             os.remove(MEDIA_LINK)
         shutil.rmtree(base, ignore_errors=True)
     if failed:

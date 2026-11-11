@@ -12,9 +12,8 @@
 import os
 import subprocess
 import sys
-import tempfile
 
-from yesoncheck import build_info, manual_html
+from yesoncheck import build_info, manual_html, user_files
 
 IMAGES_FOLDER = "manual_images"
 FILE_NAME = "YesonCheck_manual.html"
@@ -52,21 +51,11 @@ def build():
 
 
 def write(folder=None):
-    """매뉴얼을 `folder`(기본 `output_dir()`)에 씀 → 파일 경로. 같은 폴더의 임시 파일에 쓴 뒤 바꿔 끼움 —
-    여러 창이 함께 써도, 브라우저가 읽는 중에도 반쪽 파일이 보이지 않음."""
-    folder = output_dir() if folder is None else folder
-    os.makedirs(folder, exist_ok=True)
-    path = os.path.join(folder, FILE_NAME)
-    text = build()
-    handle, tmp_path = tempfile.mkstemp(prefix=".manual_", suffix=".tmp", dir=folder)
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(text)
-        os.replace(tmp_path, path)
-    except BaseException:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        raise
+    """매뉴얼을 `folder`(기본 `output_dir()`)에 씀 → 파일 경로. `user_files.write_text_atomic`(같은 폴더의 임시 파일 + 바꿔 끼움)
+    이라 여러 창이 함께 써도 반쪽 파일이 보이지 않고, Windows에서 브라우저·백신이 앞 파일을 잠깐 잡고 있으면 다시 시도함
+    (끝내 안 되면 PermissionError 그대로). 그림이 없으면 아무것도 쓰지 않고 그 예외."""
+    path = os.path.join(output_dir() if folder is None else folder, FILE_NAME)
+    user_files.write_text_atomic(path, build())
     return path
 
 

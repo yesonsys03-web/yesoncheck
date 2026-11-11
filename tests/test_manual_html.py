@@ -58,13 +58,13 @@ def test_real_manual_builds_with_every_page_and_release():
 
 
 def test_real_manual_links_all_resolve():
-    """목차·쪽 안의 링크(#쪽, #쪽/닻)가 모두 실제 쪽·절을 가리킴 — 스크립트는 `쪽--닻`인 id로 감."""
+    """목차·쪽 안의 링크가 모두 실제 쪽·절의 id를 가리킴 (`#쪽`·`#쪽--닻` — 스크립트가 꺼져 있어도 그 자리로 감)."""
     text = manual_html.build(fake_image)
     ids = set(re.findall(r'id="([^"]+)"', text))
     targets = set(re.findall(r'href="#([^"]+)"', text))
-    assert targets
-    for target in targets:
-        assert target.replace("/", "--") in ids, target
+    assert len(targets) > 60
+    assert targets <= ids, sorted(targets - ids)
+    assert any("--" in target for target in targets)
 
 
 def test_real_manual_is_self_contained():
@@ -87,6 +87,30 @@ def test_shortcuts_page_lists_every_key_the_code_handles():
     for key in ("Space", "←", "→", ",", ".", "+", "=", "2", "-", "1", "3", "4", "F (ㄹ)", "Shift+F", "V (ㅍ)", "N (ㅜ)", "T (ㅅ)",
                 "B (ㅠ)", "P (ㅔ)", "R (ㄱ)", "Ctrl+O", "Ctrl+휠", "↑", "↓", "Enter", "\\", "F5", "F1", "D (ㅇ)", "X (ㅌ)", "Ctrl+Z"):
         assert key in listed, key
+
+
+def test_manual_text_has_no_private_paths():
+    """저장소가 공개 — 매뉴얼 글에 이 PC·NAS의 경로가 들어가면 안 됨 (바뀐 점은 test_release_notes가 봄)."""
+
+    def strings(value):
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, tuple):
+            for item in value:
+                yield from strings(item)
+
+    for item in manual_content.PAGES:
+        for text in strings((item.title, item.lead, item.blocks)):
+            for needle in ("/Volumes/", "/Users/", "colordata", "usadata", "USA_DB"):
+                assert needle not in text, (item.key, needle, text[:60])
+
+
+def test_script_routes_by_element_id_and_survives_a_broken_address():
+    """주소는 `#쪽--닻`(= id)로 나누고, 깨진 퍼센트 인코딩은 모르는 쪽처럼 다룸 — 브라우저 없이는 글자로만 확인
+    (동작은 헤드리스 크롬으로 봄: CLAUDE.md '사용법 매뉴얼')."""
+    assert "hash.indexOf('--')" in manual_html.SCRIPT
+    assert "try { hash = decodeURIComponent(hash); } catch (e) { hash = ''; }" in manual_html.SCRIPT
+    assert "if (a && a.getAttribute('href') === location.hash) route();" in manual_html.SCRIPT
 
 
 def test_groups_cover_every_page():
@@ -162,6 +186,34 @@ def test_inline_markup(one_page):
     assert "&lt;이름&gt; &amp; 끝</p>" in text
 
 
+@pytest.mark.parametrize("source, expected", [
+    ("`**`와 **굵게**", "<code>**</code>와 <strong>굵게</strong>"),  # 코드 안의 **는 굵게가 아님
+    ("`{x}` 와 `[[nowhere]]`", "<code>{x}</code> 와 <code>[[nowhere]]</code>"),  # 코드 안은 글자 그대로 (모르는 쪽이어도)
+    ("`a < b & c`", "<code>a &lt; b &amp; c</code>"),
+    ("{<} {Shift+&}", '<span class="keycombo"><kbd>&lt;</kbd></span> <span class="keycombo"><kbd>Shift</kbd>'
+                      '<span class="plus">+</span><kbd>&amp;</kbd></span>'),  # 키 안의 글자를 두 번 escape하지 않음
+    ("**a `b` {F5}**", '<strong>a <code>b</code> <span class="keycombo"><kbd>F5</kbd></span></strong>'),
+    ("[[start|<b> & 글]]", '<a class="xref" href="#start">&lt;b&gt; &amp; 글</a>'),
+    ("**[[start]]**", '<strong><a class="xref" href="#start">쪽 제목</a></strong>'),
+])
+def test_inline_markup_is_tokenized_from_the_source_text(one_page, source, expected):
+    assert f"<p>{expected}</p>" in one_page([("p", source)])
+
+
+@pytest.mark.parametrize("broken", ["**짝 없는 굵게", "짝 없는 ` 코드", "**a `b**c` d**", "{Ctrl+}", "{+F}"])
+def test_unbalanced_markup_and_empty_keys_fail_the_build(one_page, broken):
+    """깨진 HTML을 조용히 만들지 않음."""
+    with pytest.raises(ValueError):
+        one_page([("p", broken)])
+
+
+def test_figure_alt_text_has_no_markup(monkeypatch):
+    monkeypatch.setattr(manual_content, "PAGES", (page([("fig", "x", "**굵은** `코드` {F5} [[start|글]] <끝>", ())]),))
+    text = manual_html.build(fake_image)
+    assert 'alt="굵은 코드 F5 글 &lt;끝&gt;"' in text
+    assert "<figcaption><strong>굵은</strong> <code>코드</code> " in text
+
+
 def test_key_shapes():
     key = manual_html._Builder.key
     assert key("Space") == '<span class="keycombo"><kbd>Space</kbd></span>'
@@ -169,6 +221,7 @@ def test_key_shapes():
     assert key("+") == '<span class="keycombo"><kbd>+</kbd></span>'  # 더하기 키 자신은 나누지 않음
     assert key("F (ㄹ)") == '<span class="keycombo"><kbd>F</kbd><span class="hangul">ㄹ</span></span>'
     assert key("\\") == '<span class="keycombo"><kbd>\\</kbd></span>'
+    assert key("Ctrl++") == '<span class="keycombo"><kbd>Ctrl</kbd><span class="plus">+</span><kbd>+</kbd></span>'  # 끝의 +는 키
 
 
 def test_keys_table_takes_one_key_or_several(one_page):
@@ -200,13 +253,13 @@ def test_headings_get_page_scoped_ids_and_chips_from_three(one_page):
     assert '<h2 id="start--a">하나</h2>' in text
     assert 'class="onpage"' not in text.split("</style>")[1].split('id="releases"')[0]
     text = one_page([("h", "하나", "a"), ("h", "둘", "b"), ("h", "셋", "c")])
-    assert '<div class="onpage"><a href="#start/a">하나</a><a href="#start/b">둘</a><a href="#start/c">셋</a></div>' in text
+    assert '<div class="onpage"><a href="#start--a">하나</a><a href="#start--b">둘</a><a href="#start--c">셋</a></div>' in text
 
 
 def test_links_between_pages(one_page):
     text = one_page([("h", "절", "part"), ("p", "[[start]] 그리고 [[start/part|그 절]] 그리고 [[releases]]")])
     assert '<a class="xref" href="#start">쪽 제목</a>' in text
-    assert '<a class="xref" href="#start/part">그 절</a>' in text
+    assert '<a class="xref" href="#start--part">그 절</a>' in text  # 주소 = 그 절의 id (스크립트 없이도 감)
     assert f'<a class="xref" href="#releases">{manual_content.RELEASES_TITLE}</a>' in text
 
 
