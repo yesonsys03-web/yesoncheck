@@ -68,6 +68,79 @@ def test_plan_rejects_bad_input(args):
         hover_strip.plan_for(*args)
 
 
+def test_plan_keeps_source_size():
+    """계획은 원본 크기도 들고 있음 — 띠 ffmpeg의 스레드 규칙(thread_limits)이 원본 화소 수로 정함 (그림 크기와 별개)."""
+    plan = hover_strip.plan_for(334, 3840, 2160)
+    assert (plan.source_width, plan.source_height) == (3840, 2160) and (plan.width, plan.height) == (320, 180)
+    portrait = hover_strip.plan_for(10, 1080, 1920)
+    assert (portrait.source_width, portrait.source_height) == (1080, 1920) and (portrait.width, portrait.height) == (180, 320)
+
+
+# ---------------------------------------------------------------- 띠 ffmpeg의 스레드 규칙
+
+
+@pytest.mark.parametrize("size,codec,expected", [
+    ((1280, 720), None, (None, None)),  # 720p 이하는 어느 코덱이든 묶지 않음 (ffmpeg 기본 — 720p 게이트 통과)
+    ((1280, 720), "prores", (None, None)),
+    ((720, 1280), "h264", (None, None)),  # 세로 720p도 화소 수가 같음
+    ((320, 180), None, (None, None)),
+    ((1920, 1080), "h264", (None, None)),  # 1080p 이하 허용 목록 코덱(h264 — 재생 게이트를 잰 것만) — 묶지 않음 (1080p H.264 게이트 통과)
+    ((1080, 1920), "h264", (None, None)),
+    ((1281, 720), "h264", (None, None)),
+    ((1920, 1080), "hevc", (1, 1)),  # 목록 밖 long-GOP는 1코어 (Ruling 26 — 양성 증거로만 켬: 재생 게이트를 안 잼)
+    ((1080, 1920), "vp9", (1, 1)),
+    ((1920, 1080), "av1", (1, 1)),
+    ((1281, 720), "hevc", (1, 1)),
+    ((1920, 1080), "cfhd", (1, 1)),  # ALL_INTRA_CODECS 목록 밖의 all-intra도 (막는 목록이던 때의 구멍)
+    ((1280, 720), "hevc", (None, None)),  # 720p 이하는 어느 코덱이든 묶지 않음
+    ((1920, 1080), "prores", (1, 1)),  # all-intra는 720p보다 크면 1코어 (1080p ProRes 게이트 불통과)
+    ((1920, 1080), "dnxhd", (1, 1)),
+    ((1281, 720), "prores", (1, 1)),
+    ((1920, 1080), None, (1, 1)),  # 코덱을 모르면(짧은 파일 — 헤더를 읽지 않음, 헤더 실패) 720p보다 크면 1코어
+    ((1281, 720), None, (1, 1)),
+    ((1921, 1080), "h264", (1, 1)),  # 1080p보다 크면 코덱과 상관없이 1코어 (4K 측정값 그대로)
+    ((1920, 1081), "h264", (1, 1)),
+    ((3840, 2160), "h264", (1, 1)),
+    ((3840, 2160), "prores", (1, 1)),
+    ((2160, 3840), None, (1, 1)),
+])
+def test_thread_limits_by_source_pixels_and_codec(size, codec, expected):
+    """스레드 규칙(Ruling 25·26): 원본 화소 ≤ SINGLE_THREAD_ABOVE_PIXELS(1280×720)면 (None, None), ≤ INTER_CODEC_FULL_THREADS_MAX_PIXELS(1920×1080)이고
+    코덱이 LONG_GOP_FULL_THREADS_CODECS(허용 목록 — 재생 게이트를 잰 h264만)에 있으면 (None, None), 그 밖은 부른 쪽의 값(큰 파일의 디코더·필터 스레드 —
+    1코어)."""
+    assert hover_strip.SINGLE_THREAD_ABOVE_PIXELS == 1280 * 720
+    assert hover_strip.INTER_CODEC_FULL_THREADS_MAX_PIXELS == 1920 * 1080
+    assert hover_strip.LONG_GOP_FULL_THREADS_CODECS == {"h264"}
+    assert hover_strip.ALL_INTRA_CODECS == {"prores", "dnxhd", "mjpeg", "rawvideo"}
+    plan = hover_strip.plan_for(48, *size)
+    assert hover_strip.thread_limits(plan, 1, 1, codec) == expected
+
+
+def test_all_intra_codecs_is_one_constant():
+    """all-intra 코덱 집합은 hover_strip에 하나 — 거친 띠 건너뜀(hover_keyframes)이 같은 객체를 씀 (스레드 규칙은 허용 목록
+    LONG_GOP_FULL_THREADS_CODECS를 봄 — Ruling 26)."""
+    from yesoncheck import hover_keyframes
+
+    assert hover_keyframes.ALL_INTRA_CODECS is hover_strip.ALL_INTRA_CODECS
+
+
+def test_thread_limits_passes_caller_values_and_reads_threshold_at_call_time(monkeypatch):
+    """큰 파일의 값은 부른 쪽(hover_strip_builder의 두 상수)이 넘긴 그대로 (None이면 None). 문턱은 부를 때마다 모듈 값으로 읽음."""
+    plan_4k = hover_strip.plan_for(48, 3840, 2160)
+    assert hover_strip.thread_limits(plan_4k, 4, 3) == (4, 3)
+    assert hover_strip.thread_limits(plan_4k, None, 2) == (None, 2)
+    plan_720 = hover_strip.plan_for(48, 1280, 720)
+    assert hover_strip.thread_limits(plan_720, 4, 3) == (None, None)
+    monkeypatch.setattr(hover_strip, "SINGLE_THREAD_ABOVE_PIXELS", 640 * 360)
+    assert hover_strip.thread_limits(plan_720, 4, 3) == (4, 3)
+    assert hover_strip.thread_limits(hover_strip.plan_for(48, 640, 360), 4, 3) == (None, None)
+    plan_4k = hover_strip.plan_for(48, 3840, 2160)
+    assert hover_strip.thread_limits(plan_4k, 4, 3, "h264") == (4, 3)
+    monkeypatch.setattr(hover_strip, "INTER_CODEC_FULL_THREADS_MAX_PIXELS", 3840 * 2160)
+    assert hover_strip.thread_limits(plan_4k, 4, 3, "h264") == (None, None)
+    assert hover_strip.thread_limits(plan_4k, 4, 3, "prores") == (4, 3)
+
+
 # ---------------------------------------------------------------- 띠 저장소
 
 
