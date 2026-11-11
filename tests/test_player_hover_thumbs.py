@@ -904,7 +904,7 @@ def test_long_h264_builds_coarse_then_exact_strip(shown_player, h264_long, real_
         coarse_done = [line for line in lines if line.startswith(f"{LOG_PREFIX} 거친 띠 완성: 17/17장 ")]
         assert len(coarse_done) == 1 and coarse_done[0].endswith(f"초 — {h264_long}")
         assert lines.index(start) < lines.index(first) < lines.index(coarse_done[0]) < lines.index(finished[0])
-        assert len(builder.pids) == 3
+        assert len(builder.pids) == 4  # 헤더 ffprobe → 패킷 ffprobe → 거친 ffmpeg → 정확한 ffmpeg
     else:
         assert not any("거친 띠 먼저" in line or "거친 띠 완성" in line for line in lines)
         head = f"{LOG_PREFIX} 거친 띠를 만들지 못했습니다(정확한 띠는 계속) — {h264_long}"
