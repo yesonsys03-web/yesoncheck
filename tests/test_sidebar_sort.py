@@ -175,12 +175,14 @@ def row_widths(player, qapp):
     return player.sidebar_tabs.tabBar().sizeHint().width(), [player._sort_button_width(text) for text in texts]
 
 
-def test_at_the_startup_width_the_button_is_visible_beside_the_tabs(player, qapp):
-    """창을 처음 켠 폭(사이드바를 건드리지 않음): 세 탭이 다 보이고 단추가 탭 줄 안에 온전히 있음. 잰 값은 기록에도 남김(진짜 stderr — 플랫폼마다 글꼴·탭
-    막대 폭이 달라 CI 기록에서 Windows·Mac의 값을 볼 수 있게)."""
+def test_at_the_startup_width_the_button_is_visible_beside_the_tabs(player, qapp, capsys):
+    """창을 처음 켠 폭(사이드바를 건드리지 않음): 세 탭이 다 보이고 단추가 탭 줄 안에 온전히 있음. 잰 값은 통과해도 기록에 남김 — 플랫폼마다 글꼴·탭
+    막대 폭이 달라 CI 기록에서 Windows·Mac의 값을 볼 수 있게. pytest가 출력을 잡는 것을 잠깐 끄고 찍음(`capsys.disabled()`):
+    `sys.__stderr__`에 쓰면 pytest가 fd 2까지 잡아 통과한 시험의 글은 기록에 나오지 않음(CI 기록에서 확인)."""
     bar_width, widths = row_widths(player, qapp)
     text, tabs_whole, gap, inside, measured = tab_row(player, qapp)
-    sys.__stderr__.write(f"\n[정렬 단추 측정 — {sys.platform}] {measured} · 글 후보 폭 {widths}\n")
+    with capsys.disabled():
+        print(f"\n[정렬 단추 측정 — {sys.platform}] {measured} · 글 후보 폭 {widths} · 틈 {gap}")
     assert text in sidebar_sort.button_texts("name") and tabs_whole and inside, measured
     assert gap <= 8, measured  # 떨어져 있지 않음 (자리가 모자라면 0보다 작아 조금 겹칠 수 있음)
 
