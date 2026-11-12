@@ -44,6 +44,7 @@ from yesoncheck.annotation_overlay import AnnotationOverlay
 from yesoncheck.frame_handles import native_surface_of, whole_surface_handle
 from yesoncheck.gl_video_item import LOG_PREFIX, VIDEO_ITEM_ENV, VideoFrameItem, use_stream_item, video_item_mode
 from yesoncheck.overlay_text_layout import overlay_layout, overlay_reserve_text, widest_digit
+from yesoncheck.raster_video_item import SETTLE_MS, AreaScaledPixmapItem
 
 VIEWPORT_ENV = "YESONCHECK_VIEWPORT"
 VIEWPORT_MODES = ("gl", "raster")
@@ -180,7 +181,15 @@ class CustomVideoWidget(QGraphicsView):
             self.video_item.set_failure_callback(self._on_stream_failure)  # → streamPaintFailed
             self.scene.addItem(self.video_item)
         else:
-            self.video_item = self.scene.addPixmap(QPixmap())
+            # 줄여 그릴 때 면적 평균으로 미리 줄인 그림을 그리는 픽스맵 아이템 (raster_video_item — Windows 기본 화면 그리기에서 가는 선이
+            # 지글거리던 것, 2026-11-12). 픽스맵·테두리는 프레임 크기 그대로라 아래의 좌표 계약(창에 맞춤·와이프 선·ROI)은 그대로
+            self.video_item = AreaScaledPixmapItem(QPixmap())
+            self.scene.addItem(self.video_item)
+            # 재생·드래그 중(프레임이 잇달아 바뀜)에는 예전의 빠른 그리기, 프레임이 SETTLE_MS 동안 그대로면 면적 평균으로 한 번 다시 그림
+            self._settle_timer = QTimer(self)
+            self._settle_timer.setSingleShot(True)
+            self._settle_timer.setInterval(SETTLE_MS)
+            self._settle_timer.timeout.connect(self._draw_settled_frame)
         self._pixmap_backing = None  # 픽스맵 길에 그린 네이티브 프레임 — RGB32 픽스맵이 그 메모리를 함께 쓰므로 다음 그림까지 쥠 (_show_native_frames)
         self._overlay_provider = None  # B 키 글자 공급자 () -> str | None — 플레이어가 등록(set_overlay_provider), updateFrame의 네이티브 분기가 부름
         self._annotation_provider = None  # 주석 공급자 () -> list[dict] — 보이는 프레임의 주석, 플레이어가 등록(set_annotation_provider)
@@ -578,6 +587,17 @@ class CustomVideoWidget(QGraphicsView):
         
         event.acceptProposedAction()
 
+    def _frame_changed(self):
+        """픽스맵 길에 새 프레임을 넣은 뒤: 우선 빠른 그리기로 두고 멈춤 타이머를 다시 셈 (raster_video_item — 줄여 그릴 때의 면적 평균은
+        프레임이 멈췄을 때만)."""
+        self.video_item.settled = False
+        self._settle_timer.start()
+
+    def _draw_settled_frame(self):
+        """프레임이 SETTLE_MS 동안 그대로임(멈춤·한 장씩 넘김·드래그를 놓음) → 면적 평균으로 다시 그림."""
+        self.video_item.settled = True
+        self.video_item.update()
+
     def updateFrame(self, frame_a, frame_b):
         if frame_a is None:
             self.video_item.setPixmap(QPixmap())
@@ -616,6 +636,7 @@ class CustomVideoWidget(QGraphicsView):
         else:
             pixmap = QPixmap.fromImage(q_img)
             self.video_item.setPixmap(pixmap)
+            self._frame_changed()
 
         self._pixmap_backing = None  # RGB 그림을 건 뒤에 놓음 — 픽스맵 길이 앞 네이티브 프레임의 표면을 더 쥐지 않게(스트림 길에선 늘 None)
         self.set_overlay_text(None, width, height)  # RGB 프레임의 B 키 글자는 프레임에 구움 — 앞 네이티브 프레임의 아이템이 남지 않게(숨어 있으면 할 일 없음)
@@ -653,6 +674,7 @@ class CustomVideoWidget(QGraphicsView):
                                  f"strides {frame_a.strides}) — RGB32 픽스맵으로 가리킬 수 없습니다")
             q_img = QImage(sip.voidptr(frame_a.ctypes.data), width, height, frame_a.strides[0], QImage.Format_RGB32)
         self.video_item.setPixmap(QPixmap.fromImage(q_img))
+        self._frame_changed()
         self._pixmap_backing = frame_a  # 새 픽스맵을 건 뒤에 바꿈 — 옛 픽스맵이 걸려 있는 동안 옛 배열을 놓지 않게
 
     def _on_stream_failure(self, native):

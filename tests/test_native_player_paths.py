@@ -21,6 +21,8 @@ import pytest
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import QGraphicsPixmapItem, QOpenGLWidget
 
+from yesoncheck.raster_video_item import AreaScaledPixmapItem  # 픽스맵 길의 아이템 (QGraphicsPixmapItem 하위 — 줄여 그릴 때 면적 평균)
+
 from tests.conftest import write_test_video
 from tests.native_fakes import (  # noqa: F401 (픽스처 — new_player는 native_fakes의 픽스처가 요청함)
     FAKE_FRAME_COUNT,
@@ -271,7 +273,7 @@ def test_pixmap_fallback_keeps_backing(fake_native_player, viewport, video_item)
     색·크기가 틀림; 픽스맵 길에서 B를 합성하면 오른쪽 절반이 B 색; updateFrame의 RGB 분기·None 분기에서 _pixmap_backing을 놓지 않으면 None 단언."""
     rig = fake_native_player(ab=True, viewport=viewport, video_item=video_item)
     player, widget = rig.player, rig.player.videoWidget
-    assert widget.video_item_stream is False and type(widget.video_item) is QGraphicsPixmapItem
+    assert widget.video_item_stream is False and type(widget.video_item) is AreaScaledPixmapItem
     player.wipeXButton.setChecked(True)
 
     player.next_frame_playback()

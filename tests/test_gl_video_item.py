@@ -555,12 +555,14 @@ def test_failure_window_names_the_decoder_menu_on_mac(qapp, shown, monkeypatch, 
 # ---------------------------------------------------------------- CustomVideoWidget 연결
 
 from PyQt5.QtWidgets import QGraphicsPixmapItem, QOpenGLWidget
+
+from yesoncheck.raster_video_item import AreaScaledPixmapItem  # 픽스맵 길의 아이템 (QGraphicsPixmapItem 하위 — 줄여 그릴 때 면적 평균)
 from yesoncheck.video_widget import CustomVideoWidget
 
 
 def test_offscreen_default_keeps_plain_pixmap_item(qapp):
     widget = CustomVideoWidget()
-    assert type(widget.video_item) is QGraphicsPixmapItem and widget.video_item_stream is False
+    assert type(widget.video_item) is AreaScaledPixmapItem and widget.video_item_stream is False
 
 def test_forced_gl_viewport_installs_stream_item_below_wipe_lines(qapp, monkeypatch, capsys):
     monkeypatch.setenv("YESONCHECK_VIEWPORT", "gl")
@@ -574,7 +576,7 @@ def test_pixmap_toggle_keeps_pixmap_item_on_gl_viewport(qapp, monkeypatch, capsy
     monkeypatch.setenv("YESONCHECK_VIEWPORT", "gl")
     monkeypatch.setenv(VIDEO_ITEM_ENV, "pixmap")
     widget = CustomVideoWidget()
-    assert type(widget.video_item) is QGraphicsPixmapItem and widget.video_item_stream is False
+    assert type(widget.video_item) is AreaScaledPixmapItem and widget.video_item_stream is False
     assert "[표시] QPixmap 경로" in capsys.readouterr().out
 
 def _fake_cocoa(monkeypatch, context_ok):
@@ -605,7 +607,7 @@ def test_cocoa_default_keeps_pixmap_item_when_context_fails(qapp, monkeypatch, c
     widget = CustomVideoWidget()
     try:
         assert not isinstance(widget.viewport(), QOpenGLWidget)
-        assert type(widget.video_item) is QGraphicsPixmapItem and widget.video_item_stream is False
+        assert type(widget.video_item) is AreaScaledPixmapItem and widget.video_item_stream is False
         assert "[표시]" not in capsys.readouterr().out
     finally:
         widget.close()
