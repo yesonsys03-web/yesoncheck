@@ -218,6 +218,19 @@ def test_switching_the_filter_applies_to_the_next_paint(qapp, gl):
     assert storage_sizes(gl) == [(WIDTH, HEIGHT)] and vertices(gl) == corners and np.array_equal(gl.uploads[-1], frame)
 
 
+@pytest.mark.parametrize("mode", ["linear", "area"])
+def test_a_frame_over_the_texture_limit_fails_the_same_way_whatever_the_filter(qapp, gl, mode):
+    """GPU 텍스처 한도를 넘는 프레임은 줄이지 않고 크게 실패하는 것이 규칙 — 고품질이 줄인 그림만 한도와 견주면 창에 맞춘 동안은 그려지다가
+    확대하는 순간 실패해 영상 영역이 비게 됨(리뷰에서 잡음). 원본 크기로 판정: 줄여 그리는 자리에서도 GL을 부르기 전에 같은 오류."""
+    downscale_filter.set_preferred(mode)
+    wide = np.zeros((8, gl.max_texture_size + 4, 3), np.uint8)
+    item = prepared(wide)
+    gl.calls.clear()
+    with pytest.raises(gl_bindings.GLBindingError, match="텍스처 한도"):
+        item._draw_native(2000, 100, box(0.0, 0.0, 1000.0, 2.0))
+    assert [name for name, _ in gl.calls] == ["check_error"]  # 들어올 때의 오류 확인뿐 — 저장소·업로드·그리기 없음
+
+
 # ---------------------------------------------------------------- paint를 거쳐 (좌표 규칙·가드)
 
 

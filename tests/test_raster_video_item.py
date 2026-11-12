@@ -9,9 +9,9 @@
 
 import numpy as np
 import pytest
-from PyQt5.QtCore import QRectF, Qt
+from PyQt5.QtCore import QPoint, QRectF, Qt
 from PyQt5.QtGui import QImage, QPainter, QPixmap
-from PyQt5.QtWidgets import QGraphicsPixmapItem, QGraphicsScene
+from PyQt5.QtWidgets import QApplication, QGraphicsPixmapItem, QGraphicsScene
 
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 from yesoncheck import downscale_filter, raster_video_item
@@ -151,15 +151,40 @@ def test_the_scaled_picture_lands_on_whole_pixels_without_being_blended_again(wi
     assert outside.min() == 255  # 그 자리 밖에는 아무것도 그리지 않음
 
 
-@pytest.mark.parametrize("pixel_ratio", [1.5, 2.0])
-def test_the_size_follows_the_screen_scale(widget, area, monkeypatch, pixel_ratio):
-    """화면 배율(Windows 150% 등)까지 넣은 장치 픽셀 크기로 줄임 — 논리 크기로 줄이면 다시 키워 그려 흐려짐."""
+@pytest.mark.parametrize("pixel_ratio, offset", [(1.25, (0.0, 0.0)), (1.5, (0.0, 0.0)), (2.0, (0.0, 0.0)), (1.25, (3.4, 7.7)), (1.5, (10.3, 2.9))])
+def test_the_size_follows_the_screen_scale(widget, area, monkeypatch, pixel_ratio, offset):
+    """화면 배율(Windows 125%·150% 등)까지 넣은 장치 픽셀 크기·자리로 — 논리 크기로 줄이면 다시 키워 그려 흐려짐."""
     real = raster_video_item.area_scaled
     calls = count_rescales(monkeypatch)
-    view = shown(widget, noise(), 0.25, pixel_ratio=pixel_ratio)
-    width, height = round(WIDTH * 0.25 * pixel_ratio), round(HEIGHT * 0.25 * pixel_ratio)
-    assert calls == [(width, height)]
-    assert np.array_equal(view[:height, :width], to_array(real(widget.video_item.pixmap(), width, height)))
+    scale = 0.25
+    view = shown(widget, noise(), scale, offset=offset, pixel_ratio=pixel_ratio)
+    left, top, width, height = downscale_filter.snapped_rect(
+        offset[0] * pixel_ratio, offset[1] * pixel_ratio, (offset[0] + WIDTH * scale) * pixel_ratio, (offset[1] + HEIGHT * scale) * pixel_ratio, WIDTH, HEIGHT)
+    assert calls == [(width, height)] and abs(width - WIDTH * scale * pixel_ratio) <= 1
+    assert np.array_equal(view[top:top + height, left:left + width], to_array(real(widget.video_item.pixmap(), width, height)))
+
+
+def test_inside_the_real_window_the_picture_lands_on_the_window_pixel_grid(new_player, dialogs, tmp_path, area):  # noqa: F811
+    """진짜 창 안의 뷰포트는 창의 그림(backing store)에 **자기 자리만큼 밀려** 그려짐 — 정수로 맞출 격자는 그 장치 좌표(painter.deviceTransform)여야 함.
+    창 전체를 그려(QWidget.grab — 자식 위젯은 자리만큼 밀린 painter로 그림) 영상 자리의 픽셀이 줄인 그림 그 자체인지 봄 (리뷰에서 권한 시험)."""
+    player = new_player(make_config(str(tmp_path), {}))
+    player.resize(1000, 760)
+    player.show()
+    view = player.videoWidget
+    frame = noise()
+    view.updateFrame(frame, None)
+    view.resetTransform()
+    view.scale(0.3127, 0.3127)  # 소수 크기 (1600 × 0.3127 = 500.32)
+    QApplication.processEvents()
+    shot = to_array(player.grab().toImage())
+    origin = view.viewport().mapTo(player, QPoint(0, 0))
+    mapping, rect = view.viewportTransform(), view.video_item.sceneBoundingRect()
+    top_left, bottom_right = mapping.map(rect.topLeft()), mapping.map(rect.bottomRight())
+    left, top, width, height = downscale_filter.snapped_rect(origin.x() + top_left.x(), origin.y() + top_left.y(),
+                                                             origin.x() + bottom_right.x(), origin.y() + bottom_right.y(), WIDTH, HEIGHT)
+    expected = to_array(raster_video_item.area_scaled(view.video_item.pixmap(), width, height))
+    inner = (slice(20, height - 20), slice(40, width - 40))  # 가운데 — 영상 위에 겹쳐 그리는 것(줌 라벨 등)을 피함
+    assert np.array_equal(shot[top:top + height, left:left + width][inner], expected[inner])
 
 
 def test_one_to_one_view_shows_the_frame_untouched(widget, area, monkeypatch):
@@ -241,5 +266,5 @@ def test_a_failure_while_rescaling_is_reported_once_and_the_frame_is_still_drawn
     first = shown(widget, stripes(), 0.25)
     second = render(widget.scene, widget.video_item.sceneBoundingRect(), 0.25)
     assert len(reports) == 1 and reports[0][0] == raster_video_item.LOG_PREFIX
-    assert downscale_filter.MENU_TEXT in reports[0][1]  # 되돌리는 길을 알림
+    assert "다시 켤 때까지" in reports[0][1]  # 그 뒤로 이 창은 메뉴에서 고품질을 다시 골라도 줄이지 않음 — 그대로 알림
     assert np.array_equal(first, plain(stripes(), 0.25)) and np.array_equal(second, first)

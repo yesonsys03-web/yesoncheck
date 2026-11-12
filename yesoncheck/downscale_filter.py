@@ -74,13 +74,16 @@ def save(name) -> None:
 def snapped_rect(x0, y0, x1, y1, width, height):
     """width×height 프레임이 그려질 장치 픽셀 자리 (x0, y0)–(x1, y1)(왼쪽 위·오른쪽 아래, 소수) → 면적 평균으로 미리 줄여 그릴 **정수** 자리
     (왼쪽, 위, 너비, 높이). 줄여 그리는 경우가 아니면(두 축 모두 DOWNSCALE_BELOW 이상 — 1:1·키워 그리기) None, 뒤집혔거나 빈 자리도 None — 예전 그리기에 맡김.
+    **네 가장자리를 각각** 가장 가까운 정수 픽셀로(왼쪽 자리와 크기를 따로 반올림하면 오른쪽·아래 끝이 1픽셀 가까이 어긋남 — 리뷰에서 잡음): 어느 가장자리든
+    진짜 자리와 반 픽셀 안이고, 크기는 반올림한 크기와 1픽셀 다를 수 있음(자리를 옮기면 같은 배율에서도 한 픽셀 오갈 수 있음 — 그때 다시 줄임).
     반올림은 Qt처럼 .5 올림(파이썬 round·int 아님 — 음수 자리에서도 가장 가까운 픽셀)."""
     span_x, span_y = x1 - x0, y1 - y0
     if span_x <= 0 or span_y <= 0:
         return None
     if span_x >= width * DOWNSCALE_BELOW and span_y >= height * DOWNSCALE_BELOW:
         return None
-    return math.floor(x0 + 0.5), math.floor(y0 + 0.5), max(1, math.floor(span_x + 0.5)), max(1, math.floor(span_y + 0.5))
+    left, top = math.floor(x0 + 0.5), math.floor(y0 + 0.5)
+    return left, top, max(1, math.floor(x1 + 0.5) - left), max(1, math.floor(y1 + 0.5) - top)
 
 
 def area_scaled(frame, width, height):

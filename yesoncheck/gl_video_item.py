@@ -438,6 +438,7 @@ class VideoFrameItem(QGraphicsPixmapItem):
         gl.check_error("native 진입 — 이전 GL 호출이 남긴 오류")  # 우리 GL 호출 전에 — Qt 엔진이 남긴 오류를 우리 업로드·그리기 탓으로 돌리지 않음(삼키지 않고 같은 실패 경로)
         shrunk = self._area_target(corners, w, h)
         if shrunk is not None:
+            self._check_texture_limit(w, h)  # 한도는 원본 크기로 — 줄인 크기로만 보면 창에 맞춘 동안은 그려지다 확대하는 순간 실패함 (필터와 상관없이 같은 판정)
             w, h, corners = shrunk
         self._ensure_storage(w, h)
         gl.glBindTexture(GL_TEXTURE_2D, self._texture)
@@ -514,13 +515,17 @@ class VideoFrameItem(QGraphicsPixmapItem):
     def _allocate_storage(self, texture, w, h):
         """(native 안) 2D 텍스처 texture에 (w, h) GL_RGB8 저장소를 새로 잡는다(내용 없음) — set_frame 경로와 RGB 면이 함께 씀.
         GPU 한도를 넘으면 GLBindingError(축소하지 않음)."""
-        limit = self._gl.max_texture_size
-        if w > limit or h > limit:
-            raise GLBindingError(f"프레임 {w}×{h}가 이 GPU의 텍스처 한도 {limit}를 넘습니다 — 축소하지 않습니다")
+        self._check_texture_limit(w, h)
         gl = self._gl
         gl.glBindTexture(GL_TEXTURE_2D, texture)
         gl.glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, None)  # 저장소만 (내용 없음)
         gl.check_error("storage")
+
+    def _check_texture_limit(self, w, h):
+        """w×h가 이 GPU의 텍스처 한도를 넘으면 GLBindingError(줄여서 그려 주지 않음 — 크게 실패). GL을 부르지 않음."""
+        limit = self._gl.max_texture_size
+        if w > limit or h > limit:
+            raise GLBindingError(f"프레임 {w}×{h}가 이 GPU의 텍스처 한도 {limit}를 넘습니다 — 축소하지 않습니다")
 
     def _upload_rgb(self, rgb):
         """(native 안, 저장소를 잡은 2D 텍스처를 바인드한 뒤) (높이, 너비, 3) RGB 배열 전체를 동기 업로드 — set_frame 경로와 RGB 면이 함께 씀."""

@@ -83,12 +83,25 @@ def test_saving_an_unknown_name_is_refused(local_app_data):
 
 
 def test_minified_frame_is_placed_on_whole_device_pixels():
-    """1920×1080을 988.3×555.9 자리에 — 그릴 크기로 반올림하고 자리도 정수 픽셀로(다시 섞이지 않게)."""
-    assert downscale_filter.snapped_rect(45.4, 30.6, 45.4 + 988.3, 30.6 + 555.9, 1920, 1080) == (45, 31, 988, 556)
+    """1920×1080을 (45.4, 30.6)–(1033.7, 586.5) 자리에 — 네 가장자리를 각각 가장 가까운 정수 픽셀로(다시 섞이지 않게)."""
+    assert downscale_filter.snapped_rect(45.4, 30.6, 45.4 + 988.3, 30.6 + 555.9, 1920, 1080) == (45, 31, 989, 556)
 
 
 def test_half_pixel_positions_round_up_like_qt():
-    assert downscale_filter.snapped_rect(10.5, 20.5, 10.5 + 100.5, 20.5 + 50.5, 400, 200) == (11, 21, 101, 51)
+    assert downscale_filter.snapped_rect(10.5, 20.5, 10.5 + 100.5, 20.5 + 50.5, 400, 200) == (11, 21, 100, 50)
+
+
+def test_every_edge_stays_within_half_a_pixel():
+    """왼쪽 자리와 크기를 따로 반올림하면 오른쪽·아래 끝이 1픽셀 가까이 어긋남(0.4에서 10.8까지 → 0..10) — 와이프 선·ROI·주석은 진짜 자리에 그려지므로
+    가장자리마다 반 픽셀 안이어야 함 (리뷰에서 잡음)."""
+    assert downscale_filter.snapped_rect(0.4, 0.4, 10.8, 10.8, 400, 400) == (0, 0, 11, 11)
+    rng = np.random.default_rng(7)
+    for _ in range(2000):
+        x0, y0 = rng.uniform(-50, 300, 2)
+        span_x, span_y = rng.uniform(2, 900), rng.uniform(2, 500)
+        left, top, width, height = downscale_filter.snapped_rect(x0, y0, x0 + span_x, y0 + span_y, 1920, 1080)
+        for snapped, real in ((left, x0), (top, y0), (left + width, x0 + span_x), (top + height, y0 + span_y)):
+            assert abs(snapped - real) <= 0.5 + 1e-9
 
 
 def test_negative_positions_round_to_the_nearest_pixel():

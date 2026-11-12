@@ -32,7 +32,7 @@ class AreaScaledPixmapItem(QGraphicsPixmapItem):
         super().__init__(*args)
         self._scaled = None  # 지금 픽스맵을 줄인 그림
         self._scaled_for = None  # (픽스맵 cacheKey, 너비, 높이) — 무엇을 어느 크기로 줄였는지
-        self._failed = False  # 줄이다 실패함 — 한 번 알린 뒤로는 예전 그리기
+        self._failed = False  # 줄이다 실패함 — 한 번 알린 뒤로는 이 창을 닫을 때까지 예전 그리기 (메뉴에서 다시 골라도 다시 시도하지 않음 — 알림 글에 적음)
 
     def paint(self, painter, option, widget=None):
         # PyQt5 가상 함수에서 빠져나간 예외는 프로세스를 끝냄(qFatal) — 줄이는 길의 실패는 여기서 잡아 한 번 크게 알리고 예전 방식으로 그림
@@ -44,8 +44,8 @@ class AreaScaledPixmapItem(QGraphicsPixmapItem):
                 self._failed = True
                 error_window.report_from_handler(
                     LOG_PREFIX,
-                    "영상을 면적 평균으로 줄여 그리다 실패했습니다 — 이 창은 예전 방식(Linear)으로 그립니다 "
-                    f"(Settings → {downscale_filter.MENU_TEXT} → {downscale_filter.ACTION_TEXTS['linear']}를 고르면 줄이지 않습니다)")
+                    f"영상을 면적 평균으로 줄여 그리다 실패했습니다(Settings → {downscale_filter.MENU_TEXT} → {downscale_filter.ACTION_TEXTS['area']}) — "
+                    "이 창은 다시 켤 때까지 예전 방식(Linear)으로 그립니다")
         super().paint(painter, option, widget)
 
     def _paint_area_scaled(self, painter):
@@ -71,7 +71,9 @@ class AreaScaledPixmapItem(QGraphicsPixmapItem):
         if not invertible:
             return False
         painter.save()
-        painter.setRenderHint(QPainter.SmoothPixmapTransform, False)  # 장치 픽셀에 1:1 — 다시 섞지 않음
-        painter.drawImage(inverse.mapRect(QRectF(left, top, scaled_width, scaled_height)), self._scaled)
-        painter.restore()
+        try:
+            painter.setRenderHint(QPainter.SmoothPixmapTransform, False)  # 장치 픽셀에 1:1 — 다시 섞지 않음
+            painter.drawImage(inverse.mapRect(QRectF(left, top, scaled_width, scaled_height)), self._scaled)
+        finally:  # 그리다 실패해도 painter 상태(부드러운 변환 끔)를 부모 그리기에 남기지 않음
+            painter.restore()
         return True
