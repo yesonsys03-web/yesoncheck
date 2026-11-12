@@ -687,26 +687,6 @@ class PlayerPlaybackMixin:
             self.play_video()
         return ok
 
-    def change_gpu_backend(self, index):
-        backend = self.gpuComboBox.currentText()
-        if backend == "CPU":
-            self.use_gpu = False
-            self.gpu_backend = None
-        elif backend == "NVIDIA (CUDA)":
-            self.use_gpu = True
-            self.gpu_backend = 'cuda'
-            if cv2.cuda.getCudaEnabledDeviceCount() > 0:
-                cv2.cuda.setDevice(0)
-        elif backend == "AMD (OpenCL)":
-            self.use_gpu = True
-            self.gpu_backend = 'opencl'
-            if cv2.ocl.haveOpenCL():
-                cv2.ocl.setUseOpenCL(True)
-
-        if self.cap_a:
-            current_pos = int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES))
-            self.seek_to_frame(current_pos)
-
     def process_frame(self, frame, gpu=True):
         """캡처 프레임을 화면용으로: BGR → RGB(use_gpu면 고른 GPU 백엔드로). 네이티브 프레임(IOSurface 위 BGRX — frame_handles)은 그대로
         돌려줌 — 변환·복사 없이 GL이 표면을 그림(cv2.cvtColor는 4채널 strided 배열도 받아 3채널 복사본을 만들어 손잡이를 조용히 잃으므로 여기서 막음).
@@ -2644,50 +2624,6 @@ class PlayerPlaybackMixin:
         msg_box.setText(msg)
         msg_box.exec_()
         msg_box.deleteLater()
-
-    def change_performance_mode(self, index):
-        """4K 성능 모드 변경"""
-        mode_text = self.performanceComboBox.currentText()
-        if "극한" in mode_text or "Ultra" in mode_text:
-            self.set_performance_mode('ultra')
-            print("4K 성능 모드: 극한 속도 (Ultra) - 최대 성능 모드")
-        elif "속도" in mode_text or "Speed" in mode_text:
-            self.set_performance_mode('speed')
-            print("4K 성능 모드: 속도 우선 (Speed) - 드래그 최적화 활성화")
-        elif "품질" in mode_text or "Quality" in mode_text:
-            self.set_performance_mode('quality')
-            print("4K 성능 모드: 품질 우선 (Quality) - 균형 모드")
-        else:  # 자동
-            self.set_performance_mode('auto')
-            print("4K 성능 모드: 자동 (Auto) - 적응형 최적화")
-        
-        # 캐시 최적화
-        self.clear_cache()
-        print(f"캐시 크기: {self.cache_size}, 드래그 업데이트 빈도: {1000/self.drag_update_interval:.0f}fps")
-
-    def set_performance_mode(self, mode):
-        """성능 모드 설정"""
-        self.performance_mode = mode
-        if mode == 'ultra':
-            self.skip_frame_processing = True
-            self.cache_size = 300  # 캐시 크기 극한 증가
-            self.drag_update_interval = 2   # 500fps로 극한 성능 (2ms 간격)
-            self.frame_skip_threshold = 30  # 프레임 스킵 임계값 극한 증가
-        elif mode == 'speed':
-            self.skip_frame_processing = True
-            self.cache_size = 200  # 캐시 크기 더 증가
-            self.drag_update_interval = 5   # 200fps로 극한 성능 (5ms 간격)
-            self.frame_skip_threshold = 20  # 프레임 스킵 임계값 더 증가
-        elif mode == 'quality':
-            self.skip_frame_processing = False
-            self.cache_size = 50   # 캐시 크기 증가
-            self.drag_update_interval = 25  # 40fps
-            self.frame_skip_threshold = 8   # 프레임 스킵 임계값 증가
-        else:  # auto
-            self.skip_frame_processing = False
-            self.cache_size = 100   # 캐시 크기 증가
-            self.drag_update_interval = 15  # 67fps
-            self.frame_skip_threshold = 10  # 프레임 스킵 임계값 증가
 
     def get_cached_frame(self, frame_idx):
         """캐시에서 프레임 가져오기"""

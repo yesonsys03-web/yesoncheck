@@ -114,11 +114,11 @@ def forbid_save(monkeypatch):
 # ---------------------------------------------------------------- 메뉴가 있는 곳 (Mac만)
 
 @mac_only
-def test_menu_exists_on_mac_after_gpu_submenu(make_player, auto):
-    """Settings에 'GPU Acceleration' 바로 뒤 '재생 디코더 (Mac)' — 체크 가능한 두 항목(이름·차례 고정), decoder_actions·decoder_action_group이 그 항목."""
+def test_menu_is_the_first_settings_item_on_mac(make_player, auto):
+    """Settings의 첫 항목이 '재생 디코더 (Mac)'(2026-11-12 전에는 'GPU Acceleration' 바로 뒤 — 그 항목을 뺌) — 체크 가능한 두 항목(이름·차례 고정), decoder_actions·decoder_action_group이 그 항목."""
     player = make_player()
     texts = [a.text() for a in settings_menu(player).actions()]
-    assert texts[texts.index("GPU Acceleration") + 1] == MENU_TEXT
+    assert texts[0] == MENU_TEXT
     items = decoder_submenu(player).actions()
     assert [a.text() for a in items] == [LABELS["videotoolbox"], LABELS["ffmpeg"]]
     assert all(a.isCheckable() for a in items)
