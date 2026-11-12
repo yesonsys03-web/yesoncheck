@@ -101,3 +101,16 @@ def test_no_player_class_silently_shadows_a_name_of_a_later_one():
                 continue
             shadowed.append(f"{cls.__name__}.{name} 가 {', '.join(later)} 의 것을 가림")
     assert shadowed == []
+
+
+def help_texts(player):
+    [action] = [a for a in player.menuBar().actions() if a.text() == "&Help"]
+    return [a.text() for a in action.menu().actions()]
+
+
+def test_help_menu_has_no_developer_run_and_build_item(player):
+    """Help의 '실행 및 빌드'는 소스 폴더의 run_app.sh·build_app.sh를 돌리던 개발용 항목 — 배포한 앱에는 그 스크립트가 없어
+    누르면 '스크립트 없음' 경고만 떴음(2026-11-12 사용자 결정으로 뺌)."""
+    assert "실행 및 빌드" not in help_texts(player)
+    assert "사용법" in help_texts(player) and "정보" in help_texts(player)
+    assert not hasattr(player, "show_run_and_build_dialog")

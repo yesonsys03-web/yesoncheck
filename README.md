@@ -27,11 +27,10 @@ YesonCheck는 PyQt5 기반의 영상 비교/검토 툴입니다. 이번 리팩�
 
 | 동작 | 방법 |
 |------|------|
-| **앱 실행** | 터미널에서 `./run_app.sh` 실행 (또는 앱 메뉴 **Help → 실행 및 빌드** → **▶ 앱 실행**) |
-| **macOS 앱 빌드** | 터미널에서 `./build_app.sh` 실행 (또는 **Help → 실행 및 빌드** → **📦 macOS 앱 빌드**) |
+| **앱 실행** | 터미널에서 `./run_app.sh` 실행 |
+| **macOS 앱 빌드** | 터미널에서 `./build_app.sh` 실행 |
 
 - `run_app.sh`, `build_app.sh`는 프로젝트 루트에 있으며, `~/coding/p310_tf` 가상환경을 사용합니다.
-- 앱이 떠 있는 상태에서는 **Help → 실행 및 빌드**에서 위 버튼을 누르면 새 터미널에서 실행/빌드됩니다.
 
 ### 수동 실행 (가상환경·명령어 직접 사용 시)
 1. 가상환경 생성·의존성 설치 (최초 한 번)  
@@ -279,7 +278,7 @@ YesonCheck는 **창 하나가 앱 하나**입니다. 창을 더 열면 앱이 �
 
 ## PyInstaller 번들 생성
 - Intel / Apple Silicon 빌드, 몬터레이(macOS 12.3) 지원 조건은 [BUILD.md](BUILD.md)를 참고하세요.
-- **원클릭**: 터미널에서 `./build_app.sh` 실행 또는 앱 메뉴 **Help → 실행 및 빌드** → **📦 macOS 앱 빌드**.
+- **원클릭**: 터미널에서 `./build_app.sh` 실행.
 - 생성된 앱은 `dist/YesonCheck_Autocut_Intel.app` 또는 `dist/YesonCheck_Autocut_AppleSilicon.app`(빌드한 Mac 기준)에 위치합니다.
 - 앱에는 `vendor/ffmpeg/<아키텍처>/`의 정적 ffmpeg·ffprobe가 들어갑니다 (Homebrew ffmpeg는 사용하지 않음).
 - 수동 빌드 시: `source ~/coding/p310_tf/bin/activate` 후 `python -m PyInstaller --clean -y YesonCheck_Autocut.spec`, 이어서 `python check_min_macos.py dist/YesonCheck_Autocut.app $(uname -m)`로 번들을 검사하세요.
