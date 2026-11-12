@@ -458,8 +458,9 @@ jobs:
         # 파이썬 스택(PYTHONFAULTHANDLER)으로는 paddle·TensorFlow 안의 어느 함수에서 죽었는지 모름 → macOS가 남긴 .ips에서 출력.
         # 러너 이미지에 원래 있던 다른 프로그램의 보고서는 빼고 이 job 동안 생긴 우리 프로세스(소스 실행·빌드된 앱) 것만.
         # 빌드 환경이 없을 때도 돌도록 러너의 python3로 (표준 라이브러리만 씀)
+        # --wait: macOS가 보고서를 쓰는 데 몇 초~수십 초 걸림 — pytest가 세그폴트로 죽으면 이 단계가 1~2초 만에 돌아 "0개"만 찍었음
         if: failure()
-        run: python3 ci/print_crash_reports.py --since "$JOB_START_EPOCH" --process python3 --process YesonCheck_Autocut
+        run: python3 ci/print_crash_reports.py --since "$JOB_START_EPOCH" --process python3 --process YesonCheck_Autocut --wait 120
 
       - name: 디스크 여유 (끝)
         if: always()
