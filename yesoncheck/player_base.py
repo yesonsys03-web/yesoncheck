@@ -1299,12 +1299,14 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         self.setStyleSheet(DARK_STYLESHEET)
         self.current_theme = 'dark'
         self.videoWidget.apply_theme_background('dark')  # GL 뷰포트는 스타일시트 배경 칠을 받지 않음
+        self._apply_take_colors(repaint=True)  # Mov 항목의 테이크 색은 테마마다 다름
         self._schedule_all_rebuild()  # All 탭 시퀀스 글자 색을 테마에 맞춤
 
     def set_light_theme(self):
         self.setStyleSheet(LIGHT_STYLESHEET)
         self.current_theme = 'light'
         self.videoWidget.apply_theme_background('light')  # GL 뷰포트는 스타일시트 배경 칠을 받지 않음
+        self._apply_take_colors(repaint=True)  # Mov 항목의 테이크 색은 테마마다 다름
         self._schedule_all_rebuild()  # All 탭 시퀀스 글자 색을 테마에 맞춤
 
     def toggle_theme(self):

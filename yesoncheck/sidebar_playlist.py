@@ -114,11 +114,7 @@ class SidebarPlaylistMixin:
                 if is_current:
                     item.setForeground(QColor("red"))  # 현재 재생 중인 항목은 빨간색
                 else:
-                    # 현재 테마에 맞는 색상으로 설정
-                    if self.current_theme == 'dark':
-                        item.setForeground(QColor("#fafafa"))  # 블랙 테마에서는 밝은 색상
-                    else:
-                        item.setForeground(QColor("#2c3e50"))  # 라이트 테마에서는 어두운 색상
+                    self._paint_mov_item(item)  # 제 글자색으로: 테이크 색 또는 테마 기본색 (SidebarAllMixin)
             
             # 파일 열기 및 재생
             try:
@@ -199,11 +195,7 @@ class SidebarPlaylistMixin:
             item = self.sidebar.item(i)
             font = item.font(); font.setBold(False)
             item.setFont(font)
-            # 현재 테마에 맞는 색상으로 설정
-            if self.current_theme == 'dark':
-                item.setForeground(QColor("#fafafa"))  # 블랙 테마에서는 밝은 색상
-            else:
-                item.setForeground(QColor("#2c3e50"))  # 라이트 테마에서는 어두운 색상
+            self._paint_mov_item(item)  # 제 글자색으로: 테이크 색 또는 테마 기본색 (SidebarAllMixin)
 
     def play_next_in_playlist(self):
         if self._playlist_resolving:

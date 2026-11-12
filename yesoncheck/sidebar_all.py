@@ -12,14 +12,17 @@
 player_sidebar를 모듈 수준에서 import하지 말 것 (순환 — 다른 사이드바 믹스인과 같음).
 """
 
+import os
+
 from PyQt5.QtCore import QItemSelection, QItemSelectionModel, Qt, QTimer
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QBrush, QColor
 from PyQt5.QtWidgets import QMenu
 
 from yesoncheck import paths
 from yesoncheck.file_names import natural_key
 from yesoncheck.sidebar_counts import count_text
 from yesoncheck.sidebar_items import ALL_KIND_ROLE
+from yesoncheck.sidebar_take_colors import take_color
 
 # All 탭 시퀀스 항목 글자 색 — 테마별 하늘색 (주황 선택 강조·흰/검 기본색 어느 쪽과도 구분)
 ALL_SEQ_FG = {"dark": "#5bc8ff", "light": "#0b6ea8"}
@@ -71,6 +74,7 @@ class SidebarAllMixin:
         self._count_timer.setSingleShot(True)
         self._count_timer.setInterval(0)
         self._count_timer.timeout.connect(self._update_sidebar_count)
+        self._count_timer.timeout.connect(lambda: self._apply_take_colors())  # 새로 들어온 Mov 항목을 테이크 색으로 (같은 미룸)
         for model in (self.sidebar.model(), self.seq_sidebar.model()):
             model.rowsInserted.connect(self._schedule_sidebar_count)
             model.rowsRemoved.connect(self._schedule_sidebar_count)
@@ -90,6 +94,38 @@ class SidebarAllMixin:
         sequences = [(seq.base, seq.ext) for seq in (self.seq_sidebar.item(i).data(Qt.UserRole)
                                                        for i in range(self.seq_sidebar.count()))]
         self.sidebar_count_label.setText(count_text(tab, movies, sequences))
+
+    # ---------------------------------------------------------------- 테이크·버전 색 (Mov 항목 — 규칙은 sidebar_take_colors)
+
+    def _paint_mov_item(self, item):
+        """Mov 항목 하나를 제 글자색으로: 테이크·버전 2번부터는 그 색, 아니면 따로 칠한 색을 지움(테마 시트의 기본색).
+        이미 그 색이면 건드리지 않음(모델 신호 없음 — All 목록을 다시 만들지 않음)."""
+        stem = os.path.splitext(os.path.basename(item.data(Qt.UserRole)))[0]
+        color = take_color(stem, self.current_theme)
+        brush = None if color is None else QBrush(QColor(color))
+        if item.data(Qt.ForegroundRole) != brush:
+            item.setData(Qt.ForegroundRole, brush)
+
+    def _playing_playlist_file(self):
+        """선택 재생이 지금 재생 중인 영상(그 항목은 빨강 — 다시 칠하지 않음), 없으면 None."""
+        if not self.is_playlist_playing or not 0 <= self.current_playlist_index < len(self.playlist):
+            return None
+        return self.playlist[self.current_playlist_index]
+
+    def _apply_take_colors(self, repaint=False):
+        """Mov 목록 항목을 테이크 색으로 칠함. 목록이 바뀐 뒤(개수 줄과 같은 미룸)에는 **아직 칠한 적 없는 항목만**(따로 칠한 글자색이
+        없는 것 — 새 항목은 늘 그렇게 들어옴): 이미 칠한 항목(테이크 색·선택 재생 강조)은 목록을 다시 읽어도 그대로 둠.
+        repaint=True(테마를 바꾼 뒤 — 색이 테마마다 다름)는 전부 다시, 선택 재생 중인 항목(빨강)만 빼고.
+        All 목록의 mov 사본은 원본을 복제하므로 따라옴(원본의 dataChanged → 다시 만들기), 시퀀스는 하늘색 그대로."""
+        if getattr(self, "_count_timer", None) is None:  # 테마 적용이 initUI보다 먼저 부를 수 있음
+            return
+        playing = self._playing_playlist_file()
+        for i in range(self.sidebar.count()):
+            item = self.sidebar.item(i)
+            if playing is not None and paths.same_path(item.toolTip(), playing):
+                continue
+            if repaint or item.data(Qt.ForegroundRole) is None:
+                self._paint_mov_item(item)
 
     def _schedule_all_rebuild(self, *_args):
         """All 탭이 보이는 동안만 미뤄서 다시 만듦 (숨은 동안의 변화는 탭을 열 때 한 번에)."""
