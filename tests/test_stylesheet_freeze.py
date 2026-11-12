@@ -12,10 +12,12 @@ import pytest
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 
 
-DARK_SHA256 = "f75108a96dda17f0c0b5bf8726613aec7a3f4ecb039bb93336309531ce5d8e80"  # 어두운 시트, 3,280자 (사이드바 Mov·Seq 탭 규칙 +378자)
-LIGHT_SHA256 = "0d7c248a7145f8f3d248847a2b72fa45089ca61b04e199b93ce5162d83102bbf"  # 밝은 시트, 4,201자 (사이드바 Mov·Seq 탭 규칙 +409자)
-DARK_LENGTH = 3280
-LIGHT_LENGTH = 4201
+# 2026-11-12 (밝은 테마에 어두운 테마가 섞임 — tests/test_light_theme.py): 두 시트에 접는 상자 머리의 색 규칙(QPushButton#collapsibleToggle
+# — 어두운 쪽은 위젯에 직접 넣던 색 그대로)을 더하고, 밝은 시트는 QMainWindow 규칙을 QWidget 규칙 뒤로 옮김(그 옮김은 글자 수 그대로)
+DARK_SHA256 = "d07dce1e05f40622f83cc2859f1b3aea46d3fcd478ca121ae885cbae8c5cddb8"  # 어두운 시트, 3,519자
+LIGHT_SHA256 = "70252c0fc4e5d2b6dfe8d4bf44c234839db64d37adf9b9a9da0211e11285cf19"  # 밝은 시트, 4,443자
+DARK_LENGTH = 3519
+LIGHT_LENGTH = 4443
 
 
 def sha256_of(sheet):
