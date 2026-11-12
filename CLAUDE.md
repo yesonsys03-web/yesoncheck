@@ -856,8 +856,8 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 
 **시험은 반드시 `~/coding/p310_tf/bin/python -m pytest`로 돌릴 것** — TensorFlow가 없는 `~/coding/p310`으로 돌리면 11개가 실패함.
 
-`tests/`에 시험 파일 130개 (수집 3,315개 — `pytest --collect-only -q tests`, 2026-11-11). `python -m pytest tests -q`로 돌리며(약 20분), 이 Mac의 소스 실행(`p310_tf` — Mac lock대로 PyObjC 포함)에서 3,268개가 통과(2026-11-11 전체 실행 기준 — 수집 3,315개 = 통과 3,268 + 건너뜀 46 + 아래 GIL 부하 시험 하나가 실패(따로 돌리면 통과); 전체 실행에서 아래 플레이크 둘이 실패할 수 있음 — GIL 부하 시험은 따로 돌리면 통과, 종료 시험은 따로 돌려도 간헐 실패)하고 46개는 건너뜀 —
-다른 OS 전용 시험, CI의 설치 파일 단계에서만 도는 시험이 건너뜀. PyObjC가 있어야 도는 네이티브 시험(`test_mac_native_source` 모듈과 진짜 네이티브 디코드 하나)은 Mac lock을 설치한 환경(이 Mac의 `p310_tf`·두 Mac CI job)에서 돌고 Windows CI에서만 건너뜀 (2026-11-11 기준; 부하 시험 `test_movie_pipe_transport::test_reader_keeps_up_while_main_thread_holds_gil`은 이 Mac이 바쁠 때 실패할 수 있음 — 따로 돌리면 통과; `test_fast_startup`의 종료 플레이크 1건(`test_app_exits_cleanly_while_shared_config_load_runs`, 자식 종료 코드 −11)은 러너 상태에 따라 간헐 실패 — main에서도 같은 빈도, 따로 돌려도 간헐 실패(2026-11-11 이 Mac에서 따로 되풀이: main 5/8·사용법 매뉴얼 브랜치 4/8 실패 — 앱을 띄워 둔 채라 평소보다 잦았음)). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
+`tests/`에 시험 파일 134개 (수집 3,380개 — 2026-11-12 전체 실행의 통과 + 건너뜀 + 실패). `python -m pytest tests -q`로 돌리며(약 20분), 이 Mac의 소스 실행(`p310_tf` — Mac lock대로 PyObjC 포함)에서 3,332개가 통과(2026-11-12 전체 실행 기준 — 수집 3,380개 = 통과 3,332 + 건너뜀 46 + 아래 플레이크 둘이 실패; 전체 실행에서 아래 플레이크 둘이 실패할 수 있음 — GIL 부하 시험은 따로 돌리면 대체로 통과, 종료 시험은 따로 돌려도 간헐 실패)하고 46개는 건너뜀 —
+다른 OS 전용 시험, CI의 설치 파일 단계에서만 도는 시험이 건너뜀. PyObjC가 있어야 도는 네이티브 시험(`test_mac_native_source` 모듈과 진짜 네이티브 디코드 하나)은 Mac lock을 설치한 환경(이 Mac의 `p310_tf`·두 Mac CI job)에서 돌고 Windows CI에서만 건너뜀 (2026-11-11 기준; 부하 시험 `test_movie_pipe_transport::test_reader_keeps_up_while_main_thread_holds_gil`은 이 Mac이 바쁠 때 실패할 수 있음 — 따로 돌리면 통과; `test_fast_startup`의 종료 플레이크 1건(`test_app_exits_cleanly_while_shared_config_load_runs`, 자식 종료 코드 −11)은 러너 상태에 따라 간헐 실패 — main에서도 같은 빈도, 따로 돌려도 간헐 실패(2026-11-11 이 Mac에서 따로 되풀이: main 5/8·사용법 매뉴얼 브랜치 4/8 실패 — 앱을 띄워 둔 채라 평소보다 잦았음); CI의 Apple Silicon 러너에서 시간 기반 시험 `test_path_map_setup::test_probe_on_wait_is_called_and_can_cancel`이 한 번 실패(2026-11-12 — 0.45초 동안 약 0.1초마다 불리는 콜백이 3번 이상이어야 하는데 2번; 그 작업만 다시 돌림)). **새 worktree에서 돌릴 때**: `vendor/ffmpeg/<arch>/`(받아 두는 파일 — git이 무시)가 따라오지 않아 `test_check_frozen_imports`의 둘과 `test_pipe_spike::test_boundary_clips_have_their_traits`가 실패함 — 메인 체크아웃의 폴더를 링크하거나 `./fetch_ffmpeg.sh`(2026-11-12에 겪음). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
 정적 빌드(`vendor/ffmpeg/`)를 씀 (`tests/conftest.py`). 시험을 건너뛰거나 지워서 통과시키지 말 것.
 
 시험 구성 (파일 이름 기준):
@@ -1109,6 +1109,10 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 5. 다양한 비디오 콘텐츠 유형으로 테스트
 
 ## 최근 변경 사항
+
+### 2026-11-12 (Help — '실행 및 빌드'를 뺌)
+
+사용자 질문 "헬프에 실행및 빌드가 왜 있는 거지? 필요없으면 제거하는 게 낫지 않아?". 소스 폴더의 `run_app.sh`·`build_app.sh`를 새 터미널에서 돌리던 개발용 창이었고(Mac에서만 보임), **배포한 앱에는 그 스크립트가 들어 있지 않아**(spec에 없음) 누르면 '스크립트 없음' 경고만 떴음. 소스 실행에서는 이미 터미널에서 띄운 상태라 쓸 일이 없음 → `player_base`의 메뉴 항목과 `show_run_and_build_dialog`(61줄), 쓰이지 않게 된 import 둘(`subprocess`·`QDialogButtonBox`), README의 언급 넷, 매뉴얼 Help 메뉴 표의 한 줄을 지우고 `help_menu` 그림을 다시 찍음. 실행·빌드는 터미널에서 `./run_app.sh`·`./build_app.sh` 그대로. 시험 `tests/test_settings_menu.py`(Help 메뉴에 그 항목·처리기가 없음). **배포 노트에 넣을 글**: "Help 메뉴에서 개발용 항목 '실행 및 빌드'를 뺐습니다(Mac)."
 
 ### 2026-11-12 (테마 전환 — 색만 바뀌고 자리·크기·글꼴은 그대로)
 

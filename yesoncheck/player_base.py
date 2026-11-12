@@ -2,7 +2,6 @@
 
 import datetime
 import os
-import subprocess
 import sys
 import time
 import traceback
@@ -23,7 +22,6 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
-    QDialogButtonBox,
     QHBoxLayout,
     QLayout,
     QLabel,
@@ -1359,11 +1357,6 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         help_action.setShortcut('F1')
         help_action.triggered.connect(self.show_help)
         
-        # 실행 및 빌드 (원클릭, Mac 개발 환경 전용: run_app.sh·build_app.sh)
-        if not paths.IS_WINDOWS:
-            run_build_action = help_menu.addAction('실행 및 빌드')
-            run_build_action.triggered.connect(self.show_run_and_build_dialog)
-
         # 업데이트 확인 (NAS·GitHub — 결과 창을 언제나 보임, PlayerUpdateMixin)
         update_check_action = help_menu.addAction('업데이트 확인…')
         update_check_action.triggered.connect(lambda: self.start_update_check(manual=True))
@@ -1604,67 +1597,6 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
             QMessageBox.critical(self, "ffmpeg 없음", str(exc))
             return None
 
-    def show_run_and_build_dialog(self):
-        """실행 및 빌드를 원클릭 버튼으로 제공하는 다이얼로그."""
-        # 프로젝트 루트 (yesoncheck 패키지의 상위 디렉터리)
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        run_script = os.path.join(project_root, "run_app.sh")
-        build_script = os.path.join(project_root, "build_app.sh")
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("실행 및 빌드")
-        layout = QVBoxLayout(dialog)
-
-        layout.addWidget(QLabel("명령어 복사 없이 버튼 한 번으로 실행하거나 빌드할 수 있습니다."))
-        layout.addSpacing(12)
-
-        run_btn = QPushButton("▶ 앱 실행 (개발 모드)")
-        run_btn.setToolTip("새 터미널에서 YesonCheck를 개발 모드로 실행합니다.")
-        def on_run():
-            if not os.path.isfile(run_script):
-                QMessageBox.warning(dialog, "스크립트 없음", f"run_app.sh를 찾을 수 없습니다:\n{run_script}")
-                return
-            try:
-                if sys.platform == "darwin":
-                    esc = project_root.replace("\\", "\\\\").replace('"', '\\"')
-                    subprocess.Popen(["osascript", "-e", f'tell application "Terminal" to do script "cd \\"{esc}\\" && ./run_app.sh"'])
-                elif sys.platform == "win32":
-                    subprocess.Popen(["cmd", "/c", "start", "cmd", "/k", "run_app.bat"], cwd=project_root, shell=False)
-                else:
-                    subprocess.Popen(["x-terminal-emulator", "-e", f"bash '{run_script}'; exec bash"], cwd=project_root)
-                QMessageBox.information(dialog, "실행", "새 터미널에서 앱이 실행됩니다.")
-            except Exception as e:
-                QMessageBox.critical(dialog, "오류", f"실행 실패:\n{e}")
-        run_btn.clicked.connect(on_run)
-        layout.addWidget(run_btn)
-
-        build_btn = QPushButton("📦 macOS 앱 빌드 (PyInstaller)")
-        build_btn.setToolTip("새 터미널에서 PyInstaller로 .app 번들을 생성합니다.")
-        def on_build():
-            if not os.path.isfile(build_script):
-                QMessageBox.warning(dialog, "스크립트 없음", f"build_app.sh를 찾을 수 없습니다:\n{build_script}")
-                return
-            try:
-                if sys.platform == "darwin":
-                    esc = project_root.replace("\\", "\\\\").replace('"', '\\"')
-                    subprocess.Popen(["osascript", "-e", f'tell application "Terminal" to do script "cd \\"{esc}\\" && ./build_app.sh"'])
-                elif sys.platform == "win32":
-                    subprocess.Popen(["cmd", "/c", "start", "cmd", "/k", "build_app.bat"], cwd=project_root, shell=False)
-                else:
-                    subprocess.Popen(["x-terminal-emulator", "-e", f"bash '{build_script}'; exec bash"], cwd=project_root)
-                QMessageBox.information(dialog, "빌드", "새 터미널에서 빌드가 시작됩니다. 완료 시 dist/YesonCheck_Autocut.app 에서 확인하세요.")
-            except Exception as e:
-                QMessageBox.critical(dialog, "오류", f"빌드 실행 실패:\n{e}")
-        build_btn.clicked.connect(on_build)
-        layout.addWidget(build_btn)
-
-        layout.addSpacing(8)
-        layout.addWidget(QLabel("※ 터미널에서 로그를 확인할 수 있습니다."))
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok)
-        button_box.accepted.connect(dialog.accept)
-        layout.addWidget(button_box)
-        dialog.exec_()
-    
     def show_about(self):
         """프로그램 정보를 표시합니다."""
         today_str = korean_date(datetime.date.today())
