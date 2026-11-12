@@ -4,6 +4,8 @@ import importlib.util
 import json
 import os
 
+import pytest
+
 from tests.conftest import ROOT
 
 TOOL = os.path.join(ROOT, "ci", "print_crash_reports.py")
@@ -117,8 +119,11 @@ class FakeTime:
             self.happenings.pop(0)[1]()
 
 
-def run_waiting(tool, capsys, fake, *args):
-    tool.main(list(args), sleep=fake.sleep, clock=fake.clock, now=fake.time)
+def run_waiting(tool, capsys, fake, *args, settle="0"):
+    """가짜 시계로 도구를 돌림. settle: 방금 쓰인 보고서를 본 뒤 더 지켜보는 시간(--settle) — 기다림 자체를 보는 시험은 0으로 두고 sleep 차례를
+    정확히 단언, None이면 도구의 기본값."""
+    extra = [] if settle is None else ["--settle", settle]
+    tool.main(extra + list(args), sleep=fake.sleep, clock=fake.clock, now=fake.time)
     return capsys.readouterr().out
 
 
@@ -196,7 +201,7 @@ def test_with_only_earlier_reports_it_waits_to_the_deadline_and_says_so(tmp_path
     fake = FakeTime()
     out = run_waiting(load_tool(), capsys, fake, "--since", str(JOB_START), "--process", "python3", "--wait", "6", str(tmp_path))
     assert fake.sleeps == [2.0, 2.0, 2.0] and "python3.10-deliberate.ips" in out and "충돌 보고서 1개 출력" in out
-    assert "기다림 6초(최대 6초) — 방금(이 단계 직전 30초 안) 쓰인 보고서는 없음" in out
+    assert "기다림 6초(최대 6초) — 방금(이 단계 직전 30초 안) 다 쓰인 보고서는 없음" in out
 
 
 def test_a_report_written_just_before_the_step_ends_the_wait_at_once(tmp_path, capsys):
@@ -207,4 +212,80 @@ def test_a_report_written_just_before_the_step_ends_the_wait_at_once(tmp_path, c
     assert fake.sleeps == [] and "sgemm_itcopy + 12" in out and "기다림 0초(최대 120초)" in out and "방금" not in out
     fake = FakeTime()
     out = run_waiting(load_tool(), capsys, fake, "--since", str(JOB_START), "--process", "python3", "--wait", "4", "--fresh", "5", str(tmp_path))
-    assert fake.sleeps == [2.0, 2.0] and "방금(이 단계 직전 5초 안) 쓰인 보고서는 없음" in out
+    assert fake.sleeps == [2.0, 2.0] and "방금(이 단계 직전 5초 안) 다 쓰인 보고서는 없음" in out
+
+
+# ---------------------------------------------------------------- 리뷰에서 잡은 것
+
+
+def header_only_now(fake, folder, name="python3.10-1.ips"):
+    """머리 줄만 쓰이고 본문은 아직인 보고서 (지금 쓰는 중)."""
+    def write():
+        (folder / name).write_text('{"app_name": "python3.10"}\n', encoding="utf-8")
+        os.utime(folder / name, (fake.time(), fake.time()))
+    return write
+
+
+def test_a_report_with_only_its_header_line_does_not_end_the_wait(tmp_path, capsys):
+    """머리 줄만 쓰이고 본문이 아직인 순간에도 파일은 읽힘(본문 빈 dict) — 그것으로 끝내면 '죽은 스레드 정보 없음'만 찍힘. 본문이 올 때까지 기다림."""
+    fake = FakeTime()
+    fake.happenings = [(2, header_only_now(fake, tmp_path)), (6, crash_now(fake, tmp_path))]
+    out = run_waiting(load_tool(), capsys, fake, "--since", str(JOB_START), "--process", "python3", "--wait", "60", str(tmp_path))
+    assert "sgemm_itcopy + 12" in out and "죽은 스레드 정보 없음" not in out and fake.sleeps == [2.0, 2.0, 2.0]
+
+
+def test_a_header_only_report_is_still_printed_at_the_deadline(tmp_path, capsys):
+    fake = FakeTime()
+    fake.happenings = [(2, header_only_now(fake, tmp_path))]
+    out = run_waiting(load_tool(), capsys, fake, "--since", str(JOB_START), "--process", "python3", "--wait", "4", str(tmp_path))
+    assert "python3.10-1.ips" in out and "죽은 스레드 정보 없음" in out and "충돌 보고서 1개 출력" in out
+    assert fake.sleeps == [2.0, 2.0] and "다 쓰인 보고서는 없음" in out
+
+
+def test_after_a_fresh_report_it_keeps_looking_for_a_while(tmp_path, capsys):
+    """자식이 죽고 곧이어 pytest 본체도 죽으면 보고서가 둘 — 첫 보고서를 보자마자 끝내면 둘째(본체의 것)를 놓침. 기본 20초(--settle) 더 지켜봄."""
+    fake = FakeTime()
+    fake.happenings = [(4, crash_now(fake, tmp_path, "python3.10-child.ips")), (14, crash_now(fake, tmp_path, "python3.10-pytest.ips"))]
+    out = run_waiting(load_tool(), capsys, fake, "--since", str(JOB_START), "--process", "python3", "--wait", "120", str(tmp_path),
+                      settle=None)
+    assert "python3.10-child.ips" in out and "python3.10-pytest.ips" in out and "충돌 보고서 2개 출력" in out
+    assert sum(fake.sleeps) == 24.0 and "기다림 24초(최대 120초)" in out and "없음" not in out
+
+
+def test_looking_on_never_passes_the_deadline(tmp_path, capsys):
+    fake = FakeTime()
+    fake.happenings = [(4, crash_now(fake, tmp_path))]
+    out = run_waiting(load_tool(), capsys, fake, "--since", str(JOB_START), "--process", "python3", "--wait", "10", str(tmp_path),
+                      settle="20")
+    assert sum(fake.sleeps) == 10.0 and "sgemm_itcopy + 12" in out and "기다림 10초(최대 10초)" in out
+
+
+def test_a_report_that_vanishes_during_the_scan_is_skipped_and_counted(tmp_path, capsys, monkeypatch):
+    """폴더를 훑는 사이 보고서가 사라져도(macOS가 옮김·임시 이름) 도구가 트레이스백으로 죽지 않음 — 그 파일만 건너뛰고 끝 줄에 적음."""
+    write_report(tmp_path, "python3.10-1.ips", {"app_name": "python3.10"}, CRASH)
+    write_report(tmp_path, "python3.10-gone.ips", {"app_name": "python3.10"}, CRASH)
+    tool = load_tool()
+    real_getmtime = os.path.getmtime
+
+    def getmtime(path):
+        if str(path).endswith("gone.ips"):
+            raise FileNotFoundError(2, "No such file or directory", str(path))
+        return real_getmtime(path)
+
+    monkeypatch.setattr(tool.os.path, "getmtime", getmtime)
+    out = run(tool, capsys, str(tmp_path))
+    assert "===== " + str(tmp_path / "python3.10-1.ips") in out and "===== " + str(tmp_path / "python3.10-gone.ips") not in out
+    assert "충돌 보고서 1개 출력" in out and "훑는 사이 사라진 파일 1개" in out
+
+
+def test_without_vanished_files_the_last_line_does_not_mention_them(tmp_path, capsys):
+    write_report(tmp_path, "python3.10-1.ips", {"app_name": "python3.10"}, CRASH)
+    assert "사라진" not in run(load_tool(), capsys, str(tmp_path))
+
+
+@pytest.mark.parametrize("poll", ["0", "-1"])
+def test_poll_must_be_positive(tmp_path, capsys, poll):
+    """--poll 0이면 기한까지 쉬지 않고 폴더를 훑고, 음수면 sleep이 ValueError — 인자에서 막음."""
+    with pytest.raises(SystemExit):
+        load_tool().main(["--wait", "5", "--poll", poll, str(tmp_path)], sleep=lambda _seconds: None)
+    assert "--poll" in capsys.readouterr().err
