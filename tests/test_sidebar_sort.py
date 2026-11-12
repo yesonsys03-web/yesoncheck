@@ -7,7 +7,9 @@
 규칙(Qt 없음)과 진짜 창의 Mov·Seq·All 목록을 함께 봄. 영상 파일은 빈 파일(목록은 이름만 봄), 이름은 지어낸 것.
 """
 
+import json
 import os
+import subprocess
 import sys
 
 import pytest
@@ -185,6 +187,38 @@ def test_at_the_startup_width_the_button_is_visible_beside_the_tabs(player, qapp
         print(f"\n[정렬 단추 측정 — {sys.platform}] {measured} · 글 후보 폭 {widths} · 틈 {gap}")
     assert text in sidebar_sort.button_texts("name") and tabs_whole and inside, measured
     assert gap <= 8, measured  # 떨어져 있지 않음 (자리가 모자라면 0보다 작아 조금 겹칠 수 있음)
+
+
+THEME_FONTS = ("Segoe UI", "Malgun Gothic", "Arial")  # 테마 시트의 font-family 차례 (main_window_styles)
+
+
+def probe_tab_row(tmp_path):
+    """tests/sort_button_probe.py를 자식 프로세스로 돌려 그 측정(JSON)을 돌려줌 — 진짜 글꼴로 잰 탭 줄.
+    Windows의 화면 없는 Qt 플랫폼은 글꼴이 없어(글자마다 상자 — 이 시험 프로세스가 그 상태) QT_QPA_FONTDIR로 Windows 글꼴 폴더를 줌.
+    그 변수를 시험 프로세스 전체에 주지 않는 까닭은 도우미의 설명에. 설정 폴더·창 기록·LOCALAPPDATA는 tmp_path에."""
+    env = dict(os.environ, YESONCHECK_CONFIG_DIR=make_config(str(tmp_path), {}), YESONCHECK_INSTANCES_DIR=str(tmp_path / "instances"),
+               LOCALAPPDATA=str(tmp_path / "local"), QT_QPA_PLATFORM="offscreen", PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+    if sys.platform == "win32":
+        env["QT_QPA_FONTDIR"] = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
+    done = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "sort_button_probe.py")], env=env,
+                          capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+    lines = [line for line in done.stdout.splitlines() if line.startswith("PROBE ")]
+    assert done.returncode == 0 and len(lines) == 1, f"종료 코드 {done.returncode}\n표준 출력:\n{done.stdout}\n표준 오류:\n{done.stderr}"
+    return json.loads(lines[0][len("PROBE "):])
+
+
+def test_with_real_fonts_the_button_never_covers_the_all_tab_label(tmp_path, capsys):
+    """진짜 글꼴로 잰 탭 줄(따로 띄운 프로세스 — Windows는 Windows 글꼴): 처음 켠 폭과 가장 좁은 폭 모두에서 세 탭이 다 보이고, 단추가 줄 안에
+    온전히 있고, **All 탭의 글자를 가리지 않음**(자리가 모자라면 탭의 오른쪽 여백에만 겹침). 잰 값은 통과해도 기록에 남김."""
+    probe = probe_tab_row(tmp_path)
+    with capsys.disabled():
+        print(f"\n[정렬 단추 측정(진짜 글꼴) — {sys.platform}] {json.dumps(probe, ensure_ascii=False)}")
+    assert probe["dialogs"] == [] and probe["tab_font"] in THEME_FONTS and probe["button_font"] in THEME_FONTS, probe
+    for name in ("startup", "narrowest"):
+        row = probe[name]
+        assert row["inside"] and row["bar_width"] >= row["bar_wanted"] and row["button_text"] in probe["candidates"], (name, probe)
+        assert row["gap"] <= 8 and row["label_gap"] >= 0, (name, probe)
+    assert probe["narrowest"]["button_text"] == sidebar_sort.COMPACT_BUTTON_TEXT, probe
 
 
 def test_in_the_narrowest_sidebar_the_button_shrinks_and_stays_inside_the_tab_row(player, qapp):
