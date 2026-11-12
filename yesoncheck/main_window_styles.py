@@ -180,19 +180,27 @@ QMessageBox {
 }
 """
 
-# 밝은 테마 — set_light_theme가 걺. **QMainWindow 규칙은 QWidget 규칙 뒤에**: 창 자신도 QWidget이라 같은 무게의 두 규칙 중 뒤의 것이
+# 밝은 테마 — set_light_theme가 걺. **어두운 시트와 같은 틀(같은 선택자·같은 치수)에 색만 다름** — 테마를 바꿔도 위젯의 자리·크기·
+# 글꼴이 그대로여야 함(tests/test_theme_geometry.py가 시트의 색 아닌 속성과 실제 위젯 자리를 견줌; 2026-11-12 전에는 밝은 시트만
+# 자식 위젯에 font-size가 없고 단추·콤보에 min-height, 목록 줄에 padding 등이 따로 있어 테마를 바꾸면 화면이 전부 움직였음).
+# 규칙을 더하거나 치수를 바꿀 때는 두 시트를 함께. 색이 아닌 차이로 남긴 것은 체크 상자의 체크 그림(image) 하나.
+# **QMainWindow 규칙은 QWidget 규칙 뒤에**: 창 자신도 QWidget이라 같은 무게의 두 규칙 중 뒤의 것이
 # 이김 — 2026-11-12 전에는 차례가 반대라 창 바탕이 투명(아무것도 안 칠함)이었고 Mac의 GL 화면에서 그 자리가 검게 나왔음
 LIGHT_STYLESHEET = """
 QWidget {
     background: transparent;
     color: #2c3e50;
     font-family: 'Segoe UI', 'Malgun Gothic', Arial, sans-serif;
+    font-size: 12px;
 }
 QMainWindow {
     background: #fafafa;
     color: #2c3e50;
     font-family: 'Segoe UI', 'Malgun Gothic', Arial, sans-serif;
     font-size: 12px;
+}
+QLabel {
+    color: #2c3e50;
 }
 QPushButton {
     background: #ffffff;
@@ -201,7 +209,6 @@ QPushButton {
     color: #2c3e50;
     font-weight: 500;
     padding: 8px 16px;
-    min-height: 20px;
 }
 QPushButton:hover {
     background: #f8f9fa;
@@ -234,21 +241,9 @@ QComboBox {
     border-radius: 6px;
     padding: 6px 12px;
     color: #2c3e50;
-    min-height: 20px;
 }
-QComboBox:hover {
+QComboBox:hover, QComboBox:focus {
     border: 1px solid #d0d0d0;
-}
-QComboBox::drop-down {
-    border: none;
-    width: 20px;
-}
-QComboBox::down-arrow {
-    image: none;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 4px solid #6c757d;
-    margin-right: 5px;
 }
 QComboBox QAbstractItemView {
     background: #ffffff;
@@ -272,26 +267,14 @@ QCheckBox::indicator:checked {
     border: 2px solid #495057;
     image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIiIGhlaWdodD0iOSIgdmlld0JveD0iMCAwIDEyIDkiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxwYXRoIGQ9Ik0xIDQuNUw0LjUgOEwxMSAxIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPgo8L3N2Zz4K);
 }
-QLabel {
-    color: #2c3e50;
-    font-weight: 400;
-}
-QListWidget {
+QListWidget, QListView, QMenu {
     background: #ffffff;
     border: 1px solid #e0e0e0;
-    border-radius: 6px;
     color: #2c3e50;
     selection-background-color: #e9ecef;
-    outline: none;
+    selection-color: #2c3e50;
 }
-QListWidget::item {
-    padding: 6px;
-    border-bottom: 1px solid #f8f9fa;
-}
-QListWidget::item:hover {
-    background: #f8f9fa;
-}
-QListWidget::item:selected {
+QListWidget::item:selected, QListView::item:selected {
     background: #e9ecef;
     color: #2c3e50;
 }
@@ -318,68 +301,61 @@ QTabBar::tab:selected {
 }
 QSplitter::handle {
     background: #e0e0e0;
-    border-radius: 1px;
 }
-QSplitter::handle:horizontal {
-    width: 2px;
-}
-QSplitter::handle:vertical {
-    height: 2px;
-}
-QScrollBar:vertical {
+QScrollBar:vertical, QScrollBar:horizontal {
     background: #f8f9fa;
-    width: 12px;
+    border: 1px solid #e0e0e0;
     border-radius: 6px;
 }
-QScrollBar::handle:vertical {
+QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
     background: #adb5bd;
     border-radius: 6px;
     min-height: 20px;
+    min-width: 20px;
 }
-QScrollBar::handle:vertical:hover {
+QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
     background: #6c757d;
 }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     height: 0px;
 }
-QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
-    background: none;
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0px;
 }
 QSlider:horizontal {
     height: 20px;
     background: transparent;
 }
 QSlider::groove:horizontal {
-    height: 6px;
+    height: 8px;
     background: #e9ecef;
     border: 1px solid #dee2e6;
-    border-radius: 3px;
-    margin: 7px 0;
+    border-radius: 4px;
 }
 QSlider::handle:horizontal {
     min-width: 80px;
     max-width: 80px;
-    height: 16px;
+    height: 20px;
     background: #495057;
-    border: 1px solid #343a40;
-    border-radius: 8px;
-    margin: -5px 0;
+    border: 2px solid #343a40;
+    border-radius: 10px;
+    margin: -6px 0;
 }
 QSlider::handle:horizontal:hover {
     background: #6c757d;
-    border: 1px solid #495057;
+    border: 2px solid #495057;
 }
 QSlider::handle:horizontal:pressed {
     background: #343a40;
-    border: 1px solid #212529;
+    border: 2px solid #212529;
 }
 QSlider::sub-page:horizontal {
     background: #495057;
-    border-radius: 3px;
+    border-radius: 4px;
 }
 QSlider::add-page:horizontal {
     background: #e9ecef;
-    border-radius: 3px;
+    border-radius: 4px;
 }
 QMessageBox {
     background: #fafafa;

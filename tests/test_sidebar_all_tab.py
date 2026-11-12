@@ -221,6 +221,7 @@ def test_rebuild_keeps_scroll_position(player, qapp):
     for i in range(80):  # 스크롤이 생기게 가짜 mov 항목을 많이
         item = QListWidgetItem(f"clip_{i:03d}.mov")
         item.setToolTip(f"/tmp/clip_{i:03d}.mov")
+        item.setData(Qt.UserRole, f"/tmp/clip_{i:03d}.mov")  # 앱이 넣는 모양 그대로 (개수 줄·테이크 색이 경로를 읽음)
         player.sidebar.addItem(item)
     player.resize(900, 400)
     player.show()  # offscreen — 레이아웃이 잡혀야 스크롤 범위가 생김

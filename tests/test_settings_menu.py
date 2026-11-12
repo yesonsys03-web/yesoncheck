@@ -9,7 +9,9 @@
 바꿔서, 사용자 결정으로 메뉴에서 뺌. 값은 메뉴를 건드리지 않은 창이 늘 쓰던 값(켠 직후의 값) 그대로 — 동작은 바뀌지 않음.
 """
 
+import ast
 import inspect
+import textwrap
 
 import numpy as np
 import pytest
@@ -61,20 +63,41 @@ def test_frames_are_converted_on_the_cpu_as_before(player):
     assert np.array_equal(player.optimize_for_4k(uhd), uhd[:, :, ::-1])
 
 
+def calls_super(function, name):
+    """함수 본문에 진짜 `super().name(...)` 호출이 있는가 — 주석·docstring 속의 글자는 치지 않음."""
+    for node in ast.walk(ast.parse(textwrap.dedent(inspect.getsource(function)))):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == name:
+            target = node.func.value
+            if isinstance(target, ast.Call) and isinstance(target.func, ast.Name) and target.func.id == "super":
+                return True
+    return False
+
+
+def test_calls_super_looks_at_real_calls_only():
+    def extends(self):
+        return super().extends() + 1
+
+    def only_mentions(self):
+        """super().only_mentions() 라고 적혀만 있음"""
+        return 1  # super().only_mentions(
+
+    assert calls_super(extends, "extends") and not calls_super(only_mentions, "only_mentions")
+
+
 def test_no_player_class_silently_shadows_a_name_of_a_later_one():
     """VideoPlayer를 이루는 프로젝트 클래스 둘이 같은 이름을 정의하면 MRO에서 앞선 쪽만 불리고 뒤쪽은 말없이 죽은 코드가 됨
-    (set_performance_mode·show_help가 그렇게 가려져 있었음). 뒤쪽을 super()로 이어 부르는 확장만 허용."""
+    (set_performance_mode·show_help가 그렇게 가려져 있었음). 뒤쪽을 super()로 이어 부르는 확장만 허용. __init__도 봄."""
     classes = [cls for cls in VideoPlayer.__mro__ if cls.__module__.startswith("yesoncheck.")]
     shadowed = []
     for index, cls in enumerate(classes):
         for name, value in vars(cls).items():
-            if name.startswith("__") and name.endswith("__"):
+            if name.startswith("__") and name.endswith("__") and name != "__init__":
                 continue
             later = [other.__name__ for other in classes[index + 1:] if name in vars(other)]
             if not later:
                 continue
             function = getattr(value, "__func__", value)
-            if inspect.isfunction(function) and f"super().{name}(" in inspect.getsource(function):
+            if inspect.isfunction(function) and calls_super(function, name):
                 continue
             shadowed.append(f"{cls.__name__}.{name} 가 {', '.join(later)} 의 것을 가림")
     assert shadowed == []

@@ -14,10 +14,12 @@ from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_
 
 # 2026-11-12 (밝은 테마에 어두운 테마가 섞임 — tests/test_light_theme.py): 두 시트에 접는 상자 머리의 색 규칙(QPushButton#collapsibleToggle
 # — 어두운 쪽은 위젯에 직접 넣던 색 그대로)을 더하고, 밝은 시트는 QMainWindow 규칙을 QWidget 규칙 뒤로 옮김(그 옮김은 글자 수 그대로)
+# 같은 날 뒤이어(tests/test_theme_geometry.py): 밝은 시트를 어두운 시트와 같은 틀로 다시 씀 — 색이 아닌 속성(글꼴 크기·여백·최소 높이·
+# 스크롤바·슬라이더 치수)이 달라 테마를 바꾸면 위젯이 전부 움직였음. 어두운 시트는 그대로
 DARK_SHA256 = "d07dce1e05f40622f83cc2859f1b3aea46d3fcd478ca121ae885cbae8c5cddb8"  # 어두운 시트, 3,519자
-LIGHT_SHA256 = "70252c0fc4e5d2b6dfe8d4bf44c234839db64d37adf9b9a9da0211e11285cf19"  # 밝은 시트, 4,443자
+LIGHT_SHA256 = "f746670c9b6831199bbe562636ea9534711d57b007d0f59704350554ea8874b5"  # 밝은 시트, 4,058자
 DARK_LENGTH = 3519
-LIGHT_LENGTH = 4443
+LIGHT_LENGTH = 4058
 
 
 def sha256_of(sheet):

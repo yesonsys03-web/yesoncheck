@@ -11,7 +11,7 @@
 
 import pytest
 from PyQt5.QtCore import QPoint, Qt
-from PyQt5.QtWidgets import QApplication, QScrollBar, QStyle, QStyleOptionSlider
+from PyQt5.QtWidgets import QApplication, QListWidgetItem, QScrollBar, QStyle, QStyleOptionSlider
 
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 
@@ -116,7 +116,9 @@ def assert_handle_free_at_end(scrollbar):
 def sidebar_scrollbar(window):
     """영상이 많아 세로로 스크롤되는 사이드바 목록의 세로 스크롤바 (핸들이 작음)."""
     for i in range(200):
-        window.sidebar.addItem(f"item {i}")
+        item = QListWidgetItem(f"item {i}")
+        item.setData(Qt.UserRole, f"/tmp/item {i}.mov")  # 앱이 넣는 모양 그대로 (개수 줄·테이크 색이 경로를 읽음)
+        window.sidebar.addItem(item)
     QApplication.processEvents()
     return window.sidebar.verticalScrollBar()
 
