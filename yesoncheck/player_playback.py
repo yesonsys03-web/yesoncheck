@@ -356,7 +356,7 @@ class PlayerPlaybackMixin:
 
             # 새로운 영상을 열 때 프레임 캐시 초기화 (이전 영상 프레임 방지)
             self.clear_cache()
-            steps.append(("멈추기", time.perf_counter() - mark))  # 선택 재생이 아니면 stop_video → 옛 캡처를 처음으로 (파이프면 ffmpeg 재시작일 수 있음)
+            steps.append(("멈추기", time.perf_counter() - mark))  # 타이머·소리 멈춤과 단추 표시 — 보던 캡처는 되감지 않음 (2026-11-12 전에는 여기서 옛 캡처를 처음으로: 파이프면 ffmpeg 재시작)
 
             # 혼합 차단: 반대쪽이 다른 종류(mov/시퀀스)면 놓고 와이프를 끔 (열기에 성공한 뒤에만 — 실패하면 보던 것은 그대로)
             other_cap = self.cap_b if video_type == 'A' else self.cap_a
@@ -560,10 +560,13 @@ class PlayerPlaybackMixin:
         return None
 
     def _stop_playback_for_open(self):
-        """새 영상을 열기 전에 재생을 멈춤 (소리는 재생기가 있을 때만)."""
-        # 플레이리스트 재생 중이 아닐 때만 stop_video 호출
+        """새 영상을 열기 전에 재생을 멈춤 (소리는 재생기가 있을 때만). **보던 캡처는 되감지 않음**(2026-11-12 — Stop 단추와 다른 점):
+        되감기의 결과(1번 프레임·소리 위치·와이프의 B)는 바로 뒤 display_first_frame이 새 캡처로 전부 다시 정하므로 남는 것이 없고,
+        비용만 있었음 — 떠나는 파일이 그사이 바뀌었으면 그 읽기가 실패해 오류 창이 뜨고(같은 이름으로 다시 렌더된 영상 — 사용자 보고),
+        ffmpeg 파이프는 ffmpeg를 한 번 더 띄움. 선택 재생은 전부터 되감지 않았음(아래 갈래)."""
         if not self.is_playlist_playing:
-            self.stop_video()
+            self.timer.stop(); self.stop_media_player()
+            self._show_stopped()
         else:
             # 플레이리스트 재생 중에는 타이머만 정지
             self.timer.stop()
@@ -599,7 +602,7 @@ class PlayerPlaybackMixin:
 
         왜 open_file을 쓰지 않나(builder check): open_file은 새 미디어를 여는 길이라 OCR 상태를 지우고(reset_ocr_state — 돌아가는 분석을 멈추고
         검토 창을 닫고 저장 안 한 결과를 버림), 주석을 다시 읽고, 소리를 다시 setMedia하고, 줌을 처음 맞춤으로(initial_fit) 되돌리고, 재생을
-        멈춘다(재생목록 재생이 아니면 stop_video가 처음으로 되감음). 같은 파일·같은 프레임에서 디코더만 바뀌는 일에는 그중 어느 것도 일어나면 안 되므로
+        멈춘다(새 영상은 1번 프레임에서 시작). 같은 파일·같은 프레임에서 디코더만 바뀌는 일에는 그중 어느 것도 일어나면 안 되므로
         캡처만 바꾸고 filename_*·mediaPlayer·annotation_store·OCR 상태·videoWidget.initial_fit·와이프 체크/축/위치·is_playlist_playing은 건드리지 않는다.
 
         차례:
@@ -2485,8 +2488,13 @@ class PlayerPlaybackMixin:
             print(f"pause_video called - is_playlist_playing: {self.is_playlist_playing}")
 
     def stop_video(self):
+        """Stop 단추·재생이 끝났을 때: 멈추고 처음(1번 프레임)으로 되감음. 영상을 바꿀 때의 멈춤은 되감지 않는 _stop_playback_for_open."""
         self.timer.stop(); self.stop_media_player()
         if self.cap_a: self.seek_to_frame(1)
+        self._show_stopped()
+
+    def _show_stopped(self):
+        """멈춘 상태의 단추·표시 (stop_video와 영상을 바꿀 때의 멈춤이 함께 씀 — 프레임 자리는 건드리지 않음)."""
         self.playPauseButton.setText('Play'); self.playPauseButton.setStyleSheet("")
         self.labelPlaybackFPS.setText('재생: 정지')
         
