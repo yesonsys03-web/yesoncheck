@@ -8,6 +8,7 @@
 """
 
 import os
+import sys
 
 import pytest
 from PyQt5.QtCore import QItemSelectionModel, Qt
@@ -145,42 +146,75 @@ def test_the_sort_button_sits_in_the_tab_row_next_to_the_all_tab(player):
     assert [action.isChecked() for action in button.menu().actions()] == [True, False, False, False]
 
 
-def tab_row(player, qapp, sidebar_width):
-    """사이드바 열을 sidebar_width로 맞춘 창을 보인 뒤의 (단추 글, 탭 막대가 다 보이는가, 단추가 All 탭 바로 옆인가 — 겹치지 않고 틈 0~8px,
-    단추가 탭 줄 안에 다 들어오는가)."""
+def tab_row(player, qapp, sidebar_width=None):
+    """창을 보이고(sidebar_width를 주면 사이드바 열을 그 폭으로 맞춘 뒤) 탭 줄을 잼 — (단추 글, 탭 막대가 다 보이는가, All 탭 끝에서 단추까지의 틈(px —
+    음수면 겹침), 단추가 탭 줄 안에 다 들어오는가, 잰 값들(실패했을 때 보일 글)). 폭은 글꼴·스타일마다 달라(Windows는 탭 막대·글자가 조금 더 넓음)
+    시험은 잰 값으로 폭을 정함."""
     player.resize(1400, 860)
     player.show()
     qapp.processEvents()
-    player._resize_sidebar_column(sidebar_width)
+    if sidebar_width is not None:
+        player._resize_sidebar_column(sidebar_width)
     for _ in range(5):
         qapp.processEvents()
     tabs, bar, button = player.sidebar_tabs, player.sidebar_tabs.tabBar(), player.sidebar_sort_button
     all_right = bar.mapTo(tabs, bar.tabRect(2).topRight()).x()
     left = button.mapTo(tabs, button.rect().topLeft()).x()
-    beside = 0 <= left - all_right <= 8 and left + button.width() <= tabs.width()
-    return button.text(), bar.width() >= bar.sizeHint().width(), beside
+    inside = left >= 0 and left + button.width() <= tabs.width()
+    measured = (f"요청 {sidebar_width} · 탭 위젯 {tabs.width()} · 탭 막대 x={bar.x()} 폭 {bar.width()}(바라는 폭 {bar.sizeHint().width()}) · "
+                f"All 탭 끝 {all_right} · 단추 {button.text()!r} x={left} 폭 {button.width()}")
+    return button.text(), bar.width() >= bar.sizeHint().width(), left - all_right, inside, measured
 
 
-def test_in_the_default_narrow_sidebar_the_button_shrinks_instead_of_covering_the_all_tab(player, qapp):
-    """기본 폭(약 180px)에서는 탭 막대만으로 줄이 거의 참 — 긴 글의 단추를 두면 Qt가 탭 막대를 줄여 All 탭이 가려졌음. 단추 글이 줄어들어 세 탭이 다 보임."""
-    text, tabs_whole, beside = tab_row(player, qapp, player.default_sidebar_width or 176)
-    assert text == sidebar_sort.COMPACT_BUTTON_TEXT and tabs_whole and beside
+def row_widths(player, qapp):
+    """(탭 막대가 바라는 폭, 단추 글 후보마다 단추가 바라는 폭 [긴 글, 짧은 글, ↕]) — 창을 보인 뒤(테마 글꼴이 걸린 뒤) 잼."""
+    player.resize(1400, 860)
+    player.show()
+    qapp.processEvents()
+    texts = sidebar_sort.button_texts(player.sidebar_sort_mode)
+    return player.sidebar_tabs.tabBar().sizeHint().width(), [player._sort_button_width(text) for text in texts]
+
+
+def test_at_the_startup_width_the_button_is_visible_beside_the_tabs(player, qapp):
+    """창을 처음 켠 폭(사이드바를 건드리지 않음): 세 탭이 다 보이고 단추가 탭 줄 안에 온전히 있음. 잰 값은 기록에도 남김(진짜 stderr — 플랫폼마다 글꼴·탭
+    막대 폭이 달라 CI 기록에서 Windows·Mac의 값을 볼 수 있게)."""
+    bar_width, widths = row_widths(player, qapp)
+    text, tabs_whole, gap, inside, measured = tab_row(player, qapp)
+    sys.__stderr__.write(f"\n[정렬 단추 측정 — {sys.platform}] {measured} · 글 후보 폭 {widths}\n")
+    assert text in sidebar_sort.button_texts("name") and tabs_whole and inside, measured
+    assert gap <= 8, measured  # 떨어져 있지 않음 (자리가 모자라면 0보다 작아 조금 겹칠 수 있음)
+
+
+def test_in_the_narrowest_sidebar_the_button_shrinks_and_stays_inside_the_tab_row(player, qapp):
+    """가장 좁은 사이드바에서는 탭 막대만으로 줄이 거의 참 — 긴 글의 단추를 두면 All 탭이 가려졌음. 단추 글이 `↕`로 줄고, 그것도 안 들어가면 줄 밖으로 밀려
+    잘리지 않고 줄 끝에 맞춰짐(All 탭의 오른쪽 여백에 조금 겹침 — 단추 폭보다 많이는 아님). 세 탭은 늘 다 보임."""
+    _bar_width, (_full, _short, compact) = row_widths(player, qapp)
+    text, tabs_whole, gap, inside, measured = tab_row(player, qapp, 100)  # 최소 폭보다 좁게 달라고 함 — 최소 폭이 됨
+    assert text == sidebar_sort.COMPACT_BUTTON_TEXT and tabs_whole and inside, measured
+    assert -compact <= gap <= 8, measured
     assert shown_mode(player) == "정렬: 이름 ▾"  # 기준은 툴팁에
 
 
 def test_in_a_wide_sidebar_the_button_shows_the_full_text_right_beside_the_all_tab(player, qapp):
-    """넓어도 줄의 오른쪽 끝이 아니라 All 탭 바로 옆 (모서리 위젯만 두면 Qt가 오른쪽 끝에 붙임 — 실제 Mac 화면에서 75px 떨어졌음)."""
-    text, tabs_whole, beside = tab_row(player, qapp, 380)
-    assert text == "정렬: 이름 ▾" and tabs_whole and beside
+    """넓어도 줄의 오른쪽 끝이 아니라 All 탭 바로 옆 (모서리 위젯으로 두면 Qt가 오른쪽 끝에 붙임 — 실제 Mac 화면에서 75px 떨어졌음)."""
+    bar_width, (full, _short, _compact) = row_widths(player, qapp)
+    text, tabs_whole, gap, inside, measured = tab_row(player, qapp, bar_width + full + 120)
+    assert text == "정렬: 이름 ▾" and tabs_whole and inside and 0 <= gap <= 8, measured
     player.set_sidebar_sort("version")
     assert player.sidebar_sort_button.text() == "정렬: 버전 ▾"
 
 
 def test_the_button_text_follows_the_sidebar_width(player, qapp):
-    """사이드바를 넓히고 좁히면 단추 글도 따라 바뀜 — 가운데 폭에서는 `이름 ▾`."""
-    seen = [tab_row(player, qapp, width) for width in (380, 215, 176, 380)]
-    assert [text for text, _whole, _apart in seen] == ["정렬: 이름 ▾", "이름 ▾", sidebar_sort.COMPACT_BUTTON_TEXT, "정렬: 이름 ▾"]
-    assert all(whole and beside for _text, whole, beside in seen)
+    """사이드바를 넓히고 좁히면 단추 글도 따라 바뀜 — 긴 글이 안 들어가는 가운데 폭에서는 `이름 ▾`. 넓혔다 좁혀도 걸리지 않음."""
+    bar_width, (full, short, _compact) = row_widths(player, qapp)
+    space = sidebar_sorting.SORT_BUTTON_GAP
+    wide, middle = bar_width + full + space + 40, bar_width + short + space + 2
+    assert middle < bar_width + full + space  # 가운데 폭에는 긴 글이 안 들어감
+    seen = [tab_row(player, qapp, width) for width in (wide, middle, 100, wide)]
+    report = "\n".join(row[-1] for row in seen)
+    assert [row[0] for row in seen] == ["정렬: 이름 ▾", "이름 ▾", sidebar_sort.COMPACT_BUTTON_TEXT, "정렬: 이름 ▾"], report
+    assert all(whole and inside for _text, whole, _gap, inside, _measured in seen), report
+    assert all(0 <= gap <= 8 for _text, _whole, gap, _inside, _measured in (seen[0], seen[1], seen[3])), report
 
 
 def test_default_mode_leaves_the_list_alone(player, tmp_path):

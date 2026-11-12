@@ -52,7 +52,7 @@ SORT_BUTTON_PAD = 5  # 단추 글의 좌우 여백(px)
 SORT_BUTTON_GAP = 4  # All 탭과 단추 사이의 틈(px)
 # 탭 막대를 왼쪽에 — Mac의 기본은 가운데라 좁은 사이드바에서 All 탭 오른쪽에 단추 놓을 자리(양쪽에 13px씩)가 없음. 왼쪽이면 탭 막대 옆의 남는 폭이 한곳에 모임
 TAB_BAR_LEFT_STYLE = "QTabWidget::tab-bar { alignment: left; }"
-SORT_BUTTON_COMPACT_PAD = 2  # 가장 짧은 글(↕)일 때 — 가장 좁은 사이드바(176px: 탭 막대 155px 옆에 21px)에 들어가게
+SORT_BUTTON_COMPACT_PAD = 0  # 가장 짧은 글(↕)일 때 — 탭 막대 옆의 좁은 틈(이 Mac의 기본 폭에서 27px, 글꼴이 넓은 곳은 더 좁음)에 들어가게
 
 
 def sort_button_style(compact=False):
@@ -138,21 +138,25 @@ class SidebarSortMixin:
 
     def _fit_sidebar_sort_button(self):
         """단추를 탭 막대 바로 오른쪽(All 탭 옆 — SORT_BUTTON_GAP 틈)에 놓고, 글은 거기서 탭 줄 끝까지 남은 폭에 들어가는 가장 긴 것으로 — 들어가는
-        것이 없으면 가장 짧은 것(그것도 모자라면 틈을 줄임). 폭은 어림하지 않고 그 글을 단추에 넣어 잼(_sort_button_width — 글꼴 폭으로 어림하면 1px
+        것이 없으면 가장 짧은 것(그것도 모자라면 줄의 오른쪽 끝에 맞춤 — 아래). 폭은 어림하지 않고 그 글을 단추에 넣어 잼(_sort_button_width — 글꼴 폭으로 어림하면 1px
         어긋났음). 탭 위젯·탭 막대의 크기·자리가 바뀔 때마다(_ResizeWatcher)와 기준을 바꿀 때 부름 — 단추는 탭 위젯의 배치에 들어 있지 않아(직접 놓음)
         글·자리를 바꿔도 그 이벤트가 다시 오지 않고, 탭 위젯의 바라는 크기·최소 크기(사이드바·창의 크기 계산)도 그대로."""
         tabs, button = self.sidebar_tabs, self.sidebar_sort_button
         if sip.isdeleted(button) or sip.isdeleted(tabs):
             return  # 창이 지워지는 중(단추가 감시자보다 먼저 지워짐) — 놓을 것이 없음 (없는 위젯을 건드려 거짓 오류 창을 띄우지 않게)
         bar = tabs.tabBar()
-        tabs_end = bar.x() + bar.width()
         texts = sidebar_sort.button_texts(self.sidebar_sort_mode)
         widths = [self._sort_button_width(text) for text in texts]
-        gap = min(SORT_BUTTON_GAP, max(0, tabs.width() - tabs_end - widths[-1]))  # 가장 좁을 때는 틈을 줄여서라도 줄 안에
-        room = tabs.width() - tabs_end - gap
-        self._set_sort_button_text(next((text for text, width in zip(texts, widths) if width <= room), texts[-1]))
+        tabs_end = bar.x() + bar.width()
+        room = tabs.width() - tabs_end
+        fitting = next((text for text, width in zip(texts, widths) if width + SORT_BUTTON_GAP <= room), texts[-1])
+        self._set_sort_button_text(fitting)
         button.resize(button.sizeHint())
-        button.move(tabs_end + gap, bar.y() + max(0, (bar.height() - button.height()) // 2))
+        # 자리: 탭 막대 끝에서 틈만큼 띄움. 가장 짧은 글도 안 들어갈 만큼 좁으면(사이드바를 기본 폭보다 줄였거나 탭 막대·글꼴이 더 넓은 플랫폼 —
+        # Windows CI에서 단추가 줄 밖으로 밀렸음) 줄 밖으로 밀어 잘리게 두지 않고 줄의 오른쪽 끝에 맞춤 — All 탭의 오른쪽 여백에 조금 겹침.
+        # (탭 위젯의 최소 폭을 키워 자리를 보장하는 길은 사이드바·창의 크기 계산을 바꿔 쓰지 않음 — test_window_resize)
+        x = max(0, min(tabs_end + SORT_BUTTON_GAP, tabs.width() - button.width()))
+        button.move(x, bar.y() + max(0, (bar.height() - button.height()) // 2))
         button.raise_()
 
     def _set_sort_button_text(self, text):
