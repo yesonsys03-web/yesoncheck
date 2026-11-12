@@ -67,7 +67,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
-from yesoncheck import paths, sequence_scan, sequence_source, thumbnails, video_list
+from yesoncheck import paths, sequence_scan, sequence_source, sidebar_sort, thumbnails, video_list
 from yesoncheck.sequence_export_worker import SequenceExportWorker, substitution_note, substitution_summary, validate_out_dir
 from yesoncheck.sequence_source import ImageSequenceCapture
 from yesoncheck.sidebar_items import THUMBNAIL_CONTEXT_ROLE, THUMBNAIL_MAKE_FAILED, THUMBNAIL_VIDEO_PROBLEM
@@ -276,7 +276,8 @@ class SidebarSequencesMixin:
 
         새 시퀀스의 썸네일 자리: 이미 있던 시퀀스는 그 항목의 자리 그대로, source_contexts({_seq_key: ThumbnailContext} — 다시 읽기에서
         새 시퀀스가 들어온 곳이 처음 불러올 때 기억한 자리, Mov 항목이 쓰는 것과 같음)에 있으면 그것, 아니면 지금 상태의 자리."""
-        seqs = list(seqs)
+        # 정렬 기준대로 — 이름(기본)이면 받은 순서 그대로, 시간이면 첫 프레임을 고친 시각(SidebarSortMixin._sidebar_seq_time — 그때만 디스크를 읽음)
+        seqs = sidebar_sort.ordered(seqs, self.sidebar_sort_mode, stem_of=lambda seq: seq.base, time_of=self._sidebar_seq_time)
         if seqs == self._current_seq_items():
             return
         widget = self.seq_sidebar

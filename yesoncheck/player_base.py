@@ -45,6 +45,7 @@ from yesoncheck.video_widget import VIEWPORT_ENV, CustomVideoWidget
 from yesoncheck import bookmarks, build_info, default_app, error_window, external_tools, file_associations, \
     instance_link, instances, mac_native_gate, mac_prefs, manual_open, media_player_log, paths, timing_log, user_files, \
     video_list, windows_display
+from yesoncheck import sidebar_sort  # 사이드바 정렬 기준의 기본값 (SidebarSortMixin)
 from yesoncheck.movie_pipe_source import movie_source_mode
 from yesoncheck.user_files import UserFileError
 from yesoncheck.main_window_styles import (
@@ -697,6 +698,9 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         # 이번 실행에서 목록 문제 창을 띄운 (제목, 폴더 키, 오류) — 같은 문제는 한 번, 그 폴더를 다시 읽으면 기록을 지움
         self._list_problems_shown = set()
         self._sidebar_refresh_holds = 0  # 목록을 쓰는 중(썸네일 반복·job 목록 만들기·메뉴) — 그동안 다시 읽기는 미룸
+        self.sidebar_sort_mode = sidebar_sort.DEFAULT_MODE  # 사이드바 정렬 기준 — 이름(기본)·종류·버전·시간 (SidebarSortMixin, 창이 떠 있는 동안 유지)
+        self._sidebar_times_stale = False  # 시간 정렬: 사용자가 '시간'을 (다시) 골랐음 — 다음에 줄을 옮길 때 모든 영상의 고친 시각을 다시 읽음
+        self._sidebar_seq_times = {}  # 시간 정렬: 시퀀스 → 첫 프레임을 고친 시각 (한 번 읽어 기억, '시간'을 다시 고르면 비움)
         self._sidebar_refresh_deferred = False  # 목록을 다 쓰면 다시 읽음
         self._sidebar_scan = None  # 실행 중인 목록 다시 읽기 (SidebarScan — 디스크 읽기는 GUI 밖 스레드)
         self._sidebar_rescan_queued = False  # 읽는 동안 다시 읽어 달라는 요청이 옴 → 끝나면 한 번 더
@@ -748,6 +752,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         self.sidebar_count_label = QLabel()  # 목록 아래 개수 줄 — 지금 보는 탭의 개수 (sidebar_all·sidebar_counts)
         self.sidebar_count_label.setWordWrap(True)  # All의 포맷이 많아도 줄을 바꿈 — 사이드바(창) 최소 너비를 늘리지 않게
         self._init_all_tab_hooks()  # Mov·Seq 모델 변화 → All 목록 미룬 다시 만들기·개수 줄
+        self._init_sidebar_sort()  # 탭 줄 오른쪽(All 탭 옆)의 정렬 단추(self.sidebar_sort_button — 이름·종류·버전·시간)와 미룬 정렬 (SidebarSortMixin)
         selectFolderButton = QPushButton('Select Folder'); selectFolderButton.clicked.connect(self.select_folder)
         selectFolderButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         
