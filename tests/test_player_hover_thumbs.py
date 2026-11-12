@@ -512,12 +512,18 @@ def test_opening_next_file_pauses_old_builder_while_opening(slow_ffmpeg, shown_p
                                                            monkeypatch):
     """도는 워커가 있는데 다음 파일을 열면(↑↓·사이드바) 새 캡처를 여는 동안 옛 ffmpeg는 정지돼 있음 — 열기(NAS에서 ffprobe·파이프 ffmpeg
     시작·첫 디코드)와 옛 띠의 디코드가 다투지 않게. open_file 맨 앞(경로 정리 직후)이 멈추고, 연 뒤의 _hover_thumbs_open → close가 kill.
-    여는 순간의 상태는 _open_movie_capture를 감싸 그 안에서 봄 (SIGSTOP이 닿을 때까지 한도 1초 — 멈추지 않았으면 그동안 계속 돌거나 끝남)."""
+    여는 순간의 상태는 _open_movie_capture를 감싸 그 안에서 봄 — 증거 둘:
+    - **멈춤 표지**(모든 플랫폼): 여는 길에 들어설 때 옛 워커의 paused가 이미 True — 이 시험이 지키는 플레이어의 몫(여는 길 맨 앞에서 멈춤을 검).
+    - **프로세스 상태**(POSIX만 — SIGSTOP이 닿을 때까지 한도 1초): psutil이 stopped. Windows의 psutil status()는 파이프 쓰기에서 막힌
+      스레드가 있으면 정지돼 있어도 running이라(빌더 시험의 `status` 갈래를 Windows에서 건너뛰는 까닭과 같음) 보지 않음 — 2026-11-12 전에는
+      여기서도 봐서 배포 CI의 Windows 작업이 두 번(1.9.0·1.9.1) 이 시험으로 실패했음. 표지가 실제 정지로 이어지는 것은 Windows에서도
+      빌더 시험의 `drain` 갈래(test_hover_strip_builder — 파이프를 비워 동작으로)가 봄."""
     player = shown_player
     old = start_and_catch_running(player, numbered_clip)
     pid = old.pid
-    statuses = []
+    seen = []
     real_open = player._open_movie_capture
+    posix = sys.platform != "win32"
 
     def status_of(pid):
         try:
@@ -526,17 +532,20 @@ def test_opening_next_file_pauses_old_builder_while_opening(slow_ffmpeg, shown_p
             return "끝남"
 
     def recording_open(path):
-        deadline = time.monotonic() + 1
-        status = status_of(pid)
-        while status != psutil.STATUS_STOPPED and time.monotonic() < deadline:
-            time.sleep(0.005)
+        requested = old.paused
+        status = None
+        if posix:
+            deadline = time.monotonic() + 1
             status = status_of(pid)
-        statuses.append((path, status))
+            while status != psutil.STATUS_STOPPED and time.monotonic() < deadline:
+                time.sleep(0.005)
+                status = status_of(pid)
+        seen.append((path, requested, status))
         return real_open(path)
 
     monkeypatch.setattr(player, "_open_movie_capture", recording_open)
     assert player.open_file("A", second_clip) is True
-    assert statuses == [(second_clip, psutil.STATUS_STOPPED)]
+    assert seen == [(second_clip, True, psutil.STATUS_STOPPED if posix else None)]
     assert sip.isdeleted(old) or not old.isRunning()
     assert not psutil.pid_exists(pid)  # 연 뒤에는 끝남 (정지된 채 kill)
     assert player._hover_path == second_clip and player._hover_builder is None
