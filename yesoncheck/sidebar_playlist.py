@@ -30,6 +30,10 @@ def switch_line(gap, open_s, previous, name):
 class SidebarPlaylistMixin:
     """VideoPlayer의 선택 재생(Play Selected) — 재생목록 시작·차례대로 열기·없는 영상 건너뛰기·강조 색·끝 처리."""
 
+    # 선택 재생이 빨갛게 강조한 줄의 경로(없으면 None) — 목록을 다시 칠하는 쪽(SidebarAllMixin._apply_take_colors)이 그 줄을
+    # 건드리지 않게. self.playlist·current_playlist_index는 선택 재생이 아닌 길(폴더 불러오기 등)도 고쳐 써서 여기에 따로 둠
+    _playlist_highlighted_path = None
+
     def _playlist_selection(self):
         """선택 재생이 쓸 항목 (목록 순서): Mov 탭은 Mov 목록의 선택 그대로, All 탭은 All 목록의 선택 중 mov만 —
         시퀀스는 건너뜀 (시퀀스 연속 재생은 메모리 한계로 하지 않음, 사용자 결정)."""
@@ -105,6 +109,7 @@ class SidebarPlaylistMixin:
             self.is_playlist_playing = True
             
             # 사이드바에서 현재 파일 강조
+            self._playlist_highlighted_path = current_file  # 이 줄은 목록을 다시 칠할 때(테마 전환)도 빨강 그대로
             for i in range(self.sidebar.count()):
                 item = self.sidebar.item(i)
                 is_current = paths.same_path(item.toolTip(), current_file)
@@ -191,6 +196,7 @@ class SidebarPlaylistMixin:
         QMessageBox.information(self, "Playlist Complete", "All selected files have been played.")
 
     def reset_sidebar_colors(self):
+        self._playlist_highlighted_path = None
         for i in range(self.sidebar.count()):
             item = self.sidebar.item(i)
             font = item.font(); font.setBold(False)

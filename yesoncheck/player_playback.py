@@ -875,12 +875,12 @@ class PlayerPlaybackMixin:
         """오버레이 슬라이더 전용 프리뷰 - B 프레임 완전 무시"""
         try:
             # 오버레이 슬라이더 드래그 중에는 캐시를 사용하지 않음 (이전 영상 프레임 방지)
-            # 1. 성능 모드별 동적 프레임 스킵
+            # 1. 가까운 프레임은 건너뜀 (문턱 frame_skip_threshold — 고정 5)
             current_pos = int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES)) - 1
             if current_pos < 0:
                 current_pos = 0
             
-            # 성능 모드에 따른 동적 스킵 임계값
+            # 스킵 임계값 (고정 — Settings의 4K 성능 모드는 2026-11-12에 뺌)
             skip_threshold = self.frame_skip_threshold
             if abs(target_frame_idx - current_pos) < skip_threshold:
                 return
@@ -1106,12 +1106,12 @@ class PlayerPlaybackMixin:
                 self._ultra_fast_ui_update(target_frame_idx, total_frames)
                 return
             
-            # 2. 성능 모드별 동적 프레임 스킵
+            # 2. 가까운 프레임은 건너뜀 (문턱 frame_skip_threshold — 고정 5)
             current_pos = int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES)) - 1
             if current_pos < 0:
                 current_pos = 0
             
-            # 성능 모드에 따른 동적 스킵 임계값
+            # 스킵 임계값 (고정 — Settings의 4K 성능 모드는 2026-11-12에 뺌)
             skip_threshold = self.frame_skip_threshold
             if abs(target_frame_idx - current_pos) < skip_threshold:
                 return
@@ -2668,7 +2668,7 @@ class PlayerPlaybackMixin:
         
         # 4K 이상 해상도 감지
         if width >= 3840 or height >= 2160:
-            # 성능 모드에 따른 처리
+            # performance_mode에 따른 처리 (늘 'auto' — Settings의 4K 성능 모드는 2026-11-12에 뺌)
             if self.performance_mode == 'ultra':
                 # 극한 속도: 최소한의 처리만 (컬러 변환만)
                 return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)

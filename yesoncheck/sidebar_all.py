@@ -74,13 +74,20 @@ class SidebarAllMixin:
         self._count_timer.setSingleShot(True)
         self._count_timer.setInterval(0)
         self._count_timer.timeout.connect(self._update_sidebar_count)
-        self._count_timer.timeout.connect(lambda: self._apply_take_colors())  # 새로 들어온 Mov 항목을 테이크 색으로 (같은 미룸)
         for model in (self.sidebar.model(), self.seq_sidebar.model()):
             model.rowsInserted.connect(self._schedule_sidebar_count)
             model.rowsRemoved.connect(self._schedule_sidebar_count)
             model.modelReset.connect(self._schedule_sidebar_count)
         self.sidebar_tabs.currentChanged.connect(self._schedule_sidebar_count)
         self._update_sidebar_count()
+        # 테이크 색: Mov 목록에 항목이 들어올 때만(탭을 바꾸거나 Seq 목록이 바뀔 때는 아님) 미뤄서 한 번 — 항목의 경로(UserRole)는
+        # 넣은 뒤에 붙으므로 이번 이벤트 처리가 끝난 뒤에 칠함
+        self._take_color_timer = QTimer(self)
+        self._take_color_timer.setSingleShot(True)
+        self._take_color_timer.setInterval(0)
+        self._take_color_timer.timeout.connect(self._apply_take_colors)
+        self.sidebar.model().rowsInserted.connect(self._schedule_take_colors)
+        self.sidebar.model().modelReset.connect(self._schedule_take_colors)
 
     def _schedule_sidebar_count(self, *_args):
         """신호의 인자는 버림 (QTimer.start(int)에 바로 이으면 탭 번호가 밀리초로 들어감)."""
@@ -110,20 +117,16 @@ class SidebarAllMixin:
         if item.data(Qt.ForegroundRole) != brush:
             item.setData(Qt.ForegroundRole, brush)
 
-    def _playing_playlist_file(self):
-        """선택 재생이 지금 재생 중인 영상(그 항목은 빨강 — 다시 칠하지 않음), 없으면 None."""
-        if not self.is_playlist_playing or not 0 <= self.current_playlist_index < len(self.playlist):
-            return None
-        return self.playlist[self.current_playlist_index]
+    def _schedule_take_colors(self, *_args):
+        """신호의 인자는 버림 (QTimer.start(int)에 바로 이으면 줄 번호가 밀리초로 들어감)."""
+        self._take_color_timer.start()
 
     def _apply_take_colors(self, repaint=False):
-        """Mov 목록 항목을 테이크 색으로 칠함. 목록이 바뀐 뒤(개수 줄과 같은 미룸)에는 **아직 칠한 적 없는 항목만**(따로 칠한 글자색이
+        """Mov 목록 항목을 테이크 색으로 칠함. 목록에 항목이 들어온 뒤(_take_color_timer — 0ms 미룸)에는 **아직 칠한 적 없는 항목만**(따로 칠한 글자색이
         없는 것 — 새 항목은 늘 그렇게 들어옴): 이미 칠한 항목(테이크 색·선택 재생 강조)은 목록을 다시 읽어도 그대로 둠.
-        repaint=True(테마를 바꾼 뒤 — 색이 테마마다 다름)는 전부 다시, 선택 재생 중인 항목(빨강)만 빼고.
+        repaint=True(테마를 바꾼 뒤 — 색이 테마마다 다름)는 전부 다시, 선택 재생이 빨갛게 한 줄(_playlist_highlighted_path)만 빼고.
         All 목록의 mov 사본은 원본을 복제하므로 따라옴(원본의 dataChanged → 다시 만들기), 시퀀스는 하늘색 그대로."""
-        if getattr(self, "_count_timer", None) is None:  # 테마 적용이 initUI보다 먼저 부를 수 있음
-            return
-        playing = self._playing_playlist_file()
+        playing = self._playlist_highlighted_path  # 선택 재생이 빨갛게 한 줄 (SidebarPlaylistMixin)
         for i in range(self.sidebar.count()):
             item = self.sidebar.item(i)
             if playing is not None and paths.same_path(item.toolTip(), playing):

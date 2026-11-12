@@ -212,9 +212,7 @@ def test_item_being_played_stays_red_when_the_list_is_repainted(player, qapp, tm
     """선택 재생 중인 항목(빨강)은 목록이 바뀌거나 테마를 바꿔 다시 칠할 때도 그대로."""
     loaded(player, qapp, tmp_path)
     playing = [player.sidebar.item(i) for i in range(player.sidebar.count()) if player.sidebar.item(i).text() == "SH010_TK2.mov"][0]
-    player.playlist = [playing.toolTip()]
-    player.current_playlist_index = 0
-    player.is_playlist_playing = True
+    player._playlist_highlighted_path = playing.toolTip()  # 선택 재생이 이 줄을 빨갛게 강조한 상태
     playing.setForeground(QColor("red"))
     player.set_light_theme()
     qapp.processEvents()
@@ -244,3 +242,11 @@ def test_seq_tab_count_line_is_not_coloured(player, qapp, tmp_path):
     qapp.processEvents()
     label = player.sidebar_count_label
     assert (label.textFormat(), label.text()) == (Qt.PlainText, "시퀀스 1개 — 기본 1 (TK2 1)")
+
+
+def test_switching_tabs_does_not_repaint_the_list(player, qapp, tmp_path):
+    """칠하기는 Mov 목록에 항목이 들어올 때만 — 탭을 바꿀 때마다 수천 줄을 다시 돌지 않음 (리뷰)."""
+    loaded(player, qapp, tmp_path)
+    assert not player._take_color_timer.isActive()
+    player.sidebar_tabs.setCurrentWidget(player.seq_sidebar)
+    assert not player._take_color_timer.isActive()

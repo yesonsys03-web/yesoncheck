@@ -316,6 +316,7 @@ def test_close_for_update_stops_thumbnail_regeneration_loop(qapp, new_player, di
         videos.append(str(path))
         item = QListWidgetItem(path.name)
         item.setToolTip(str(path))
+        item.setData(Qt.UserRole, str(path))  # 앱이 넣는 모양 그대로 (개수 줄·테이크 색이 경로를 읽음)
         player.sidebar.addItem(item)
         item.setSelected(True)
     made = []
