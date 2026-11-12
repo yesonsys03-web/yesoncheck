@@ -510,6 +510,8 @@ def launch_until_window(monkeypatch):
         raise _StopLaunch
 
     monkeypatch.setattr(app_module, "load_slider_thumbnails", lambda: None)
+    # (Windows) 축소 필터 설정(app.load_downscale_filter — 2026-11-12)도 같은 까닭으로 끔: Windows의 prefs.json을 읽음 (tests/test_downscale_filter.py가 봄)
+    monkeypatch.setattr(app_module, "load_downscale_filter", lambda: None)
 
     real_wanted = mac_native_gate.native_wanted
     wanted = []
