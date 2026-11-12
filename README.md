@@ -352,7 +352,7 @@ yesoncheck/
 ├─ sidebar_sequences.py    # Mov·Seq 탭, Seq 목록·우클릭 메뉴, 시퀀스 → MOV 진행 창 믹스인
 ├─ sidebar_all.py          # All 탭 믹스인 (Mov·Seq 목록을 한 목록에 — 선택 재생은 mov만), 목록 아래 개수 줄
 ├─ sidebar_counts.py       # 개수 줄의 글 (Qt 없음)
-├─ sidebar_sort.py         # 목록 정렬 규칙 — 이름·종류·버전 (Qt 없음)
+├─ sidebar_sort.py         # 목록 정렬 규칙 — 이름·종류·버전·시간 (Qt 없음)
 ├─ sidebar_sorting.py      # 정렬 단추와 목록 줄 옮기기 믹스인
 ├─ sidebar_open_with.py    # 우클릭 '다른 앱으로 열기' 믹스인 (QuickTime Player·등록한 앱)
 ├─ open_with.py            # 다른 앱으로 열기 — 명령·등록한 앱 목록·띄우기 (Qt 없음)

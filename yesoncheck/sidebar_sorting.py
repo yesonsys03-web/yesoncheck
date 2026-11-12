@@ -8,7 +8,7 @@
 가운데가 아니라 왼쪽). 사이드바의 기본 폭(약 180px)에서는 탭 막대(155px) 옆에 20여 px뿐이라, 남은 폭에 들어가는 가장 긴 글을 씀
 (`정렬: 이름 ▾` → `이름 ▾` → `↕`). 지금 기준은 툴팁 첫 줄에 늘 있음.
 
-정렬 기준(self.sidebar_sort_mode — 이름·종류·버전)은 창이 떠 있는 동안 유지되고(job·폴더를 바꿔도), 세 탭에 함께 적용:
+정렬 기준(self.sidebar_sort_mode — 이름·종류·버전·시간)은 창이 떠 있는 동안 유지되고(job·폴더를 바꿔도), 세 탭에 함께 적용:
 - **Mov 목록**(원본 — 다시 읽기·선택 재생·썸네일이 이 목록의 항목을 씀): 항목 객체는 그대로 두고 **줄만 옮김**(떼었다 다시 넣음 — clear()는 항목을 지우고
   모델을 초기화해 출처·Seq 목록까지 잊으므로 쓰지 않음). 썸네일 아이콘·테이크 색·썸네일 자리·고른 것·현재 항목이 그대로 따라옴.
 - **Seq 목록**: _set_seq_items가 넣을 때 정렬(SidebarSequencesMixin) — 기준을 바꾸면 여기서 지금 목록을 다시 넣음.
@@ -22,7 +22,8 @@
 - 목록 다시 읽기(SidebarRefreshMixin._apply_sidebar_read)는 계획을 **기본 순위 순서로** 세우고(_sidebar_items_in_default_order), 바꿀 것이 있을 때만
   목록을 잠깐 기본 순서로 되돌려 계획을 넣은 뒤(_sidebar_default_order) 순위를 다시 매기고 정렬 — 새 영상이 이름 순서의 제자리에 들어가고, 계획 코드는
   정렬을 모름. 바뀐 것이 없으면 목록을 건드리지 않음.
-- 목록을 쓰는 중(_sidebar_refresh_holds — 썸네일 반복·우클릭 메뉴가 줄 번호를 쥠)에는 줄을 옮기지 않고 끝난 뒤에(SORT_RETRY_MS마다 다시 봄).
+- 목록을 쓰는 중(_sidebar_refresh_holds — 썸네일 반복·우클릭 메뉴가 줄 번호·항목을 쥠)에는 줄을 옮기지 않고 끝난 뒤에(SORT_RETRY_MS마다 다시 봄) —
+  기준을 바꿀 때의 Seq 목록 다시 넣기(항목을 새로 만듦)와 All 목록 다시 만들기도 함께 미룸(_sidebar_seq_resort_pending).
 
 **시간**(파일을 고친 시각 — 최근 것부터)만은 이름이 아니라 디스크를 읽음: 줄을 옮길 때 GUI 스레드에서 os.stat(_read_sidebar_times) — 사용자가 '시간'을 고를 때
 (이미 시간이어도 — 다시 고르면 다시 읽음) 모든 영상을, 그 뒤 들어온 새 영상은 그것만. 저절로 도는 목록 다시 읽기에서는 다시 읽지 않음(앱을 오갈 때마다
@@ -36,6 +37,7 @@ import contextlib
 import os
 import time
 
+from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QItemSelectionModel, QObject, Qt, QTimer
 from PyQt5.QtWidgets import QAbstractItemView, QMenu, QToolButton
 
@@ -139,7 +141,10 @@ class SidebarSortMixin:
         것이 없으면 가장 짧은 것(그것도 모자라면 틈을 줄임). 폭은 어림하지 않고 그 글을 단추에 넣어 잼(_sort_button_width — 글꼴 폭으로 어림하면 1px
         어긋났음). 탭 위젯·탭 막대의 크기·자리가 바뀔 때마다(_ResizeWatcher)와 기준을 바꿀 때 부름 — 단추는 탭 위젯의 배치에 들어 있지 않아(직접 놓음)
         글·자리를 바꿔도 그 이벤트가 다시 오지 않고, 탭 위젯의 바라는 크기·최소 크기(사이드바·창의 크기 계산)도 그대로."""
-        tabs, bar, button = self.sidebar_tabs, self.sidebar_tabs.tabBar(), self.sidebar_sort_button
+        tabs, button = self.sidebar_tabs, self.sidebar_sort_button
+        if sip.isdeleted(button) or sip.isdeleted(tabs):
+            return  # 창이 지워지는 중(단추가 감시자보다 먼저 지워짐) — 놓을 것이 없음 (없는 위젯을 건드려 거짓 오류 창을 띄우지 않게)
+        bar = tabs.tabBar()
         tabs_end = bar.x() + bar.width()
         texts = sidebar_sort.button_texts(self.sidebar_sort_mode)
         widths = [self._sort_button_width(text) for text in texts]
@@ -171,7 +176,7 @@ class SidebarSortMixin:
     # ---------------------------------------------------------------- 기준 바꾸기
 
     def set_sidebar_sort(self, mode):
-        """정렬 기준을 mode("name"·"kind"·"version")로 — 세 탭에 바로 적용(목록을 쓰는 중이면 Mov 목록의 줄은 끝난 뒤에). 모르는 값은 ValueError
+        """정렬 기준을 mode("name"·"kind"·"version"·"time")로 — 세 탭에 바로 적용(목록을 쓰는 중이면 Mov 목록의 줄은 끝난 뒤에). 모르는 값은 ValueError
         (아무것도 바꾸지 않음). 같은 기준이면 체크만 맞춤(체크된 항목을 다시 누르면 Qt가 끔)."""
         sidebar_sort.button_text(mode)  # 모르는 값이면 여기서 ValueError
         previous = self.sidebar_sort_mode
@@ -187,9 +192,8 @@ class SidebarSortMixin:
         self.sidebar_sort_mode = mode
         self._sync_sidebar_sort_button()
         print(f"{SORT_LOG_PREFIX} 사이드바: {sidebar_sort.LABELS[mode]}", flush=True)
+        self._sidebar_seq_resort_pending = True  # Seq·All 목록도 다시 — 목록을 쓰는 중이면 Mov 줄 옮기기와 함께 끝난 뒤에 (_apply_sidebar_sort)
         self._apply_sidebar_sort(show_current=True)
-        self._set_seq_items(video_list.sort_sequences(self._current_seq_items()))  # 이름 순서로 되돌린 목록을 넣음 — 넣을 때 기준대로 정렬
-        self._schedule_all_rebuild()
 
     # ---------------------------------------------------------------- Mov 목록
 
@@ -237,17 +241,20 @@ class SidebarSortMixin:
             return
         mode = self.sidebar_sort_mode
         if mode == sidebar_sort.DEFAULT_MODE:
-            if not self._sidebar_ranked():
-                return  # 순위 없는 목록 = 정렬한 적 없이 들어온 그대로
-            self._reorder_sidebar_items(self._sidebar_items_by_rank(), show_current)
-            for item in self._sidebar_items():
-                item.setData(SIDEBAR_RANK_ROLE, None)
-            return
-        time_of = None
-        if mode == sidebar_sort.TIME_MODE:
-            self._read_sidebar_times()
-            time_of = _item_time
-        self._reorder_sidebar_items(sidebar_sort.ordered(self._sidebar_items_by_rank(), mode, stem_of=_item_stem, time_of=time_of), show_current)
+            if self._sidebar_ranked():  # 순위 없는 목록 = 정렬한 적 없이 들어온 그대로 — 건드리지 않음
+                self._reorder_sidebar_items(self._sidebar_items_by_rank(), show_current)
+                for item in self._sidebar_items():
+                    item.setData(SIDEBAR_RANK_ROLE, None)
+        else:
+            time_of = None
+            if mode == sidebar_sort.TIME_MODE:
+                self._read_sidebar_times()
+                time_of = _item_time
+            self._reorder_sidebar_items(sidebar_sort.ordered(self._sidebar_items_by_rank(), mode, stem_of=_item_stem, time_of=time_of), show_current)
+        if self._sidebar_seq_resort_pending:  # 사용자가 기준을 바꿈 — Seq 목록을 이름 순서로 되돌려 다시 넣고(넣을 때 기준대로 정렬) All 목록도 다시
+            self._sidebar_seq_resort_pending = False
+            self._set_seq_items(video_list.sort_sequences(self._current_seq_items()))
+            self._schedule_all_rebuild()
 
     def _read_sidebar_times(self):
         """(시간 정렬 — 줄을 옮기기 직전) Mov 항목마다 파일을 고친 시각(os.stat)을 항목에 적음(SIDEBAR_MTIME_ROLE): 아직 없는 항목만, 사용자가 '시간'을

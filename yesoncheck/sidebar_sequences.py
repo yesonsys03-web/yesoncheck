@@ -313,6 +313,7 @@ class SidebarSequencesMixin:
         읽던·만들던 Seq 썸네일 일도 멈춤 (지난 목록의 결과가 새 목록에 붙지 않게)."""
         self._stop_seq_thumbnail_work()
         self.seq_sidebar.clear()
+        self._sidebar_seq_times.clear()  # 시간 정렬이 기억한 시퀀스의 고친 시각도 — 다시 불러온 목록은 시각을 새로 읽음 (영상 항목이 새로 읽는 것과 같게)
 
     def _note_folder_sequences(self, folder_path, sequences):
         """폴더를 읽어 찾은 시퀀스를 기억 — 영상 경로만 돌려주는 get_video_files_from_folder와, 그 뒤 목록을 비우고 채우는 부른 쪽

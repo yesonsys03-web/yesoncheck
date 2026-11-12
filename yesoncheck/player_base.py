@@ -700,7 +700,8 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         self._sidebar_refresh_holds = 0  # 목록을 쓰는 중(썸네일 반복·job 목록 만들기·메뉴) — 그동안 다시 읽기는 미룸
         self.sidebar_sort_mode = sidebar_sort.DEFAULT_MODE  # 사이드바 정렬 기준 — 이름(기본)·종류·버전·시간 (SidebarSortMixin, 창이 떠 있는 동안 유지)
         self._sidebar_times_stale = False  # 시간 정렬: 사용자가 '시간'을 (다시) 골랐음 — 다음에 줄을 옮길 때 모든 영상의 고친 시각을 다시 읽음
-        self._sidebar_seq_times = {}  # 시간 정렬: 시퀀스 → 첫 프레임을 고친 시각 (한 번 읽어 기억, '시간'을 다시 고르면 비움)
+        self._sidebar_seq_times = {}  # 시간 정렬: 시퀀스 → 첫 프레임을 고친 시각 (한 번 읽어 기억 — '시간'을 다시 고르거나 Seq 목록을 비우면 비움)
+        self._sidebar_seq_resort_pending = False  # 정렬 기준을 바꿈 — Seq·All 목록을 다시 넣어야 함 (목록을 쓰는 중이면 끝난 뒤에)
         self._sidebar_refresh_deferred = False  # 목록을 다 쓰면 다시 읽음
         self._sidebar_scan = None  # 실행 중인 목록 다시 읽기 (SidebarScan — 디스크 읽기는 GUI 밖 스레드)
         self._sidebar_rescan_queued = False  # 읽는 동안 다시 읽어 달라는 요청이 옴 → 끝나면 한 번 더

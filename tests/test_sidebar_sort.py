@@ -243,6 +243,19 @@ def test_the_button_leaves_the_keyboard_focus_with_the_list(player):
     assert player.sidebar_sort_button.focusPolicy() == Qt.NoFocus
 
 
+def test_fitting_the_button_after_the_window_is_gone_does_nothing(new_player, dialogs, tmp_path, monkeypatch):  # noqa: F811
+    """창이 지워지는 중 탭 줄에 크기 이벤트가 와도(단추가 먼저 지워짐) 없는 위젯을 건드려 거짓 오류 창을 띄우지 않음."""
+    from PyQt5 import sip
+
+    player = new_player(make_config(str(tmp_path), {}))
+    reports = []
+    monkeypatch.setattr(sidebar_sorting.error_window, "report_from_handler", lambda prefix, context: reports.append(context))
+    sip.delete(player.sidebar_sort_button)
+    player.sidebar_tabs.resize(player.sidebar_tabs.width() + 30, player.sidebar_tabs.height())
+    player._fit_sidebar_sort_button()
+    assert reports == []
+
+
 def test_the_button_looks_the_same_size_in_both_themes(player, qapp):
     """테마를 바꿔도 크기·자리가 그대로 — 단추의 시트는 색을 정하지 않음(글자색은 테마 시트를 따름)."""
     player.show()
@@ -477,6 +490,51 @@ def test_seq_and_all_lists_follow_the_time_sort(player, tmp_path):
     assert all_stems == sorted(minutes, key=lambda stem: -minutes[stem])
     player.set_sidebar_sort("name")
     assert seq_names(player) == bases
+
+
+def test_reloading_the_list_reads_sequence_times_again(player, tmp_path):
+    """시퀀스의 시각은 한 번 읽어 기억하지만, 목록을 비우고 다시 불러오면(같은 job을 다시 고름) 새로 읽음 — 영상 항목이 새로 읽는 것과 같게
+    (리뷰에서 잡음: 다시 렌더한 시퀀스만 옛 자리에 남았음)."""
+    bases = ["S_010_OSRO_v01", "S_020_OSAN_v01"]
+    frames = seq_frames(tmp_path, bases)
+    for base, minute in zip(bases, (10, 90)):
+        os.utime(frames / f"{base}-0001.tga", (NOON + minute * 60, NOON + minute * 60))
+    sequences = video_list.scan_folder(str(frames)).sequences
+    player.set_sidebar_sort("time")
+    player._set_seq_items(sequences)
+    assert seq_names(player) == ["S_020_OSAN_v01", "S_010_OSRO_v01"]
+    os.utime(frames / "S_010_OSRO_v01-0001.tga", (NOON + 999 * 60, NOON + 999 * 60))  # 다시 렌더
+    player.sidebar.clear()  # job·폴더를 바꿈 — Seq 목록도 함께 비워짐
+    player._set_seq_items(sequences)
+    assert seq_names(player) == ["S_010_OSRO_v01", "S_020_OSAN_v01"]
+
+
+def test_the_seq_list_also_waits_while_the_list_is_in_use(player, tmp_path):
+    """기준을 바꿀 때 Seq 목록은 항목을 새로 만들어 넣음 — 목록을 쓰는 중(항목을 쥔 일이 도는 중)에는 Mov 줄 옮기기와 함께 끝난 뒤에."""
+    bases = ["S_010_OSRO_v01", "S_020_OSAN_v01"]
+    player._set_seq_items(video_list.scan_folder(str(seq_frames(tmp_path, bases))).sequences)
+    items = [player.seq_sidebar.item(i) for i in range(player.seq_sidebar.count())]
+    with player._hold_sidebar_refresh():
+        player.set_sidebar_sort("kind")
+        assert [player.seq_sidebar.item(i) for i in range(player.seq_sidebar.count())] == items  # 그대로 (지워지지 않음)
+    QTest.qWait(sidebar_sorting.SORT_RETRY_MS + 150)
+    assert seq_names(player) == ["S_020_OSAN_v01", "S_010_OSRO_v01"]
+
+
+def test_shift_click_selects_one_group_after_sorting(player, tmp_path, qapp):
+    """매뉴얼이 권하는 길: 종류로 정렬 → 묶음의 첫 줄 클릭 → 마지막 줄 Shift+클릭 → 그 종류만 선택 재생. 줄을 옮긴 뒤에도 범위 선택이 맞아야 함."""
+    load(player, tmp_path)
+    player.sidebar.setCurrentRow(5)  # 정렬 전에 다른 줄을 보고 있었음
+    player.set_sidebar_sort("kind")
+    player.show()
+    qapp.processEvents()
+    widget = player.sidebar
+    monkey_open = []
+    player.open_file = lambda *args, **kwargs: monkey_open.append(args)  # 클릭이 영상을 열지 않게 (목록만 봄)
+    first, last = widget.item(1), widget.item(3)  # OSAN 묶음
+    QTest.mouseClick(widget.viewport(), Qt.LeftButton, Qt.NoModifier, widget.visualItemRect(first).center())
+    QTest.mouseClick(widget.viewport(), Qt.LeftButton, Qt.ShiftModifier, widget.visualItemRect(last).center())
+    assert [item.text() for item in player._playlist_selection()] == BY_KIND[1:4]
 
 
 # ---------------------------------------------------------------- 선택 재생·All·Seq
