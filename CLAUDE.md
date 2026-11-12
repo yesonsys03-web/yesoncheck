@@ -1123,6 +1123,14 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 
 사용자 질문 "헬프에 실행및 빌드가 왜 있는 거지? 필요없으면 제거하는 게 낫지 않아?". 소스 폴더의 `run_app.sh`·`build_app.sh`를 새 터미널에서 돌리던 개발용 창이었고(Mac에서만 보임), **배포한 앱에는 그 스크립트가 들어 있지 않아**(spec에 없음) 누르면 '스크립트 없음' 경고만 떴음. 소스 실행에서는 이미 터미널에서 띄운 상태라 쓸 일이 없음 → `player_base`의 메뉴 항목과 `show_run_and_build_dialog`(61줄), 쓰이지 않게 된 import 둘(`subprocess`·`QDialogButtonBox`), README의 언급 넷, 매뉴얼 Help 메뉴 표의 한 줄을 지우고 `help_menu` 그림을 다시 찍음. 실행·빌드는 터미널에서 `./run_app.sh`·`./build_app.sh` 그대로. 시험 `tests/test_settings_menu.py`(Help 메뉴에 그 항목·처리기가 없음). **배포 노트에 넣을 글**: "Help 메뉴에서 개발용 항목 '실행 및 빌드'를 뺐습니다(Mac)."
 
+### 2026-11-12 (CI — 충돌 보고서를 기다렸다가 출력: Mac pytest 세그폴트의 네이티브 스택을 보려고)
+
+- **증상(원인 미확인 — main에 원래 있던 간헐 크래시)**: Mac CI의 pytest가 `tests/test_mac_app_events.py::test_open_startup_file_missing_video_shows_error_window_naming_it`에서 `Fatal Python error: Segmentation fault`로 죽음 — 파이썬 스택은 늘 같은 자리: `VideoPlayerBase.__init__` → `_init_hover_thumbs` → `slider_preview.py`의 `SliderPreviewPopup.__init__`(`super().__init__(parent, Qt.ToolTip | …)`). 본 것: 2026-11-12 `feat/take-colors`의 Intel 1회(다시 돌려 통과), 같은 날 `fix/smooth-downscale-raster`의 Intel·Apple Silicon 동시 1회. 그 시험은 `launch_env` 시험들(진짜 `app.launch` + 가짜 창) 바로 뒤에 진짜 `VideoPlayer`를 처음 만드는 시험.
+- **이 Mac에서 재현하지 못함**: 전체 실행·CI와 같은 차례(test_a… ~ test_mac_app_events) 실행·그 파일만 30번(main) 모두 통과; 쓰레기가 된 앱 전체 이벤트 필터(`FileOpenRouter` — launch 시험이 순환 참조로 남김)를 걸어 둔 채 위젯 생성 순간마다 순환 GC를 강제로 돌리는 실험(창 10번씩 × 네 조건)도 죽지 않음 — 그 가설은 확인되지 않음.
+- **왜 네이티브 스택이 없었나**: 워크플로의 '충돌 보고서' 단계(`ci/print_crash_reports.py`, `if: failure()`)가 pytest가 죽은 지 1~2초 만에 돌아 "충돌 보고서 0개"만 찍음 — macOS(ReportCrash)가 `.ips`를 쓰는 데 몇 초~수십 초가 걸림.
+- **고침(진단 도구만 — 앱 코드 무변경)**: `print_crash_reports.py --wait 초`(`--poll` 기본 2초) — 보여 줄 보고서(이 job·우리 프로세스·읽을 수 있는 것)가 없으면 그만큼까지 기다림. 쓰는 중이라 JSON이 덜 된 보고서와 다른 프로그램의 보고서는 기다림을 끝내지 않고, 기한이 지나면 있는 대로(읽지 못한 것 포함) 출력, 끝 줄에 `기다림 n초(최대 m초)`. 워크플로는 `--wait 120`(실패한 Mac job마다 크래시가 아니어도 최대 2분 더 걸림 — 알고 둠). 시험 `tests/test_print_crash_reports.py`(가짜 시계·sleep — 기다렸다 출력·기한에 포기·쓰는 중인 보고서·다른 프로그램의 보고서·기다림 없으면 sleep 안 함).
+- **다음에 그 세그폴트가 나면**: 실패한 job의 '충돌 보고서' 단계에서 죽은 스레드의 네이티브 프레임을 볼 것(Qt·sip 어느 함수인지) — 원인을 정한 뒤에 고침. 그 전까지는 실패한 job만 다시 돌림(`gh run rerun <id> --failed`).
+
 ### 2026-11-12 (테마 전환 — 색만 바뀌고 자리·크기·글꼴은 그대로)
 
 사용자 보고 "테마 전환시 전체적으로 UI 사이즈 변경돼. 테마만 전환돼야 하는데"·"화이트 테마 전환시 버튼의 비율들이 바뀌는 거 같아" (1.9.0에도 있던 것 — 밝은 테마를 고친 뒤 눈에 띔).
