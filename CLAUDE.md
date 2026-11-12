@@ -1112,6 +1112,10 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 
 ## 최근 변경 사항
 
+### 2026-11-12 (시험 — Windows 배포 CI에서 흔들리던 호버 멈춤 시험)
+
+`tests/test_player_hover_thumbs.py::test_opening_next_file_pauses_old_builder_while_opening`이 배포 CI의 Windows 작업을 두 번(1.9.0·1.9.1) 실패시켰음(재실행마다 약 1시간) — 여는 순간 옛 썸네일 ffmpeg가 정지됐는지를 psutil `status()`로 봤는데, **Windows의 psutil은 파이프 쓰기에서 막힌 스레드가 있으면 정지된 프로세스도 `running`으로 읽음**(빌더 시험의 `status` 갈래를 Windows에서 건너뛰는 까닭과 같음 — 이 시험만 빠져 있었음). 고침(시험만 — 앱 코드 무변경): 증거를 둘로 나눔 — ① **멈춤 표지**(모든 플랫폼): `_open_movie_capture`에 들어설 때 옛 워커의 `paused`가 이미 True(이 시험이 지키는 플레이어의 몫) ② **프로세스 상태**(POSIX만): psutil이 stopped. 표지가 실제 정지로 이어지는 것은 Windows에서도 빌더 시험의 `drain` 갈래가 봄. 확인: `_hover_thumbs_pause`의 `worker.paused = True`를 잠깐 없애면 `(경로, False, 'running')`으로 실패(표지만으로도 잡힘) — 되돌림. 사용자 지시("1.9.1을 내보낸 뒤 수정 시작해").
+
 ### 2026-11-12 (영상을 바꿀 때 떠나는 영상을 되감지 않음)
 
 사용자 보고(1.9.0, Mac): 사이드바에서 다음 영상을 누르자 **떠나는** 영상에 대해 "VideoToolbox로 영상을 읽다가 도중에 실패해 … 리더가 0번 프레임 앞에서 끝났습니다 — 받은 장 수가 파일의 프레임 수 80보다 적음"이 뜸. 기록과 파일로 본 원인: 그 영상이 열려 있는 동안 **같은 이름으로 다시 렌더됨**(파일의 고친 때·안에 적힌 만든 시각이 오류 몇 분 전 — 그 폴더에서 그날 바뀐 영상은 그것 하나). 새 영상을 열 때 `open_file` → `_stop_playback_for_open` → `stop_video` → `seek_to_frame(1)`이 **떠나는 캡처**를 처음으로 되감다가 바뀐 파일에서 한 장도 못 받은 것(파일이 바뀌면 읽기가 0장으로 끝난다는 고리는 시각이 맞아떨어진 것으로 본 추정 — 재현은 안 함).
@@ -1139,6 +1143,14 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 ### 2026-11-12 (Help — '실행 및 빌드'를 뺌)
 
 사용자 질문 "헬프에 실행및 빌드가 왜 있는 거지? 필요없으면 제거하는 게 낫지 않아?". 소스 폴더의 `run_app.sh`·`build_app.sh`를 새 터미널에서 돌리던 개발용 창이었고(Mac에서만 보임), **배포한 앱에는 그 스크립트가 들어 있지 않아**(spec에 없음) 누르면 '스크립트 없음' 경고만 떴음. 소스 실행에서는 이미 터미널에서 띄운 상태라 쓸 일이 없음 → `player_base`의 메뉴 항목과 `show_run_and_build_dialog`(61줄), 쓰이지 않게 된 import 둘(`subprocess`·`QDialogButtonBox`), README의 언급 넷, 매뉴얼 Help 메뉴 표의 한 줄을 지우고 `help_menu` 그림을 다시 찍음. 실행·빌드는 터미널에서 `./run_app.sh`·`./build_app.sh` 그대로. 시험 `tests/test_settings_menu.py`(Help 메뉴에 그 항목·처리기가 없음). **배포 노트에 넣을 글**: "Help 메뉴에서 개발용 항목 '실행 및 빌드'를 뺐습니다(Mac)."
+
+### 2026-11-12 (CI — 충돌 보고서를 기다렸다가 출력: Mac pytest 세그폴트의 네이티브 스택을 보려고)
+
+- **증상(원인 미확인 — main에 원래 있던 간헐 크래시)**: Mac CI의 pytest가 `tests/test_mac_app_events.py::test_open_startup_file_missing_video_shows_error_window_naming_it`에서 `Fatal Python error: Segmentation fault`로 죽음 — 파이썬 스택은 늘 같은 자리: `VideoPlayerBase.__init__` → `_init_hover_thumbs` → `slider_preview.py`의 `SliderPreviewPopup.__init__`(`super().__init__(parent, Qt.ToolTip | …)`). 본 것: 2026-11-12 `feat/take-colors`의 Intel 1회(다시 돌려 통과), 같은 날 `fix/smooth-downscale-raster`의 Intel·Apple Silicon 동시 1회. 그 시험은 `launch_env` 시험들(진짜 `app.launch` + 가짜 창) 바로 뒤에 진짜 `VideoPlayer`를 처음 만드는 시험.
+- **이 Mac에서 재현하지 못함**: 전체 실행·CI와 같은 차례(test_a… ~ test_mac_app_events) 실행·그 파일만 30번(main) 모두 통과; 쓰레기가 된 앱 전체 이벤트 필터(`FileOpenRouter` — launch 시험이 순환 참조로 남김)를 걸어 둔 채 위젯 생성 순간마다 순환 GC를 강제로 돌리는 실험(창 10번씩 × 네 조건)도 죽지 않음 — 그 가설은 확인되지 않음.
+- **왜 네이티브 스택이 없었나**: 워크플로의 '충돌 보고서' 단계(`ci/print_crash_reports.py`, `if: failure()`)가 pytest가 죽은 지 1~2초 만에 돌아 "충돌 보고서 0개"만 찍음 — macOS(ReportCrash)가 `.ips`를 쓰는 데 몇 초~수십 초가 걸림.
+- **고침(진단 도구만 — 앱 코드 무변경)**: `print_crash_reports.py --wait 초`(`--poll` 기본 2초 — 0 이하는 인자 오류) — **방금 다 쓰인** 보고서(이 job·우리 프로세스·본문까지 읽히는 것·이 도구가 시작되기 `--fresh`초(기본 30) 전부터 고쳐진 것)가 없으면 그만큼까지 기다림. 쓰는 중인 보고서(JSON이 덜 됨·머리 줄만 있고 본문이 아직 — `is_complete`)·다른 프로그램의 보고서·**앞서 쓰인 우리 보고서**는 기다림을 끝내지 않고, 기한이 지나면 있는 대로(앞서 쓰인 것·덜 쓰인 것·읽지 못한 것 포함) 출력. 방금 다 쓰인 것을 처음 본 뒤에도 `--settle`초(기본 20, 기한은 넘기지 않음) 더 지켜봄 — 자식이 죽고 곧이어 pytest 본체도 죽으면 보고서가 둘인데 첫 것만 보고 끝내면 본체의 것을 놓침. 폴더를 훑는 사이 사라진 파일(`FileNotFoundError` — macOS가 옮김·지움)은 그 번에 건너뛰고 수를 끝 줄에(트레이스백으로 죽으면 모은 출력을 다 잃음). 끝 줄: `… 기다림 n초(최대 m초)`(방금 다 쓰인 것이 끝내 없었으면 ` — 방금(이 단계 직전 30초 안) 다 쓰인 보고서는 없음`)·`훑는 사이 사라진 파일 n개`(있을 때만). 워크플로는 `--wait 120`: 이 단계가 도는 Mac job의 실패(pytest·빌드·실행 시험·업데이트 시험)마다, 방금 쓰인 우리 보고서가 없으면 2분을 다 기다리고 있으면 최대 20초 더 — 알고 둠. **'방금'만 보는 까닭**(이 PR의 첫 CI에서 찾음 — Intel job이 러너의 DNS 실패로 `test_smoke_from_source`의 OCR 단계에서 실패했을 때 '기다림 0초'): `test_smoke`가 일부러 죽인 파이썬 둘(`faulthandler_sigsegv`·`time_sleep` 프레임 — 같은 `python3.10`)의 보고서가 몇 분 전에 이미 있어 그것을 보고 기다림을 끝냈음 — 그 뒤에 pytest가 진짜로 죽으면 그 보고서를 놓침(종료 플레이크로 앞서 죽은 자식의 보고서도 같음). 별도 리뷰(읽기 전용 — 승인, 지적 MEDIUM 1·LOW 4)에서 고친 것: 머리 줄만 쓰인 보고서로 기다림이 끝나던 것, 훑는 사이 사라진 파일, `--poll` 0·음수, 잇달아 죽은 프로세스(→ `--settle`), 이 줄의 '늘 2분' 문구. **모르는 것**: macOS가 `.ips`를 한 번에 쓰는지·임시 이름으로 썼다 옮기는지·고친 시각을 크래시 시각으로 맞추는지, 보고서 쓰기가 120초를 넘는 경우가 있는지 — 다음에 진짜 세그폴트가 날 때의 기록으로 확인. 시험 `tests/test_print_crash_reports.py`(가짜 시계·sleep·벽시계 — 기다렸다 출력·기한에 포기·쓰는 중인 보고서(덜 된 JSON·머리 줄만)·다른 프로그램의 보고서·기다림 없으면 sleep 안 함·앞서 쓰인 우리 보고서는 기다림을 안 끝냄·그것뿐이면 기한까지 기다리고 끝 줄에 적음·단계 직전에 쓰인 것은 바로·`--fresh` 폭·첫 보고서 뒤 `--settle`초 더(기한 안에서)·사라진 파일은 건너뛰고 셈·`--poll` 0 이하는 오류).
+- **다음에 그 세그폴트가 나면**: 실패한 job의 '충돌 보고서' 단계에서 죽은 스레드의 네이티브 프레임을 볼 것(Qt·sip 어느 함수인지) — 원인을 정한 뒤에 고침. 그 전까지는 실패한 job만 다시 돌림(`gh run rerun <id> --failed`).
 
 ### 2026-11-12 (테마 전환 — 색만 바뀌고 자리·크기·글꼴은 그대로)
 
