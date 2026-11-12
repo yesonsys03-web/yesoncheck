@@ -22,7 +22,7 @@ from yesoncheck import paths
 from yesoncheck.file_names import natural_key
 from yesoncheck.sidebar_counts import count_text
 from yesoncheck.sidebar_items import ALL_KIND_ROLE
-from yesoncheck.sidebar_take_colors import take_color
+from yesoncheck.sidebar_take_colors import count_line_html, take_color
 
 # All 탭 시퀀스 항목 글자 색 — 테마별 하늘색 (주황 선택 강조·흰/검 기본색 어느 쪽과도 구분)
 ALL_SEQ_FG = {"dark": "#5bc8ff", "light": "#0b6ea8"}
@@ -93,7 +93,11 @@ class SidebarAllMixin:
         movies = [self.sidebar.item(i).data(Qt.UserRole) for i in range(self.sidebar.count())]
         sequences = [(seq.base, seq.ext) for seq in (self.seq_sidebar.item(i).data(Qt.UserRole)
                                                        for i in range(self.seq_sidebar.count()))]
-        self.sidebar_count_label.setText(count_text(tab, movies, sequences))
+        line = count_text(tab, movies, sequences)
+        # 버전·테이크 토막을 목록과 같은 색으로(줄이 곧 범례) — 목록에 테이크 색이 없는 Seq 탭은 칠하지 않음, 칠할 토막이 없으면 평문 그대로
+        colored = None if tab == "seq" else count_line_html(line, self.current_theme)
+        self.sidebar_count_label.setTextFormat(Qt.PlainText if colored is None else Qt.RichText)
+        self.sidebar_count_label.setText(line if colored is None else colored)
 
     # ---------------------------------------------------------------- 테이크·버전 색 (Mov 항목 — 규칙은 sidebar_take_colors)
 
@@ -126,6 +130,8 @@ class SidebarAllMixin:
                 continue
             if repaint or item.data(Qt.ForegroundRole) is None:
                 self._paint_mov_item(item)
+        if repaint:
+            self._update_sidebar_count()  # 개수 줄의 색도 테마마다 다름
 
     def _schedule_all_rebuild(self, *_args):
         """All 탭이 보이는 동안만 미뤄서 다시 만듦 (숨은 동안의 변화는 탭을 열 때 한 번에)."""

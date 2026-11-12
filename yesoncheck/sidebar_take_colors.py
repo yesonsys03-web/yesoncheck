@@ -10,7 +10,13 @@
   밝은 테마의 색은 흰 목록 바탕에서 읽히게 어두운 쪽 — 두 테마 모두 목록 바탕(밝은 테마는 마우스를 올린 줄 포함)과의 명암 대비가
   4.5:1 이상(시험이 지킴; 실측 어두운 7.6~11.2:1, 밝은 5.1~6.5:1).
 - 고른 줄은 테이크 색이 아니라 목록 시트의 선택 글자색(어두운 테마 주황·밝은 테마 기본색)으로 보임 — 시트의 ::item:selected가 우선.
+- **개수 줄**(목록 아래 `638개 — OSAN 615 (v01 397 · v02 176 …)`)의 버전·테이크 토막도 같은 색(`count_line_html`) — 줄이 곧 범례.
+  사용자 지시 "여기에도 일관성있게 적용돼야지". 버전·테이크는 늘 괄호 안이라 괄호 안의 토막만 칠함(괄호 밖 포맷 이름이 `v2`처럼
+  생겨도 그대로). 칠할 토막이 없으면 None — 부른 쪽이 예전처럼 평문으로 보임.
 """
+
+import html
+import re
 
 from yesoncheck.sidebar_counts import VERSION_TOKEN, kind_and_version
 
@@ -29,10 +35,34 @@ def take_number(stem):
     return int(VERSION_TOKEN.fullmatch(version).group(2))
 
 
-def take_color(stem, theme):
-    """이름의 테이크·버전 색("#rrggbb") — 1번 이하·번호 없음이면 None(테마 기본색). 모르는 테마는 KeyError."""
+def number_color(number, theme):
+    """테이크·버전 번호의 색("#rrggbb") — 1번 이하·None이면 None(테마 기본색). 모르는 테마는 KeyError."""
     colors = TAKE_COLORS[theme]
-    number = take_number(stem)
     if number is None or number < 2:
         return None
     return colors[(number - 2) % len(colors)]
+
+
+def take_color(stem, theme):
+    """이름의 테이크·버전 색("#rrggbb") — 1번 이하·번호 없음이면 None(테마 기본색). 모르는 테마는 KeyError."""
+    return number_color(take_number(stem), theme)
+
+
+_PARENTHESES = re.compile(r"\(([^()]*)\)")  # 종류마다의 버전·테이크 묶음 `(v01 397 · v02 176)`
+_VERSION_COUNT = re.compile(r"(?<![0-9A-Za-z_])(?:TK|v)(\d+) \d+")  # 묶음 안의 토막 `v02 176` — sidebar_counts가 내는 모양(TK·v + 숫자, 개수)
+
+
+def count_line_html(line, theme):
+    """개수 줄 글(sidebar_counts.count_text)에서 2번 이상의 버전·테이크 토막을 목록과 같은 색으로 감싼 HTML.
+    칠할 토막이 하나도 없으면 None (평문 그대로 보이면 됨). 줄 바꿈(All 탭의 둘째 줄)은 <br>, 나머지 글은 escape."""
+    painted = []
+
+    def paint(token):
+        color = number_color(int(token.group(1)), theme)
+        if color is None:
+            return token.group(0)
+        painted.append(token.group(0))
+        return f'<span style="color:{color}">{token.group(0)}</span>'
+
+    marked = _PARENTHESES.sub(lambda group: "(" + _VERSION_COUNT.sub(paint, group.group(1)) + ")", html.escape(line, quote=False))
+    return marked.replace("\n", "<br>") if painted else None

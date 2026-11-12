@@ -4,6 +4,7 @@
 - 테이크·버전 번호는 개수 줄과 같은 규칙(sidebar_counts.kind_and_version — 이름 끝의 TK·v + 숫자)으로 읽음.
 - 1번(TK1·v01·v001)과 번호 없는 이름은 테마 기본색(따로 칠하지 않음), 2번부터 번호마다 색 — 넷을 돌려 씀.
 - 색은 이미 뜻이 있는 색을 피함: All 탭의 시퀀스(하늘색), 선택 재생 중인 항목(빨강), 어두운 테마의 선택 항목(주황).
+- 목록 아래 개수 줄의 버전·테이크 토막(`v02 176`)도 목록과 같은 색 — 사용자 지시 "여기에도 일관성있게 적용돼야지".
 - 창: 목록이 바뀌면·테마를 바꾸면 다시 칠하고, All 탭의 mov 사본도 같은 색(시퀀스는 하늘색 그대로), 선택 재생이 끝나도 테이크 색이 남음.
 """
 
@@ -19,7 +20,7 @@ from tests.test_sidebar_all_tab import show_all_tab, wait_rebuild
 from tests.test_thumbnails import drop_folder
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 from yesoncheck.sidebar_all import ALL_SEQ_FG
-from yesoncheck.sidebar_take_colors import TAKE_COLORS, take_color, take_number
+from yesoncheck.sidebar_take_colors import TAKE_COLORS, count_line_html, take_color, take_number
 
 RESERVED = {"dark": {"sequence": ALL_SEQ_FG["dark"], "playing": "#ff0000", "selected": "#ff9900"},
             "light": {"sequence": ALL_SEQ_FG["light"], "playing": "#ff0000"}}
@@ -97,6 +98,43 @@ def test_take_colours_are_readable_on_the_list_background(theme):
     for color in TAKE_COLORS[theme]:
         for background in LIST_BACKGROUNDS[theme]:
             assert contrast(color, background) >= 4.5, (theme, color, background)
+
+
+# ---------------------------------------------------------------- 개수 줄 (Qt 없음)
+
+
+def span(color, token):
+    return f'<span style="color:{color}">{token}</span>'
+
+
+def test_count_line_colours_versions_like_the_list():
+    green, pink, violet, _lime = TAKE_COLORS["dark"]
+    line = "638개 — OSAN 615 (v01 397 · v02 176 · v03 38 · v04 4) · TX 10 (v01 7 · v02 3)"
+    assert count_line_html(line, "dark") == (
+        f"638개 — OSAN 615 (v01 397 · {span(green, 'v02 176')} · {span(pink, 'v03 38')} · {span(violet, 'v04 4')})"
+        f" · TX 10 (v01 7 · {span(green, 'v02 3')})")
+
+
+def test_count_line_colours_takes_with_the_theme_palette():
+    line = "249개 — 기본 249 (TK1 243 · TK2 6)"
+    assert count_line_html(line, "light") == f"249개 — 기본 249 (TK1 243 · {span(TAKE_COLORS['light'][0], 'TK2 6')})"
+
+
+@pytest.mark.parametrize("line", ["0개", "12개", "시퀀스 3개", "10개 — mov 7 · png 3",
+                                  "450개 — 기본 225 (TK1 225) · HD 225 (TK1 225)", "3개 — 기본 3 (v001 2 · 없음 1)"])
+def test_count_line_with_nothing_to_colour_stays_plain(line):
+    assert count_line_html(line, "dark") is None
+
+
+def test_count_line_escapes_text_and_keeps_the_all_tab_line_break():
+    line = "3개 — mov 2 · a&b 1\n기본 3 (TK1 1 · TK2 2)"
+    assert count_line_html(line, "dark") == f"3개 — mov 2 · a&amp;b 1<br>기본 3 (TK1 1 · {span(TAKE_COLORS['dark'][0], 'TK2 2')})"
+
+
+def test_only_version_tokens_inside_parentheses_are_coloured():
+    """괄호 밖의 포맷 이름(확장자)이 버전처럼 생겨도 칠하지 않음 — 버전·테이크는 늘 괄호 안."""
+    line = "5개 — v2 3 · mov 2\n기본 5 (v02 5)"
+    assert count_line_html(line, "dark") == f"5개 — v2 3 · mov 2<br>기본 5 ({span(TAKE_COLORS['dark'][0], 'v02 5')})"
 
 
 # ---------------------------------------------------------------- 창
@@ -182,3 +220,27 @@ def test_item_being_played_stays_red_when_the_list_is_repainted(player, qapp, tm
     qapp.processEvents()
     assert color_of(playing) == "#ff0000"
     assert mov_colors(player) == {**expected("light"), "SH010_TK2.mov": "#ff0000"}
+
+
+def test_count_line_under_the_list_uses_the_list_colours(player, qapp, tmp_path):
+    loaded(player, qapp, tmp_path)
+    label = player.sidebar_count_label
+    assert label.textFormat() == Qt.RichText
+    assert span(TAKE_COLORS["dark"][0], "TK2 1") in label.text() and span(TAKE_COLORS["dark"][1], "v03 1") in label.text()
+    player.set_light_theme()
+    qapp.processEvents()
+    assert span(TAKE_COLORS["light"][0], "TK2 1") in label.text() and span(TAKE_COLORS["light"][1], "v03 1") in label.text()
+
+
+def test_count_line_is_plain_text_when_nothing_is_coloured(player, qapp):
+    qapp.processEvents()
+    assert (player.sidebar_count_label.textFormat(), player.sidebar_count_label.text()) == (Qt.PlainText, "0개")
+
+
+def test_seq_tab_count_line_is_not_coloured(player, qapp, tmp_path):
+    """Seq 탭의 시퀀스에는 테이크 색이 없으므로 개수 줄도 칠하지 않음 (줄의 색 = 목록의 색)."""
+    loaded(player, qapp, tmp_path)
+    player.sidebar_tabs.setCurrentWidget(player.seq_sidebar)
+    qapp.processEvents()
+    label = player.sidebar_count_label
+    assert (label.textFormat(), label.text()) == (Qt.PlainText, "시퀀스 1개 — 기본 1 (TK2 1)")
