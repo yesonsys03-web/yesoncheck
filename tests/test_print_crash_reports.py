@@ -91,8 +91,13 @@ def test_no_reports(tmp_path, capsys):
 # ---------------------------------------------------------------- --wait: macOS가 보고서를 쓸 때까지 기다림
 
 
+STEP_START = JOB_START + 600  # '충돌 보고서' 단계가 시작된 시각 — job을 시작한 지 10분 뒤
+EARLIER = JOB_START + 60  # 그보다 9분 전: 시험이 일부러 죽인 파이썬의 보고서가 쓰인 때
+
+
 class FakeTime:
-    """가짜 시계와 sleep — sleep할 때마다 시각을 그만큼 보내고, 정해 둔 시각에 일(보고서가 생김)을 일으킴."""
+    """가짜 시계와 sleep — sleep할 때마다 시각을 그만큼 보내고, 정해 둔 시각에 일(보고서가 생김)을 일으킴.
+    clock은 기다림을 재는 시계, time은 보고서 파일의 고친 시각과 견줄 벽시계(단계가 시작될 때 STEP_START)."""
 
     def __init__(self, happenings=()):
         self.now = 1000.0
@@ -102,6 +107,9 @@ class FakeTime:
     def clock(self):
         return self.now
 
+    def time(self):
+        return STEP_START + (self.now - 1000.0)
+
     def sleep(self, seconds):
         self.sleeps.append(seconds)
         self.now += seconds
@@ -110,8 +118,13 @@ class FakeTime:
 
 
 def run_waiting(tool, capsys, fake, *args):
-    tool.main(list(args), sleep=fake.sleep, clock=fake.clock)
+    tool.main(list(args), sleep=fake.sleep, clock=fake.clock, now=fake.time)
     return capsys.readouterr().out
+
+
+def crash_now(fake, folder, name="python3.10-1.ips", app="python3.10"):
+    """지금(가짜 벽시계) 쓰인 보고서 — 방금 죽은 프로세스의 것."""
+    return lambda: write_report(folder, name, {"app_name": app}, dict(CRASH, procName=app), mtime=fake.time())
 
 
 def test_without_wait_it_never_sleeps(tmp_path, capsys):
@@ -122,7 +135,8 @@ def test_without_wait_it_never_sleeps(tmp_path, capsys):
 
 def test_waits_until_the_report_is_written(tmp_path, capsys):
     """pytest가 세그폴트로 죽은 직후에는 보고서가 아직 없음 — 생길 때까지 기다렸다가 스택을 출력."""
-    fake = FakeTime([(7, lambda: write_report(tmp_path, "python3.10-1.ips", {"app_name": "python3.10"}, CRASH))])
+    fake = FakeTime()
+    fake.happenings = [(7, crash_now(fake, tmp_path))]
     out = run_waiting(load_tool(), capsys, fake, "--since", str(JOB_START), "--process", "python3", "--wait", "120", str(tmp_path))
     assert "sgemm_itcopy + 12" in out and "충돌 보고서 1개 출력" in out
     assert fake.sleeps == [2.0, 2.0, 2.0, 2.0] and "기다림 8초(최대 120초)" in out
@@ -139,9 +153,10 @@ def test_a_report_still_being_written_does_not_end_the_wait(tmp_path, capsys):
     """쓰는 중이라 JSON이 덜 된 보고서는 '아직 없음' — 다 써지면 그 스택을 출력 (읽지 못함으로 끝내지 않음)."""
     def start_writing():
         (tmp_path / "python3.10-1.ips").write_text('{"app_name": "python3.10"}\n{"procName": "pyth', encoding="utf-8")
-        os.utime(tmp_path / "python3.10-1.ips", (JOB_START + 60, JOB_START + 60))
+        os.utime(tmp_path / "python3.10-1.ips", (fake.time(), fake.time()))
 
-    fake = FakeTime([(2, start_writing), (6, lambda: write_report(tmp_path, "python3.10-1.ips", {"app_name": "python3.10"}, CRASH))])
+    fake = FakeTime()
+    fake.happenings = [(2, start_writing), (6, crash_now(fake, tmp_path))]
     out = run_waiting(load_tool(), capsys, fake, "--since", str(JOB_START), "--process", "python3", "--wait", "60", str(tmp_path))
     assert "sgemm_itcopy + 12" in out and "읽지 못함" not in out and len(fake.sleeps) == 3
 
@@ -155,8 +170,41 @@ def test_an_unreadable_report_is_still_reported_at_the_deadline(tmp_path, capsys
 
 def test_another_programs_report_does_not_end_the_wait(tmp_path, capsys):
     """러너의 다른 프로그램(coreaudiod 등)이 그사이 죽어도 우리 프로세스의 보고서를 계속 기다림."""
-    write_report(tmp_path, "coreaudiod-1.ips", {"app_name": "coreaudiod"}, dict(CRASH, procName="coreaudiod"))
-    fake = FakeTime([(4, lambda: write_report(tmp_path, "python3.10-1.ips", {"app_name": "python3.10"}, CRASH))])
+    write_report(tmp_path, "coreaudiod-1.ips", {"app_name": "coreaudiod"}, dict(CRASH, procName="coreaudiod"), mtime=STEP_START - 1)
+    fake = FakeTime()
+    fake.happenings = [(4, crash_now(fake, tmp_path))]
     out = run_waiting(load_tool(), capsys, fake, "--since", str(JOB_START), "--process", "python3", "--wait", "60", str(tmp_path))
     assert "python3.10-1.ips" in out and "coreaudiod-1.ips" not in out and "다른 프로세스 1개 ['coreaudiod']" in out
     assert fake.sleeps == [2.0, 2.0]
+
+
+def test_an_earlier_report_of_ours_does_not_end_the_wait(tmp_path, capsys):
+    """시험이 일부러 죽인 파이썬(test_smoke)·앞서 죽은 자식의 보고서는 같은 python3.10이고 몇 분 전에 이미 있음 — 그것을 보고 기다림을 끝내면
+    방금 죽은 pytest의 보고서를 놓침(2026-11-12 CI: 일부러 죽인 것 둘이 있어 '기다림 0초'). 방금 쓰인 보고서가 올 때까지 기다리고 둘 다 출력."""
+    write_report(tmp_path, "python3.10-deliberate.ips", {"app_name": "python3.10"}, CRASH, mtime=EARLIER)
+    fake = FakeTime()
+    fake.happenings = [(6, crash_now(fake, tmp_path, "python3.10-real.ips"))]
+    out = run_waiting(load_tool(), capsys, fake, "--since", str(JOB_START), "--process", "python3", "--wait", "120", str(tmp_path))
+    assert fake.sleeps == [2.0, 2.0, 2.0]
+    assert "python3.10-deliberate.ips" in out and "python3.10-real.ips" in out and "충돌 보고서 2개 출력" in out
+    assert "기다림 6초(최대 120초)" in out and "방금" not in out
+
+
+def test_with_only_earlier_reports_it_waits_to_the_deadline_and_says_so(tmp_path, capsys):
+    """크래시가 아닌 실패: 앞서 쓰인 보고서만 있음 — 기한까지 기다린 뒤 있는 것을 출력하고, 방금 쓰인 것은 없었다고 적음."""
+    write_report(tmp_path, "python3.10-deliberate.ips", {"app_name": "python3.10"}, CRASH, mtime=EARLIER)
+    fake = FakeTime()
+    out = run_waiting(load_tool(), capsys, fake, "--since", str(JOB_START), "--process", "python3", "--wait", "6", str(tmp_path))
+    assert fake.sleeps == [2.0, 2.0, 2.0] and "python3.10-deliberate.ips" in out and "충돌 보고서 1개 출력" in out
+    assert "기다림 6초(최대 6초) — 방금(이 단계 직전 30초 안) 쓰인 보고서는 없음" in out
+
+
+def test_a_report_written_just_before_the_step_ends_the_wait_at_once(tmp_path, capsys):
+    """프로세스가 죽고 이 단계가 돌기까지 몇 초 — 그사이 이미 다 쓰인 보고서는 방금 것: 기다리지 않음. --fresh로 그 폭을 정함."""
+    write_report(tmp_path, "python3.10-1.ips", {"app_name": "python3.10"}, CRASH, mtime=STEP_START - 10)
+    fake = FakeTime()
+    out = run_waiting(load_tool(), capsys, fake, "--since", str(JOB_START), "--process", "python3", "--wait", "120", str(tmp_path))
+    assert fake.sleeps == [] and "sgemm_itcopy + 12" in out and "기다림 0초(최대 120초)" in out and "방금" not in out
+    fake = FakeTime()
+    out = run_waiting(load_tool(), capsys, fake, "--since", str(JOB_START), "--process", "python3", "--wait", "4", "--fresh", "5", str(tmp_path))
+    assert fake.sleeps == [2.0, 2.0] and "방금(이 단계 직전 5초 안) 쓰인 보고서는 없음" in out
