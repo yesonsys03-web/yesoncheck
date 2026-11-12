@@ -88,8 +88,8 @@ def contrast(a, b):
     return (high + 0.05) / (low + 0.05)
 
 
-# 목록 줄의 바탕 (main_window_styles의 QListWidget 규칙): 어두운 테마, 밝은 테마의 보통 줄·마우스를 올린 줄
-LIST_BACKGROUNDS = {"dark": ("#232323",), "light": ("#ffffff", "#f8f9fa")}
+# 목록 줄의 바탕 (main_window_styles의 QListWidget 규칙) — 고른 줄은 시트의 선택 글자색으로 보이므로 여기 없음
+LIST_BACKGROUNDS = {"dark": ("#232323",), "light": ("#ffffff",)}
 
 
 @pytest.mark.parametrize("theme", ["dark", "light"])
