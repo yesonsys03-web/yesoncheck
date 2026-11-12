@@ -24,7 +24,7 @@ from tests.test_player_hover_thumbs import (  # noqa: F401 (픽스처 — 이 �
 )
 from tests.test_sequence_capture import make_seq
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
-from yesoncheck import app, hover_strip, windows_display
+from yesoncheck import app, downscale_filter, hover_strip, windows_display
 from yesoncheck.hover_strip import LOG_PREFIX, MENU_TEXT
 from yesoncheck.player_hover_thumbs import HOVER_TIP
 
@@ -98,11 +98,12 @@ def test_menu_item_starts_unchecked_when_the_session_is_off(new_player, dialogs,
 
 
 def test_menu_item_follows_the_display_menu_on_windows(new_player, dialogs, tmp_path, monkeypatch):  # noqa: F811
-    """삽입 자리: 화면 그리기 메뉴(Windows) 바로 뒤 — Mac·Windows 모두 항목이 있음 (Mac은 화면 그리기 메뉴가 없어 디코더 메뉴 뒤)."""
+    """삽입 자리: Windows의 화면 설정 둘(화면 그리기·축소 필터 — 2026-11-12) 바로 뒤 — Mac·Windows 모두 항목이 있음 (Mac은 그 둘이 없어 디코더 메뉴 뒤)."""
     monkeypatch.setattr(sys, "platform", "win32")
     player = new_player(make_config(str(tmp_path), {}))
     texts = [a.text() for a in settings_menu(player).actions()]
-    assert texts.index(MENU_TEXT) == texts.index(windows_display.MENU_TEXT) + 1
+    assert texts.index(MENU_TEXT) == texts.index(windows_display.MENU_TEXT) + 2
+    assert texts[texts.index(windows_display.MENU_TEXT) + 1] == downscale_filter.MENU_TEXT
     assert texts.count(MENU_TEXT) == 1
 
 

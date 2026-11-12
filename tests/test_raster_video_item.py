@@ -1,26 +1,21 @@
-"""raster(픽스맵) 영상 아이템이 **줄여 그릴 때** 면적 평균으로 미리 줄인 그림을 그림 (2026-11-12).
+"""CPU 그리기(raster 뷰포트)의 영상 아이템 — 축소 필터가 '고품질'이면 **줄여 그릴 때** 면적 평균으로 줄인 그림을 그림 (2026-11-12).
 
-사용자 보고: "윈도 버전에서 같은 그림을 띄워도 라인이 지글거려 보여. 1대1 사이즈로 보면 괜찮은데. 맥은 … 축소해도 라인이 깔끔하게 표시되거든."
-Windows 기본(raster 뷰포트 — 화면 배율 1)은 창에 맞춰 줄일 때(예: 1080p를 0.44배) Qt의 부드러운 변환이 원본 픽셀을 띄엄띄엄 골라(겹선형 —
-점 둘씩만 봄) 가는 선이 어떤 곳은 진하고 어떤 곳은 사라졌음. Mac은 Retina(배율 2)라 같은 창에서도 거의 줄이지 않아 티가 안 났음.
-고침: 줄여 그릴 때는 그릴 크기로 면적 평균한 그림(QImage.scaled의 부드러운 줄이기)을 만들어 1:1로 그림 — 프레임마다·크기마다 한 번.
-면적 평균은 프레임당 약 2ms 더 들어(Windows의 4K 재생은 여유가 없음) **프레임이 멈춰 있을 때만**: 새 프레임은 우선 예전처럼 빠르게 그리고,
-SETTLE_MS 동안 그대로면 다시 그림 — 재생·드래그 중의 그리기는 예전 그대로.
+사용자 보고(Windows): "같은 그림을 띄워도 라인이 지글거려 보여. 1대1 사이즈로 보면 괜찮은데." 겹선형(Linear)으로 반쯤 줄이면 원본 픽셀을 띄엄띄엄 골라
+가는 선이 어떤 곳은 진하고 어떤 곳은 사라짐. 고품질은 그릴 크기로 면적 평균한 그림을 정수 장치 픽셀 자리에 1:1로 그림.
+**기본(Linear)은 예전 그리기 그대로**여야 하고(Mac은 고르는 길이 없어 늘 이쪽), 필터는 재생·정지 구분 없이 늘 같음(멈췄을 때만 다시 그리는 방식은 버림 — 사용자 지시).
 
 여기서는 진짜 창의 영상 아이템을 장면째 그림(QGraphicsScene.render — 그리는 배율이 painter에 실림)에 그려 픽셀을 봄.
-같은 자리·1:1·키워 그리기는 예전 그림 그대로여야 함.
 """
 
 import numpy as np
 import pytest
 from PyQt5.QtCore import QRectF, Qt
 from PyQt5.QtGui import QImage, QPainter, QPixmap
-from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QGraphicsPixmapItem, QGraphicsScene
 
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
-from yesoncheck import raster_video_item
-from yesoncheck.raster_video_item import SETTLE_MS, AreaScaledPixmapItem
+from yesoncheck import downscale_filter, raster_video_item
+from yesoncheck.raster_video_item import AreaScaledPixmapItem
 
 WIDTH, HEIGHT = 1600, 400
 
@@ -29,8 +24,14 @@ WIDTH, HEIGHT = 1600, 400
 def widget(new_player, dialogs, tmp_path):  # noqa: F811
     player = new_player(make_config(str(tmp_path), {}))
     view = player.videoWidget
-    assert not view.video_item_stream  # 화면 없는 시험은 raster — Windows 기본과 같은 길
+    assert not view.video_item_stream  # 화면 없는 시험은 raster — Windows의 CPU 그리기와 같은 길
     return view
+
+
+@pytest.fixture
+def area():
+    """축소 필터 = 고품질 (Windows의 Settings 메뉴가 고른 상태 — conftest가 시험 뒤 Linear로 되돌림)."""
+    downscale_filter.set_preferred("area")
 
 
 def stripes():
@@ -52,88 +53,133 @@ def to_array(image):
         image.height(), image.width(), 3).copy()
 
 
-def render(scene, source, scale):
-    """장면의 source 영역을 scale배로 그린 그림 (부드러운 변환 켬 — 뷰와 같음)."""
-    width, height = round(source.width() * scale), round(source.height() * scale)
-    image = QImage(width, height, QImage.Format_RGB32)
+def render(scene, source, scale, offset=(0.0, 0.0), pixel_ratio=1.0):
+    """장면의 source 영역을 scale배로, offset(논리 픽셀)만큼 밀어 그린 그림 (부드러운 변환 켬 — 뷰와 같음). pixel_ratio: 화면 배율(장치 픽셀 = 논리 × 배율)."""
+    width, height = source.width() * scale, source.height() * scale
+    image = QImage(round((width + offset[0] + 2) * pixel_ratio), round((height + offset[1] + 2) * pixel_ratio), QImage.Format_RGB32)
+    image.setDevicePixelRatio(pixel_ratio)
     image.fill(Qt.white)
     painter = QPainter(image)
     painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
-    scene.render(painter, QRectF(0, 0, width, height), source)
+    scene.render(painter, QRectF(offset[0], offset[1], width, height), source)
     painter.end()
     return to_array(image)
 
 
-def settle(widget):
-    """프레임이 멈춘 뒤의 상태가 될 때까지 기다림 (위젯의 멈춤 타이머가 돎)."""
-    QTest.qWait(SETTLE_MS + 80)
-    assert widget.video_item.settled
-
-
-def shown(widget, frame, scale):
-    """프레임을 넣고 멈춘 뒤(면적 평균으로 다시 그리는 상태) scale배로 그린 그림."""
+def shown(widget, frame, scale, **how):
+    """프레임을 넣고 scale배로 그린 그림."""
     widget.updateFrame(frame, None)
-    settle(widget)
-    return render(widget.scene, widget.video_item.sceneBoundingRect(), scale)
+    return render(widget.scene, widget.video_item.sceneBoundingRect(), scale, **how)
 
 
-def plain(frame, scale):
+def plain(frame, scale, **how):
     """보통 픽스맵 아이템(예전 그리기)으로 같은 그림을 그린 것."""
     scene = QGraphicsScene()
     height, width = frame.shape[:2]
     item = QGraphicsPixmapItem(QPixmap.fromImage(QImage(frame.data, width, height, 3 * width, QImage.Format_RGB888)))
     item.setTransformationMode(Qt.SmoothTransformation)
     scene.addItem(item)
-    return render(scene, item.sceneBoundingRect(), scale)
+    return render(scene, item.sceneBoundingRect(), scale, **how)
+
+
+def count_rescales(monkeypatch):
+    calls = []
+    real = raster_video_item.area_scaled
+    monkeypatch.setattr(raster_video_item, "area_scaled", lambda pixmap, width, height: calls.append((width, height)) or real(pixmap, width, height))
+    return calls
 
 
 def test_the_raster_video_item_is_the_area_scaling_item(widget):
     assert isinstance(widget.video_item, AreaScaledPixmapItem)
 
 
-def test_thin_lines_survive_evenly_when_the_view_is_scaled_down(widget):
-    """0.25배: 그리는 픽셀 하나가 원본 4열(검은 선 하나 포함)을 덮음 → 면적 평균이면 어디나 같은 회색(191). 예전 그리기는 선이 통째로 사라졌음."""
-    view = shown(widget, stripes(), 0.25).astype(float)
+# ---------------------------------------------------------------- 기본(Linear) — 예전 그리기 그대로
+
+
+@pytest.mark.parametrize("scale", [0.25, 0.31, 0.44, 0.6, 0.85, 1.0, 1.5])
+def test_the_default_filter_draws_exactly_as_before(widget, monkeypatch, scale):
+    """기본값에서는 어떤 배율에서도 보통 픽스맵 아이템과 같은 픽셀 — Mac과 고르지 않은 Windows는 바뀐 것이 없음."""
+    calls = count_rescales(monkeypatch)
+    assert downscale_filter.preferred() == "linear"
+    for frame in (stripes(), noise()):
+        assert np.array_equal(shown(widget, frame, scale, offset=(3.4, 7.6)), plain(frame, scale, offset=(3.4, 7.6)))
+    assert calls == []
+
+
+# ---------------------------------------------------------------- 고품질(면적 평균)
+
+
+def test_thin_lines_survive_evenly_when_the_view_is_scaled_down(widget, area):
+    """0.25배: 그리는 픽셀 하나가 원본 4열(검은 선 하나 포함)을 덮음 → 면적 평균이면 어디나 같은 회색(191). 겹선형은 선이 통째로 사라졌음."""
+    view = shown(widget, stripes(), 0.25)[:100, :400].astype(float)
     assert abs(view.mean() - 191.25) < 2
     assert view.std() < 2
-    old = plain(stripes(), 0.25).astype(float)
-    assert abs(old.mean() - 191.25) > 30  # 예전 그리기가 왜 지글거렸는지 — 이 그림에서는 선이 사라짐(시험이 차이를 가르는지의 증거)
+    old = plain(stripes(), 0.25)[:100, :400].astype(float)
+    assert abs(old.mean() - 191.25) > 30  # 겹선형이 왜 지글거렸는지 — 이 그림에서는 선이 사라짐(시험이 차이를 가르는지의 증거)
 
 
 @pytest.mark.parametrize("scale", [0.31, 0.44, 0.6, 0.85])
-def test_scaled_down_views_keep_the_average_brightness_of_line_art(widget, scale):
+def test_scaled_down_views_keep_the_average_brightness_of_line_art(widget, area, scale):
     """줄이는 배율이 어떻든 선의 양(평균 밝기)이 보존됨."""
-    assert abs(shown(widget, stripes(), scale).astype(float).mean() - 191.25) < 3
+    view = shown(widget, stripes(), scale)[:round(HEIGHT * scale), :round(WIDTH * scale)].astype(float)
+    assert abs(view.mean() - 191.25) < 3
 
 
 @pytest.mark.parametrize("scale", [0.31, 0.44, 0.6])
-def test_lines_are_more_even_than_the_old_drawing_at_fractional_scales(widget, scale):
-    """정수배가 아닌 축소(창에 맞춤의 보통 경우 — 1080p가 0.44배쯤): 예전 그리기는 선마다 새까맣거나 사라져 줄 안의 밝기가 크게 출렁임
-    (이 그림에서 표준편차 약 83) — 면적 평균은 선이 덮인 만큼의 회색이라 훨씬 고름(0.31배 22 · 0.44배 46 · 0.6배 63)."""
+def test_lines_are_more_even_than_linear_at_fractional_scales(widget, area, scale):
+    """정수배가 아닌 축소(창에 맞춤의 보통 경우 — 1080p가 0.44~0.5배쯤): 겹선형은 선마다 새까맣거나 사라져 줄 안의 밝기가 크게 출렁임 —
+    면적 평균은 선이 덮인 만큼의 회색이라 훨씬 고름."""
     frame = stripes()
-    new_row = shown(widget, frame, scale)[10, :, 0].astype(float)
-    old_row = plain(frame, scale)[10, :, 0].astype(float)
+    cut = slice(0, round(WIDTH * scale) - 2)
+    new_row = shown(widget, frame, scale)[10, cut, 0].astype(float)
+    old_row = plain(frame, scale)[10, cut, 0].astype(float)
     assert new_row.std() < 0.8 * old_row.std()
-    assert new_row.min() > old_row.min() + 50  # 예전에는 새까만 점이 섞였음
+    assert new_row.min() > old_row.min() + 50  # 겹선형에는 새까만 점이 섞였음
 
 
-def test_one_to_one_view_shows_the_frame_untouched(widget):
+@pytest.mark.parametrize("scale, offset", [(0.44, (0.0, 0.0)), (0.4406, (10.4, 7.6)), (0.5146, (3.5, 2.5)), (0.3127, (0.3, 0.9))])
+def test_the_scaled_picture_lands_on_whole_pixels_without_being_blended_again(widget, area, scale, offset):
+    """그릴 자리는 보통 크기도 자리도 소수(1600×0.4406 = 704.96) — 줄인 그림(705px)을 그 자리에 맞춰 그리면 한 번 더 보간돼 흐려짐.
+    정수 크기·정수 장치 픽셀 자리에 1:1로: 그린 결과가 줄인 그림 그 자체."""
     frame = noise()
-    assert np.array_equal(shown(widget, frame, 1.0), frame)
+    view = shown(widget, frame, scale, offset=offset)
+    left, top, width, height = downscale_filter.snapped_rect(offset[0], offset[1], offset[0] + WIDTH * scale, offset[1] + HEIGHT * scale, WIDTH, HEIGHT)
+    expected = to_array(raster_video_item.area_scaled(widget.video_item.pixmap(), width, height))
+    assert np.array_equal(view[top:top + height, left:left + width], expected)
+    outside = view.copy()
+    outside[top:top + height, left:left + width] = 255
+    assert outside.min() == 255  # 그 자리 밖에는 아무것도 그리지 않음
+
+
+@pytest.mark.parametrize("pixel_ratio", [1.5, 2.0])
+def test_the_size_follows_the_screen_scale(widget, area, monkeypatch, pixel_ratio):
+    """화면 배율(Windows 150% 등)까지 넣은 장치 픽셀 크기로 줄임 — 논리 크기로 줄이면 다시 키워 그려 흐려짐."""
+    real = raster_video_item.area_scaled
+    calls = count_rescales(monkeypatch)
+    view = shown(widget, noise(), 0.25, pixel_ratio=pixel_ratio)
+    width, height = round(WIDTH * 0.25 * pixel_ratio), round(HEIGHT * 0.25 * pixel_ratio)
+    assert calls == [(width, height)]
+    assert np.array_equal(view[:height, :width], to_array(real(widget.video_item.pixmap(), width, height)))
+
+
+def test_one_to_one_view_shows_the_frame_untouched(widget, area, monkeypatch):
+    calls = count_rescales(monkeypatch)
+    frame = noise()
+    assert np.array_equal(shown(widget, frame, 1.0)[:HEIGHT, :WIDTH], frame)
+    assert calls == []
 
 
 @pytest.mark.parametrize("scale", [1.5, 2.0])
-def test_enlarged_views_are_drawn_as_before(widget, scale):
+def test_enlarged_views_are_drawn_as_before(widget, area, scale):
     frame = noise()
     assert np.array_equal(shown(widget, frame, scale), plain(frame, scale))
 
 
-def test_the_frame_is_rescaled_once_per_frame_and_size(widget, monkeypatch):
-    calls = []
-    real = raster_video_item.area_scaled
-    monkeypatch.setattr(raster_video_item, "area_scaled", lambda pixmap, width, height: calls.append((width, height)) or real(pixmap, width, height))
+def test_the_frame_is_rescaled_once_per_frame_and_size(widget, area, monkeypatch):
+    calls = count_rescales(monkeypatch)
     shown(widget, stripes(), 0.5)
     render(widget.scene, widget.video_item.sceneBoundingRect(), 0.5)  # 같은 프레임·같은 크기를 다시 그림(창이 가려졌다 보임 등)
+    render(widget.scene, widget.video_item.sceneBoundingRect(), 0.5, offset=(30.2, 4.9))  # 자리만 바뀜(창을 옮김·팬)
     assert calls == [(800, 200)]
     render(widget.scene, widget.video_item.sceneBoundingRect(), 0.25)  # 크기가 바뀜(확대·축소·창 크기)
     assert calls == [(800, 200), (400, 100)]
@@ -141,40 +187,49 @@ def test_the_frame_is_rescaled_once_per_frame_and_size(widget, monkeypatch):
     assert calls == [(800, 200), (400, 100), (400, 100)]
 
 
-def test_a_new_frame_is_first_drawn_the_fast_way(widget, monkeypatch):
-    """새 프레임이 막 들어온 때(재생·드래그 중)는 예전 그리기 그대로 — 줄이는 비용이 재생 틱에 실리지 않음."""
-    calls = []
-    monkeypatch.setattr(raster_video_item, "area_scaled", lambda *args: calls.append(args))
-    widget.updateFrame(stripes(), None)
-    assert widget.video_item.settled is False
-    view = render(widget.scene, widget.video_item.sceneBoundingRect(), 0.25)
-    assert np.array_equal(view, plain(stripes(), 0.25)) and calls == []
-
-
-def test_frames_arriving_in_a_stream_are_never_rescaled_until_they_stop(widget, monkeypatch):
-    calls = []
+def test_every_frame_is_filtered_while_frames_keep_coming(widget, area, monkeypatch):
+    """재생·드래그 중에도 같은 필터 — 프레임마다 줄여 그림(멈췄을 때만 또렷해지는 방식이 아님 — 사용자 지시)."""
     real = raster_video_item.area_scaled
-    monkeypatch.setattr(raster_video_item, "area_scaled", lambda pixmap, width, height: calls.append((width, height)) or real(pixmap, width, height))
-    source = widget.video_item.sceneBoundingRect
-    for seed in range(8):  # 프레임이 SETTLE_MS보다 촘촘히 바뀜 (재생 24fps = 42ms, 여기서는 30ms)
-        widget.updateFrame(noise(seed), None)
-        render(widget.scene, source(), 0.5)
-        QTest.qWait(30)
-    assert calls == [] and widget.video_item.settled is False
-    settle(widget)  # 멈춤 — 위젯이 스스로 다시 그리게 함
-    render(widget.scene, source(), 0.5)
-    assert calls == [(800, 200)]
+    calls = count_rescales(monkeypatch)
+    for seed in range(6):
+        frame = noise(seed)
+        view = shown(widget, frame, 0.5)
+        assert np.array_equal(view[:200, :800], to_array(real(widget.video_item.pixmap(), 800, 200)))
+    assert calls == [(800, 200)] * 6
 
 
-def test_item_geometry_is_still_the_frame_size(widget):
+def test_switching_the_filter_applies_to_the_next_paint(widget, monkeypatch):
+    """메뉴로 바꾸면 이 창에 바로 — 아이템은 그릴 때마다 설정을 봄."""
+    calls = count_rescales(monkeypatch)
+    frame = stripes()
+    assert np.array_equal(shown(widget, frame, 0.25), plain(frame, 0.25))
+    downscale_filter.set_preferred("area")
+    filtered = render(widget.scene, widget.video_item.sceneBoundingRect(), 0.25)
+    assert calls == [(400, 100)] and not np.array_equal(filtered, plain(frame, 0.25))
+    downscale_filter.set_preferred("linear")
+    assert np.array_equal(render(widget.scene, widget.video_item.sceneBoundingRect(), 0.25), plain(frame, 0.25))
+
+
+def test_item_geometry_is_still_the_frame_size(widget, area):
     """아이템의 픽스맵·테두리는 프레임 크기 그대로 — 창에 맞춤·와이프 선·ROI·주석이 이 좌표에 기댐."""
     widget.updateFrame(stripes(), None)
     item = widget.video_item
+    render(widget.scene, item.sceneBoundingRect(), 0.25)
     assert (item.pixmap().width(), item.pixmap().height()) == (WIDTH, HEIGHT)
     assert item.boundingRect().size().toSize().width() in (WIDTH, WIDTH + 1)  # Qt가 테두리에 반 픽셀 여유를 둠
 
 
-def test_a_failure_while_rescaling_is_reported_once_and_the_frame_is_still_drawn(widget, monkeypatch):
+def test_an_empty_item_is_left_to_the_plain_drawing(widget, area, monkeypatch):
+    """영상이 없는 창(빈 픽스맵) — 줄이지도 실패하지도 않음."""
+    reports = []
+    monkeypatch.setattr(raster_video_item.error_window, "report_from_handler", lambda prefix, context: reports.append(context))
+    calls = count_rescales(monkeypatch)
+    widget.updateFrame(None, None)
+    render(widget.scene, QRectF(0, 0, 100, 50), 0.5)
+    assert reports == [] and calls == []
+
+
+def test_a_failure_while_rescaling_is_reported_once_and_the_frame_is_still_drawn(widget, area, monkeypatch):
     """줄이다 실패하면 크게 알리고(한 번) 예전 방식으로 그림 — PyQt5 가상 함수에서 예외가 빠져나가면 프로세스가 끝나므로 paint가 잡음."""
     reports = []
     monkeypatch.setattr(raster_video_item.error_window, "report_from_handler", lambda prefix, context: reports.append((prefix, context)))
@@ -186,4 +241,5 @@ def test_a_failure_while_rescaling_is_reported_once_and_the_frame_is_still_drawn
     first = shown(widget, stripes(), 0.25)
     second = render(widget.scene, widget.video_item.sceneBoundingRect(), 0.25)
     assert len(reports) == 1 and reports[0][0] == raster_video_item.LOG_PREFIX
+    assert downscale_filter.MENU_TEXT in reports[0][1]  # 되돌리는 길을 알림
     assert np.array_equal(first, plain(stripes(), 0.25)) and np.array_equal(second, first)
