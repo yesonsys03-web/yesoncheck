@@ -357,7 +357,7 @@ def test_selected_play_disabled_on_seq_tab(player):
 
 
 def test_both_selected_play_buttons_disabled_on_seq_tab(player):
-    """'Play Selected'뿐 아니라 짝 단추 'Selected Play'(Play/Pause Selected)도: 눌리면 안 보이는 Mov 목록의 선택으로 재생을 시작하므로."""
+    """'Play Selected'뿐 아니라 짝 단추 'Selected Play'도: 눌리면 안 보이는 Mov 목록의 선택으로 재생을 시작하므로."""
     assert player.playSelectedButton.isEnabled() and player.playSelectedPauseButton.isEnabled()
 
     player.sidebar_tabs.setCurrentIndex(1)

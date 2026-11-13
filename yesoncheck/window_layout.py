@@ -15,7 +15,9 @@ import math
 
 from PyQt5.QtCore import QEvent, QMargins, QPoint, QRect, QSize, Qt
 from PyQt5.QtGui import QFontMetricsF, QPainter
-from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QLayout, QPushButton, QScrollArea, QStyle, QStyleOption, QToolTip
+from PyQt5.QtWidgets import (
+    QApplication, QFrame, QHBoxLayout, QLabel, QLayout, QPushButton, QScrollArea, QStyle, QStyleOption, QStyleOptionButton, QToolTip,
+)
 
 # 예전 처음 창: setGeometry(100, 100, 1080, 720)
 DEFAULT_WINDOW_SIZE = QSize(1080, 720)
@@ -384,21 +386,54 @@ class SteadyTextButton(QPushButton):
     """글자가 몇 가지로 바뀌는 단추 — 크기 힌트를 그 글자들(texts) 중 가장 넓은 것으로 잡음.
 
     옆 단추와 한 줄을 나눠 쓰는 단추의 글자가 바뀔 때마다(Selected Play ↔ Selected Pause) 줄의 최소 폭이 달라지면
-    가운데 열과 영상 영역의 폭이 재생·멈춤마다 흔들림. 글자 밖의 몫(여백·테두리)은 글자와 무관하므로 지금 글자의
-    힌트에 '가장 넓은 글자 − 지금 글자'의 폭만 더함 — 글꼴·스타일시트가 바뀌어도 그때의 값으로 맞음.
+    가운데 열과 영상 영역의 폭이 재생·멈춤마다 흔들림. 폭 = '그 글자를 넣은 보통 QPushButton이 바랄 폭'들 중 가장 큰 것 —
+    글자마다 스타일에 물어 잼(글꼴·스타일시트가 바뀌어도 그때의 값). 지금 글자의 힌트에 글자 폭의 차이만 더하는 식은
+    스타일에 최소 폭이 있으면(Fusion 80px·Windows 75px — 시트 없는 단추) 그 바닥 위에 차이를 얹어 글자마다 폭이 달라짐.
+
+    알고 둔 한계: macOS 기본 스타일(시트 없는 단추)은 폭을 정할 때 옵션이 아니라 위젯의 지금 글자를 보고 'OK'·'Cancel'만
+    따로 다뤄, 그 두 글자가 texts에 섞이면 글자에 따라 폭이 달라짐 (이 앱의 단추는 시트가 폭을 정해 해당 없음).
     """
 
+    _texts = ()  # 생성자가 끝나기 전에 Qt가 크기 힌트를 물어도 있게
+
     def __init__(self, text, texts, parent=None):
+        texts = tuple(texts)
+        for candidate in texts:
+            # 여기서 거절: 크기 힌트(가상 함수) 안에서 터지면 PyQt5가 프로세스를 끝냄
+            if not isinstance(candidate, str):
+                raise TypeError(f"texts에는 글자만 넣을 수 있습니다: {candidate!r}")
         super().__init__(text, parent)
-        self._texts = tuple(texts)
+        self._texts = texts
 
     def sizeHint(self):
         # 최소 힌트는 따로 고치지 않음: QPushButton.minimumSizeHint()가 이 sizeHint()를 그대로 돌려줌 (둘 다 고치면 두 번 더해짐)
         hint = super().sizeHint()
-        metrics = self.fontMetrics()
-        current = metrics.size(Qt.TextShowMnemonic, self.text()).width()
-        widest = max([current] + [metrics.size(Qt.TextShowMnemonic, text).width() for text in self._texts])
-        return QSize(hint.width() + widest - current, hint.height())
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        width = hint.width()
+        for text in self._texts:
+            if text != self.text():
+                width = max(width, self._hint_width(option, text))
+        return QSize(width, hint.height())
+
+    def _hint_width(self, option, text):
+        """text를 넣었을 때 바랄 폭 — QPushButton::sizeHint(Qt 5.15)와 같은 계산 (아이콘·메뉴 표시·빈 글자의 'XXXX')."""
+        width = height = 0
+        if not self.icon().isNull():
+            width += option.iconSize.width() + 4
+            height = max(height, option.iconSize.height())
+        text_size = self.fontMetrics().size(Qt.TextShowMnemonic, text or "XXXX")
+        if text or not width:
+            width += text_size.width()
+        if text or not height:
+            height = max(height, text_size.height())
+        probe = QStyleOptionButton(option)
+        probe.text = text
+        probe.rect = QRect(option.rect.topLeft(), QSize(width, height))  # 메뉴 표시의 크기가 높이를 따름
+        if self.menu() is not None:
+            width += self.style().pixelMetric(QStyle.PM_MenuButtonIndicator, probe, self)
+        asked = self.style().sizeFromContents(QStyle.CT_PushButton, probe, QSize(width, height), self)
+        return asked.expandedTo(QApplication.globalStrut()).width()
 
 
 def button_pair_row(left, right, spacing):

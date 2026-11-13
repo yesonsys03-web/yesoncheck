@@ -10,9 +10,12 @@ Open Video A | Open Video B · X-Axis Wipe | Y-Axis Wipe · Play Selected | Sele
 """
 
 import pytest
-from PyQt5.QtWidgets import QApplication, QPushButton
+from PyQt5.QtCore import QEvent, Qt
+from PyQt5.QtGui import QKeyEvent
+from PyQt5.QtWidgets import QApplication, QPushButton, QStyleFactory
 
 from yesoncheck.player_timeline import CollapsibleBox
+from yesoncheck.window_layout import SteadyTextButton
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 
 PAIRS = [("Open Video A", "Open Video B"), ("X-Axis Wipe", "Y-Axis Wipe"), ("Play Selected", "Selected Play")]
@@ -90,7 +93,10 @@ def test_rows_span_the_same_width_as_the_other_controls(player):
 def test_rows_follow_each_other_without_a_gap_row(player):
     """Open Video 줄 바로 아래가 첫 접는 상자 (B가 차지하던 줄이 없어짐)."""
     open_a = button(player, "Open Video A")
-    first_box = column(player).findChildren(CollapsibleBox)[0]
+    stacked = column(player).layout().itemAt(0).layout()  # 가운데 열에 세로로 쌓은 항목들 (그 아래는 늘어나는 빈칸)
+    assert stacked.itemAt(0).layout().indexOf(open_a) == 0  # 첫 항목이 Open Video 줄
+    first_box = stacked.itemAt(1).widget()
+    assert isinstance(first_box, CollapsibleBox)
     below = left_edge(first_box, player).y() - (left_edge(open_a, player).y() + open_a.height())
     assert 0 <= below <= 8
 
@@ -158,4 +164,84 @@ def test_buttons_still_do_their_jobs(player, monkeypatch):
     pause = player.playSelectedPauseButton
     assert play.receivers(play.clicked) >= 1
     assert pause.receivers(pause.clicked) >= 1
-    assert not button(player, "X-Axis Wipe").isEnabled() and not button(player, "Y-Axis Wipe").isEnabled()  # 와이프를 켜기 전에는 꺼진 채
+    wipe_x, wipe_y = button(player, "X-Axis Wipe"), button(player, "Y-Axis Wipe")
+    assert not wipe_x.isEnabled() and not wipe_y.isEnabled()  # 와이프를 켜기 전에는 꺼진 채
+    player.wipeCheckBox.setChecked(True)
+    assert wipe_x.isEnabled() and wipe_y.isEnabled()
+    wipe_x.setChecked(True)
+    assert (player.videoWidget.wipe_enabled_x, player.videoWidget.wipe_enabled_y) == (True, False)
+    wipe_y.setChecked(True)
+    assert (player.videoWidget.wipe_enabled_x, player.videoWidget.wipe_enabled_y) == (True, True)
+    player.wipeCheckBox.setChecked(False)  # 끄면 두 단추도 풀리고 꺼짐
+    assert not wipe_x.isEnabled() and not wipe_y.isEnabled()
+    assert not wipe_x.isChecked() and not wipe_y.isChecked()
+    assert (player.videoWidget.wipe_enabled_x, player.videoWidget.wipe_enabled_y) == (False, False)
+
+
+def test_light_theme_keeps_the_rows(player):
+    """밝은 테마로 바꿔도 같은 줄·글자가 다 들어감·폭이 그대로 (테마는 색만 바꿈)."""
+    before = (player.middleScrollArea.width(), player.videoWidget.width())
+    player.set_light_theme()
+    settle()
+    for left, right in pairs(player):
+        assert left_edge(left, player).y() == left_edge(right, player).y()
+        for b in (left, right):
+            assert b.width() >= b.minimumSizeHint().width()
+    show_pause_label(player)
+    assert (player.middleScrollArea.width(), player.videoWidget.width()) == before
+
+
+def test_hiding_and_showing_the_column_restores_its_width(player):
+    """N 키로 가운데 열을 숨겼다 다시 보이면 같은 폭 — 기억해 둔 폭(220)이 글자가 들어가는 최소 폭보다 좁아도 그 최소 폭으로."""
+    width = player.middleScrollArea.width()
+    for _ in range(2):
+        player.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_N, Qt.NoModifier, "n"))
+        settle()
+    assert not player.middleScrollArea.isHidden()
+    assert player.middleScrollArea.width() == width
+    for left, right in pairs(player):
+        for b in (left, right):
+            assert b.width() >= b.minimumSizeHint().width()
+
+
+# ---- SteadyTextButton: 어느 스타일에서든 '가장 넓은 글자를 넣은 보통 단추'의 폭 ----
+
+@pytest.fixture
+def fusion(qapp):
+    style = QStyleFactory.create("Fusion")  # 글자 있는 단추의 폭에 바닥(80px)이 있는 스타일 — 플랫폼과 무관하게 같은 규칙
+    assert style is not None
+    return style
+
+
+def plain_hint(text, style, sheet):
+    plain = QPushButton(text)
+    plain.setStyle(style)
+    plain.setStyleSheet(sheet)
+    return plain.sizeHint().width()
+
+
+@pytest.mark.parametrize("sheet", ["", "QPushButton { padding: 3px 9px; border: 1px solid gray; }"])
+@pytest.mark.parametrize("current, texts", [
+    ("Play", ("Play", "Pause long")),        # 짧은 글자가 스타일의 최소 폭 바닥에 걸림 — 바닥 위에 차이를 얹으면 틀림
+    ("Pause long", ("Play", "Pause long")),
+    ("OK", ("OK", "No")),                    # 둘 다 바닥 아래
+    ("", ("A&B", "Selected Pause")),         # 빈 글자는 Qt가 'XXXX'로 잼, &는 단축키 표시
+    ("Selected Play", ("Selected Play", "Selected Pause")),
+])
+def test_steady_button_asks_for_the_widest_plain_button_width(fusion, sheet, current, texts):
+    steady = SteadyTextButton(current, texts)
+    steady.setStyle(fusion)
+    steady.setStyleSheet(sheet)
+    expected = max(plain_hint(text, fusion, sheet) for text in (current,) + tuple(texts))
+    assert steady.sizeHint().width() == expected
+    assert steady.minimumSizeHint().width() == expected
+    assert steady.sizeHint().height() == QPushButton.sizeHint(steady).height()
+    for text in texts:  # 글자를 바꿔도 그대로
+        steady.setText(text)
+        assert steady.sizeHint().width() == expected
+
+
+def test_steady_button_refuses_texts_that_are_not_strings(qapp):
+    """글자가 아닌 값은 만들 때 거절 — 크기 힌트(가상 함수) 안에서 터지면 PyQt5가 프로세스를 끝냄."""
+    with pytest.raises(TypeError):
+        SteadyTextButton("Play", ("Play", None))
