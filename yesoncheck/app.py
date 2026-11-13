@@ -18,7 +18,7 @@ if __package__ in (None, ""):
     from yesoncheck import (  # type: ignore  # pylint: disable=import-error
         build_info, default_app, downscale_filter, error_window, file_associations, gl_video_item, hover_strip, launch_args, mac_app_events,
         mac_mounts, mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, qt_messages, timing_log, update_install,
-        user_files, windows_display,
+        user_files, video_list, windows_display,
     )
     from yesoncheck.player_base import EXIT_WAIT_S, wait_for_released_workers  # type: ignore  # pylint: disable=import-error
     from yesoncheck.player_update import BOX_TITLE_PROPERTY  # type: ignore  # pylint: disable=import-error
@@ -27,7 +27,7 @@ else:
     from . import (
         build_info, default_app, downscale_filter, error_window, file_associations, gl_video_item, hover_strip, launch_args, mac_app_events,
         mac_mounts, mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, qt_messages, timing_log, update_install,
-        user_files, windows_display,
+        user_files, video_list, windows_display,
     )
     from .player_base import EXIT_WAIT_S, wait_for_released_workers
     from .player_update import BOX_TITLE_PROPERTY
@@ -416,6 +416,7 @@ def launch(argv=None):
     movie_pipe_source.movie_source_mode()
     movie_pipe_source.frame_cache_mode()  # 프레임 캐시 토글(YESONCHECK_FRAME_CACHE)도 같은 이유로 시작 때 검증
     gl_video_item.video_item_mode(os.environ)  # 영상 아이템 토글(YESONCHECK_VIDEO_ITEM)의 나쁜 값도 같은 이유로 여기서
+    video_list.job_scan_threads()  # job 목록 스레드 수(YESONCHECK_JOB_SCAN_THREADS)의 나쁜 값도 — job을 고를 때 뒤늦게 알게 되지 않게
     # (Mac) 재생 디코더 설정(prefs.json)도 시작 때 한 번 읽어 게이트의 캐시에 — native_wanted는 그 캐시만 봄 (깨졌으면 알리고 이 세션은 ffmpeg)
     load_playback_decoder()
     load_display_renderer()  # (Windows) 화면 그리기 설정 — 창(뷰포트)을 만들기 전에
