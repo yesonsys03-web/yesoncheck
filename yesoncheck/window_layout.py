@@ -8,7 +8,8 @@
 - InfoRowLayout: 정보 줄 배치. 자리가 있으면 예전 QHBoxLayout + 빈칸과 같은 배치, 모자라면 정해진 순서로 줄임.
 - VerticalScrollArea: 세로로만 스크롤 — 안의 내용이 길어도 창의 최소 높이를 묶지 않음.
 - startup_geometry: 처음 창 크기·위치 (예전처럼 1080×720 이상, 레이아웃이 원하는 크기까지, 화면 작업 영역 안으로).
-- SteadyTextButton·button_pair_row: 가운데 열의 단추를 둘씩 한 줄에 (2026-11-13) — 글자가 바뀌는 단추가 줄의 폭을 흔들지 않게.
+- SteadyTextButton·ButtonPairRow: 가운데 열의 단추를 둘씩 한 줄에 (2026-11-13) — 글자가 바뀌는 단추가 줄의 폭을 흔들지 않게,
+  둘이 글자째 들어갈 폭이 안 되면 예전처럼 위아래로 (열·창의 최소 폭을 키우지 않음).
 """
 
 import math
@@ -16,7 +17,8 @@ import math
 from PyQt5.QtCore import QEvent, QMargins, QPoint, QRect, QSize, Qt
 from PyQt5.QtGui import QFontMetricsF, QPainter
 from PyQt5.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel, QLayout, QPushButton, QScrollArea, QStyle, QStyleOption, QStyleOptionButton, QToolTip,
+    QApplication, QBoxLayout, QFrame, QLabel, QLayout, QPushButton, QScrollArea, QSizePolicy, QStyle, QStyleOption, QStyleOptionButton,
+    QToolTip, QWidget,
 )
 
 # 예전 처음 창: setGeometry(100, 100, 1080, 720)
@@ -370,6 +372,14 @@ class VerticalScrollArea(QScrollArea):
     def sizeHint(self):
         return QSize(self._full_size)
 
+    def width_for_content_hint(self):
+        """내용이 원하는 폭(sizeHint)을 세로 스크롤바가 보일 때에도 받는 폭 — 열의 처음 폭으로 씀.
+        최소 너비(내용의 최소 폭 + 스크롤바)와 같은 식에 내용의 최소 폭 대신 원하는 폭: 둘이 다른 내용(ButtonPairRow —
+        좁으면 위아래로 놓여 최소 폭이 작음)이 처음에는 원하는 배치로 보이게."""
+        content = self.widget()
+        hint = content.sizeHint().expandedTo(content.minimumSize())
+        return hint.width() + self.verticalScrollBar().sizeHint().width() + 2 * self.frameWidth()
+
     def eventFilter(self, watched, event):
         if watched is self.widget() and event.type() == QEvent.LayoutRequest:
             self.update_size_hints()  # 내용의 레이아웃이 바뀜 (펼침·접힘·글꼴)
@@ -436,14 +446,51 @@ class SteadyTextButton(QPushButton):
         return asked.expandedTo(QApplication.globalStrut()).width()
 
 
-def button_pair_row(left, right, spacing):
-    """단추 둘을 한 줄에 반씩 (가운데 열 — 세로 자리를 아낌). 자리가 모자라면 각자 글자가 들어가는 폭까지만 줄어듦."""
-    row = QHBoxLayout()
-    row.setContentsMargins(0, 0, 0, 0)
-    row.setSpacing(spacing)
-    row.addWidget(left, 1)
-    row.addWidget(right, 1)
-    return row
+class ButtonPairRow(QWidget):
+    """단추 둘을 한 줄에 반씩 (가운데 열 — 세로 자리를 아낌). 둘이 글자째 들어갈 폭이 안 되면 예전처럼 위아래로 놓음.
+
+    최소 폭은 위아래로 놓았을 때의 것(넓은 쪽 단추) — 한 줄 배치가 열과 창의 최소 폭을 키우지 않음: 글자가 넓은 글꼴
+    (글꼴 없는 Windows CI는 글자마다 12px)에서 한 줄 배치를 최소 폭으로 삼으면 창의 최소 폭이 900을 넘음.
+    원하는 폭(sizeHint)은 한 줄에 놓았을 때의 것 — 가운데 열의 처음 폭이 이것을 따름(VerticalScrollArea.width_for_content_hint).
+    높이는 지금 배치의 것(한 줄 또는 두 줄)으로 고정. 배치는 줄의 폭이 바뀔 때와 단추의 크기 힌트가 바뀔 때 다시 정함.
+    """
+
+    def __init__(self, left, right, spacing, parent=None):
+        super().__init__(parent)
+        self._buttons = (left, right)
+        self._box = QBoxLayout(QBoxLayout.LeftToRight, self)
+        self._box.setContentsMargins(0, 0, 0, 0)
+        self._box.setSpacing(spacing)
+        self._box.addWidget(left, 1)
+        self._box.addWidget(right, 1)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+
+    def side_by_side_width(self):
+        """둘이 한 줄에 글자째 들어가는 가장 좁은 폭."""
+        left, right = self._buttons
+        return left.minimumSizeHint().width() + self._box.spacing() + right.minimumSizeHint().width()
+
+    def sizeHint(self):
+        return QSize(self.side_by_side_width(), self._box.sizeHint().height())
+
+    def minimumSizeHint(self):
+        left, right = self._buttons
+        return QSize(max(left.minimumSizeHint().width(), right.minimumSizeHint().width()), self._box.minimumSize().height())
+
+    def _arrange(self):
+        fits = self.width() >= self.side_by_side_width()
+        direction = QBoxLayout.LeftToRight if fits else QBoxLayout.TopToBottom
+        if direction != self._box.direction():
+            self._box.setDirection(direction)  # 레이아웃을 다시 하고 바뀐 높이를 부모에 알림
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._arrange()
+
+    def event(self, event):
+        if event.type() == QEvent.LayoutRequest:
+            self._arrange()  # 단추의 크기 힌트가 바뀜 (글자·글꼴·스타일시트)
+        return super().event(event)
 
 
 def _take_equally(widths, floors, indices, excess):

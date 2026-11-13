@@ -74,7 +74,7 @@ from yesoncheck.player_overlay import PlayerOverlayMixin
 from yesoncheck.slider_style import jump_to_click
 from yesoncheck.update_banner import UpdateBanner
 from yesoncheck.window_layout import (
-    ElidedLabel, InfoRowLayout, SteadyTextButton, VerticalScrollArea, button_pair_row, startup_geometry,
+    ButtonPairRow, ElidedLabel, InfoRowLayout, SteadyTextButton, VerticalScrollArea, startup_geometry,
 )
 # 놓아 준 워커를 붙잡아 두는 코드는 worker_lifecycle에 있고, 기존 경로(`from yesoncheck.player_base import EXIT_WAIT_S, release_worker,
 # wait_for_released_workers`)를 위해 여기서 다시 내보냄. _RELEASED_WORKERS는 읽는 쪽(시험)용 같은 dict 객체 — 바꿔치기하려면
@@ -655,7 +655,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         # 단추 여섯은 둘씩 한 줄에(2026-11-13 — 세 줄이 줄어 접는 상자를 펼쳐도 아래 항목이 덜 밀림). 글자가 잘리지 않게
         # 가운데 열의 최소 폭이 그만큼 늘어남: 스크롤 영역의 최소 폭 = 내용의 최소 폭 + 스크롤바 (VerticalScrollArea)
         MIDDLE_SPACING = 5
-        controlLayoutMiddle.addLayout(button_pair_row(openButtonA, openButtonB, MIDDLE_SPACING))
+        controlLayoutMiddle.addWidget(ButtonPairRow(openButtonA, openButtonB, MIDDLE_SPACING))
         
         # OCR 그룹박스 추가 (기본 접힌 상태)
         controlLayoutMiddle.addWidget(roi_group)
@@ -669,8 +669,8 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         controlLayoutMiddle.addWidget(volumeLabel); controlLayoutMiddle.addWidget(self.volumeSlider); controlLayoutMiddle.addWidget(self.volumePercentLabel)
         controlLayoutMiddle.addWidget(self.frameRateLabel); controlLayoutMiddle.addWidget(self.frameRateComboBox)
         controlLayoutMiddle.addWidget(self.wipeCheckBox)
-        controlLayoutMiddle.addLayout(button_pair_row(self.wipeXButton, self.wipeYButton, MIDDLE_SPACING))
-        controlLayoutMiddle.addLayout(button_pair_row(self.playSelectedButton, self.playSelectedPauseButton, MIDDLE_SPACING))
+        controlLayoutMiddle.addWidget(ButtonPairRow(self.wipeXButton, self.wipeYButton, MIDDLE_SPACING))
+        controlLayoutMiddle.addWidget(ButtonPairRow(self.playSelectedButton, self.playSelectedPauseButton, MIDDLE_SPACING))
         controlLayoutMiddle.addWidget(workLabel); controlLayoutMiddle.addWidget(self.workComboBox)
         controlLayoutMiddle.addWidget(self.seasonComboBox); controlLayoutMiddle.addWidget(self.jobComboBox)
         controlLayoutMiddle.setContentsMargins(0,0,0,0)
@@ -1249,7 +1249,8 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
 
     def apply_startup_geometry(self):
         """처음 창 크기·위치와 열 너비 (예전 모습): max(1080×720, 레이아웃이 원하는 크기)를 화면 작업 영역 안으로,
-        사이드바·가운데 열은 예전 처음 너비(스플리터 setSizes 200·220, 최소 너비가 더 크면 최소 너비)."""
+        사이드바·가운데 열은 예전 처음 너비(스플리터 setSizes 200·220, 최소 너비가 더 크면 최소 너비). 가운데 열은 단추 쌍이
+        세로 스크롤바가 보여도 한 줄에 들어가는 폭까지(이 Mac 236 — 그보다 좁히면 쌍이 예전처럼 위아래로 놓임)."""
         self._measure_polished_layout()
         rect = startup_geometry(self.sizeHint(), self.minimumSizeHint(),
                                 QApplication.primaryScreen().availableGeometry())
@@ -1257,6 +1258,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         splitter = self.mainSplitter
         side, middle = (max(start, w.minimumSizeHint().width(), w.minimumWidth())
                         for start, w in ((200, splitter.widget(0)), (220, splitter.widget(1))))
+        middle = max(middle, self.middleScrollArea.width_for_content_hint())
         splitter.setSizes([side, middle, max(0, rect.width() - side - middle)])
         # 초기 창 크기 저장 (앱 처음 실행 시) — 동영상 전용 전체화면을 끝내면 이 크기로 돌아옴
         self.initial_geometry = self.geometry()
