@@ -862,7 +862,7 @@ ImportError를 잡아 조용히 '없음'으로 처리하지 않습니다 (모듈
 **시험은 반드시 `~/coding/p310_tf/bin/python -m pytest`로 돌릴 것** — TensorFlow가 없는 `~/coding/p310`으로 돌리면 11개가 실패함.
 
 `tests/`에 시험 파일 142개 (수집 3,655개 — 2026-11-13, 영문 매뉴얼 브랜치; 가운데 열 단추까지의 main은 141개·3,625개, job 목록 병렬 읽기를 합친 main은 140개·3,590개, 그 전은 139개·3,533개 — 같은 코드의 CI에서 Mac 3,487 통과 + 46 건너뜀). `python -m pytest tests -q`로 돌리며(약 20분), 이 Mac의 소스 실행(`p310_tf` — Mac lock대로 PyObjC 포함)에서 3,386개가 통과(2026-11-12 정렬 브랜치의 전체 실행 기준 — 그때 수집 3,433개 = 통과 3,386 + 건너뜀 46 + 아래 GIL 부하 시험 하나가 실패; 전체 실행에서 아래 플레이크 둘이 실패할 수 있음 — GIL 부하 시험은 따로 돌리면 대체로 통과, 종료 시험은 따로 돌려도 간헐 실패)하고 46개는 건너뜀 —
-다른 OS 전용 시험, CI의 설치 파일 단계에서만 도는 시험이 건너뜀. PyObjC가 있어야 도는 네이티브 시험(`test_mac_native_source` 모듈과 진짜 네이티브 디코드 하나)은 Mac lock을 설치한 환경(이 Mac의 `p310_tf`·두 Mac CI job)에서 돌고 Windows CI에서만 건너뜀 (2026-11-11 기준; 부하 시험 `test_movie_pipe_transport::test_reader_keeps_up_while_main_thread_holds_gil`은 이 Mac이 바쁠 때 실패할 수 있음 — 따로 돌리면 통과; `test_fast_startup`의 종료 플레이크 1건(`test_app_exits_cleanly_while_shared_config_load_runs`, 자식 종료 코드 −11)은 러너 상태에 따라 간헐 실패 — main에서도 같은 빈도, 따로 돌려도 간헐 실패(2026-11-11 이 Mac에서 따로 되풀이: main 5/8·사용법 매뉴얼 브랜치 4/8 실패 — 앱을 띄워 둔 채라 평소보다 잦았음); CI의 Apple Silicon 러너에서 시간 기반 시험 `test_path_map_setup::test_probe_on_wait_is_called_and_can_cancel`이 한 번 실패(2026-11-12 — 0.45초 동안 약 0.1초마다 불리는 콜백이 3번 이상이어야 하는데 2번; 그 작업만 다시 돌림)). **새 worktree에서 돌릴 때**: `vendor/ffmpeg/<arch>/`(받아 두는 파일 — git이 무시)가 따라오지 않아 `test_check_frozen_imports`의 둘과 `test_pipe_spike::test_boundary_clips_have_their_traits`가 실패함 — 메인 체크아웃의 폴더를 링크하거나 `./fetch_ffmpeg.sh`(2026-11-12에 겪음). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
+다른 OS 전용 시험, CI의 설치 파일 단계에서만 도는 시험이 건너뜀. PyObjC가 있어야 도는 네이티브 시험(`test_mac_native_source` 모듈과 진짜 네이티브 디코드 하나)은 Mac lock을 설치한 환경(이 Mac의 `p310_tf`·두 Mac CI job)에서 돌고 Windows CI에서만 건너뜀 (2026-11-11 기준; 부하 시험 `test_movie_pipe_transport::test_reader_keeps_up_while_main_thread_holds_gil`은 이 Mac이 바쁠 때 실패할 수 있음 — 따로 돌리면 통과; `test_fast_startup`의 종료 플레이크 1건(`test_app_exits_cleanly_while_shared_config_load_runs`, 자식 종료 코드 −11)은 러너 상태에 따라 간헐 실패 — main에서도 같은 빈도, 따로 돌려도 간헐 실패(2026-11-11 이 Mac에서 따로 되풀이: main 5/8·사용법 매뉴얼 브랜치 4/8 실패 — 앱을 띄워 둔 채라 평소보다 잦았음); CI의 Apple Silicon 러너에서 시간 기반 시험 `test_path_map_setup::test_probe_on_wait_is_called_and_can_cancel`이 한 번 실패(2026-11-12 — 0.45초 동안 약 0.1초마다 불리는 콜백이 3번 이상이어야 하는데 2번; 그 작업만 다시 돌림) → 2026-11-14에 횟수를 시간으로 세지 않게 고침('최근 변경 사항')). **새 worktree에서 돌릴 때**: `vendor/ffmpeg/<arch>/`(받아 두는 파일 — git이 무시)가 따라오지 않아 `test_check_frozen_imports`의 둘과 `test_pipe_spike::test_boundary_clips_have_their_traits`가 실패함 — 메인 체크아웃의 폴더를 링크하거나 `./fetch_ffmpeg.sh`(2026-11-12에 겪음). Qt는 화면 없이(`QT_QPA_PLATFORM=offscreen`), ffmpeg는 저장소의
 정적 빌드(`vendor/ffmpeg/`)를 씀 (`tests/conftest.py`). 시험을 건너뛰거나 지워서 통과시키지 말 것.
 
 시험 구성 (파일 이름 기준):
@@ -1116,6 +1116,13 @@ UI를 건드린 변경은 소스 실행(`./run_app.sh`)으로 눈으로도 확�
 5. 다양한 비디오 콘텐츠 유형으로 테스트
 
 ## 최근 변경 사항
+
+### 2026-11-14 (시험 — 느린 Mac CI 러너에서 흔들리던 probe 콜백 횟수 시험)
+
+`tests/test_path_map_setup.py::test_probe_on_wait_is_called_and_can_cancel`이 Mac CI에서 `assert 2 >= 3`으로 실패해 왔음(2026-11-12 Apple Silicon 1회, 2026-11-13 1.9.4 배포 CI의 Mac 두 작업 동시 — 그 작업만 다시 돌리면 통과; 1.9.4 때 재실행에 55분). 사용자 지시 "시간에 덜 기대도록 고치는 PR을 해줘".
+- **원인**: 시험이 '0.45초 기한 안에 `on_wait`가 3번 이상'을 봤는데, `call_with_timeout`은 **기한 전에 시작한 기다림마다** 한 번 부름 — 0.1초 기다림(`Event.wait`)이 길어지면 기한 안의 횟수가 줆. 기다림 두 번이 합쳐 0.45초(한 번에 0.225초)를 넘으면 2번. 재현: 시간을 정한 `Event.wait`마다 0.15초를 더 걸리게 하면 같은 `assert 2 >= 3`(이 Mac, 저장소 밖의 pytest 플러그인). 러너에서 기다림이 왜 그만큼 길어졌는지는 확인하지 못함(실패 기록에는 횟수뿐). 앱 코드의 결함이 아님 — 기다림이 늦으면 콜백이 덜 불릴 뿐.
+- **고침(시험만 — 앱 코드 무변경)**: 횟수를 시간으로 세지 않음. `on_wait`가 세 번째 부름에 False(취소)를 돌려주게 하고 기한을 30초로 — `SetupCancelled`가 나고 부른 횟수가 정확히 3이면 '기한이 아니라 걸음마다 불림 + None은 계속 기다림 + False에서 바로 멈춤'이 한 번에 확인됨(기다림 세 번이 30초를 넘지 않는 한 러너 속도와 무관). 끝까지 취소하지 않으면 기한에 None인 것은 횟수 없이 따로(`timeout=0.2`). 첫 부름의 False는 2초 안에 끝난다는 단언은 그대로 둠(취소가 늦지 않음 — 보통 0.1초; 같은 파일의 다른 시험들과 같은 여유).
+- **확인**(이 Mac): 고친 시험은 기다림마다 +0.15초·+1.0초에서 통과(옛 시험은 +0.15초에서 실패), +2.5초에서는 남겨 둔 '2초 안' 단언에서만 실패. 구현을 망가뜨리면 실패 — 남은 시간을 통째로 기다림(`done.wait(remaining)` — 30초 뒤 `DID NOT RAISE`), None을 취소로 봄(`1 == 3`), False를 무시(`DID NOT RAISE`).
 
 ### 2026-11-13 (사용법 매뉴얼 — 영문판, 한국어 ↔ English 전환)
 

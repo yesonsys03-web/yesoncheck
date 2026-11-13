@@ -526,11 +526,25 @@ def test_probe_times_out_and_abandoned_thread_is_harmless(monkeypatch, capsys):
 
 
 def test_probe_on_wait_is_called_and_can_cancel():
+    """기다리는 동안 on_wait를 되풀이해 부르고, False를 돌려주면 그 자리에서 기다리기를 멈춤.
+
+    횟수를 '정해진 시간 안에 몇 번'으로 세지 않음: 0.45초 안에 3번 이상을 봤더니 느린 CI 러너에서는 0.1초 기다림이
+    길어져 2번만 불렸음(기다림이 길수록 기한 안의 횟수가 줄어듦). 세 번째에 취소하게 해 두고 그 취소가 30초 기한보다
+    먼저 오는지를 봄 — 기다림 세 번이 30초를 넘지 않는 한 러너 속도와 상관없이 같은 결과.
+    """
     func, entered, release, finished = hanging()
     calls = []
+
+    def cancel_on_third():
+        calls.append(1)
+        return False if len(calls) == 3 else None  # None은 '계속 기다림' — False만 취소
+
     try:
-        assert pms.probe(func, "\\\\dead\\x", timeout=0.45, on_wait=lambda: calls.append(1)) is None
-        assert len(calls) >= 3  # 약 0.1초마다
+        with pytest.raises(pms.SetupCancelled):
+            pms.probe(func, "\\\\dead\\x", timeout=30, on_wait=cancel_on_third)
+        assert len(calls) == 3  # 기한(30초)이 아니라 걸음마다 불렸고, 세 번째의 False 뒤로는 부르지 않음
+        # 끝까지 취소하지 않으면 기한에 '응답 없음' (몇 번 불렸는지는 기다린 시간에 달려 있어 세지 않음)
+        assert pms.probe(func, "\\\\dead\\x", timeout=0.2, on_wait=lambda: None) is None
         started = time.monotonic()
         with pytest.raises(pms.SetupCancelled):
             pms.probe(func, "\\\\dead\\x", timeout=30, on_wait=lambda: False)
