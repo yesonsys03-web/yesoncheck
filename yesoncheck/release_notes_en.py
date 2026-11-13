@@ -7,6 +7,20 @@ entry for entry (no Qt). The deploy notes (GitHub Release, update banner) still 
 from yesoncheck.release_notes import Release
 
 RELEASES = (
+    Release("1.9.4", "2026-11-13",
+            "The manual now has an English version — switch between 한국어 and English with the buttons above the table of "
+            "contents.",
+            (
+                ("Manual — English version (new feature)", (
+                    "The manual (Help → 사용법 (Manual), F1) now has `한국어 | English` buttons above the table of contents — "
+                    "click one and the whole manual (feature pages, keyboard shortcuts, release notes) switches to that "
+                    "language. You stay on the page you were reading.",
+                    "The chosen language is remembered by that browser. The first time, the manual opens in Korean if the "
+                    "browser language is Korean, and in English otherwise.",
+                    "The English version keeps the app's Korean button and menu names exactly as they appear on screen, with "
+                    "the English meaning next to them. The screenshots are the same as in the Korean version.",
+                )),
+            )),
     Release("1.9.3", "2026-11-13",
             "The video list appears faster when you pick a show (job). The six buttons in the middle column are now laid out "
             "two to a row, freeing up vertical space.",
