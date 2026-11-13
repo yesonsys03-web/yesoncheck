@@ -16,7 +16,7 @@ if __package__ in (None, ""):
     sys.path.append(os.path.dirname(os.path.dirname(__file__)))
     from yesoncheck.main_window import VideoPlayer  # type: ignore  # pylint: disable=import-error
     from yesoncheck import (  # type: ignore  # pylint: disable=import-error
-        build_info, default_app, error_window, file_associations, gl_video_item, hover_strip, launch_args, mac_app_events,
+        build_info, default_app, downscale_filter, error_window, file_associations, gl_video_item, hover_strip, launch_args, mac_app_events,
         mac_mounts, mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, qt_messages, timing_log, update_install,
         user_files, windows_display,
     )
@@ -25,7 +25,7 @@ if __package__ in (None, ""):
 else:
     from .main_window import VideoPlayer
     from . import (
-        build_info, default_app, error_window, file_associations, gl_video_item, hover_strip, launch_args, mac_app_events,
+        build_info, default_app, downscale_filter, error_window, file_associations, gl_video_item, hover_strip, launch_args, mac_app_events,
         mac_mounts, mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, qt_messages, timing_log, update_install,
         user_files, windows_display,
     )
@@ -267,6 +267,26 @@ def load_slider_thumbnails():
     print(f"{hover_strip.LOG_PREFIX} 설정: {'켬' if hover_strip.enabled() else '끔'}", flush=True)
 
 
+def load_downscale_filter():
+    """(Windows) 축소 필터 설정(Linear·고품질)을 시작 때 한 번 읽어 downscale_filter의 캐시에 둠 — 영상 아이템이 그릴 때마다 그 캐시를 봄. 다른 플랫폼은 읽지 않음
+    (늘 Linear — 예전 그리기 그대로). 깨진 파일·모르는 값은 기본으로 치지 않고 트레이스백·창을 보인 뒤 이 세션은 Linear, 파일은 건드리지 않는다.
+    창의 끝 글은 둘로 갈림(슬라이더 썸네일 설정과 같은 까닭): 모르는 값(ValueError)은 메뉴에서 고르면 그 값으로 고쳐 쓰고, 깨진 JSON(UserFileError)은 메뉴도 덮지 않음."""
+    if sys.platform != "win32":
+        return
+    try:
+        downscale_filter.set_preferred(downscale_filter.read())
+    except (user_files.UserFileError, ValueError) as exc:
+        traceback.print_exc()
+        downscale_filter.set_preferred(downscale_filter.DEFAULT_FILTER)
+        if isinstance(exc, user_files.UserFileError):
+            note = (f"이 세션은 Linear로 그립니다.\n설정 파일을 고치거나 지운 뒤 다시 켜면 설정을 읽습니다 — Settings → {downscale_filter.MENU_TEXT}은 "
+                    "파일을 덮지 않습니다")
+        else:
+            note = f"이 세션은 Linear로 그립니다 — Settings → {downscale_filter.MENU_TEXT}에서 다시 고를 수 있습니다"
+        QMessageBox.warning(None, downscale_filter.SETTINGS_TITLE, f"{exc}\n\n{note}")
+    print(f"{downscale_filter.LOG_PREFIX} 설정: {downscale_filter.preferred()}", flush=True)
+
+
 def screen_report(screen):
     """시작 로그용 한 줄: 화면의 논리 크기·작업 영역·devicePixelRatio·논리 DPI·Qt 배율 반올림 정책
     (Windows 150%가 2배로 반올림되는지 등을 사용자 로그로 알 수 있게)."""
@@ -400,6 +420,7 @@ def launch(argv=None):
     load_playback_decoder()
     load_display_renderer()  # (Windows) 화면 그리기 설정 — 창(뷰포트)을 만들기 전에
     load_slider_thumbnails()  # 슬라이더 썸네일 켬/끔 — 창(Settings 메뉴 체크)을 만들기 전에
+    load_downscale_filter()  # (Windows) 축소 필터 — 창(Settings 메뉴 체크·영상 아이템)을 만들기 전에
     # 네이티브 재생 토글(YESONCHECK_MAC_NATIVE)도 같은 이유로 여기서 — 값(native_mode)과 함께 on이 macOS 밖이면 ValueError (native_wanted가
     # 열 때마다 늦게 실패하지 않게)
     mac_native_gate.native_wanted()

@@ -42,7 +42,7 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck.video_widget import VIEWPORT_ENV, CustomVideoWidget
-from yesoncheck import bookmarks, build_info, default_app, error_window, external_tools, file_associations, \
+from yesoncheck import bookmarks, build_info, default_app, downscale_filter, error_window, external_tools, file_associations, \
     instance_link, instances, mac_native_gate, mac_prefs, manual_open, media_player_log, paths, timing_log, user_files, \
     video_list, windows_display
 from yesoncheck import sidebar_sort  # 사이드바 정렬 기준의 기본값 (SidebarSortMixin)
@@ -1348,6 +1348,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
                 self.decoder_actions[name] = action
             self._sync_decoder_menu()
         self._add_display_menu(settings_menu)
+        self._add_downscale_menu(settings_menu)  # (Windows) 축소 필터 — Linear·고품질 (downscale_filter)
         self._add_hover_thumbs_menu(settings_menu)  # 슬라이더 썸네일 켜기/끄기 (PlayerHoverThumbsMixin)
 
         # 공유 설정 폴더 변경 (Windows: PC마다 고름)
@@ -1559,6 +1560,50 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         print(f"[뷰포트] 화면 그리기 설정: {name} (Settings 메뉴)", flush=True)
         self._sync_display_menu()
         QMessageBox.information(self, DISPLAY_TITLE, f"{windows_display.ACTION_TEXTS[name]}로 저장했습니다. 다음에 여는 창부터 적용됩니다.\n{self.display_status_action.text()}")
+
+    def _add_downscale_menu(self, settings_menu):
+        """(Windows) Settings → 축소 필터 — Linear(기본)·고품질(면적 평균) 라디오. 다른 플랫폼은 메뉴 없음(늘 Linear — 사용자 지시 'Mac은 수정하지 않아도 됨').
+        체크는 파일이 아니라 이 프로세스의 캐시(downscale_filter.preferred — 이 창이 실제로 그리는 필터)를 따름."""
+        self.downscale_actions = {}
+        if sys.platform != "win32":
+            return
+        menu = settings_menu.addMenu(downscale_filter.MENU_TEXT)
+        menu.setToolTipsVisible(True)
+        for name in downscale_filter.FILTERS:
+            action = menu.addAction(downscale_filter.ACTION_TEXTS[name])
+            action.setCheckable(True)
+            action.setToolTip(downscale_filter.TIPS[name])
+            action.triggered.connect(lambda checked, chosen=name: self.set_downscale_filter(chosen))
+            self.downscale_actions[name] = action
+        self._sync_downscale_menu()
+
+    def _sync_downscale_menu(self):
+        """체크를 이 창의 필터(캐시)에 맞춤 — 만들 때·고른 뒤(저장 실패면 되돌림)."""
+        for name, action in self.downscale_actions.items():
+            action.setChecked(name == downscale_filter.preferred())
+
+    def set_downscale_filter(self, name):
+        """(Windows) 메뉴에서 고른 축소 필터를 이 PC의 설정 파일에 저장하고 **이 창에 바로** 적용(지금 프레임을 다시 그림 — 영상 아이템이 그릴 때마다 캐시를 봄).
+        이미 열린 다른 창(프로세스)은 다음에 켤 때부터. 모르는 이름은 쓰기 전에 ValueError. 이 창이 이미 그 필터면 체크만 맞춤(체크된 항목을 다시 누르면 Qt가 끔).
+        파일이 이미 그 값이면 쓰지 않고(다른 창이 먼저 저장) 이 창에만 적용, 파일의 모르는 값은 고른 값으로 고침(명시적 선택). 저장 실패(깨진 파일·쓰기 오류·잠금)는
+        트레이스백 + 창 + 체크 되돌림 — 필터는 그대로(깨진 파일을 덮지 않음)."""
+        if name not in downscale_filter.FILTERS:
+            raise ValueError(f"{downscale_filter.PREF_KEY}는 {', '.join(downscale_filter.FILTERS)} 중 하나여야 합니다: {name!r}")
+        if name == downscale_filter.preferred():
+            self._sync_downscale_menu()
+            return
+        try:
+            if downscale_filter.read() != name:
+                downscale_filter.save(name)
+        except (user_files.UserFileError, OSError, TimeoutError) as exc:
+            traceback.print_exc()
+            QMessageBox.critical(self, downscale_filter.SETTINGS_TITLE, f"축소 필터 설정을 저장하지 못해 바꾸지 않았습니다.\n{exc}")
+            self._sync_downscale_menu()
+            return
+        downscale_filter.set_preferred(name)
+        print(f"{downscale_filter.LOG_PREFIX} 설정: {name} (Settings 메뉴)", flush=True)
+        self._sync_downscale_menu()
+        self.videoWidget.video_item.update()
 
     def _sync_decoder_menu(self):
         """(Mac) Settings → 재생 디코더 (Mac)의 체크·활성·툴팁을 지금 유효한 디코더(mac_native_gate.effective_decoder)에 맞춤 — 메뉴를 만들 때, 고른 뒤(저장
