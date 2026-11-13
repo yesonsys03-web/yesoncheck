@@ -453,11 +453,13 @@ class ButtonPairRow(QWidget):
     (글꼴 없는 Windows CI는 글자마다 12px)에서 한 줄 배치를 최소 폭으로 삼으면 창의 최소 폭이 900을 넘음.
     원하는 폭(sizeHint)은 한 줄에 놓았을 때의 것 — 가운데 열의 처음 폭이 이것을 따름(VerticalScrollArea.width_for_content_hint).
     높이는 지금 배치의 것(한 줄 또는 두 줄)으로 고정. 배치는 줄의 폭이 바뀔 때와 단추의 크기 힌트가 바뀔 때 다시 정함.
+    단추의 폭은 단추가 아니라 레이아웃 항목에서 읽음: 숨긴 단추는 레이아웃처럼 셈에서 빠지고(남은 단추가 줄 전체), 먼저 지워진
+    단추는 Qt가 항목을 이미 뺐음 — 지워진 단추의 파이썬 객체를 건드리면 예외가 나고, 크기 힌트·event 같은 가상 함수 안의
+    예외는 PyQt5가 프로세스를 끝냄.
     """
 
     def __init__(self, left, right, spacing, parent=None):
         super().__init__(parent)
-        self._buttons = (left, right)
         self._box = QBoxLayout(QBoxLayout.LeftToRight, self)
         self._box.setContentsMargins(0, 0, 0, 0)
         self._box.setSpacing(spacing)
@@ -465,17 +467,21 @@ class ButtonPairRow(QWidget):
         self._box.addWidget(right, 1)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
 
+    def _button_widths(self):
+        """줄에 든(숨기지 않은) 단추마다의 최소 폭."""
+        items = (self._box.itemAt(index) for index in range(self._box.count()))
+        return [item.minimumSize().width() for item in items if not item.isEmpty()]
+
     def side_by_side_width(self):
         """둘이 한 줄에 글자째 들어가는 가장 좁은 폭."""
-        left, right = self._buttons
-        return left.minimumSizeHint().width() + self._box.spacing() + right.minimumSizeHint().width()
+        widths = self._button_widths()
+        return sum(widths) + self._box.spacing() * max(0, len(widths) - 1)
 
     def sizeHint(self):
         return QSize(self.side_by_side_width(), self._box.sizeHint().height())
 
     def minimumSizeHint(self):
-        left, right = self._buttons
-        return QSize(max(left.minimumSizeHint().width(), right.minimumSizeHint().width()), self._box.minimumSize().height())
+        return QSize(max(self._button_widths(), default=0), self._box.minimumSize().height())
 
     def _arrange(self):
         fits = self.width() >= self.side_by_side_width()

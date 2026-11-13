@@ -14,6 +14,7 @@ Open Video A | Open Video B · X-Axis Wipe | Y-Axis Wipe · Play Selected | Sele
 """
 
 import pytest
+from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QRect, Qt
 from PyQt5.QtGui import QKeyEvent
 from PyQt5.QtWidgets import QApplication, QPushButton, QStyleFactory, QVBoxLayout, QWidget
@@ -448,6 +449,33 @@ def test_row_restacks_when_a_label_grows_without_a_resize(lone_row):
     settle()
     assert_side_by_side(left, right, spacing_at_most=SPACING)
 
+
+def test_row_gives_a_hidden_buttons_place_to_the_other(lone_row):
+    """단추 하나를 숨기면 남은 단추가 줄 전체를 씀 (레이아웃이 숨은 단추를 빼는 것과 같은 셈) — 다시 보이면 원래대로."""
+    host, row, left, right = lone_row
+    host.resize(row.side_by_side_width(), 300)
+    settle()
+    right.hide()
+    settle()
+    assert row.side_by_side_width() == row.minimumSizeHint().width() == left.minimumSizeHint().width()
+    assert (left.x(), left.width()) == (0, row.width())
+    assert row.height() == left.height()
+    right.show()
+    settle()
+    assert_side_by_side(left, right, spacing_at_most=SPACING)
+    assert_fits(left, right)
+
+
+def test_row_survives_a_deleted_button(lone_row):
+    """단추가 먼저 지워져도 줄의 크기 힌트·배치가 예외 없이 돎 — 가상 함수(sizeHint·event) 안의 예외는 프로세스를 끝냄."""
+    host, row, left, right = lone_row
+    sip.delete(right)
+    settle()
+    assert row.side_by_side_width() == row.sizeHint().width() == row.minimumSizeHint().width() == left.minimumSizeHint().width()
+    host.resize(left.minimumSizeHint().width() + 60, 300)
+    settle()
+    assert (left.x(), left.width()) == (0, row.width())
+    assert row.height() == left.height()
 
 
 # ---- SteadyTextButton: 어느 스타일에서든 '가장 넓은 글자를 넣은 보통 단추'의 폭 ----
