@@ -14,7 +14,7 @@ Open Video A | Open Video B · X-Axis Wipe | Y-Axis Wipe · Play Selected | Sele
 """
 
 import pytest
-from PyQt5.QtCore import QEvent, Qt
+from PyQt5.QtCore import QEvent, QRect, Qt
 from PyQt5.QtGui import QKeyEvent
 from PyQt5.QtWidgets import QApplication, QPushButton, QStyleFactory, QVBoxLayout, QWidget
 
@@ -40,6 +40,21 @@ def player(large_screen, new_player, dialogs, tmp_path):  # noqa: F811
     player.show()
     settle()
     return player
+
+
+@pytest.fixture
+def small_screen(monkeypatch):
+    """화면 작업 영역이 500×400인 것처럼 — 처음 창이 최소 크기로 뜸 (가운데 열을 넓혀 줄 자리가 없음)."""
+    real_screen = QApplication.primaryScreen()
+
+    class SmallScreen:
+        def availableGeometry(self):
+            return QRect(0, 0, 500, 400)
+
+        def __getattr__(self, name):
+            return getattr(real_screen, name)
+
+    monkeypatch.setattr(QApplication, "primaryScreen", staticmethod(lambda: SmallScreen()))
 
 
 def column(player):
@@ -187,6 +202,21 @@ def test_start_width_is_no_wider_than_the_pairs_need(player):
         assert set_column_width(player, start - 1) == start - 1
         left, right = widest.findChildren(QPushButton)
         assert not side_by_side(left, right)
+
+
+def test_start_window_without_room_keeps_the_old_start_width(small_screen, new_player, dialogs, tmp_path):  # noqa: F811
+    """처음 창에 쌍이 들어갈 폭까지 넓혀 줄 자리가 없으면(작은 화면 — 글자가 넓은 글꼴에서는 보통 화면에서도) 예전 처음 폭:
+    영상 영역의 몫을 가져가지 않음 — 나중에 창을 넓혀도 가운데 열은 그 폭 그대로이고 늘어난 폭은 영상 영역으로."""
+    player = new_player(make_config(str(tmp_path), {}))
+    player.show()
+    settle()
+    area = player.middleScrollArea
+    assert player.width() == player.minimumSizeHint().width()  # 처음 창이 최소 크기 (시험 조건)
+    player.resize(1440, 900)
+    settle()
+    assert player.mainSplitter.sizes()[1] == max(OLD_START_WIDTH, area.minimumWidth()) < area.width_for_content_hint()
+    for left, right in pairs(player):  # 그 폭에서도 글자는 잘리지 않음 (들어가는 쌍은 한 줄, 아니면 위아래)
+        assert_fits(left, right)
 
 
 # ---- 좁으면 예전처럼 위아래 ----

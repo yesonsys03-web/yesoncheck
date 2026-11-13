@@ -1250,15 +1250,20 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
     def apply_startup_geometry(self):
         """처음 창 크기·위치와 열 너비 (예전 모습): max(1080×720, 레이아웃이 원하는 크기)를 화면 작업 영역 안으로,
         사이드바·가운데 열은 예전 처음 너비(스플리터 setSizes 200·220, 최소 너비가 더 크면 최소 너비). 가운데 열은 단추 쌍이
-        세로 스크롤바가 보여도 한 줄에 들어가는 폭까지(이 Mac 236 — 그보다 좁히면 쌍이 예전처럼 위아래로 놓임)."""
+        세로 스크롤바가 보여도 한 줄에 들어가는 폭까지(이 Mac 236 — 그보다 좁히면 쌍이 예전처럼 위아래로 놓임) — 처음 창에
+        그만큼의 자리가 있을 때만: 영상 영역이 최소 너비 밑으로 밀리는 창(작은 화면, 글자가 넓은 글꼴)에서는 예전 처음 너비.
+        스플리터는 요청한 너비를 기억했다가 창이 넓어지면 되찾으므로, 자리가 없을 때 요청하면 나중에 영상 영역의 몫을 가져감."""
         self._measure_polished_layout()
         rect = startup_geometry(self.sizeHint(), self.minimumSizeHint(),
                                 QApplication.primaryScreen().availableGeometry())
         self.setGeometry(rect)
         splitter = self.mainSplitter
-        side, middle = (max(start, w.minimumSizeHint().width(), w.minimumWidth())
-                        for start, w in ((200, splitter.widget(0)), (220, splitter.widget(1))))
-        middle = max(middle, self.middleScrollArea.width_for_content_hint())
+        side, middle, video_minimum = (max(start, w.minimumSizeHint().width(), w.minimumWidth())
+                                       for start, w in ((200, splitter.widget(0)), (220, splitter.widget(1)), (0, splitter.widget(2))))
+        paired = self.middleScrollArea.width_for_content_hint()
+        handles = splitter.handleWidth() * (splitter.count() - 1)
+        if paired > middle and side + paired + video_minimum + handles <= rect.width():
+            middle = paired
         splitter.setSizes([side, middle, max(0, rect.width() - side - middle)])
         # 초기 창 크기 저장 (앱 처음 실행 시) — 동영상 전용 전체화면을 끝내면 이 크기로 돌아옴
         self.initial_geometry = self.geometry()
