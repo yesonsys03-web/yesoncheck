@@ -7,12 +7,17 @@
 
 오류(OSError)는 삼키지 않는다: 목록을 넣은 폴더 자체를 읽지 못하면 예외를 올리고, 그 안의 하위 폴더를 읽지 못하면
 결과의 unreadable에 남긴다 (그 아래 영상은 알 수 없음 → 다시 읽기는 그 영상들을 그대로 둠). 부른 쪽이 창·로그로 알린다.
+
+job의 하위 폴더(<씬>/frames 등)는 스레드 여럿이 함께 읽는다 (2026-11-13 — job_scan_threads, 기본 8개): 씬 폴더가 2,000개 넘는
+job은 하나씩 차례로 읽느라 목록이 1.4~2.0초 뒤에 떴음(개발 Mac·NFS — 폴더마다 NAS에 요청을 보내고 기다림), 함께 읽으면
+0.4~0.7초. 결과(영상의 차례·시퀀스·unreadable의 차례)는 차례로 읽은 것과 같다 — 폴더마다 따로 모아 폴더 차례대로 합침.
 """
 
 import locale
 import os
 import traceback
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from yesoncheck import file_names, paths, sequence_scan
@@ -28,6 +33,12 @@ MAC_MOUNT_PARENT = "/Volumes"
 # Mac: 공유를 붙이는 곳의 위(/, autofs 마운트들이 있는 Data 볼륨) — 여기까지 올라가면 공유가 떨어졌을 수 있음 (is_gone).
 # 이 Mac의 자동 연결 맵 폴더(paths.mac_mount_map_dirs)도 같음
 MAC_LOCAL_ROOTS = ("/", "/System/Volumes/Data")
+# job의 하위 폴더를 함께 읽는 스레드 수 (job_scan_threads). 개발 Mac·NFS에서 씬 폴더 2,000~2,350개인 job: 1개 1.4~2.0초 ·
+# 4개 0.7~0.9초 · 8개 0.6~0.75초 · 16개 0.4~0.7초 · 32개 0.5~0.7초 — 8개면 대부분을 얻음. 방금 읽은 폴더(캐시)는
+# 스레드가 많을수록 조금 느려짐(0.10초 → 0.15~0.25초 — 항목마다 GIL을 주고받음)
+JOB_SCAN_THREADS = 8
+JOB_SCAN_THREADS_MAX = 32
+JOB_SCAN_THREADS_ENV = "YESONCHECK_JOB_SCAN_THREADS"  # 진단·끄는 길: 1이면 예전처럼 차례로
 _sort_locale_set = False  # set_sort_locale을 이 프로세스에서 이미 불렀는지
 
 
@@ -142,6 +153,56 @@ def _read_folder(folder, unreadable, files_only=False):
         return [], []
 
 
+def job_scan_threads():
+    """job의 하위 폴더를 함께 읽는 스레드 수: 환경 변수 YESONCHECK_JOB_SCAN_THREADS(1~32 — 1이면 예전처럼 차례로),
+    없거나 비면 기본(JOB_SCAN_THREADS). 그 밖의 값은 ValueError — 기본값으로 넘기지 않음 (app.launch가 켤 때 한 번 확인)."""
+    text = os.environ.get(JOB_SCAN_THREADS_ENV, "").strip()
+    if not text:
+        return JOB_SCAN_THREADS
+    if not (text.isascii() and text.isdigit() and 1 <= int(text) <= JOB_SCAN_THREADS_MAX):
+        raise ValueError(f"{JOB_SCAN_THREADS_ENV}={text!r} — 1~{JOB_SCAN_THREADS_MAX}의 정수여야 합니다 (1 = 차례로 읽기)")
+    return int(text)
+
+
+@dataclass(frozen=True)
+class _SubRead:
+    """job 폴더 아래에서 읽을 폴더 하나. entry: 먼저 폴더인지 확인할 job 폴더 항목 (없으면 확인 없이 읽음)."""
+
+    folder: str
+    entry: object = None
+    files_only: bool = False
+
+
+def _run_sub_read(task):
+    """task의 폴더를 읽음 → (영상, 시퀀스, 읽지 못한 것). 다른 스레드에서 돌 수 있으므로 결과를 함께 쓰는 목록에 넣지 않고
+    따로 모아 돌려줌 — 합치는 일은 부른 쪽이 폴더 차례대로."""
+    unreadable = []
+    if task.entry is not None and not _is_dir(task.entry, unreadable):
+        return [], [], unreadable
+    videos, sequences = _read_folder(task.folder, unreadable, task.files_only)
+    return videos, sequences, unreadable
+
+
+def _run_sub_reads(tasks, threads):
+    """tasks를 읽은 결과를 tasks 차례대로. 스레드가 1개이거나 읽을 것이 하나뿐이면 이 스레드에서 차례로, 아니면 스레드
+    여럿이 함께 (폴더 읽기는 NAS 응답을 기다리는 동안 GIL을 놓음).
+
+    읽다 난 예상 못 한 예외는 그대로 올라옴 — tasks 차례에서 가장 앞의 것이, 아직 시작하지 않은 읽기는 하지 않고
+    (읽는 중이던 것은 끝난 뒤에: 스레드를 도중에 멈출 길이 없음). 풀의 스레드는 데몬이 아니라서 NAS가 멈춘 채 이 함수
+    안에 있는 스레드를 버려 둔 프로세스는 파이썬이 끝날 때 그 읽기를 기다림 — 앱은 app.finish_released_workers가
+    정해진 시간 뒤 os._exit로 끝내므로 해당 없음 (os._exit 없이 끝나는 도구에서 부를 때의 주의)."""
+    workers = min(threads, len(tasks))
+    if workers <= 1:
+        return [_run_sub_read(task) for task in tasks]
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="job-scan") as pool:
+        futures = [pool.submit(_run_sub_read, task) for task in tasks]
+        try:
+            return [future.result() for future in futures]
+        finally:
+            for future in futures:
+                future.cancel()  # 예외로 나갈 때 아직 시작하지 않은 읽기를 뺌 (끝났거나 읽는 중인 것에는 아무 일도 없음)
+
+
 def scan_job(work, base_path):
     """작품 job 폴더의 영상과 이미지 시퀀스 → ScanResult (영상 순서: sort_job_videos, 시퀀스 순서: sort_sequences).
     시퀀스는 영상을 찾는 폴더마다 같은 폴더 목록에서 함께 찾음 (폴더를 더 읽지 않음). update_playlist에서 옮긴 작품별 규칙:
@@ -155,47 +216,41 @@ def scan_job(work, base_path):
       '1601_ANIMATIC'·'1604_ANIMATICS').
 
     job 폴더를 읽지 못하면 OSError. 하위 폴더를 읽지 못하면 결과의 unreadable에.
+    하위 폴더는 스레드 여럿이 함께 읽음(job_scan_threads) — 결과는 차례로 읽은 것과 같음 (_run_sub_reads).
     """
     unreadable = []
-    sequences = []
-
-    def read_sub(folder, files_only=False):
-        found_videos, found_sequences = _read_folder(folder, unreadable, files_only)
-        sequences.extend(found_sequences)
-        return found_videos
-
     with os.scandir(base_path) as it:
         entries = list(it)
     # job 폴더 바로 안의 시퀀스 (영상처럼 모든 작품 규칙에 해당)
-    sequences.extend(_sequences_in(base_path, _frame_names(entries, unreadable)))
+    sequences = list(_sequences_in(base_path, _frame_names(entries, unreadable)))
+    tasks = []  # 읽을 하위 폴더 — 차례로 읽던 때의 그 차례 (결과도 이 차례로 합침)
     if work == "MS_Animatic":
         videos = [(e.name, e.path) for e in entries if file_names.is_listed_video(e.name)]
     elif work == "TJS_Animatic":
         videos = [(e.name, e.path) for e in entries if file_names.is_listed_video(e.name) and _is_file(e, unreadable)]
-        for entry in entries:
-            if not entry.name.startswith('.') and _is_dir(entry, unreadable):
-                videos += read_sub(entry.path, files_only=True)
+        tasks += [_SubRead(entry.path, entry, files_only=True) for entry in entries if not entry.name.startswith('.')]
     else:
         videos = [(e.name, e.path) for e in entries if file_names.is_listed_video(e.name)]
-        for entry in entries:
-            if work == "BB_Animatic":
-                sub = "Quicktime"
-            elif work == "TGN_Animatic":
-                sub = "ANIMATIC"
-            elif work in ("BM_Animatic", "KOTH_Animatic"):
-                sub = None  # 아래 정한 폴더만
-            else:
-                sub = "frames"
-            if sub and _is_dir(entry, unreadable):
-                videos += read_sub(os.path.join(entry.path, sub))
         if work == "BB_Animatic":
-            videos += read_sub(os.path.join(base_path, "Quicktime"))  # 씬 폴더 없이 job/Quicktime인 job (없으면 빈 목록)
+            sub = "Quicktime"
+        elif work == "TGN_Animatic":
+            sub = "ANIMATIC"
+        elif work in ("BM_Animatic", "KOTH_Animatic"):
+            sub = None  # 아래 정한 폴더만
+        else:
+            sub = "frames"
+        if sub:
+            tasks += [_SubRead(os.path.join(entry.path, sub), entry) for entry in entries]
+        if work == "BB_Animatic":
+            tasks.append(_SubRead(os.path.join(base_path, "Quicktime")))  # 씬 폴더 없이 job/Quicktime인 job (없으면 빈 목록)
         if work == "BM_Animatic":
-            videos += read_sub(os.path.join(base_path, "ANIMATIC"))
+            tasks.append(_SubRead(os.path.join(base_path, "ANIMATIC")))
         if work == "KOTH_Animatic":
-            for entry in entries:
-                if 'ANIMATIC' in entry.name.upper() and _is_dir(entry, unreadable):
-                    videos += read_sub(entry.path)
+            tasks += [_SubRead(entry.path, entry) for entry in entries if 'ANIMATIC' in entry.name.upper()]
+    for found_videos, found_sequences, problems in _run_sub_reads(tasks, job_scan_threads()):
+        videos += found_videos
+        sequences += found_sequences
+        unreadable += problems
     # 하위 폴더를 읽는 사이 공유가 끊겼으면(Windows는 끊긴 SMB도 FileNotFoundError) 하위 폴더가 '없음'으로 보였을 수
     # 있음 → job 폴더를 한 번 더 확인 (확인하지 못하면 OSError: 이 결과는 쓰지 않음)
     os.stat(base_path)
