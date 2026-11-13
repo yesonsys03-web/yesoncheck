@@ -15,7 +15,8 @@ import time
 
 import pytest
 
-from yesoncheck import video_list
+from yesoncheck import file_names, video_list
+from yesoncheck.video_list import ScanResult
 from tests.test_sidebar_refresh import open_job
 from tests.test_work_paths_ui import new_player  # noqa: F401 (fixture)
 
@@ -96,6 +97,29 @@ def test_sub_folders_are_read_together(tmp_path, monkeypatch):
     assert sorted(name for name, _path in result.videos) == [f"a{i}.mov" for i in range(8)]
 
 
+@pytest.mark.parametrize("work", ["FL", "BB_Animatic", "TGN_Animatic", "KOTH_Animatic", "TJS_Animatic"])
+def test_every_rule_with_several_sub_folders_reads_them_together(tmp_path, monkeypatch, work):
+    """하위 폴더를 여럿 읽는 작품 규칙은 모두 함께 읽음 — 첫 읽기가 둘째 읽기가 들어올 때까지 기다림(차례로 읽으면 끝내 안 옴)."""
+    job = make_job(tmp_path)
+    lock = threading.Lock()
+    entered = []
+    overlapped = threading.Event()
+
+    def wait_for_a_second_reader(folder):
+        with lock:
+            entered.append(folder)
+            first = len(entered) == 1
+        if first:
+            overlapped.wait(timeout=3)
+        else:
+            overlapped.set()
+
+    wrap_reads(monkeypatch, wait_for_a_second_reader)
+    scan(monkeypatch, work, job)
+    assert len(entered) >= 2, "이 작품 규칙이 하위 폴더를 둘 이상 읽지 않음 (시험 폴더가 틀림)"
+    assert overlapped.is_set(), "하위 폴더를 차례로(하나씩) 읽었음"
+
+
 def test_one_thread_reads_in_the_calling_thread(tmp_path, monkeypatch):
     """YESONCHECK_JOB_SCAN_THREADS=1: 예전처럼 부른 스레드에서 차례로."""
     job = make_job(tmp_path)
@@ -125,7 +149,7 @@ def test_no_more_readers_than_the_setting(tmp_path, monkeypatch):
 
     monkeypatch.setattr(video_list, "_read_folder", read)
     scan(monkeypatch, "FL", job, threads=3)
-    assert 2 <= state["most"] <= 3
+    assert 1 <= state["most"] <= 3  # 함께 읽는지는 위 시험들이 봄 — 여기서는 상한
 
 
 def test_no_reader_threads_left_after_the_scan(tmp_path, monkeypatch):
@@ -194,6 +218,184 @@ def test_unreadable_folders_come_in_the_same_order(tmp_path, monkeypatch):
     assert together.videos == one_by_one.videos
 
 
+def reference_scan_job(work, base_path):
+    """2026-11-13 전의 scan_job 본문 그대로(하위 폴더를 하나씩 차례로) — 새 구현을 견주는 기준.
+    (스레드 1과 기본을 견주는 시험은 둘 다 새 코드라, 읽을 폴더를 모으는 규칙이 틀리면 똑같이 틀림)"""
+    unreadable = []
+    sequences = []
+
+    def read_sub(folder, files_only=False):
+        found_videos, found_sequences = video_list._read_folder(folder, unreadable, files_only)
+        sequences.extend(found_sequences)
+        return found_videos
+
+    with os.scandir(base_path) as it:
+        entries = list(it)
+    sequences.extend(video_list._sequences_in(base_path, video_list._frame_names(entries, unreadable)))
+    if work == "MS_Animatic":
+        videos = [(e.name, e.path) for e in entries if file_names.is_listed_video(e.name)]
+    elif work == "TJS_Animatic":
+        videos = [(e.name, e.path) for e in entries
+                  if file_names.is_listed_video(e.name) and video_list._is_file(e, unreadable)]
+        for entry in entries:
+            if not entry.name.startswith('.') and video_list._is_dir(entry, unreadable):
+                videos += read_sub(entry.path, files_only=True)
+    else:
+        videos = [(e.name, e.path) for e in entries if file_names.is_listed_video(e.name)]
+        for entry in entries:
+            if work == "BB_Animatic":
+                sub = "Quicktime"
+            elif work == "TGN_Animatic":
+                sub = "ANIMATIC"
+            elif work in ("BM_Animatic", "KOTH_Animatic"):
+                sub = None
+            else:
+                sub = "frames"
+            if sub and video_list._is_dir(entry, unreadable):
+                videos += read_sub(os.path.join(entry.path, sub))
+        if work == "BB_Animatic":
+            videos += read_sub(os.path.join(base_path, "Quicktime"))
+        if work == "BM_Animatic":
+            videos += read_sub(os.path.join(base_path, "ANIMATIC"))
+        if work == "KOTH_Animatic":
+            for entry in entries:
+                if 'ANIMATIC' in entry.name.upper() and video_list._is_dir(entry, unreadable):
+                    videos += read_sub(entry.path)
+    os.stat(base_path)
+    return ScanResult(video_list.sort_job_videos(videos), unreadable, video_list.sort_sequences(sequences))
+
+
+class TroubledEntry:
+    """os.DirEntry 대역: 정한 경로의 is_dir·is_file이 OSError를 냄 (나머지는 진짜 항목에 맡김)."""
+
+    def __init__(self, real, errors):
+        self._real = real
+        self._errors = errors
+        self.name = real.name
+        self.path = real.path
+
+    def _check(self, what):
+        error = self._errors.get((what, os.path.normpath(self.path)))
+        if error is not None:
+            raise error
+
+    def is_dir(self, **kwargs):
+        self._check("is_dir")
+        return self._real.is_dir(**kwargs)
+
+    def is_file(self, **kwargs):
+        self._check("is_file")
+        return self._real.is_file(**kwargs)
+
+
+class Listing:
+    """os.scandir가 돌려주는 것의 대역 (with … as it: list(it))."""
+
+    def __init__(self, entries):
+        self._entries = entries
+
+    def __enter__(self):
+        return iter(self._entries)
+
+    def __exit__(self, *exc):
+        return False
+
+
+def make_troubled_job(root, monkeypatch):
+    """읽기 실패를 여러 가지로 심은 job → (job 경로, 심은 오류 수). 작품 규칙마다 다른 실패에 닿음:
+    씬 폴더가 폴더인지 확인 실패 · 하위 폴더 목록 읽기 실패 · 없는 하위 폴더 + 그 위 폴더 확인 실패 · job 폴더 바로 안과
+    하위 폴더 안의 프레임·영상이 파일인지 확인 실패."""
+    job = make_job(root)
+    for frame in (1, 2):
+        touch(os.path.join(job, f"jobseq-{frame:04d}.png"))  # job 폴더 바로 안의 시퀀스 프레임
+
+    def denied(what):
+        return PermissionError(errno.EACCES, "Permission denied", what)
+
+    def at(*parts):
+        return os.path.normpath(os.path.join(job, *parts))
+
+    entry_errors = {
+        ("is_dir", at("scene-003")): denied("is_dir scene-003"),
+        ("is_dir", at("1601_ANIMATIC")): denied("is_dir 1601_ANIMATIC"),
+        ("is_file", at("jobseq-0002.png")): denied("is_file jobseq-0002.png"),
+        ("is_file", at("top.mov")): denied("is_file top.mov"),
+        ("is_file", at("scene-000", "frames", "frames000-0002.png")): denied("is_file frames000-0002.png"),
+        ("is_file", at("scene-000", "Quicktime", "Quicktime000-0002.png")): denied("is_file Quicktime000-0002.png"),
+        ("is_file", at("scene-001", "direct_001.mov")): denied("is_file direct_001.mov"),
+    }
+    listing_errors = {at("scene-005", sub): denied(f"scandir scene-005/{sub}") for sub in ("frames", "Quicktime", "ANIMATIC")}
+    listing_errors[at("scene-007")] = denied("scandir scene-007")
+    stat_errors = {at("empty-scene"): denied("stat empty-scene")}  # frames가 없는 폴더 → 그 위 폴더를 확인하다 실패
+    real_scandir, real_stat = os.scandir, os.stat
+
+    def scandir(path="."):
+        key = os.path.normpath(os.fspath(path))
+        if key in listing_errors:
+            raise listing_errors[key]
+        with real_scandir(path) as it:
+            return Listing([TroubledEntry(entry, entry_errors) for entry in it])
+
+    def stat(path, *args, **kwargs):
+        if not isinstance(path, int) and os.path.normpath(os.fspath(path)) in stat_errors:
+            raise stat_errors[os.path.normpath(os.fspath(path))]
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(video_list.os, "scandir", scandir)
+    monkeypatch.setattr(video_list.os, "stat", stat)
+    return job, len(entry_errors) + len(listing_errors) + len(stat_errors)
+
+
+def problems(result):
+    return [(os.path.normpath(folder), error) for folder, error in result.unreadable]
+
+
+@pytest.mark.parametrize("threads", [1, 8])
+@pytest.mark.parametrize("work", WORKS)
+def test_same_as_the_old_one_by_one_code_with_failures_mixed_in(tmp_path, monkeypatch, work, threads):
+    """예전 코드(하나씩 차례로)를 기준으로: 읽기 실패가 섞인 job에서 영상의 차례·시퀀스·읽지 못한 것의 차례와 오류가 모두 같음."""
+    job, _planted = make_troubled_job(tmp_path, monkeypatch)
+    expected = reference_scan_job(work, job)
+    result = scan(monkeypatch, work, job, threads=threads)
+    assert result.videos == expected.videos
+    assert result.sequences == expected.sequences
+    assert problems(result) == problems(expected)
+    assert expected.unreadable, "이 작품 규칙이 심은 실패에 하나도 닿지 않음 (시험 폴더가 틀림)"
+
+
+def test_the_troubled_job_reaches_every_kind_of_failure(tmp_path, monkeypatch):
+    """심은 실패가 어느 작품 규칙에서든 한 번은 읽지 못한 것으로 나옴 (시험이 실패 없는 길만 견주지 않게)."""
+    job, planted = make_troubled_job(tmp_path, monkeypatch)
+    reached = set()
+    for work in WORKS:
+        reached.update(id(error) for _folder, error in reference_scan_job(work, job).unreadable)
+    assert len(reached) == planted
+
+
+def test_reads_not_started_yet_are_dropped_after_an_unexpected_error(tmp_path, monkeypatch):
+    """한 폴더에서 예상 못 한 오류가 나면 아직 시작하지 않은 폴더는 읽지 않고 올림 (읽는 중이던 것만 끝남) — 창이 남은
+    수백 폴더를 다 읽을 때까지 멈춰 있지 않게."""
+    job = tmp_path / "job"
+    for i in range(60):
+        touch(job / f"scene-{i:03d}" / "frames" / f"a{i}.mov")
+    order = []
+    wrap_reads(monkeypatch, order.append)
+    scan(monkeypatch, "FL", str(job), threads=1)
+    first = order[0]
+    started = []
+
+    def boom_on_the_first(folder):
+        started.append(folder)
+        if folder == first:
+            raise RuntimeError("시험: 예상 못 한 오류")
+        time.sleep(0.2)
+
+    wrap_reads(monkeypatch, boom_on_the_first)
+    with pytest.raises(RuntimeError, match="예상 못 한 오류"):
+        scan(monkeypatch, "FL", str(job), threads=2)
+    assert len(started) <= 10, f"오류 뒤에도 {len(started)}개 폴더를 읽기 시작함"
+
+
 def test_unexpected_error_in_a_sub_folder_is_not_swallowed(tmp_path, monkeypatch):
     job = make_job(tmp_path)
 
@@ -252,11 +454,11 @@ def test_picking_a_job_logs_how_long_the_read_took(new_player, work_area, monkey
     monkeypatch.delenv(ENV, raising=False)
     open_job(new_player, work_area, monkeypatch)
     out = capsys.readouterr().out
-    assert re.search(r"^\[측정\] job 목록 읽기 \d+\.\d\d초 \(영상 3개, 스레드 8\) — job_01$", out, re.M), out
+    assert re.search(r"^\[측정\] job 목록 읽기 \d+\.\d\d초 \(영상 3개, 스레드 설정 8\) — job_01$", out, re.M), out
 
 
 def test_the_log_line_shows_the_thread_setting(new_player, work_area, monkeypatch, capsys):  # noqa: F811
     monkeypatch.setenv(ENV, "1")
     open_job(new_player, work_area, monkeypatch)
     out = capsys.readouterr().out
-    assert re.search(r"^\[측정\] job 목록 읽기 \d+\.\d\d초 \(영상 3개, 스레드 1\) — job_01$", out, re.M), out
+    assert re.search(r"^\[측정\] job 목록 읽기 \d+\.\d\d초 \(영상 3개, 스레드 설정 1\) — job_01$", out, re.M), out

@@ -280,9 +280,10 @@ class PlayerPlaybackMixin:
             self._sidebar_scan_seconds = time.perf_counter() - started
             all_mov_files = result.videos
             print(f"job 목록: 영상 {len(all_mov_files)}개 ({base_path})")
-            # 폴더를 읽는 데 걸린 시간 — 느린 job·PC를 기록으로 가름 (하위 폴더를 함께 읽는 스레드 수: video_list.job_scan_threads)
+            # 폴더를 읽는 데 걸린 시간 — 느린 job·PC를 기록으로 가름. '스레드 설정'은 video_list.job_scan_threads의 값이지
+            # 실제로 쓴 수가 아님 (읽을 하위 폴더가 그보다 적으면 그만큼만, 하나 이하면 스레드 없이)
             print(f"[측정] job 목록 읽기 {self._sidebar_scan_seconds:.2f}초 (영상 {len(all_mov_files)}개, "
-                  f"스레드 {video_list.job_scan_threads()}) — {selected_job}")
+                  f"스레드 설정 {video_list.job_scan_threads()}) — {selected_job}")
 
             # 사이드바 업데이트 최적화
             self.sidebar.setUpdatesEnabled(False)  # UI 업데이트 일시 중지

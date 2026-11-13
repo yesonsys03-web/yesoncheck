@@ -185,12 +185,22 @@ def _run_sub_read(task):
 
 def _run_sub_reads(tasks, threads):
     """tasks를 읽은 결과를 tasks 차례대로. 스레드가 1개이거나 읽을 것이 하나뿐이면 이 스레드에서 차례로, 아니면 스레드
-    여럿이 함께 (폴더 읽기는 NAS 응답을 기다리는 동안 GIL을 놓음). 읽다 난 예상 못 한 예외는 그대로 올라옴."""
+    여럿이 함께 (폴더 읽기는 NAS 응답을 기다리는 동안 GIL을 놓음).
+
+    읽다 난 예상 못 한 예외는 그대로 올라옴 — tasks 차례에서 가장 앞의 것이, 아직 시작하지 않은 읽기는 하지 않고
+    (읽는 중이던 것은 끝난 뒤에: 스레드를 도중에 멈출 길이 없음). 풀의 스레드는 데몬이 아니라서 NAS가 멈춘 채 이 함수
+    안에 있는 스레드를 버려 둔 프로세스는 파이썬이 끝날 때 그 읽기를 기다림 — 앱은 app.finish_released_workers가
+    정해진 시간 뒤 os._exit로 끝내므로 해당 없음 (os._exit 없이 끝나는 도구에서 부를 때의 주의)."""
     workers = min(threads, len(tasks))
     if workers <= 1:
         return [_run_sub_read(task) for task in tasks]
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="job-scan") as pool:
-        return list(pool.map(_run_sub_read, tasks))
+        futures = [pool.submit(_run_sub_read, task) for task in tasks]
+        try:
+            return [future.result() for future in futures]
+        finally:
+            for future in futures:
+                future.cancel()  # 예외로 나갈 때 아직 시작하지 않은 읽기를 뺌 (끝났거나 읽는 중인 것에는 아무 일도 없음)
 
 
 def scan_job(work, base_path):
