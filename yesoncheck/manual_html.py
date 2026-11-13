@@ -274,8 +274,9 @@ class _Builder:
 
 def _language_css(codes):
     """언어를 가리는 CSS: 고른 언어(html의 data-lang)의 것만 보이고, 스크립트가 꺼져 있으면(data-lang 없음) 첫째 언어."""
-    rules = [f':root:not([data-lang]) .l[lang="{codes[0]}"] {{ display:revert; }}']
-    rules += [f':root[data-lang="{code}"] .l[lang="{code}"] {{ display:revert; }}' for code in codes]
+    # 가리는 요소는 div·nav뿐이라 block (display:revert는 모르는 브라우저가 있어 그 줄을 버리면 전부 숨은 채 남음)
+    rules = [f':root:not([data-lang]) .l[lang="{codes[0]}"] {{ display:block; }}']
+    rules += [f':root[data-lang="{code}"] .l[lang="{code}"] {{ display:block; }}' for code in codes]
     return "\n".join(rules) + "\n"
 
 

@@ -65,8 +65,8 @@ RELEASES = (
                     "Text such as `TK2 6` or `v02 176` in the count line below the list uses the same colors — you can see "
                     "there which color is which number.",
                     "This applies to videos on the Mov and All tabs. Image sequences on the All tab stay sky blue as before. "
-                    "On the selected row and on the row being played by Play Selected playback, that row's own color comes "
-                    "first.",
+                    "On the selected row and on the row being played by Play Selected playback, the selection or playback "
+                    "highlight color takes precedence over the take color.",
                 )),
                 ("Themes (T key)", (
                     "Fixed the window background turning black in the light theme (Mac) and the collapsible boxes — ROI 설정 "

@@ -69,6 +69,14 @@ def _key_specs(spec):
     return (spec,) if isinstance(spec, str) else tuple(spec)
 
 
+def _translated_key_differs(base_spec, other_spec):
+    """한글 낱말이 든 키("Ctrl+휠" → "Ctrl+Wheel")의 번역이 어긋났는지: `+`로 나눈 조각의 수가 같고 한글이 없는 조각(Ctrl)은 그대로여야 함."""
+    base_parts, other_parts = base_spec.split("+"), other_spec.split("+")
+    if len(base_parts) != len(other_parts):
+        return True
+    return any(not HANGUL_RE.search(base) and base != other for base, other in zip(base_parts, other_parts))
+
+
 def _block_problems(where, base, other, problems):
     kind = base[0]
     if kind == "h":
@@ -94,11 +102,15 @@ def _block_problems(where, base, other, problems):
                 korean_word = HANGUL_RE.search(re.sub(r" \(.\)$", "", base_one))  # "마우스 휠"은 번역, "F (ㄹ)"은 그대로
                 if not korean_word and base_one != other_one:
                     problems.append(f"{where} 줄 {index}: 키가 다름 {base_one!r} ≠ {other_one!r}")
+                elif korean_word and _translated_key_differs(base_one, other_one):
+                    problems.append(f"{where} 줄 {index}: 키가 다름 {base_one!r} ≠ {other_one!r}")
             _same_tokens(f"{where} 줄 {index}", base_text, other_text, problems)
     elif kind == "table":
         base_head, other_head = base[1], other[1]
         if (base_head is None) != (other_head is None) or (base_head is not None and len(base_head) != len(other_head)):
             problems.append(f"{where}: 표 머리의 모양이 다름")
+        for cell, (base_cell, other_cell) in enumerate(zip(base_head or (), other_head or ()), 1):
+            _same_tokens(f"{where} 머리 칸 {cell}", base_cell, other_cell, problems)
         if [len(row) for row in base[2]] != [len(row) for row in other[2]]:
             problems.append(f"{where}: 표의 줄·칸 수가 다름 {[len(r) for r in base[2]]} ≠ {[len(r) for r in other[2]]}")
         for row, (base_row, other_row) in enumerate(zip(base[2], other[2]), 1):

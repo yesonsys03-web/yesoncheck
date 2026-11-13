@@ -65,11 +65,23 @@ def test_english_manual_mirrors_the_korean_one():
     assert manual_languages.parity_problems() == []
 
 
+def shares_by(pairs):
+    """(이름표, 글)들을 이름표마다 모아 한글 글자 비율로."""
+    groups = {}
+    for where, text in pairs:
+        groups.setdefault(where, []).append(text)
+    return {where: hangul_share(texts) for where, texts in groups.items()}
+
+
 def test_english_text_is_english():
-    """영문 글에 한글은 화면의 한글 이름표(단추·메뉴)를 그대로 적은 것뿐 — 번역하지 않고 남은 문장이 없음."""
-    assert hangul_share(text for _where, text in strings_of(manual_content_en)) < 0.12
-    assert hangul_share(text for _where, text in note_strings(release_notes_en)) < 0.12
-    assert hangul_share(text for _where, text in strings_of(manual_content)) > 0.5  # 재는 법이 맞는지 (한글 글은 한글)
+    """영문 글에 한글은 화면의 한글 이름표(단추·메뉴)를 그대로 적은 것뿐 — 번역하지 않고 남은 쪽·버전이 없음.
+    쪽·버전마다 봄(실제 값: 쪽 최대 6.6%·버전 최대 4.6%, 번역 안 된 한글 쪽은 55% 이상) — 전체로만 보면 한 쪽이 통째로 한글이어도 묻힘."""
+    pages, versions = shares_by(strings_of(manual_content_en)), shares_by(note_strings(release_notes_en))
+    assert {where: round(share, 3) for where, share in pages.items() if share >= 0.12} == {}
+    assert {where: round(share, 3) for where, share in versions.items() if share >= 0.12} == {}
+    assert hangul_share(text for _where, text in strings_of(manual_content_en)) < 0.06
+    assert hangul_share(text for _where, text in note_strings(release_notes_en)) < 0.06
+    assert min(shares_by(strings_of(manual_content)).values()) > 0.5  # 재는 법이 맞는지 (한글 글은 쪽마다 한글)
     for group in manual_content_en.GROUPS:
         assert not HANGUL_RE.search(group)
     assert not HANGUL_RE.search(manual_content_en.RELEASES_TITLE + manual_content_en.RELEASES_LEAD)
@@ -105,8 +117,8 @@ BASE_BLOCKS = (
     ("h", "절", "sec"),
     ("p", "글 {Space} [[a/sec|여기]]"),
     ("fig", "shot", "그림", ("하나", "둘")),
-    ("keys", (("Space", "재생"), (("←", ","), "이전"), ("마우스 휠", "이동"), ("F (ㄹ)", "전체 화면"))),
-    ("table", ("가", "나"), (("1", "2"), ("3", "4"))),
+    ("keys", (("Space", "재생"), (("←", ","), "이전"), ("마우스 휠", "이동"), ("F (ㄹ)", "전체 화면"), ("Ctrl+휠", "확대"))),
+    ("table", ("가 {F1}", "나"), (("1", "2"), ("3", "4"))),
     ("steps", ("첫째", "둘째")),
     ("note", "알림"),
 )
@@ -114,8 +126,8 @@ SAME_SHAPE = (
     ("h", "Section", "sec"),
     ("p", "Text {Space} [[a/sec|here]]"),
     ("fig", "shot", "Picture", ("one", "two")),
-    ("keys", (("Space", "Play"), (("←", ","), "Previous"), ("Mouse wheel", "Move"), ("F (ㄹ)", "Full screen"))),
-    ("table", ("A", "B"), (("1", "2"), ("3", "4"))),
+    ("keys", (("Space", "Play"), (("←", ","), "Previous"), ("Mouse wheel", "Move"), ("F (ㄹ)", "Full screen"), ("Ctrl+Wheel", "Zoom"))),
+    ("table", ("A {F1}", "B"), (("1", "2"), ("3", "4"))),
     ("steps", ("first", "second")),
     ("note", "Note"),
 )
@@ -140,11 +152,19 @@ def test_parity_check_accepts_a_faithful_translation():
     (with_block(2, ("fig", "another", "Picture", ("one", "two"))), "그림이 다름"),
     (with_block(2, ("fig", "shot", "Picture", ("one",))), "그림 설명의 수"),
     (with_block(3, ("keys", (("Space", "Play"),))), "단축키 줄의 수"),
-    (with_block(3, ("keys", (("Enter", "Play"), (("←", ","), "Previous"), ("Mouse wheel", "Move"), ("F (ㄹ)", "Full")))), "키가 다름"),
-    (with_block(3, ("keys", (("Space", "Play"), ("←", "Previous"), ("Mouse wheel", "Move"), ("F (ㄹ)", "Full")))), "키의 수"),
-    (with_block(3, ("keys", (("Space", "Play"), (("←", ","), "Previous"), ("Mouse wheel", "Move"), ("F", "Full")))), "키가 다름"),
+    (with_block(3, ("keys", (("Enter", "Play"), (("←", ","), "Previous"), ("Mouse wheel", "Move"), ("F (ㄹ)", "Full"), ("Ctrl+Wheel", "Zoom")))),
+     "키가 다름"),
+    (with_block(3, ("keys", (("Space", "Play"), ("←", "Previous"), ("Mouse wheel", "Move"), ("F (ㄹ)", "Full"), ("Ctrl+Wheel", "Zoom")))),
+     "키의 수"),
+    (with_block(3, ("keys", (("Space", "Play"), (("←", ","), "Previous"), ("Mouse wheel", "Move"), ("F", "Full"), ("Ctrl+Wheel", "Zoom")))),
+     "키가 다름"),
+    (with_block(3, ("keys", (("Space", "Play"), (("←", ","), "Previous"), ("Mouse wheel", "Move"), ("F (ㄹ)", "Full"), ("Shift+Wheel", "Zoom")))),
+     "키가 다름"),  # 한글 낱말이 든 키: 옮긴 낱말(휠 → Wheel)만 다르고 Ctrl은 그대로여야 함
+    (with_block(3, ("keys", (("Space", "Play"), (("←", ","), "Previous"), ("Mouse wheel", "Move"), ("F (ㄹ)", "Full"), ("Wheel", "Zoom")))),
+     "키가 다름"),
     (with_block(4, ("table", None, (("1", "2"), ("3", "4")))), "표 머리"),
-    (with_block(4, ("table", ("A", "B"), (("1", "2"),))), "표의 줄"),
+    (with_block(4, ("table", ("A", "B"), (("1", "2"), ("3", "4")))), "머리 칸 1: 키 표시"),
+    (with_block(4, ("table", ("A {F1}", "B"), (("1", "2"),))), "표의 줄"),
     (with_block(5, ("steps", ("first",))), "항목의 수"),
     (content([one(SAME_SHAPE)], groups=("A", "B"), releases_group="B"), "묶음"),
 ])
@@ -241,9 +261,11 @@ def test_pictures_are_embedded_once(document):
 
 def test_without_a_script_only_the_first_language_shows(document):
     assert ".l[lang] { display:none; }" in document
-    assert ':root:not([data-lang]) .l[lang="ko"] { display:revert; }' in document
+    assert ':root:not([data-lang]) .l[lang="ko"] { display:block; }' in document
     for code in ("ko", "en"):
-        assert f':root[data-lang="{code}"] .l[lang="{code}"] {{ display:revert; }}' in document
+        assert f':root[data-lang="{code}"] .l[lang="{code}"] {{ display:block; }}' in document
+    assert "display:revert" not in document  # 모르는 브라우저가 있음 — 그 줄을 버리면 전부 숨은 채 남음
+    assert set(re.findall(r'<(\w+) class="l[ "]', document)) == {"div", "nav"}  # block으로 보여도 되는 요소뿐
 
 
 def test_script_gets_the_languages_and_their_words(document):

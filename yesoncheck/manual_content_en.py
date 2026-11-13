@@ -8,7 +8,9 @@
 화면 글자 규칙:
 - 앱에서 영어인 이름(Open Video A, Play Selected, Settings …)은 그대로.
 - 앱에서 한글인 이름(**▶ 수정 사항 주석**, `재생 디코더 (Mac)` …)과 화면에 뜨는 한글 글은 **한글 그대로** 적고, 그 쪽에서 처음 나올 때
-  괄호 안에 영어 뜻을 붙임 — 영어로만 바꿔 적지 않음(화면에서 찾을 수 없게 됨). OS의 한글 이름(다음으로 열기·연결 프로그램 …)도 같은 모양.
+  괄호 안에 영어 뜻을 붙임 — 영어로만 바꿔 적지 않음(화면에서 찾을 수 없게 됨).
+- OS의 화면 글자(Finder·Windows — 앱이 아니라 OS 언어를 따름)는 거꾸로 **영어를 앞에, 한글을 괄호에**: `Open With (다음으로 열기)`·
+  `Settings (설정)` — 영문 매뉴얼을 읽는 사람의 OS는 영문일 가능성이 큼.
 - 키 표시(`{N}`, 단축키 표의 "F (ㄹ)")는 한글 쪽과 같은 글자. 한글 낱말이 든 키만 옮김("마우스 휠" → "Mouse wheel").
 - 코드 표시 안의 자리 이름(`<이름>.mov` → `<name>.mov`)은 옮기고, 화면에 그대로 뜨는 글(`시퀀스 3개`, `정렬: 이름 ▾`)은 그대로.
 """
@@ -648,13 +650,13 @@ PAGES = (
          (
              ("h", "Opening more windows", "new"),
              ("list", (
-                 "**Mac** — launch YesonCheck again from the Applications folder (응용 프로그램), Launchpad or Spotlight, or "
+                 "**Mac** — launch YesonCheck again from the Applications folder (응용 프로그램 on a Korean Mac), Launchpad or Spotlight, or "
                  "**click its icon in the Dock**, and one empty new window opens. Switching to it with ⌘Tab or by clicking a "
                  "window does not open a new window.",
                  "Windows that are already open stay as they are. To bring back a window that was minimized to the Dock, click "
                  "that window's icon on the right side of the Dock.",
-                 "If you **double-click** a video (.mov, .mp4) in Finder or File Explorer, or open it with **다음으로 열기** "
-                 "(Open With; on Windows, **연결 프로그램** — Open with), a new window opens that video in A. If you open several "
+                 "If you **double-click** a video (.mov, .mp4) in Finder or File Explorer, or open it with **Open With** "
+                 "(다음으로 열기; on Windows, **Open with** — 연결 프로그램), a new window opens that video in A. If you open several "
                  "at once, one window opens for each video.",
                  "While a window is closing (up to about 30 seconds while it finishes its work), a new window may not open — "
                  "open it again after the window has closed completely.",
@@ -665,8 +667,8 @@ PAGES = (
                  ("Mac", "The first time you start a new version, the app asks once: “동영상(.mov·.mp4)을 더블클릭하면 YesonCheck로 "
                          "열까요?” — in English, “Open videos (.mov, .mp4) in YesonCheck when you double-click them?” To change "
                          "this later, choose **Help → 동영상 기본 앱으로 정하기…** (Set as default video app…)."),
-                 ("Windows", "Right-click a video → in **연결 프로그램** (Open with), choose **Yeson Checker** and click **항상** "
-                             "(Always) — once each for .mov and .mp4. **Help → 동영상 기본 앱 설정 열기…** (Open default video app "
+                 ("Windows", "Right-click a video → in **Open with** (연결 프로그램), choose **Yeson Checker** and click **Always** "
+                             "(항상) — once each for .mov and .mp4. **Help → 동영상 기본 앱 설정 열기…** (Open default video app "
                              "settings…) opens the default apps settings screen of Windows."),
              )),
              ("note", "On Mac, the default app cannot be set from an app opened directly from the disk image (dmg). Move the app "
@@ -797,8 +799,8 @@ PAGES = (
                  ("`YESONCHECK_VIDEO_ITEM=pixmap`", "(Mac) Draws the picture the old way."),
                  ("`YESONCHECK_VIEWPORT=raster`", "(Windows) Draws the picture on the CPU."),
              )),
-             ("note", "**Setting an environment variable on Windows** — 설정 (Settings) → 시스템 (System) → 정보 (About) → "
-                      "고급 시스템 설정 (Advanced system settings) → 환경 변수 (Environment Variables) → under 사용자 변수 (User "
-                      "variables), click **새로 만들기** (New). Or run `setx YESONCHECK_MOVIE_SOURCE cv2` in Command Prompt."),
+             ("note", "**Setting an environment variable on Windows** — Settings (설정) → System (시스템) → About (정보) → "
+                      "Advanced system settings (고급 시스템 설정) → Environment Variables (환경 변수) → under User variables "
+                      "(사용자 변수), click **New** (새로 만들기). Or run `setx YESONCHECK_MOVIE_SOURCE cv2` in Command Prompt."),
          )),
 )
