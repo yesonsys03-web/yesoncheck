@@ -8,13 +8,14 @@
 - InfoRowLayout: 정보 줄 배치. 자리가 있으면 예전 QHBoxLayout + 빈칸과 같은 배치, 모자라면 정해진 순서로 줄임.
 - VerticalScrollArea: 세로로만 스크롤 — 안의 내용이 길어도 창의 최소 높이를 묶지 않음.
 - startup_geometry: 처음 창 크기·위치 (예전처럼 1080×720 이상, 레이아웃이 원하는 크기까지, 화면 작업 영역 안으로).
+- SteadyTextButton·button_pair_row: 가운데 열의 단추를 둘씩 한 줄에 (2026-11-13) — 글자가 바뀌는 단추가 줄의 폭을 흔들지 않게.
 """
 
 import math
 
 from PyQt5.QtCore import QEvent, QMargins, QPoint, QRect, QSize, Qt
 from PyQt5.QtGui import QFontMetricsF, QPainter
-from PyQt5.QtWidgets import QFrame, QLabel, QLayout, QScrollArea, QStyle, QStyleOption, QToolTip
+from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QLayout, QPushButton, QScrollArea, QStyle, QStyleOption, QToolTip
 
 # 예전 처음 창: setGeometry(100, 100, 1080, 720)
 DEFAULT_WINDOW_SIZE = QSize(1080, 720)
@@ -377,6 +378,37 @@ class VerticalScrollArea(QScrollArea):
         # 스크롤바 너비·테두리가 바뀜 (만드는 중 setWidget 전에도 오므로 내용이 생긴 뒤부터)
         if event.type() in _METRICS_EVENTS and self.widget() is not None:
             self.update_size_hints()
+
+
+class SteadyTextButton(QPushButton):
+    """글자가 몇 가지로 바뀌는 단추 — 크기 힌트를 그 글자들(texts) 중 가장 넓은 것으로 잡음.
+
+    옆 단추와 한 줄을 나눠 쓰는 단추의 글자가 바뀔 때마다(Selected Play ↔ Selected Pause) 줄의 최소 폭이 달라지면
+    가운데 열과 영상 영역의 폭이 재생·멈춤마다 흔들림. 글자 밖의 몫(여백·테두리)은 글자와 무관하므로 지금 글자의
+    힌트에 '가장 넓은 글자 − 지금 글자'의 폭만 더함 — 글꼴·스타일시트가 바뀌어도 그때의 값으로 맞음.
+    """
+
+    def __init__(self, text, texts, parent=None):
+        super().__init__(text, parent)
+        self._texts = tuple(texts)
+
+    def sizeHint(self):
+        # 최소 힌트는 따로 고치지 않음: QPushButton.minimumSizeHint()가 이 sizeHint()를 그대로 돌려줌 (둘 다 고치면 두 번 더해짐)
+        hint = super().sizeHint()
+        metrics = self.fontMetrics()
+        current = metrics.size(Qt.TextShowMnemonic, self.text()).width()
+        widest = max([current] + [metrics.size(Qt.TextShowMnemonic, text).width() for text in self._texts])
+        return QSize(hint.width() + widest - current, hint.height())
+
+
+def button_pair_row(left, right, spacing):
+    """단추 둘을 한 줄에 반씩 (가운데 열 — 세로 자리를 아낌). 자리가 모자라면 각자 글자가 들어가는 폭까지만 줄어듦."""
+    row = QHBoxLayout()
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(spacing)
+    row.addWidget(left, 1)
+    row.addWidget(right, 1)
+    return row
 
 
 def _take_equally(widths, floors, indices, excess):

@@ -73,7 +73,9 @@ from yesoncheck.player_ocr import PlayerOcrMixin
 from yesoncheck.player_overlay import PlayerOverlayMixin
 from yesoncheck.slider_style import jump_to_click
 from yesoncheck.update_banner import UpdateBanner
-from yesoncheck.window_layout import ElidedLabel, InfoRowLayout, VerticalScrollArea, startup_geometry
+from yesoncheck.window_layout import (
+    ElidedLabel, InfoRowLayout, SteadyTextButton, VerticalScrollArea, button_pair_row, startup_geometry,
+)
 # 놓아 준 워커를 붙잡아 두는 코드는 worker_lifecycle에 있고, 기존 경로(`from yesoncheck.player_base import EXIT_WAIT_S, release_worker,
 # wait_for_released_workers`)를 위해 여기서 다시 내보냄. _RELEASED_WORKERS는 읽는 쪽(시험)용 같은 dict 객체 — 바꿔치기하려면
 # worker_lifecycle에서 할 것 (이 모듈의 이름을 바꿔도 release_worker는 worker_lifecycle의 것을 씀)
@@ -582,7 +584,10 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         self.playSelectedButton = QPushButton('Play Selected')
         self.playSelectedButton.clicked.connect(self.play_selected_files)
         self.playSelectedButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.playSelectedPauseButton = QPushButton('Play/Pause Selected')
+        # 글자는 재생·멈춤마다 바뀜(player_playback·sidebar_playlist가 'Selected Play'/'Selected Pause'로) — 옆의 Play Selected와 한 줄을
+        # 나눠 쓰므로 크기 힌트는 둘 중 넓은 글자로 고정(SteadyTextButton). 처음 글자도 한 번 쓴 뒤와 같은 'Selected Play'
+        # (예전 처음 글자 'Play/Pause Selected'는 반 폭에 들어가지 않음)
+        self.playSelectedPauseButton = SteadyTextButton('Selected Play', ('Selected Play', 'Selected Pause'))
         self.playSelectedPauseButton.clicked.connect(self.toggle_play_pause_selected)
         self.playSelectedPauseButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         
@@ -647,7 +652,10 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         
         controlLayoutMiddle = QVBoxLayout()
         # 테마전환, Previous Frame, Next Frame 버튼은 UI에서 제거 (기능은 유지)
-        controlLayoutMiddle.addWidget(openButtonA); controlLayoutMiddle.addWidget(openButtonB)
+        # 단추 여섯은 둘씩 한 줄에(2026-11-13 — 세 줄이 줄어 접는 상자를 펼쳐도 아래 항목이 덜 밀림). 글자가 잘리지 않게
+        # 가운데 열의 최소 폭이 그만큼 늘어남: 스크롤 영역의 최소 폭 = 내용의 최소 폭 + 스크롤바 (VerticalScrollArea)
+        MIDDLE_SPACING = 5
+        controlLayoutMiddle.addLayout(button_pair_row(openButtonA, openButtonB, MIDDLE_SPACING))
         
         # OCR 그룹박스 추가 (기본 접힌 상태)
         controlLayoutMiddle.addWidget(roi_group)
@@ -660,13 +668,13 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         controlLayoutMiddle.addWidget(self.loopCheckBox)
         controlLayoutMiddle.addWidget(volumeLabel); controlLayoutMiddle.addWidget(self.volumeSlider); controlLayoutMiddle.addWidget(self.volumePercentLabel)
         controlLayoutMiddle.addWidget(self.frameRateLabel); controlLayoutMiddle.addWidget(self.frameRateComboBox)
-        controlLayoutMiddle.addWidget(self.wipeCheckBox); controlLayoutMiddle.addWidget(self.wipeXButton)
-        controlLayoutMiddle.addWidget(self.wipeYButton); controlLayoutMiddle.addWidget(self.playSelectedButton)
-        controlLayoutMiddle.addWidget(self.playSelectedPauseButton)
+        controlLayoutMiddle.addWidget(self.wipeCheckBox)
+        controlLayoutMiddle.addLayout(button_pair_row(self.wipeXButton, self.wipeYButton, MIDDLE_SPACING))
+        controlLayoutMiddle.addLayout(button_pair_row(self.playSelectedButton, self.playSelectedPauseButton, MIDDLE_SPACING))
         controlLayoutMiddle.addWidget(workLabel); controlLayoutMiddle.addWidget(self.workComboBox)
         controlLayoutMiddle.addWidget(self.seasonComboBox); controlLayoutMiddle.addWidget(self.jobComboBox)
         controlLayoutMiddle.setContentsMargins(0,0,0,0)
-        controlLayoutMiddle.setSpacing(5)
+        controlLayoutMiddle.setSpacing(MIDDLE_SPACING)
         
         controlLayoutRight = QVBoxLayout()
         controlLayoutRight.addWidget(self.positionScroll)
