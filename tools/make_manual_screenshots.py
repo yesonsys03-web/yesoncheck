@@ -12,6 +12,7 @@
 - 메뉴·호버 창·대화 상자처럼 창 밖에 뜨는 것은 따로 찍어 창 그림 위에 얹음(화면 없이는 한 장에 함께 찍히지 않음).
 """
 import argparse
+import contextlib
 import json
 import os
 import shutil
@@ -30,6 +31,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import manual_media  # noqa: E402
 import screenshot_check as sc  # noqa: E402 — 격리 환경·정착·뒤 스레드 기다림을 그대로 씀
 
+REAL_SCREEN = (1920, 1040)  # 창을 만드는 동안 알려 줄 화면 작업 영역 (real_screen_size)
 SCALE = 2  # 2배로 찍음 (레티나에서 또렷하게) — 그림의 논리 크기는 창 크기 그대로
 WINDOW = (1360, 880)
 BADGE_COLOR = "#ff2d6f"
@@ -201,6 +203,31 @@ def left_inset(rect, dx):
     return QRect(rect.left() + dx - 1, rect.center().y() - 1, 2, 2)
 
 
+@contextlib.contextmanager
+def real_screen_size():
+    """창을 만드는 동안 화면 작업 영역을 실제 모니터 크기로 알림. 화면 없는 화면은 800×600(2배 배율이면 논리 400×300)이라
+    처음 창이 최소 크기로 뜨는데, 가운데 열의 처음 폭은 처음 창에 자리가 있을 때만 단추 쌍이 한 줄에 들어가는 폭으로 넓어짐
+    (player_base.apply_startup_geometry) — 그대로 찍으면 사용자가 실제로 보는 것보다 가운데 열이 좁게 나옴."""
+    from PyQt5.QtCore import QRect
+    from PyQt5.QtWidgets import QApplication
+
+    original = QApplication.primaryScreen
+    screen = original()
+
+    class RealSizedScreen:
+        def availableGeometry(self):
+            return QRect(0, 0, *REAL_SCREEN)
+
+        def __getattr__(self, name):
+            return getattr(screen, name)
+
+    QApplication.primaryScreen = staticmethod(lambda: RealSizedScreen())
+    try:
+        yield
+    finally:
+        QApplication.primaryScreen = original
+
+
 class Stage:
     """샷 함수에 건네는 도구: 합성 영상 경로, 창 만들기, 정착한 그림 찍기, 저장."""
 
@@ -220,7 +247,8 @@ class Stage:
     def player(self, size=WINDOW):
         from yesoncheck.main_window import VideoPlayer
 
-        player = VideoPlayer()
+        with real_screen_size():
+            player = VideoPlayer()
         player.resize(*size)
         player.show()
         self.cleanups.append(player.close)
