@@ -199,7 +199,9 @@ git 저장소가 아닌 폴더(직접 복사한 폴더)에서는 버전을 정�
 0. **바뀐 점을 먼저 저장소에**: `yesoncheck/release_notes.py`의 `RELEASES` 맨 위에 이번 버전의 항목(버전·날짜·요약·묶음)을
    더해 `main`에 넣습니다 — 앱의 사용법 매뉴얼(Help → 사용법)의 '업데이트 내역'에 이 글이 보입니다. 그리고 배포 노트 파일을
    거기서 뽑습니다: `~/coding/p310_tf/bin/python -m yesoncheck.release_notes X.Y.Z > notes.md` (그 버전의 항목이 없으면 오류로 멈춤).
-   매뉴얼·GitHub Release·업데이트 알림의 [바뀐 점]이 같은 글이 됩니다. 화면이 바뀌었으면 매뉴얼 그림도 다시 찍습니다
+   매뉴얼·GitHub Release·업데이트 알림의 [바뀐 점]이 같은 글이 됩니다. **영문 매뉴얼용으로 `yesoncheck/release_notes_en.py`에도 같은 모양의
+   항목을 더합니다**(같은 버전·날짜·묶음 수·항목 수 — 빠뜨리면 `tests/test_manual_languages.py`가 실패; 배포 노트는 한글 글에서만 뽑음).
+   화면이 바뀌었으면 매뉴얼 그림도 다시 찍습니다
    (`tools/make_manual_screenshots.py`).
 1. **`prepare`**(`--notes-file notes.md`): `main`에 있는 커밋인지·작업 폴더가 깨끗한지·NAS에 쓸 수 있는지·`gh` 로그인을 확인 → 다음 배포
    번호를 정함(가장 큰 `v*` 태그의 끝자리 +1, 큰 변경이면 `--minor`로 가운데 +1·끝 0) → 바뀐 점을 메시지로 담은
