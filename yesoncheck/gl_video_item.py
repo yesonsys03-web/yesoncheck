@@ -59,7 +59,7 @@ from PyQt5.QtCore import QPointF, Qt, QTimer
 from PyQt5.QtGui import QImage, QOpenGLContext, QPaintEngine, QPixmap
 from PyQt5.QtWidgets import QGraphicsPixmapItem
 
-from yesoncheck import error_window, gl_bindings, gl_surface, windows_display
+from yesoncheck import downscale_filter, error_window, gl_bindings, gl_surface, windows_display
 from yesoncheck.frame_handles import native_surface_of, whole_surface_handle
 from yesoncheck.gl_bindings import (
     GL_BLEND,
@@ -428,10 +428,18 @@ class VideoFrameItem(QGraphicsPixmapItem):
 
     def _draw_native(self, pw, ph, corners):
         """(native painting 안에서) 들어온 GL 오류 확인 → 저장소 확인 → 필터가 바뀌었으면 다시 세움 → 새 프레임이면 업로드 → 텍스처 사각형.
-        corners: 물리 픽셀 (x, y) 네 개 — 아이템의 (0,0)(w,0)(w,h)(0,h)를 매핑한 값 그대로."""
+        corners: 물리 픽셀 (x, y) 네 개 — 아이템의 (0,0)(w,0)(w,h)(0,h)를 매핑한 값 그대로.
+
+        축소 필터가 '고품질'(Windows의 Settings — downscale_filter)이고 프레임을 줄여 그리는 자리면(_area_target): 저장소·올리는 그림이 그릴 크기로
+        면적 평균한 작은 그림이고 사각형은 정수 픽셀 자리 — GL 호출의 종류·차례는 같음. 그릴 크기가 바뀌면 저장소가 바뀌어(_ensure_storage) 같은 프레임을
+        다시 줄여 올리고, 필터를 Linear로 되돌려도 같은 길로 원본을 다시 올림. 기본(Linear)에서는 아래가 예전과 글자 그대로 같음."""
         gl = self._gl
         h, w = self._frame.shape[:2]
         gl.check_error("native 진입 — 이전 GL 호출이 남긴 오류")  # 우리 GL 호출 전에 — Qt 엔진이 남긴 오류를 우리 업로드·그리기 탓으로 돌리지 않음(삼키지 않고 같은 실패 경로)
+        shrunk = self._area_target(corners, w, h)
+        if shrunk is not None:
+            self._check_texture_limit(w, h)  # 한도는 원본 크기로 — 줄인 크기로만 보면 창에 맞춘 동안은 그려지다 확대하는 순간 실패함 (필터와 상관없이 같은 판정)
+            w, h, corners = shrunk
         self._ensure_storage(w, h)
         gl.glBindTexture(GL_TEXTURE_2D, self._texture)
         filt = self._wanted_filter()
@@ -440,7 +448,7 @@ class VideoFrameItem(QGraphicsPixmapItem):
             gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filt)
             self._filter = filt
         if self._dirty:
-            self._upload_rgb(self._frame)
+            self._upload_rgb(self._frame if shrunk is None else downscale_filter.area_scaled(self._frame, w, h))
             self._dirty = False
         gl.glViewport(0, 0, pw, ph)
         gl.glMatrixMode(GL_PROJECTION)
@@ -459,6 +467,21 @@ class VideoFrameItem(QGraphicsPixmapItem):
         gl.glDisable(GL_TEXTURE_2D)
         gl.glBindTexture(GL_TEXTURE_2D, 0)
         gl.check_error("draw")
+
+    def _area_target(self, corners, w, h):
+        """축소 필터가 '고품질'이고 w×h 프레임을 줄여 그리는 자리면 (너비, 높이, 정수 픽셀 자리의 모서리 넷) — 그 크기로 면적 평균한 그림을 그 자리에 그리면
+        텍스처 픽셀 = 화면 픽셀(다시 섞이지 않음; 자리는 반 픽셀 안에서 맞춤). 아니면 None — 필터가 Linear(기본 — Mac은 늘), 1:1·키워 그리기,
+        돌리거나 뒤집은 변환(이 앱에는 없음). 규칙은 downscale_filter.snapped_rect(CPU 그리기 raster_video_item과 같음)."""
+        if downscale_filter.preferred() != "area":
+            return None
+        (x0, y0), (x1, y1), (x2, y2), (x3, y3) = corners
+        if y1 != y0 or x2 != x1 or y3 != y2 or x3 != x0:
+            return None
+        rect = downscale_filter.snapped_rect(x0, y0, x2, y2, w, h)
+        if rect is None:
+            return None
+        left, top, width, height = rect
+        return width, height, [(left, top), (left + width, top), (left + width, top + height), (left, top + height)]
 
     def _prepare(self, context):
         """(native painting 안에서, context가 current) 이 컨텍스트로 GL 함수를 묶고 텍스처를 만든다. 필터는 transformationMode()가
@@ -492,13 +515,17 @@ class VideoFrameItem(QGraphicsPixmapItem):
     def _allocate_storage(self, texture, w, h):
         """(native 안) 2D 텍스처 texture에 (w, h) GL_RGB8 저장소를 새로 잡는다(내용 없음) — set_frame 경로와 RGB 면이 함께 씀.
         GPU 한도를 넘으면 GLBindingError(축소하지 않음)."""
-        limit = self._gl.max_texture_size
-        if w > limit or h > limit:
-            raise GLBindingError(f"프레임 {w}×{h}가 이 GPU의 텍스처 한도 {limit}를 넘습니다 — 축소하지 않습니다")
+        self._check_texture_limit(w, h)
         gl = self._gl
         gl.glBindTexture(GL_TEXTURE_2D, texture)
         gl.glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, None)  # 저장소만 (내용 없음)
         gl.check_error("storage")
+
+    def _check_texture_limit(self, w, h):
+        """w×h가 이 GPU의 텍스처 한도를 넘으면 GLBindingError(줄여서 그려 주지 않음 — 크게 실패). GL을 부르지 않음."""
+        limit = self._gl.max_texture_size
+        if w > limit or h > limit:
+            raise GLBindingError(f"프레임 {w}×{h}가 이 GPU의 텍스처 한도 {limit}를 넘습니다 — 축소하지 않습니다")
 
     def _upload_rgb(self, rgb):
         """(native 안, 저장소를 잡은 2D 텍스처를 바인드한 뒤) (높이, 너비, 3) RGB 배열 전체를 동기 업로드 — set_frame 경로와 RGB 면이 함께 씀."""

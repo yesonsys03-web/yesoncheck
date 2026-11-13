@@ -44,6 +44,7 @@ from yesoncheck.annotation_overlay import AnnotationOverlay
 from yesoncheck.frame_handles import native_surface_of, whole_surface_handle
 from yesoncheck.gl_video_item import LOG_PREFIX, VIDEO_ITEM_ENV, VideoFrameItem, use_stream_item, video_item_mode
 from yesoncheck.overlay_text_layout import overlay_layout, overlay_reserve_text, widest_digit
+from yesoncheck.raster_video_item import AreaScaledPixmapItem
 
 VIEWPORT_ENV = "YESONCHECK_VIEWPORT"
 VIEWPORT_MODES = ("gl", "raster")
@@ -180,7 +181,11 @@ class CustomVideoWidget(QGraphicsView):
             self.video_item.set_failure_callback(self._on_stream_failure)  # → streamPaintFailed
             self.scene.addItem(self.video_item)
         else:
-            self.video_item = self.scene.addPixmap(QPixmap())
+            # 픽스맵 아이템 — 축소 필터(Windows의 Settings — downscale_filter)가 '고품질'이면 줄여 그릴 때 면적 평균으로 줄인 그림을 그림
+            # (raster_video_item, 2026-11-12). 기본(Linear)은 보통 픽스맵 아이템과 같은 그리기이고, 픽스맵·테두리는 프레임 크기 그대로라 아래의 좌표 계약
+            # (창에 맞춤·와이프 선·ROI)은 그대로
+            self.video_item = AreaScaledPixmapItem(QPixmap())
+            self.scene.addItem(self.video_item)
         self._pixmap_backing = None  # 픽스맵 길에 그린 네이티브 프레임 — RGB32 픽스맵이 그 메모리를 함께 쓰므로 다음 그림까지 쥠 (_show_native_frames)
         self._overlay_provider = None  # B 키 글자 공급자 () -> str | None — 플레이어가 등록(set_overlay_provider), updateFrame의 네이티브 분기가 부름
         self._annotation_provider = None  # 주석 공급자 () -> list[dict] — 보이는 프레임의 주석, 플레이어가 등록(set_annotation_provider)
