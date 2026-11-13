@@ -14,7 +14,7 @@
   Mov 목록은 열지 않음. 한 장뿐인 프레임은 예전처럼 무시. 영상 파일이 함께 있으면 영상은 예전 그대로이고 시퀀스는 목록에만 더함. 창 본문 핸들러는 영상 영역 핸들러와
   같은 코드이고, `self`가 `open_file`을 가진 창이면 self를 대상으로 씀 (예전에는 `parent()`만 따라 올라가 최상위 창에서 본문이 돌지 않았음).
 - 탭 전환(`_on_sidebar_tab_changed`)은 페이지 교체뿐 — GUI 스레드는 디스크를 읽지 않음 (썸네일 모드면 Seq 썸네일을 뒤 스레드로 다시
-  읽을 뿐). Seq 탭에서는 선택 재생 단추 둘('Play Selected'·'Play/Pause Selected')을 끔 (선택 재생은 Mov 경로 전제 — 이미 도는 선택 재생의
+  읽을 뿐). Seq 탭에서는 선택 재생 단추 둘('Play Selected'·'Selected Play')을 끔 (선택 재생은 Mov 경로 전제 — 이미 도는 선택 재생의
   일시정지 단추는 예외, `_sync_selected_play_buttons`).
 - 썸네일: Seq 목록은 전역 표시 모드(List/Thumb 단추 — `_apply_seq_display_mode`)를 따르고, 썸네일 모드에서 읽기 전용 경량 경로
   (`_load_seq_thumbnails` — SeqThumbnailLoaderWorker가 뒤 스레드에서 디스크의 썸네일을 읽어 아이콘만 붙임)로 보여 줌. 시퀀스의 썸네일은
@@ -461,8 +461,8 @@ class SidebarSequencesMixin:
                 self._load_seq_thumbnails()
 
     def _sync_selected_play_buttons(self):
-        """선택 재생 단추를 보이는 탭에 맞춤. Seq 탭에서는 'Play Selected'뿐 아니라 짝 단추 'Play/Pause Selected'(멈춰 있을 때 라벨
-        'Selected Play')도 끔 — 누르면 보이지 않는 Mov 목록의 선택(폴더를 불러올 때 selectAll)으로 선택 재생이 시작되어 열어 둔 시퀀스를
+        """선택 재생 단추를 보이는 탭에 맞춤. Seq 탭에서는 'Play Selected'뿐 아니라 그 옆의 짝 단추
+        'Selected Play'도 끔 — 누르면 보이지 않는 Mov 목록의 선택(폴더를 불러올 때 selectAll)으로 선택 재생이 시작되어 열어 둔 시퀀스를
         닫기 때문. 다만 선택 재생이 이미 돌고 있으면 짝 단추는 그 재생의 일시정지 단추('Selected Pause')라 켜 둠 (Mov 탭에서 시작한 선택
         재생을 보다가 Seq 탭으로 옮겨도 멈출 수 있게). 탭 전환과, 선택 재생이 끝나는 길(stop_video·_end_playlist_mode)이 부름."""
         on_seq_page = self.sidebar_tabs.currentWidget() is self.seq_sidebar

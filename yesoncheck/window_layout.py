@@ -8,13 +8,18 @@
 - InfoRowLayout: 정보 줄 배치. 자리가 있으면 예전 QHBoxLayout + 빈칸과 같은 배치, 모자라면 정해진 순서로 줄임.
 - VerticalScrollArea: 세로로만 스크롤 — 안의 내용이 길어도 창의 최소 높이를 묶지 않음.
 - startup_geometry: 처음 창 크기·위치 (예전처럼 1080×720 이상, 레이아웃이 원하는 크기까지, 화면 작업 영역 안으로).
+- SteadyTextButton·ButtonPairRow: 가운데 열의 단추를 둘씩 한 줄에 (2026-11-13) — 글자가 바뀌는 단추가 줄의 폭을 흔들지 않게,
+  둘이 글자째 들어갈 폭이 안 되면 예전처럼 위아래로 (열·창의 최소 폭을 키우지 않음).
 """
 
 import math
 
 from PyQt5.QtCore import QEvent, QMargins, QPoint, QRect, QSize, Qt
 from PyQt5.QtGui import QFontMetricsF, QPainter
-from PyQt5.QtWidgets import QFrame, QLabel, QLayout, QScrollArea, QStyle, QStyleOption, QToolTip
+from PyQt5.QtWidgets import (
+    QApplication, QBoxLayout, QFrame, QLabel, QLayout, QPushButton, QScrollArea, QSizePolicy, QStyle, QStyleOption, QStyleOptionButton,
+    QToolTip, QWidget,
+)
 
 # 예전 처음 창: setGeometry(100, 100, 1080, 720)
 DEFAULT_WINDOW_SIZE = QSize(1080, 720)
@@ -367,6 +372,14 @@ class VerticalScrollArea(QScrollArea):
     def sizeHint(self):
         return QSize(self._full_size)
 
+    def width_for_content_hint(self):
+        """내용이 원하는 폭(sizeHint)을 세로 스크롤바가 보일 때에도 받는 폭 — 열의 처음 폭으로 씀.
+        최소 너비(내용의 최소 폭 + 스크롤바)와 같은 식에 내용의 최소 폭 대신 원하는 폭: 둘이 다른 내용(ButtonPairRow —
+        좁으면 위아래로 놓여 최소 폭이 작음)이 처음에는 원하는 배치로 보이게."""
+        content = self.widget()
+        hint = content.sizeHint().expandedTo(content.minimumSize())
+        return hint.width() + self.verticalScrollBar().sizeHint().width() + 2 * self.frameWidth()
+
     def eventFilter(self, watched, event):
         if watched is self.widget() and event.type() == QEvent.LayoutRequest:
             self.update_size_hints()  # 내용의 레이아웃이 바뀜 (펼침·접힘·글꼴)
@@ -377,6 +390,113 @@ class VerticalScrollArea(QScrollArea):
         # 스크롤바 너비·테두리가 바뀜 (만드는 중 setWidget 전에도 오므로 내용이 생긴 뒤부터)
         if event.type() in _METRICS_EVENTS and self.widget() is not None:
             self.update_size_hints()
+
+
+class SteadyTextButton(QPushButton):
+    """글자가 몇 가지로 바뀌는 단추 — 크기 힌트를 그 글자들(texts) 중 가장 넓은 것으로 잡음.
+
+    옆 단추와 한 줄을 나눠 쓰는 단추의 글자가 바뀔 때마다(Selected Play ↔ Selected Pause) 줄의 최소 폭이 달라지면
+    가운데 열과 영상 영역의 폭이 재생·멈춤마다 흔들림. 폭 = '그 글자를 넣은 보통 QPushButton이 바랄 폭'들 중 가장 큰 것 —
+    글자마다 스타일에 물어 잼(글꼴·스타일시트가 바뀌어도 그때의 값). 지금 글자의 힌트에 글자 폭의 차이만 더하는 식은
+    스타일에 최소 폭이 있으면(Fusion 80px·Windows 75px — 시트 없는 단추) 그 바닥 위에 차이를 얹어 글자마다 폭이 달라짐.
+
+    알고 둔 한계: macOS 기본 스타일(시트 없는 단추)은 폭을 정할 때 옵션이 아니라 위젯의 지금 글자를 보고 'OK'·'Cancel'만
+    따로 다뤄, 그 두 글자가 texts에 섞이면 글자에 따라 폭이 달라짐 (이 앱의 단추는 시트가 폭을 정해 해당 없음).
+    """
+
+    _texts = ()  # 생성자가 끝나기 전에 Qt가 크기 힌트를 물어도 있게
+
+    def __init__(self, text, texts, parent=None):
+        texts = tuple(texts)
+        for candidate in texts:
+            # 여기서 거절: 크기 힌트(가상 함수) 안에서 터지면 PyQt5가 프로세스를 끝냄
+            if not isinstance(candidate, str):
+                raise TypeError(f"texts에는 글자만 넣을 수 있습니다: {candidate!r}")
+        super().__init__(text, parent)
+        self._texts = texts
+
+    def sizeHint(self):
+        # 최소 힌트는 따로 고치지 않음: QPushButton.minimumSizeHint()가 이 sizeHint()를 그대로 돌려줌 (둘 다 고치면 두 번 더해짐)
+        hint = super().sizeHint()
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        width = hint.width()
+        for text in self._texts:
+            if text != self.text():
+                width = max(width, self._hint_width(option, text))
+        return QSize(width, hint.height())
+
+    def _hint_width(self, option, text):
+        """text를 넣었을 때 바랄 폭 — QPushButton::sizeHint(Qt 5.15)와 같은 계산 (아이콘·메뉴 표시·빈 글자의 'XXXX')."""
+        width = height = 0
+        if not self.icon().isNull():
+            width += option.iconSize.width() + 4
+            height = max(height, option.iconSize.height())
+        text_size = self.fontMetrics().size(Qt.TextShowMnemonic, text or "XXXX")
+        if text or not width:
+            width += text_size.width()
+        if text or not height:
+            height = max(height, text_size.height())
+        probe = QStyleOptionButton(option)
+        probe.text = text
+        probe.rect = QRect(option.rect.topLeft(), QSize(width, height))  # 메뉴 표시의 크기가 높이를 따름
+        if self.menu() is not None:
+            width += self.style().pixelMetric(QStyle.PM_MenuButtonIndicator, probe, self)
+        asked = self.style().sizeFromContents(QStyle.CT_PushButton, probe, QSize(width, height), self)
+        return asked.expandedTo(QApplication.globalStrut()).width()
+
+
+class ButtonPairRow(QWidget):
+    """단추 둘을 한 줄에 반씩 (가운데 열 — 세로 자리를 아낌). 둘이 글자째 들어갈 폭이 안 되면 예전처럼 위아래로 놓음.
+
+    최소 폭은 위아래로 놓았을 때의 것(넓은 쪽 단추) — 한 줄 배치가 열과 창의 최소 폭을 키우지 않음: 글자가 넓은 글꼴
+    (글꼴 없는 Windows CI는 글자마다 12px)에서 한 줄 배치를 최소 폭으로 삼으면 창의 최소 폭이 900을 넘음.
+    원하는 폭(sizeHint)은 한 줄에 놓았을 때의 것 — 가운데 열의 처음 폭이 이것을 따름(VerticalScrollArea.width_for_content_hint).
+    높이는 지금 배치의 것(한 줄 또는 두 줄)으로 고정. 배치는 줄의 폭이 바뀔 때와 단추의 크기 힌트가 바뀔 때 다시 정함.
+    단추의 폭은 단추가 아니라 레이아웃 항목에서 읽음: 숨긴 단추는 레이아웃처럼 셈에서 빠지고(남은 단추가 줄 전체), 먼저 지워진
+    단추는 Qt가 항목을 이미 뺐음 — 지워진 단추의 파이썬 객체를 건드리면 예외가 나고, 크기 힌트·event 같은 가상 함수 안의
+    예외는 PyQt5가 프로세스를 끝냄.
+    """
+
+    def __init__(self, left, right, spacing, parent=None):
+        super().__init__(parent)
+        self._box = QBoxLayout(QBoxLayout.LeftToRight, self)
+        self._box.setContentsMargins(0, 0, 0, 0)
+        self._box.setSpacing(spacing)
+        self._box.addWidget(left, 1)
+        self._box.addWidget(right, 1)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+
+    def _button_widths(self):
+        """줄에 든(숨기지 않은) 단추마다의 최소 폭."""
+        items = (self._box.itemAt(index) for index in range(self._box.count()))
+        return [item.minimumSize().width() for item in items if not item.isEmpty()]
+
+    def side_by_side_width(self):
+        """둘이 한 줄에 글자째 들어가는 가장 좁은 폭."""
+        widths = self._button_widths()
+        return sum(widths) + self._box.spacing() * max(0, len(widths) - 1)
+
+    def sizeHint(self):
+        return QSize(self.side_by_side_width(), self._box.sizeHint().height())
+
+    def minimumSizeHint(self):
+        return QSize(max(self._button_widths(), default=0), self._box.minimumSize().height())
+
+    def _arrange(self):
+        fits = self.width() >= self.side_by_side_width()
+        direction = QBoxLayout.LeftToRight if fits else QBoxLayout.TopToBottom
+        if direction != self._box.direction():
+            self._box.setDirection(direction)  # 레이아웃을 다시 하고 바뀐 높이를 부모에 알림
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._arrange()
+
+    def event(self, event):
+        if event.type() == QEvent.LayoutRequest:
+            self._arrange()  # 단추의 크기 힌트가 바뀜 (글자·글꼴·스타일시트)
+        return super().event(event)
 
 
 def _take_equally(widths, floors, indices, excess):
