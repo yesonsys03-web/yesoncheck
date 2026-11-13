@@ -9,6 +9,7 @@ import zlib
 import pytest
 
 from yesoncheck import manual_content, manual_html, manual_open, release_notes
+from yesoncheck.manual_languages import KOREAN
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 IMAGES = os.path.join(ROOT, "yesoncheck", "manual_images")
@@ -27,6 +28,11 @@ def fake_image(name):
     return tiny_png()
 
 
+def build_korean(load_image=fake_image, **kwargs):
+    """한글만 든 매뉴얼 — 한글 글을 시험용으로 바꿔 끼운 시험이 씀 (두 언어가 함께 든 문서는 test_manual_languages)."""
+    return manual_html.build(load_image, languages=(KOREAN,), **kwargs)
+
+
 def page(blocks, key="start", group="시작"):
     return manual_content.Page(key, "쪽 제목", group, "소개", tuple(blocks))
 
@@ -37,7 +43,7 @@ def one_page(monkeypatch):
 
     def build(blocks, **kwargs):
         monkeypatch.setattr(manual_content, "PAGES", (page(blocks),))
-        return manual_html.build(fake_image, **kwargs)
+        return build_korean(**kwargs)
 
     return build
 
@@ -209,7 +215,7 @@ def test_unbalanced_markup_and_empty_keys_fail_the_build(one_page, broken):
 
 def test_figure_alt_text_has_no_markup(monkeypatch):
     monkeypatch.setattr(manual_content, "PAGES", (page([("fig", "x", "**굵은** `코드` {F5} [[start|글]] <끝>", ())]),))
-    text = manual_html.build(fake_image)
+    text = build_korean(fake_image)
     assert 'alt="굵은 코드 F5 글 &lt;끝&gt;"' in text
     assert "<figcaption><strong>굵은</strong> <code>코드</code> " in text
 
@@ -279,13 +285,13 @@ def test_unknown_block_duplicate_anchor_and_unknown_group_fail_the_build(one_pag
         one_page([("h", "하나", "a"), ("h", "둘", "a")])
     monkeypatch.setattr(manual_content, "PAGES", (page([], group="없는 묶음"),))
     with pytest.raises(ValueError, match="없는 묶음"):
-        manual_html.build(fake_image)
+        build_korean(fake_image)
     monkeypatch.setattr(manual_content, "PAGES", (page([], key="a"), page([], key="a")))
     with pytest.raises(ValueError, match="겹칩니다"):
-        manual_html.build(fake_image)
+        build_korean(fake_image)
     monkeypatch.setattr(manual_content, "PAGES", (page([], key=manual_content.RELEASES_KEY),))
     with pytest.raises(ValueError, match="업데이트 내역"):
-        manual_html.build(fake_image)
+        build_korean(fake_image)
 
 
 def test_figure_size_legend_and_layout(monkeypatch):
@@ -301,7 +307,7 @@ def test_figure_size_legend_and_layout(monkeypatch):
         loaded.append(name)
         return tiny_png(*sizes[name])
 
-    text = manual_html.build(load)
+    text = build_korean(load)
     assert loaded == ["narrow", "wide", "wide"]
     assert '<figure class="fig beside">' in text and 'width="200" height="300" alt="좁은 &lt;그림&gt;"' in text
     assert '<figure class="fig below">' in text and 'width="1000" height="500"' in text
@@ -316,19 +322,19 @@ def test_missing_image_error_is_not_swallowed(monkeypatch):
 
     monkeypatch.setattr(manual_content, "PAGES", (page([("fig", "nowhere", "그림", ())]),))
     with pytest.raises(FileNotFoundError, match="nowhere"):
-        manual_html.build(missing)
+        build_korean(missing)
 
 
 def test_not_a_png_is_rejected(monkeypatch):
     monkeypatch.setattr(manual_content, "PAGES", (page([("fig", "x", "그림", ())]),))
     with pytest.raises(ValueError, match="PNG가 아닌"):
-        manual_html.build(lambda name: b"GIF89a" + b"\x00" * 40)
+        build_korean(lambda name: b"GIF89a" + b"\x00" * 40)
 
 
 def test_release_notes_do_not_turn_braces_into_keys(monkeypatch):
     releases = (release_notes.Release("9.9.9", None, "요약 {이건 키가 아님} **굵게** `코드`", (("", ("항목 {그대로}",)),)),)
     monkeypatch.setattr(release_notes, "RELEASES", releases)
-    text = manual_html.build(fake_image)
+    text = build_korean(fake_image)
     assert "요약 {이건 키가 아님} <strong>굵게</strong> <code>코드</code>" in text
     assert "<li>항목 {그대로}</li>" in text
     assert "<h3>" not in text.split('id="releases"')[1]  # 제목 없는 묶음은 제목 줄이 없음

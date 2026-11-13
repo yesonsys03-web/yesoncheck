@@ -10,19 +10,27 @@
 글 안의 표시는 **원문에서** 왼쪽부터 토큰으로 나눠 조각마다 escape함(escape한 글에 정규식을 걸면 `{<}`가 두 번 escape되고
 코드 안의 `**`가 굵게로 바뀜): `` `코드` `` 안은 글자 그대로, `**굵게**` 안은 다시 나눔, `[[쪽/닻|글]]`의 글과 `{키}`는 글자 그대로.
 쪽 안의 절 주소는 id와 같은 `#쪽--닻` — 스크립트가 꺼져 있어도 그 자리로 감.
+
+**두 언어**(`manual_languages.LANGUAGES` — 한글·영문): 한 파일에 언어마다의 목차와 쪽들을 함께 넣고 목차 위의 단추로 전환.
+고른 언어는 브라우저에 기억하고(localStorage), 처음에는 브라우저 언어가 한국어면 한글·아니면 영문. 주소(`#쪽--닻`)는 언어와
+무관 — 전환해도 보던 쪽에 머묾. 첫째 언어(한글)가 기준: 요소 id에 앞말이 없고(둘째부터는 `en:쪽--닻`) 그림을 품음 —
+그림은 한 번만 넣고 다른 언어의 `<img data-img=이름>`은 스크립트가 같은 그림을 가리키게 함(파일 크기가 두 배가 되지 않게).
+스크립트가 꺼진 브라우저에서는 한글만 보임.
 """
 import base64
 import html
+import json
 import re
 import struct
 
-from yesoncheck import manual_content, release_notes
+from yesoncheck import manual_content
+from yesoncheck.manual_languages import KOREAN, LANGUAGES
 
 IMAGE_SCALE = 2  # 스크린샷을 찍은 배율 (tools/make_manual_screenshots.SCALE) — 보일 크기 = 픽셀 / 배율
 NARROW_IMAGE = 430  # 이보다 좁은 그림은 설명을 옆에 둠
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
-CURRENT_BADGE = "지금 버전"
-CALLOUT_LABELS = {"note": "참고", "tip": "팁", "warn": "주의"}
+CURRENT_BADGE = KOREAN.ui["current"]
+CALLOUT_LABELS = KOREAN.ui["callouts"]
 
 _CODE = r"`(?P<code>[^`]+)`"
 _LINK = r"\[\[(?P<page>[a-z_]+)(?:/(?P<anchor>[a-z0-9_.]+))?(?:\|(?P<label>[^\]]+))?\]\]"
@@ -47,20 +55,32 @@ def target(page, anchor=None):
 
 
 class _Builder:
-    def __init__(self, load_image, version_text, current_version):
+    """한 언어의 목차와 쪽들. primary(기준 언어)는 id에 앞말이 없고 그림을 품음."""
+
+    def __init__(self, load_image, version_text, current_version, language=KOREAN, primary=True):
         self.load_image = load_image
         self.version_text = version_text
         self.current_version = current_version
-        self.pages = {page.key: page for page in manual_content.PAGES}
-        if len(self.pages) != len(manual_content.PAGES):
+        self.language = language
+        self.content = language.content
+        self.notes = language.notes
+        self.ui = language.ui
+        self.primary = primary
+        self.prefix = "" if primary else f"{language.code}:"
+        self.pages = {page.key: page for page in self.content.PAGES}
+        if len(self.pages) != len(self.content.PAGES):
             raise ValueError("쪽 이름(key)이 겹칩니다")
         if manual_content.RELEASES_KEY in self.pages:
             raise ValueError(f"쪽 이름 {manual_content.RELEASES_KEY!r}는 업데이트 내역 쪽의 것입니다")
         self.titles = {key: page.title for key, page in self.pages.items()}
-        self.titles[manual_content.RELEASES_KEY] = manual_content.RELEASES_TITLE
+        self.titles[manual_content.RELEASES_KEY] = self.content.RELEASES_TITLE
         self.anchors = {key: self._page_anchors(page) for key, page in self.pages.items()}
-        self.anchors[manual_content.RELEASES_KEY] = {f"v{release.version}" for release in release_notes.RELEASES}
+        self.anchors[manual_content.RELEASES_KEY] = {f"v{release.version}" for release in self.notes.RELEASES}
         self.images_used = []
+
+    def element_id(self, page, anchor=None):
+        """요소의 id — 기준 언어는 주소 그대로(`쪽--닻`), 다른 언어는 앞말을 붙여 겹치지 않게."""
+        return self.prefix + target(page, anchor)
 
     @staticmethod
     def _page_anchors(page):
@@ -143,22 +163,28 @@ class _Builder:
         width, height = png_size(data, name)
         shown_w, shown_h = round(width / IMAGE_SCALE), round(height / IMAGE_SCALE)
         self.images_used.append(name)
-        source = "data:image/png;base64," + base64.b64encode(data).decode("ascii")
+        name_attr = html.escape(name, quote=True)
+        if self.primary:
+            source = f'src="data:image/png;base64,{base64.b64encode(data).decode("ascii")}" '
+            mark = f' data-img="{name_attr}"'
+        else:  # 스크립트가 기준 언어의 같은 그림을 가리키게 함
+            source = f'data-img="{name_attr}" '
+            mark = ""
         classes = ["fig"]
         if legend:
             classes.append("beside" if shown_w <= NARROW_IMAGE else "below")  # 좁은 그림은 설명을 옆에, 넓은 그림은 아래에
         items = "".join(f'<li><span class="n">{number}</span><div>{self.inline(text)}</div></li>'
                         for number, text in enumerate(legend, 1))
         legend_html = f'<ol class="legend">{items}</ol>' if legend else ""
-        return (f'<figure class="{" ".join(classes)}"><div class="shot"><img src="{source}" width="{shown_w}" height="{shown_h}" '
-                f'alt="{html.escape(self.text_only(caption), quote=True)}" loading="lazy"><figcaption>{self.inline(caption)}</figcaption></div>'
+        return (f'<figure class="{" ".join(classes)}"><div class="shot"><img {source}width="{shown_w}" height="{shown_h}" '
+                f'alt="{html.escape(self.text_only(caption), quote=True)}" loading="lazy"{mark}><figcaption>{self.inline(caption)}</figcaption></div>'
                 f"{legend_html}</figure>")
 
     def block(self, page, block):
         kind = block[0]
         if kind == "h":
             _kind, title, anchor = block
-            return f'<h2 id="{target(page.key, anchor)}">{self.inline(title)}</h2>'
+            return f'<h2 id="{self.element_id(page.key, anchor)}">{self.inline(title)}</h2>'
         if kind == "p":
             return f"<p>{self.inline(block[1])}</p>"
         if kind == "fig":
@@ -181,8 +207,8 @@ class _Builder:
             return '<ol class="steps">' + "".join(f"<li>{self.inline(item)}</li>" for item in block[1]) + "</ol>"
         if kind == "list":
             return "<ul>" + "".join(f"<li>{self.inline(item)}</li>" for item in block[1]) + "</ul>"
-        if kind in CALLOUT_LABELS:
-            return (f'<div class="callout {kind}"><span class="label">{CALLOUT_LABELS[kind]}</span>'
+        if kind in self.ui["callouts"]:
+            return (f'<div class="callout {kind}"><span class="label">{html.escape(self.ui["callouts"][kind])}</span>'
                     f"<div>{self.inline(block[1])}</div></div>")
         raise ValueError(f"모르는 블록 종류: {kind!r} (쪽 {page.key})")
 
@@ -195,63 +221,101 @@ class _Builder:
             chips = '<div class="onpage">' + "".join(
                 f'<a href="#{target(page.key, anchor)}">{self.inline(title)}</a>' for anchor, title in sections) + "</div>"
         body = "".join(self.block(page, block) for block in page.blocks)
-        return (f'<section class="page" id="{page.key}"><header><div class="crumb">{html.escape(page.group)}</div>'
+        return (f'<section class="page" id="{self.element_id(page.key)}"><header><div class="crumb">{html.escape(page.group)}</div>'
                 f"<h1>{html.escape(page.title)}</h1><p class=\"lead\">{self.inline(page.lead)}</p>{chips}</header>{body}</section>")
 
     def releases_section(self):
         key = manual_content.RELEASES_KEY
         links = "".join(f'<a href="#{target(key, "v" + release.version)}">{release.version}</a>'
-                        for release in release_notes.RELEASES)
+                        for release in self.notes.RELEASES)
         chips = f'<div class="onpage">{links}</div>'
         articles = []
-        for release in release_notes.RELEASES:
-            badge = f'<span class="badge">{CURRENT_BADGE}</span>' if release.version == self.current_version else ""
+        for release in self.notes.RELEASES:
+            badge = (f'<span class="badge">{html.escape(self.ui["current"])}</span>'
+                     if release.version == self.current_version else "")
             date = f'<span class="date">{release.date}</span>' if release.date else ""
             groups = []
             for title, items in release.groups:
                 heading = f"<h3>{self.inline(title, keys=False)}</h3>" if title else ""
                 groups.append(heading + "<ul>" + "".join(f"<li>{self.inline(item, keys=False)}</li>" for item in items) + "</ul>")
             articles.append(
-                f'<article class="release"><h2 id="{target(key, "v" + release.version)}">{release.version}{badge}{date}</h2>'
+                f'<article class="release"><h2 id="{self.element_id(key, "v" + release.version)}">{release.version}{badge}{date}</h2>'
                 f'<p class="summary">{self.inline(release.summary, keys=False)}</p>{"".join(groups)}</article>')
-        return (f'<section class="page" id="{key}"><header><div class="crumb">{manual_content.RELEASES_GROUP}</div>'
-                f"<h1>{manual_content.RELEASES_TITLE}</h1><p class=\"lead\">{manual_content.RELEASES_LEAD}</p>{chips}</header>"
+        content = self.content
+        return (f'<section class="page" id="{self.element_id(key)}"><header><div class="crumb">{html.escape(content.RELEASES_GROUP)}</div>'
+                f"<h1>{html.escape(content.RELEASES_TITLE)}</h1><p class=\"lead\">{html.escape(content.RELEASES_LEAD)}</p>{chips}</header>"
                 f'{"".join(articles)}</section>')
 
     def nav(self):
-        entries = [(page.group, page.key, page.title) for page in manual_content.PAGES]
-        entries.append((manual_content.RELEASES_GROUP, manual_content.RELEASES_KEY, manual_content.RELEASES_TITLE))
-        unknown = sorted({group for group, _key, _title in entries} - set(manual_content.GROUPS))
+        content = self.content
+        entries = [(page.group, page.key, page.title) for page in content.PAGES]
+        entries.append((content.RELEASES_GROUP, manual_content.RELEASES_KEY, content.RELEASES_TITLE))
+        unknown = sorted({group for group, _key, _title in entries} - set(content.GROUPS))
         if unknown:
             raise ValueError(f"목차 묶음(GROUPS)에 없는 묶음: {unknown}")
         parts = []
-        for group in manual_content.GROUPS:
+        for group in content.GROUPS:
             links = "".join(f'<a href="#{key}" data-page="{key}">{html.escape(title)}</a>'
                             for entry_group, key, title in entries if entry_group == group)
             if links:
                 parts.append(f'<div class="group">{html.escape(group)}</div>{links}')
         return "".join(parts)
 
-    def document(self):
-        sections = "".join(self.page_section(page) for page in manual_content.PAGES) + self.releases_section()
-        version = f'<div class="ver">버전 {html.escape(self.version_text)}</div>' if self.version_text else ""
-        return (
-            '<!DOCTYPE html>\n<html lang="ko"><head><meta charset="utf-8">'
-            '<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f"<title>YesonCheck 사용법</title><style>{CSS}</style></head><body>"
-            '<aside class="side"><div class="brand"><div class="name">YesonCheck <span>사용법</span></div>'
-            f'{version}</div><div class="tools"><input id="q" type="search" placeholder="찾기" aria-label="찾기" autocomplete="off">'
-            '<button id="theme" type="button" title="밝게 / 어둡게" aria-label="밝게 / 어둡게">◐</button></div>'
-            f'<div id="hits" class="hits"></div><nav>{self.nav()}</nav></aside>'
-            f'<main>{sections}<div class="pager"><a id="prev"></a><a id="next"></a></div></main>'
-            '<div id="zoom" class="zoom" hidden><img alt=""></div>'
-            f"<script>{SCRIPT}</script></body></html>\n")
+    def brand(self):
+        """목차 맨 위의 이름과 버전 (이 언어의 글자로)."""
+        version = ""
+        if self.version_text:
+            version = f'<div class="ver">{html.escape(self.ui["version"])} {html.escape(self.version_text)}</div>'
+        return f'<div class="name">YesonCheck <span>{html.escape(self.ui["manual"])}</span></div>{version}'
+
+    def sections(self):
+        return "".join(self.page_section(page) for page in self.content.PAGES) + self.releases_section()
 
 
-def build(load_image, version_text=None, current_version=None):
-    """매뉴얼 HTML. `load_image(이름)` → 그 그림(PNG)의 바이트. `version_text`는 목차 위에 보일 지금 앱의 버전 글
-    (없으면 표시하지 않음), `current_version`("1.9.0")이 '업데이트 내역'에 있으면 그 버전에 '지금 버전' 표시."""
-    return _Builder(load_image, version_text, current_version).document()
+def _language_css(codes):
+    """언어를 가리는 CSS: 고른 언어(html의 data-lang)의 것만 보이고, 스크립트가 꺼져 있으면(data-lang 없음) 첫째 언어."""
+    rules = [f':root:not([data-lang]) .l[lang="{codes[0]}"] {{ display:revert; }}']
+    rules += [f':root[data-lang="{code}"] .l[lang="{code}"] {{ display:revert; }}' for code in codes]
+    return "\n".join(rules) + "\n"
+
+
+def _in_language(tag, builder, inner, classes=""):
+    """한 언어에서만 보이는 요소 (CSS가 `.l[lang]`으로 가려 줌)."""
+    names = f"l {classes}".strip()
+    return f'<{tag} class="{names}" lang="{builder.language.code}">{inner}</{tag}>'
+
+
+def build(load_image, version_text=None, current_version=None, languages=None):
+    """매뉴얼 HTML — 두 언어(한글·영문)가 함께 들어 있고 목차 위의 단추로 전환. `load_image(이름)` → 그 그림(PNG)의 바이트.
+    `version_text`는 목차 위에 보일 지금 앱의 버전 글(없으면 표시하지 않음), `current_version`("1.9.0")이 '업데이트 내역'에
+    있으면 그 버전에 '지금 버전' 표시. `languages`는 넣을 언어들(기본 `LANGUAGES` 전부 — 첫째가 기준; 하나면 전환 단추 없음)."""
+    builders = [_Builder(load_image, version_text, current_version, language, primary=index == 0)
+                for index, language in enumerate(LANGUAGES if languages is None else languages)]
+    first = builders[0].language
+    brands = "".join(_in_language("div", builder, builder.brand()) for builder in builders)
+    switch = ""
+    if len(builders) > 1:
+        switch = '<div class="langs">' + "".join(
+            f'<button type="button" data-lang="{builder.language.code}">{html.escape(builder.language.name)}</button>'
+            for builder in builders) + "</div>"
+    navs = "".join(_in_language("nav", builder, builder.nav()) for builder in builders)
+    docs = "".join(_in_language("div", builder, builder.sections(), "doc") for builder in builders)
+    codes = [builder.language.code for builder in builders]
+    script = (SCRIPT.replace("__CODES__", json.dumps(codes))
+              .replace("__UI__", json.dumps({builder.language.code: {key: builder.ui[key] for key in SCRIPT_UI_KEYS}
+                                             for builder in builders}, ensure_ascii=False)))
+    search, theme = html.escape(first.ui["search"], quote=True), html.escape(first.ui["theme"], quote=True)
+    return (
+        f'<!DOCTYPE html>\n<html lang="{first.code}"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        f"<title>YesonCheck {html.escape(first.ui['manual'])}</title><style>{CSS}{_language_css(codes)}</style></head><body>"
+        f'<aside class="side"><div class="brand">{brands}</div>{switch}'
+        f'<div class="tools"><input id="q" type="search" placeholder="{search}" aria-label="{search}" autocomplete="off">'
+        f'<button id="theme" type="button" title="{theme}" aria-label="{theme}">◐</button></div>'
+        f'<div id="hits" class="hits"></div>{navs}</aside>'
+        f'<main>{docs}<div class="pager"><a id="prev"></a><a id="next"></a></div></main>'
+        '<div id="zoom" class="zoom" hidden><img alt=""></div>'
+        f"<script>{script}</script></body></html>\n")
 
 
 def image_names():
@@ -292,6 +356,13 @@ a:hover { text-decoration:underline; }
 .brand .name { font-size:18px; font-weight:750; letter-spacing:-.01em; }
 .brand .name span { color:var(--accent); }
 .brand .ver { margin-top:2px; color:var(--muted); font-size:12.5px; }
+.l[lang] { display:none; }
+.langs { display:none; gap:0; margin:0 18px 10px; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+.js .langs { display:flex; }
+.langs button { flex:1; padding:5px 0; border:0; background:var(--bg); color:var(--muted); font:inherit; font-size:12.5px; cursor:pointer; }
+.langs button + button { border-left:1px solid var(--line); }
+.langs button:hover { color:var(--accent); }
+.langs button.active { background:var(--accent); color:#fff; font-weight:650; }
 .tools { display:flex; gap:8px; padding:0 18px 8px; }
 #q { flex:1; min-width:0; padding:7px 11px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text);
   font:inherit; font-size:13.5px; outline:none; }
@@ -404,30 +475,37 @@ html:not(.js) .pager { display:none; }
 }
 """
 
+SCRIPT_UI_KEYS = ("manual", "search", "theme", "found", "none")  # 스크립트가 쓰는 화면 글자 (manual_languages의 ui)
+
 SCRIPT = r"""
 (function () {
   var root = document.documentElement;
   root.classList.add('js');
-  var pages = Array.prototype.slice.call(document.querySelectorAll('.page'));
-  var links = Array.prototype.slice.call(document.querySelectorAll('nav a[data-page]'));
-  var order = links.map(function (a) { return a.getAttribute('data-page'); });
+  var CODES = __CODES__;  // 언어 — 첫째가 기준 (요소 id에 앞말이 없음)
+  var UI = __UI__;
+  var slice = function (list) { return Array.prototype.slice.call(list); };
   var prev = document.getElementById('prev'), next = document.getElementById('next');
+  var q = document.getElementById('q'), hits = document.getElementById('hits'), theme = document.getElementById('theme');
+  var langButtons = slice(document.querySelectorAll('.langs button'));
+  var lang, pages, links, order, texts;
 
+  function prefix() { return lang === CODES[0] ? '' : lang + ':'; }
+  function keyOf(page) { return page.id.slice(prefix().length); }
   function titleOf(key) {
     for (var i = 0; i < links.length; i++) if (links[i].getAttribute('data-page') === key) return links[i].textContent;
     return '';
   }
   function show(key, anchor) {
     if (order.indexOf(key) < 0) { key = order[0]; anchor = null; }
-    pages.forEach(function (p) { p.classList.toggle('active', p.id === key); });
+    pages.forEach(function (p) { p.classList.toggle('active', keyOf(p) === key); });
     links.forEach(function (a) { a.classList.toggle('active', a.getAttribute('data-page') === key); });
     var at = order.indexOf(key);
     prev.textContent = at > 0 ? '← ' + titleOf(order[at - 1]) : '';
     prev.setAttribute('href', at > 0 ? '#' + order[at - 1] : '#');
     next.textContent = at < order.length - 1 ? titleOf(order[at + 1]) + ' →' : '';
     next.setAttribute('href', at < order.length - 1 ? '#' + order[at + 1] : '#');
-    document.title = titleOf(key) + ' — YesonCheck 사용법';
-    var section = anchor ? document.getElementById(key + '--' + anchor) : null;
+    document.title = titleOf(key) + ' — YesonCheck ' + UI[lang].manual;
+    var section = anchor ? document.getElementById(prefix() + key + '--' + anchor) : null;
     if (section) section.scrollIntoView(); else window.scrollTo(0, 0);
   }
   function route() {
@@ -442,30 +520,69 @@ SCRIPT = r"""
     var a = e.target.closest ? e.target.closest('a[href^="#"]') : null;
     if (a && a.getAttribute('href') === location.hash) route();
   });
-  route();
 
-  // 찾기: 글에 낱말이 모두 들어 있는 쪽만 목차에 남김, Enter는 첫 쪽으로
-  var q = document.getElementById('q'), hits = document.getElementById('hits');
-  var texts = {};
-  pages.forEach(function (p) { texts[p.id] = p.textContent.toLowerCase(); });
+  // 찾기: 글에 낱말이 모두 들어 있는 쪽만 목차에 남김, Enter는 첫 쪽으로 (지금 언어의 글에서)
   function matches() {
     var words = q.value.toLowerCase().split(/\s+/).filter(Boolean);
     return order.filter(function (key) { return words.every(function (w) { return texts[key].indexOf(w) >= 0; }); });
   }
-  q.addEventListener('input', function () {
+  function search() {
     var found = matches(), active = q.value.trim() !== '';
     links.forEach(function (a) { a.classList.toggle('dim', active && found.indexOf(a.getAttribute('data-page')) < 0); });
-    hits.textContent = active ? (found.length ? found.length + '개 쪽에서 찾음 — Enter로 이동' : '찾는 글이 없습니다') : '';
-  });
+    hits.textContent = active ? (found.length ? UI[lang].found.replace('{n}', found.length) : UI[lang].none) : '';
+  }
+  q.addEventListener('input', search);
   q.addEventListener('keydown', function (e) {
     if (e.key === 'Enter') { var found = matches(); if (found.length) location.hash = '#' + found[0]; }
-    if (e.key === 'Escape') { q.value = ''; q.dispatchEvent(new Event('input')); }
+    if (e.key === 'Escape') { q.value = ''; search(); }
+  });
+
+  // 언어: 고른 언어의 목차·쪽만 보임 (주소는 언어와 무관 — 전환해도 보던 쪽에 머묾). 처음에는 브라우저 언어를 따름
+  var LANG_KEY = 'yesoncheck-manual-lang';
+  function setLang(value) {
+    lang = CODES.indexOf(value) < 0 ? CODES[0] : value;
+    root.setAttribute('data-lang', lang);
+    root.setAttribute('lang', lang);
+    pages = slice(document.querySelectorAll('.doc[lang="' + lang + '"] .page'));
+    links = slice(document.querySelectorAll('nav[lang="' + lang + '"] a[data-page]'));
+    order = links.map(function (a) { return a.getAttribute('data-page'); });
+    texts = {};
+    pages.forEach(function (p) { texts[keyOf(p)] = p.textContent.toLowerCase(); });
+    q.setAttribute('placeholder', UI[lang].search);
+    q.setAttribute('aria-label', UI[lang].search);
+    theme.setAttribute('title', UI[lang].theme);
+    theme.setAttribute('aria-label', UI[lang].theme);
+    langButtons.forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-lang') === lang); });
+    q.value = '';  // 찾던 낱말은 앞 언어의 것 — 지움
+    search();
+    route();
+  }
+  langButtons.forEach(function (b) {
+    b.addEventListener('click', function () {
+      setLang(b.getAttribute('data-lang'));
+      try { localStorage.setItem(LANG_KEY, lang); } catch (e) {}
+    });
+  });
+  var chosen = null;
+  try { chosen = localStorage.getItem(LANG_KEY); } catch (e) {}
+  if (!chosen) {
+    var browser = (navigator.language || '').toLowerCase().split('-')[0];
+    chosen = CODES.indexOf(browser) >= 0 ? browser : CODES[CODES.length - 1];
+  }
+  setLang(chosen);
+
+  // 그림은 기준 언어 쪽에만 들어 있음 — 다른 언어의 같은 그림이 그것을 가리키게
+  var sources = {};
+  slice(document.querySelectorAll('img[data-img][src]')).forEach(function (img) { sources[img.getAttribute('data-img')] = img.getAttribute('src'); });
+  slice(document.querySelectorAll('img[data-img]:not([src])')).forEach(function (img) {
+    var source = sources[img.getAttribute('data-img')];
+    if (source) img.setAttribute('src', source);
   });
 
   // 밝게 / 어둡게 (기본은 시스템 설정을 따름)
   var KEY = 'yesoncheck-manual-theme';
   try { var saved = localStorage.getItem(KEY); if (saved) root.setAttribute('data-theme', saved); } catch (e) {}
-  document.getElementById('theme').addEventListener('click', function () {
+  theme.addEventListener('click', function () {
     var dark = root.getAttribute('data-theme') ? root.getAttribute('data-theme') === 'dark'
       : window.matchMedia('(prefers-color-scheme: dark)').matches;
     var value = dark ? 'light' : 'dark';
