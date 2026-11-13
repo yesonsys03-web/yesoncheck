@@ -17,6 +17,7 @@ from yesoncheck import paths, video_list
 from yesoncheck.sidebar_all import SidebarAllMixin
 from yesoncheck.sidebar_bookmarks import SidebarBookmarksMixin
 from yesoncheck.sidebar_open_with import SidebarOpenWithMixin
+from yesoncheck.sidebar_sorting import SidebarSortMixin
 from yesoncheck.sidebar_playlist import SidebarPlaylistMixin
 from yesoncheck.sidebar_config_paths import SidebarConfigPathsMixin
 from yesoncheck.sidebar_refresh import SidebarRefreshMixin
@@ -42,7 +43,7 @@ from yesoncheck.sidebar_items import (
 )
 
 
-class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin, SidebarRefreshMixin, SidebarSequencesMixin, SidebarAllMixin, SidebarOpenWithMixin, SidebarThumbnailsMixin):
+class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin, SidebarRefreshMixin, SidebarSequencesMixin, SidebarAllMixin, SidebarSortMixin, SidebarOpenWithMixin, SidebarThumbnailsMixin):
 
     def dragEnterEvent(self, event):
         """메인 윈도우에 파일 드래그앤드롭 이벤트"""

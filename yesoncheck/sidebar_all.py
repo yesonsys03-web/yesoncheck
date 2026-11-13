@@ -18,7 +18,7 @@ from PyQt5.QtCore import QItemSelection, QItemSelectionModel, Qt, QTimer
 from PyQt5.QtGui import QBrush, QColor
 from PyQt5.QtWidgets import QMenu
 
-from yesoncheck import paths
+from yesoncheck import paths, sidebar_sort
 from yesoncheck.file_names import natural_key
 from yesoncheck.sidebar_counts import count_text
 from yesoncheck.sidebar_items import ALL_KIND_ROLE
@@ -40,6 +40,13 @@ def _all_sort_key(item):
     if item.data(ALL_KIND_ROLE) == "seq":
         return natural_key(item.data(Qt.UserRole).base)
     return natural_key(item.text())
+
+
+def _all_stem(item):
+    """정렬 묶음을 읽을 이름(확장자 뺀): mov는 파일 이름, 시퀀스는 base."""
+    if item.data(ALL_KIND_ROLE) == "seq":
+        return item.data(Qt.UserRole).base
+    return os.path.splitext(item.text())[0]
 
 
 def _select_rows(widget, wanted):
@@ -165,7 +172,10 @@ class SidebarAllMixin:
             clone.setData(ALL_KIND_ROLE, "seq")
             clone.setForeground(seq_fg)
             clones.append(clone)
-        clones.sort(key=_all_sort_key)
+        mode = self.sidebar_sort_mode  # 정렬 기준(SidebarSortMixin) — 종류·버전이면 묶음끼리, 그 안에서 이름 순서 (이름이면 묶음이 하나 — 예전과 같음)
+        timed = mode == sidebar_sort.TIME_MODE  # 시간이면 항목의 고친 시각(영상은 Mov 항목에서 복제해 온 값, 시퀀스는 첫 프레임 — SidebarSortMixin)
+        clones.sort(key=lambda item: (sidebar_sort.group_key(_all_stem(item), mode, self._all_item_time(item) if timed else None),
+                                      _all_sort_key(item)))
 
         widget.setUpdatesEnabled(False)
         try:

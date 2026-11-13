@@ -326,12 +326,14 @@ class SidebarRefreshMixin:
         버튼·F5의 요청 — _refresh_sidebar_by_user)면 모든 영상의 썸네일 (다시 렌더링한 영상도, _check_thumbnails_after_refresh).
         그사이 목록 모드로 바꿨으면 요청은 버리기만.
         """
-        rows = [(self.sidebar.item(i).data(Qt.UserRole), self.sidebar.item(i).data(SIDEBAR_SOURCE_ROLE))
-                for i in range(self.sidebar.count())]
+        # 계획은 이름(기본) 순서의 줄로 세움 — 정렬해 둔 목록(SidebarSortMixin)이면 그 순서로 본 항목들이고, 바꿀 것이 있을 때만 목록을 잠깐 그 순서로
+        # 되돌렸다가 계획을 넣은 뒤 다시 정렬. 정렬하지 않은 목록은 줄 순서 그대로(예전과 같음)
+        rows = [(item.data(Qt.UserRole), item.data(SIDEBAR_SOURCE_ROLE)) for item in self._sidebar_items_in_default_order()]
         plan = video_list.plan_refresh(rows, read.results, read.gone_files)
         added = []
         if video_list.plan_changes(plan):
-            added = self._apply_sidebar_plan(plan)
+            with self._sidebar_default_order():
+                added = self._apply_sidebar_plan(plan)
             print(f"목록 다시 읽기: 뺌 {len(plan[0])}개, 넣음 {len(added)}개 → {self.sidebar.count()}개 "
                   f"(읽은 곳 {len(read.results)}곳, {elapsed:.2f}초)")
         else:
