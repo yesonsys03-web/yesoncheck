@@ -565,8 +565,8 @@ def test_probe_on_wait_is_called_and_can_cancel(monkeypatch):
         with pytest.raises(pms.SetupCancelled):
             pms.probe(func, "\\\\dead\\x", timeout=30, on_wait=cancel_on_third)
         assert len(calls) == 3  # 기한(30초)이 아니라 걸음마다 불렸고, 세 번째의 False 뒤로는 부르지 않음
-        # 부를 때마다 그 앞에 한 걸음씩 기다림. 걸음은 '약 0.1초' — 진행 창이 멈춘 것처럼 보이지 않는 간격(옛 시험의
-        # '0.45초 안에 3번'과 같은 선인 0.15초 이하)이고 0보다 큼(기다리지 않고 돌지 않음)
+        # 부를 때마다 그 앞에 한 걸음씩 기다림. 걸음은 '약 0.1초' — 진행 창이 멈춘 것처럼 보이지 않게 0.15초 이하
+        # (옛 시험의 '0.45초 안에 3번'이 허용하던 0.225초 미만보다 엄격)이고 0보다 큼(기다리지 않고 돌지 않음)
         assert len(steps) == 3 and all(0 < step <= 0.15 for step in steps), steps
         # 끝까지 취소하지 않으면 기한에 '응답 없음' (몇 번 불렸는지는 기다린 시간에 달려 있어 세지 않음)
         assert pms.probe(func, "\\\\dead\\x", timeout=0.2, on_wait=lambda: None) is None
