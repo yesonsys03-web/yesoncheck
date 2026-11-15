@@ -562,7 +562,7 @@ PAGES = (
                  ("King", "Settings tuned for recognizing red text."),
                  ("Bento", "Settings tuned for small text and special formats (for example `Seq 02A_S09 - Panel 6`)."),
                  ("All (사용자 패턴) (custom pattern)", "You write the pattern of the text to read yourself — `#` is a letter, `W` "
-                                                   "is a digit. Example: `MS101_B010` → `##WWW_#WWW`"),
+                                                   "is a digit. Example: `AB101_C010` → `##WWW_#WWW`"),
                  ("애니매틱 (Auto Cut) (animatic)", "Detects **cuts (where the scene changes)** instead of text. No ROI is needed."),
                  ("애니매틱2 (TransNetV2) (animatic 2)", "Detects cuts with deep learning — including slow transitions such as "
                                                      "dissolves and fades. No ROI is needed. On PCs that do not support it, it "

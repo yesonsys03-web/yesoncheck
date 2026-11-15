@@ -108,8 +108,9 @@ def test_manual_text_has_no_private_paths():
 
     for item in manual_content.PAGES:
         for text in strings((item.title, item.lead, item.blocks)):
-            for needle in ("/Volumes/", "/Users/", "colordata", "usadata", "USA_DB", "_Animatic", "_animatic"):
+            for needle in ("/Volumes/", "/Users/", "colordata", "usadata", "USA_DB"):
                 assert needle not in text, (item.key, needle, text[:60])
+            assert "_animatic" not in text.lower(), (item.key, text[:60])  # 작품 폴더 이름 꼴 — 대소문자와 상관없이
 
 
 def test_script_routes_by_element_id_and_survives_a_broken_address():
