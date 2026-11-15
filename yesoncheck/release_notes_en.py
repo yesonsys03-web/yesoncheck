@@ -133,7 +133,7 @@ RELEASES = (
             )),
     Release("1.8.1", "2026-11-09",
             "On Windows, switching files in Play Selected playback is faster, and the B-key text no longer jitters during "
-            "playback. Another folder layout of BB_Animatic now appears in the list as well.",
+            "playback. Another folder layout of one show now appears in the list as well.",
             (
                 ("Playback (Windows)", (
                     "In Play Selected playback of 4K ProRes, the time to move on to the next file dropped from about 1.1 "
@@ -144,7 +144,7 @@ RELEASES = (
                     "fits the length of the text (it grows by one character only when the number of digits changes).",
                 )),
                 ("Sidebar", (
-                    "In BB_Animatic, jobs whose Quicktime folder sits directly under the job, without scene folders, now "
+                    "For one show, jobs whose video folder sits directly under the job, without scene folders, now "
                     "appear in the list too.",
                 )),
                 ("Sound on Windows", (

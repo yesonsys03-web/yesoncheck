@@ -15,7 +15,7 @@ from tests.test_manual_html import fake_image
 
 HANGUL_RE = re.compile(r"[ㄱ-ㆎ가-힣]")
 LETTER_RE = re.compile(r"[A-Za-zㄱ-ㆎ가-힣]")
-PRIVATE = ("/Volumes/", "/Users/", "colordata", "usadata", "USA_DB")
+PRIVATE = ("/Volumes/", "/Users/", "colordata", "usadata", "USA_DB", "_Animatic", "_animatic")  # 경로·작품 폴더 이름 꼴
 
 
 def strings_of(content):
