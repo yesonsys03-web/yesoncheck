@@ -9,6 +9,7 @@
 이미 지워져 있고, 그 뒤(프레임이 풀리며 QApplication이 정리되는 동안)에는 앱의 파이썬 코드가 불리지 않음.
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -21,12 +22,13 @@ RETURN_LINE = "CHILD: launch가 돌아갈 때 창 지워짐"
 LATE_CALL_LINE = "CHILD: launch 뒤에 불린 앱 코드"
 
 CHILD = r'''
-import os, sys
+import faulthandler, os, sys
+faulthandler.enable()  # 죽으면(세그폴트·Windows 접근 위반) 그때의 파이썬 스택을 stderr에 — 시험의 실패 글에 실림
 sys.path.insert(0, sys.argv[1])
 scenario = sys.argv[2]
 from PyQt5 import sip
 from PyQt5.QtCore import QPoint, QTimer
-from PyQt5.QtWidgets import QAction, QApplication, QWidget
+from PyQt5.QtWidgets import QAction, QApplication, QMessageBox, QWidget
 from yesoncheck import app as app_module
 
 LAUNCH_FILE = os.path.abspath(app_module.__file__)
@@ -64,7 +66,21 @@ def player_factory(**kwargs):
         player.show_video_context_menu(QPoint(40, 40))  # exec_ — close_popup이 닫으면 돌아옴
         QTimer.singleShot(50, lambda: use_menu(times - 1))
 
-    QTimer.singleShot(800, lambda: use_menu(3 if scenario == "menu" else 0))
+    def dismiss_dialog():
+        box = QApplication.activeModalWidget()
+        print("CHILD: 모달", type(box).__name__ if box is not None else None, flush=True)
+        if box is not None:
+            box.accept()
+
+    def show_dialog_then_close():
+        QTimer.singleShot(200, dismiss_dialog)
+        QMessageBox.information(player, "probe", "probe")  # 닫힐 때까지 여기서 돎 (dismiss_dialog가 닫음)
+        QTimer.singleShot(300, player.close)
+
+    if scenario == "dialog":
+        QTimer.singleShot(800, show_dialog_then_close)
+    else:
+        QTimer.singleShot(800, lambda: use_menu(3 if scenario == "menu" else 0))
     return player
 
 
@@ -101,10 +117,15 @@ def run_child(tmp_path, scenario):
     for folder in (home, config, instances):
         folder.mkdir(parents=True)
     (config / "work_paths.json").write_text("{}", encoding="utf-8")
+    # 변환표도 둠: 없으면 Windows는 켜자마자 '변환표 오류' 모달 창을 띄움(자식 프로세스라 아무도 못 닫음) — 그 창이 뜬 채
+    # 타이머로 창을 닫는 것은 사람이 만들 수 없는 장면이고, 이 시험이 보려는 '그냥 닫기'가 아님 (첫 Windows CI에서 0xC0000005)
+    path_map = {"version": 1, "shares": [{"mac": "/MyShare", "windows": [r"\\myserver\myshare"]}]}
+    (config / "path_map.json").write_text(json.dumps(path_map), encoding="utf-8")
     env = {key: value for key, value in os.environ.items() if not key.startswith("YESONCHECK_")}
     env.update(QT_QPA_PLATFORM="offscreen", HOME=str(home), USERPROFILE=str(home),
                LOCALAPPDATA=str(home / "AppData" / "Local"), YESONCHECK_CONFIG_DIR=str(config),
-               YESONCHECK_INSTANCES_DIR=str(instances), PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1")
+               YESONCHECK_INSTANCES_DIR=str(instances), PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1",
+               PYTHONUNBUFFERED="1")  # 죽어도 그때까지의 기록이 남게 (파이프로 받는 stdout은 모아 씀)
     done = subprocess.run([sys.executable, str(script), ROOT, scenario], cwd=ROOT, env=env, capture_output=True,
                           timeout=120)
     out = done.stdout.decode("utf-8", "replace")
@@ -112,15 +133,18 @@ def run_child(tmp_path, scenario):
     return done.returncode, out, f"종료 코드 {done.returncode}\n--- stdout ---\n{out}\n--- stderr ---\n{err}"
 
 
-@pytest.mark.parametrize("scenario", ["plain", "menu", "stray"])
+@pytest.mark.parametrize("scenario", ["plain", "menu", "dialog", "stray"])
 def test_window_is_gone_before_the_application_and_no_app_code_runs_after_launch(tmp_path, scenario):
-    """창을 닫아 끝낼 때(그냥 닫기 · 영상 영역의 우클릭 메뉴를 세 번 쓴 뒤 닫기 · launch가 모르는 부모 없는 위젯이 남은 채):
+    """창을 닫아 끝낼 때(그냥 닫기 · 영상 영역의 우클릭 메뉴를 세 번 쓴 뒤 닫기 · 모달 알림 창을 띄웠다 닫은 뒤 닫기 ·
+    launch가 모르는 부모 없는 위젯이 남은 채):
     launch가 돌아가는 순간 창이 이미 지워져 있고, 그 뒤 QApplication이 정리되는 동안 앱의 파이썬 코드(이벤트 필터 등)가
     불리지 않으며, 정상 종료. 'stray'는 앱 전체 필터를 떼는 쪽을 봄(Mac — 그 필터는 Mac에만 걸림): 남은 위젯은 정리 중에
     지워지므로 필터가 걸려 있으면 그때 파이썬으로 옴."""
     code, out, report = run_child(tmp_path, scenario)
     if scenario == "menu":
         assert out.count("CHILD: 팝업 QMenu") == 3, report
+    if scenario == "dialog":
+        assert "CHILD: 모달 QMessageBox" in out, report
     assert f"{RETURN_LINE} True" in out, report
     late = [line for line in out.splitlines() if line.startswith(LATE_CALL_LINE)]
     assert late == [], report

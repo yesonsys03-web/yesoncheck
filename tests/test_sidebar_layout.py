@@ -246,11 +246,13 @@ def test_popup_list_is_as_wide_as_its_longest_name(qapp):
     combo = WidePopupComboBox()
     combo.addItem("job선택")
     combo.addItem("EP101_아주_긴_job_이름_" * 4)
-    combo.setFixedWidth(150)
     combo.show()
     qapp.processEvents()
     wanted = combo.view().sizeHintForColumn(0)
-    assert wanted > 150
+    assert wanted > 40
+    # 콤보는 가장 긴 이름의 절반 폭 — 글자 폭은 글꼴에 달려 픽셀 값을 박지 않음 (글꼴 없는 Windows CI에서 이 이름이 125px)
+    combo.setFixedWidth(wanted // 2)
+    qapp.processEvents()
     combo.showPopup()
     qapp.processEvents()
     try:
