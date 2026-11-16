@@ -360,6 +360,9 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         self.videoWidget.set_annotation_provider(self._annotations_for_native)  # 주석도 — 네이티브 프레임은 위젯의 주석 층으로
         self.videoWidget.streamPaintFailed.connect(self._on_stream_paint_failed)  # (Mac) 네이티브 그리기 첫 실패 → 이 창만 ffmpeg
         self.videoWidget.roiSelectionFinished.connect(self.on_roi_selected)
+        # 영상 영역에서 우클릭 → 메뉴 막대의 메뉴 전부를 띄움 (player_menus — 영상 영역은 우클릭을 다른 데 쓰지 않음)
+        self.videoWidget.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.videoWidget.customContextMenuRequested.connect(lambda position: self.show_video_context_menu(position))
         self.init_annotation_system()
 
         # 작품·시즌·job 콤보 — 사이드바 맨 위의 작품 묶음에 놓임 (sidebar_controls._build_work_picker).

@@ -296,3 +296,71 @@ def test_check_marks_are_put_right_even_when_the_handler_refuses(shown, monkeypa
     monkeypatch.setattr(shown, "toggle_tool_page", lambda key: None)
     shown.menu_actions["menu.tools.annotation"].trigger()
     assert not checked(shown, "menu.tools.annotation") and shown.tool_panel_key() is None
+
+
+# ---------------------------------------------------------------- 영상 영역의 우클릭 메뉴
+
+def test_video_area_takes_right_clicks_for_a_menu(player):
+    assert player.videoWidget.contextMenuPolicy() == Qt.CustomContextMenu
+
+
+def test_right_click_menu_offers_every_top_menu_as_a_submenu(player):
+    """영상 영역에서 우클릭하면 메뉴 막대의 메뉴 전부가 하위 메뉴로 — 같은 메뉴 객체라 항목·체크·처리기가 그대로."""
+    menu = player.build_video_context_menu()
+    try:
+        assert [action.text() for action in menu.actions()] == menu_titles(player)
+        assert [action.text() for action in menu.actions()] == ["&File", "&View", "&Playback", "&Compare", "&Tools",
+                                                                "&Settings", "&Help"]
+        for action, bar_action in zip(menu.actions(), player.menuBar().actions()):
+            assert action is bar_action and action.menu() is not None
+        assert menu.actions()[2].menu() is player.main_menus["playback"]
+        assert player.menu_actions["menu.playback.play"] in menu.actions()[2].menu().actions()
+    finally:
+        menu.deleteLater()
+
+
+def right_click(player, monkeypatch, point):
+    """영상 영역의 그 자리에 우클릭(컨텍스트 메뉴 이벤트)을 보내고, 뜬 메뉴마다 (항목 글자, 뜬 자리)를 돌려줌 — 메뉴는 띄우지 않음."""
+    from PyQt5.QtGui import QContextMenuEvent
+    from PyQt5.QtWidgets import QMenu
+
+    shown_menus = []
+    monkeypatch.setattr(QMenu, "exec_", lambda menu, *args: shown_menus.append(
+        ([action.text() for action in menu.actions()], args[0] if args else None)))
+    viewport = player.videoWidget.viewport()
+    event = QContextMenuEvent(QContextMenuEvent.Mouse, point, viewport.mapToGlobal(point))
+    QApplication.sendEvent(viewport, event)
+    return shown_menus
+
+
+def test_right_click_on_the_video_pops_the_menu_at_the_cursor(shown, monkeypatch):
+    from PyQt5.QtCore import QPoint
+
+    point = QPoint(120, 90)
+    menus = right_click(shown, monkeypatch, point)
+    assert menus == [(menu_titles(shown), shown.videoWidget.viewport().mapToGlobal(point))]
+
+
+def test_right_click_menu_works_while_the_controls_are_hidden(shown, qapp, monkeypatch):
+    """V 키로 컨트롤을 숨긴 채(메뉴 막대가 안 보이는 영상만 전체 화면에서도) 우클릭 메뉴는 그대로 — 거기서 되돌릴 수 있음."""
+    from PyQt5.QtCore import QPoint
+
+    press(shown, Qt.Key_V)
+    qapp.processEvents()
+    assert right_click(shown, monkeypatch, QPoint(40, 40)) == [
+        (menu_titles(shown), shown.videoWidget.viewport().mapToGlobal(QPoint(40, 40)))]
+    shown.menu_actions["menu.view.controls"].trigger()
+    qapp.processEvents()
+    assert shown.controls_visible and not shown.transportBar.isHidden()
+
+
+def test_submenus_of_the_right_click_menu_show_the_current_state(shown):
+    """하위 메뉴가 펼쳐질 때(aboutToShow)도 체크·켜짐을 맞춤 — 메뉴 막대에서 열 때와 같은 메뉴라서."""
+    shown.show_tool_panel("ocr")
+    menu = shown.build_video_context_menu()
+    try:
+        tools = next(action.menu() for action in menu.actions() if action.menu() is shown.main_menus["tools"])
+        tools.aboutToShow.emit()
+        assert shown.menu_actions["menu.tools.ocr"].isChecked()
+    finally:
+        menu.deleteLater()

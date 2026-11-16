@@ -14,7 +14,7 @@ Settings·Help 앞에 메뉴 다섯: **File · View · Playback · Compare · To
   이름을 그때 풀지 않는 람다이고, 만들 때 위젯을 건드리지 않는다.
 """
 
-from PyQt5.QtWidgets import QAction
+from PyQt5.QtWidgets import QAction, QMenu
 
 from yesoncheck import ui_text
 
@@ -121,6 +121,23 @@ class PlayerMenusMixin:
     def _playlist_can_start(self):
         """선택 재생을 시작할 수 있는 탭인지 — Mov·All 목록의 선택으로 시작하므로 Seq 탭에서는 아님 (사이드바의 단추와 같은 규칙)."""
         return self.sidebar_tabs.currentWidget() is not self.seq_sidebar
+
+    # ------------------------------------------------------------ 영상 영역의 우클릭 메뉴
+    def build_video_context_menu(self):
+        """영상 영역에서 우클릭하면 뜨는 메뉴: 메뉴 막대의 메뉴 전부(File … Help)를 하위 메뉴로 (사용자 요청 2026-11-16).
+        메뉴 막대의 항목을 그대로 넣음 — 같은 메뉴 객체라 항목·체크·켜짐·처리기가 따로 놀지 않고, 하위 메뉴가 펼쳐질 때
+        (`aboutToShow`)의 상태 맞춤도 그대로. 메뉴 막대가 보이지 않을 때(영상만 전체 화면)에도 모든 기능에 닿는 길."""
+        menu = QMenu(self)
+        menu.addActions(self.menuBar().actions())
+        return menu
+
+    def show_video_context_menu(self, position):
+        """영상 영역(뷰포트 좌표 position)에 우클릭 메뉴를 띄움."""
+        menu = self.build_video_context_menu()
+        try:
+            menu.exec_(self.videoWidget.viewport().mapToGlobal(position))
+        finally:
+            menu.deleteLater()
 
     def retranslate_main_menus(self):
         """글자 표에서 메뉴 제목·항목 글자를 다시 읽음 (언어가 바뀐 뒤)."""
