@@ -743,12 +743,18 @@ def test_window_title_tail_follows_the_language(shown):
     english = ui_texts._title_texts(shown)
     assert ui_texts.hangul(english) == [] and len(set(english)) == 5
     assert [title.partition(" — ")[0] for title in english] == [title.partition(" — ")[0] for title in korean]  # 머리는 같음
-    shown.shared_config_problem = "x"  # 문제가 있는 채 언어를 바꾸면 창 제목의 꼬리도 따라 바뀜
-    shown._update_shared_config_title()
-    assert shown.windowTitle() == english[2]
-    shown.set_ui_language("ko")
-    assert shown.windowTitle() == korean[2]
-    shown.shared_config_problem = None
+    # 문제가 있는 채 언어를 바꾸면 창 제목의 꼬리도 따라 바뀜. 변환표 문제는 지움 — Windows의 시험용 창은 변환표가 없어
+    # 처음부터 그 꼬리가 붙어 있음(english[2]는 공유 설정 오류 하나만인 제목)
+    saved = shown.shared_config_problem, shown.path_map_problem
+    shown.shared_config_problem, shown.path_map_problem = "x", None
+    try:
+        shown._update_shared_config_title()
+        assert shown.windowTitle() == english[2]
+        shown.set_ui_language("ko")
+        assert shown.windowTitle() == korean[2]
+    finally:
+        shown.shared_config_problem, shown.path_map_problem = saved
+        shown._update_shared_config_title()
 
 
 # ---------------------------------------------------------------- 주석 쪽과 뷰어의 배지 (Task 7)
