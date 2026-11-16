@@ -10,10 +10,14 @@ Settings·Help 앞에 메뉴 다섯: **File · View · Playback · Compare · To
 - **체크·켜짐은 메뉴를 열 때 맞춘다**(`_sync_menu_states` — 메뉴의 `aboutToShow`): 반복·와이프·X/Y·패널·글자는 단추나 키로도
   바뀌므로, 바뀔 때마다 따라가지 않고 보이는 순간에 지금 상태를 읽는다. 항목을 고른 뒤에도 한 번(Qt가 체크를 먼저 뒤집음).
 - 글자는 글자 표(`ui_text`) — 제목은 두 언어 모두 영어(지금의 Settings·Help처럼), 항목은 지금 언어.
+- **키 넷은 이 모듈의 표로 받는다**(`KEY_SHORTCUTS` — O 영상 A 열기 · I 폴더 열기 · L 반복 재생 · W 와이프 켜기, 한글 자판의
+  같은 자리 ㅐ·ㅑ·ㅣ·ㅈ도; 사용자 요청 2026-11-16): 창의 키 처리 두 곳이 `run_key_shortcut(event)`를 부르고, 하는 일은 그 메뉴
+  항목의 처리기 그대로. 다른 키(Space·← → …)는 예전부터 키 처리 코드에 직접 있음.
 - 메뉴는 창의 다른 위젯보다 **먼저** 만들어진다(`create_menu_bar` — `VideoPlayerBase.__init__` 앞부분). 그래서 처리기는
   이름을 그때 풀지 않는 람다이고, 만들 때 위젯을 건드리지 않는다.
 """
 
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QAction, QMenu
 
 from yesoncheck import ui_text
@@ -31,6 +35,13 @@ MENUS = (
                   "menu.playback.playlist", "menu.playback.playlist_end")),
     ("compare", ("menu.compare.wipe", "menu.compare.x", "menu.compare.y")),
     ("tools", ("menu.tools.annotation", "menu.tools.ocr", "menu.tools.toggle", SEPARATOR, "menu.tools.work_paths")),
+)
+# 이 표로 받는 단축키: (Qt 키, 한글 자판의 같은 자리 글자, 항목의 글자 표 키) — 항목의 글자 끝에 같은 키를 적음(`(O)`)
+KEY_SHORTCUTS = (
+    (Qt.Key_O, "ㅐ", "menu.file.open_a"),
+    (Qt.Key_I, "ㅑ", "menu.file.open_folder"),
+    (Qt.Key_L, "ㅣ", "menu.playback.loop"),
+    (Qt.Key_W, "ㅈ", "menu.compare.wipe"),
 )
 CHECKABLE = frozenset({"menu.view.overlay_text", "menu.playback.loop", "menu.compare.wipe", "menu.compare.x",
                        "menu.compare.y", "menu.tools.annotation", "menu.tools.ocr"})
@@ -90,6 +101,23 @@ class PlayerMenusMixin:
             "menu.tools.toggle": lambda: self.toggle_tool_panel(),
             "menu.tools.work_paths": lambda: self.manage_work_paths(),
         }
+
+    def run_key_shortcut(self, event):
+        """키 이벤트가 `KEY_SHORTCUTS`의 키면 그 메뉴 항목의 처리기를 부르고 True, 아니면 아무것도 안 하고 False.
+        창의 키 처리 두 곳(`keyPressEvent`, 목록·창이 받는 `eventFilter`)이 부름.
+
+        - Ctrl·Alt·Meta와 함께 누른 키는 아님 (Ctrl+O는 오버레이 컨트롤 위치 되돌리기 — 예전 그대로).
+        - 누르고 있을 때의 자동 반복은 삼킴(True — 처리기는 부르지 않음): 반복·와이프가 깜빡이거나 파일 창이 거듭 뜨지 않게.
+        - 글자를 치는 칸(프레임 번호·주석 글·OCR 패턴)은 친 글자를 자기가 받아 창까지 오지 않음."""
+        if event.modifiers() & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier):
+            return False
+        key, text = event.key(), event.text()
+        for qt_key, hangul, text_key in KEY_SHORTCUTS:
+            if key == qt_key or text == hangul:
+                if not event.isAutoRepeat():
+                    self._run_menu_item(self._menu_handlers()[text_key])
+                return True
+        return False
 
     def _run_menu_item(self, run):
         try:

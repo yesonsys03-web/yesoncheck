@@ -694,6 +694,11 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
                     event.accept()
                     return True
             
+            # 메뉴 항목의 단축키 O·I·L·W (한글 ㅐ·ㅑ·ㅣ·ㅈ) — 영상 A 열기·폴더 열기·반복 재생·와이프 켜기
+            # (player_menus.KEY_SHORTCUTS — Ctrl과 함께면 아님: Ctrl+O는 바로 위에서 이미 받음)
+            if self.run_key_shortcut(event):
+                return True
+
             # 전역 프레임 이동 단축키 (, . ← →)
             if key in [Qt.Key_Comma, Qt.Key_Left]:
                 self.prev_frame()

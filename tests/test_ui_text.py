@@ -31,12 +31,12 @@ def test_missing_reports_absent_and_empty_texts(monkeypatch):
 
 def test_text_follows_language():
     assert ui_text.language() == "ko"
-    assert ui_text.text("transport.loop") == "반복 재생"
+    assert ui_text.text("playlist.end") == "이어 재생 끝내기"
     ui_text.set_language("en")
     assert ui_text.language() == "en"
-    assert ui_text.text("transport.loop") == "Loop playback"
+    assert ui_text.text("playlist.end") == "End playlist"
     ui_text.set_language("ko")
-    assert ui_text.text("transport.loop") == "반복 재생"
+    assert ui_text.text("playlist.end") == "이어 재생 끝내기"
 
 
 def test_transport_texts_name_their_shortcuts():
@@ -66,6 +66,12 @@ SHORTCUT_TEXTS = {
     "playlist.play.tip": "(Enter)",
     "panel.close.tip": "(N)",
     "menu.file.bookmark_manage": "(P)",
+    "menu.file.open_a": "(O)",  # O·I·L·W — 사용자 요청 2026-11-16 (한글 자판 ㅐ·ㅑ·ㅣ·ㅈ도 받음 — player_menus.KEY_SHORTCUTS)
+    "menu.file.open_folder": "(I)",
+    "menu.playback.loop": "(L)",
+    "menu.compare.wipe": "(W)",
+    "transport.loop": "(L)",
+    "transport.wipe.tip": "(W)",
     "menu.view.fit": "(3)",
     "menu.view.original": "(4)",
     "menu.view.zoom_in": "(2, +)",  # 키 처리는 2·+·= 를 받음 — 숫자 키(1 축소·2 확대·3 맞춤·4 원본)가 한 벌 (사용자 지적 2026-11-16)

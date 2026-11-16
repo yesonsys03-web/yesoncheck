@@ -2081,6 +2081,11 @@ class PlayerPlaybackMixin:
             event.accept()
             return
 
+        # 메뉴 항목의 단축키 O·I·L·W (한글 ㅐ·ㅑ·ㅣ·ㅈ) — 영상 A 열기·폴더 열기·반복 재생·와이프 켜기 (player_menus.KEY_SHORTCUTS)
+        if self.run_key_shortcut(event):
+            event.accept()
+            return
+
         # 한글 자판 대응 단축키 매핑 (V 키 제외)
         # T-ㅅ, B-ㅠ, F-ㄹ, R-ㄱ
         # ㅅ: '\u3145', ㅠ: '\u315C', ㄹ: '\u3139', ㄱ: '\u3131'

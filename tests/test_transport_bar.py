@@ -268,12 +268,12 @@ def test_tooltips_come_from_the_text_table(bar):
     assert bar.playButton.toolTip() == "재생 (Space)"
     assert bar.nextButton.toolTip() == "한 장 앞으로 (→)"
     assert bar.lastButton.toolTip() == "끝으로 (End)"
-    assert bar.loopButton.toolTip() == "반복 재생"
+    assert bar.loopButton.toolTip() == "반복 재생 (L)"
     assert bar.frameField.toolTip() == "프레임 번호 — 숫자를 치고 Enter"
     ui_text.set_language("en")
     try:
         bar.retranslate()
-        assert bar.playButton.toolTip() == "Play (Space)" and bar.loopButton.toolTip() == "Loop playback"
+        assert bar.playButton.toolTip() == "Play (Space)" and bar.loopButton.toolTip() == "Loop playback (L)"
     finally:
         ui_text.set_language("ko")
         bar.retranslate()
@@ -513,7 +513,7 @@ def test_tool_toggle_full_width_is_what_qt_wants_for_text_beside_icon(qapp):
 
 
 def test_tool_toggles_are_checkable_and_read_the_text_table(bar):
-    expected = ((bar.wipeButton, "A|B 와이프", "A와 B를 와이프로 견줍니다"),
+    expected = ((bar.wipeButton, "A|B 와이프", "A와 B를 와이프로 견줍니다 (W)"),
                 (bar.annotationButton, "주석", "수정 사항 주석 패널을 열고 닫습니다"),
                 (bar.ocrButton, "OCR", "OCR 패널을 열고 닫습니다"))
     for button, label, tip in expected:

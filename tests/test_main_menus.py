@@ -74,7 +74,7 @@ def test_every_item_reads_the_text_table_in_the_listed_order(player):
 
 def test_file_menu_is_what_the_design_lists(player):
     assert [a.text() for a in player.main_menus["file"].actions() if not a.isSeparator()] == [
-        "영상 A 열기…", "영상 B 열기…", "폴더 열기…", "북마크 추가", "북마크 관리… (P)"]
+        "영상 A 열기… (O)", "영상 B 열기…", "폴더 열기… (I)", "북마크 추가", "북마크 관리… (P)"]
     assert [a.text() for a in player.main_menus["tools"].actions() if not a.isSeparator()] == [
         "주석 패널", "OCR 패널", "도구 패널 열고 닫기 (N)", "작품 경로 관리…"]
 
@@ -364,3 +364,131 @@ def test_submenus_of_the_right_click_menu_show_the_current_state(shown):
         assert shown.menu_actions["menu.tools.ocr"].isChecked()
     finally:
         menu.deleteLater()
+
+
+# ---------------------------------------------------------------- 단축키 O·I·L·W (사용자 요청 2026-11-16)
+
+KEY_CASES = (  # (Qt 키, 영문 글자, 한글 자판의 같은 자리 글자, 항목의 글자 표 키)
+    (Qt.Key_O, "o", "ㅐ", "menu.file.open_a"),
+    (Qt.Key_I, "i", "ㅑ", "menu.file.open_folder"),
+    (Qt.Key_L, "l", "ㅣ", "menu.playback.loop"),
+    (Qt.Key_W, "w", "ㅈ", "menu.compare.wipe"),
+)
+
+
+@pytest.fixture
+def key_calls(player, monkeypatch):
+    """파일·폴더 창을 띄우지 않게 그 처리기만 바꿔 끼우고 부른 것을 적음 (반복·와이프는 진짜 단추 상태로 봄)."""
+    calls = []
+    monkeypatch.setattr(player, "open_file", lambda *got: calls.append(("open_file",) + got))
+    monkeypatch.setattr(player, "select_folder", lambda *got: calls.append(("select_folder",) + got))
+    return calls
+
+
+def key_event(key, text="", modifiers=Qt.NoModifier, repeat=False):
+    return QKeyEvent(QEvent.KeyPress, key, modifiers, text, repeat)
+
+
+def test_shortcut_table_is_the_four_keys_and_their_menu_items():
+    assert player_menus.KEY_SHORTCUTS == tuple((key, hangul, text_key) for key, _latin, hangul, text_key in KEY_CASES)
+
+
+def test_menu_texts_name_the_shortcut_keys():
+    for key, _hangul, text_key in player_menus.KEY_SHORTCUTS:
+        for code in ui_text.LANGUAGES:
+            assert ui_text.TEXTS[text_key][code].endswith(f" ({chr(key)})"), (text_key, code)
+
+
+def test_o_and_i_keys_open_video_a_and_a_folder(player, key_calls):
+    press(player, Qt.Key_O, "o")
+    press(player, 0, "ㅐ")
+    assert key_calls == [("open_file", "A"), ("open_file", "A")]
+    del key_calls[:]
+    press(player, Qt.Key_I, "i")
+    press(player, 0, "ㅑ")
+    assert key_calls == [("select_folder",), ("select_folder",)]
+
+
+def test_capital_letters_work_too(player, key_calls):
+    """Caps Lock·Shift — 키 값은 같고 글자만 대문자."""
+    player.keyPressEvent(key_event(Qt.Key_O, "O", Qt.ShiftModifier))
+    assert key_calls == [("open_file", "A")]
+
+
+def test_l_key_toggles_loop_like_the_button(shown):
+    press(shown, Qt.Key_L, "l")
+    assert shown.loopCheckBox.isChecked() and shown.loopEnabled
+    open_menu(shown, "playback")
+    assert checked(shown, "menu.playback.loop")
+    press(shown, 0, "ㅣ")
+    assert not shown.loopCheckBox.isChecked() and not shown.loopEnabled
+
+
+def test_w_key_toggles_wipe_like_the_button(shown):
+    press(shown, Qt.Key_W, "w")
+    assert shown.wipeCheckBox.isChecked() and shown.videoWidget.wipeEnabled
+    assert shown.wipeXButton.isEnabled() and shown.wipeYButton.isEnabled()
+    open_menu(shown, "compare")
+    assert checked(shown, "menu.compare.wipe")
+    press(shown, 0, "ㅈ")
+    assert not shown.wipeCheckBox.isChecked() and not shown.videoWidget.wipeEnabled
+
+
+def test_shortcut_keys_are_taken_by_the_event_filter_from_every_list(player, key_calls):
+    """목록(Mov·Seq·All)이 포커스를 가진 채 누른 키도 창의 필터가 받음 — 목록의 글자 찾기(타이핑으로 줄 고르기)로 가지 않음."""
+    for source in (player.sidebar, player.seq_sidebar, player.all_sidebar):
+        del key_calls[:]
+        assert player.eventFilter(source, key_event(Qt.Key_O, "o")) is True
+        assert player.eventFilter(source, key_event(0, "ㅑ")) is True
+        assert key_calls == [("open_file", "A"), ("select_folder",)]
+        loop, wipe = player.loopCheckBox.isChecked(), player.wipeCheckBox.isChecked()
+        assert player.eventFilter(source, key_event(Qt.Key_L, "l")) is True
+        assert player.eventFilter(source, key_event(0, "ㅈ")) is True
+        assert player.loopCheckBox.isChecked() is not loop and player.wipeCheckBox.isChecked() is not wipe
+
+
+def test_shortcut_keys_work_through_real_key_presses_on_a_focused_list(shown, qapp):
+    shown.sidebar.setFocus()
+    qapp.processEvents()
+    QTest.keyClick(shown.sidebar, Qt.Key_L)
+    assert shown.loopCheckBox.isChecked()
+    QTest.keyClick(shown.sidebar, Qt.Key_W)
+    assert shown.wipeCheckBox.isChecked()
+
+
+@pytest.mark.parametrize("modifier", [Qt.ControlModifier, Qt.AltModifier, Qt.MetaModifier])
+def test_keys_with_ctrl_alt_or_meta_are_not_these_shortcuts(player, key_calls, monkeypatch, modifier):
+    """Ctrl+O는 오버레이 컨트롤 위치 되돌리기(예전 그대로) — 다른 조합 키도 이 단축키로 치지 않음."""
+    resets = []
+    monkeypatch.setattr(player, "reset_overlay_position", lambda: resets.append(True))
+    monkeypatch.setattr(player, "force_focus", lambda: None)
+    for key, latin, _hangul, _text_key in KEY_CASES:
+        player.keyPressEvent(key_event(key, latin, modifier))
+        player.eventFilter(player.sidebar, key_event(key, latin, modifier))
+    assert key_calls == []
+    assert not player.loopCheckBox.isChecked() and not player.wipeCheckBox.isChecked()
+    assert bool(resets) is (modifier == Qt.ControlModifier)  # Ctrl+O만 — 목록 포커스의 필터가 받음
+
+
+def test_a_held_key_does_not_repeat_the_action(player, key_calls):
+    """누르고 있을 때의 자동 반복은 삼킴 — 반복·와이프가 깜빡이거나 파일 창이 거듭 뜨지 않게."""
+    player.keyPressEvent(key_event(Qt.Key_L, "l", repeat=True))
+    assert player.eventFilter(player.sidebar, key_event(Qt.Key_W, "w", repeat=True)) is True
+    player.keyPressEvent(key_event(Qt.Key_O, "o", repeat=True))
+    assert not player.loopCheckBox.isChecked() and not player.wipeCheckBox.isChecked() and key_calls == []
+
+
+def test_typing_in_an_input_field_is_not_a_shortcut(shown, qapp, key_calls):
+    """글자를 치는 칸(프레임 번호·OCR 패턴)에서 친 o·i·l·w는 그 칸의 것 — 창까지 오지 않음."""
+    shown.show_tool_panel("ocr")
+    shown.ocrPatternLineEdit.setVisible(True)  # 사용자 패턴 방식에서만 보이는 칸 — 여기서는 키가 어디로 가는지만 봄
+    shown.ocrPatternLineEdit.setEnabled(True)
+    qapp.processEvents()
+    for field in (shown.transportBar.frameField, shown.ocrPatternLineEdit):
+        field.setFocus()
+        qapp.processEvents()
+        assert field.hasFocus(), field.objectName()
+        QTest.keyClicks(field, "oilw")
+    assert key_calls == []
+    assert not shown.loopCheckBox.isChecked() and not shown.wipeCheckBox.isChecked()
+    assert shown.ocrPatternLineEdit.text().endswith("oilw")
