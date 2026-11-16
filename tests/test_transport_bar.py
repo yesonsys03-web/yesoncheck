@@ -264,9 +264,9 @@ def test_buttons_are_six_in_order_without_focus(bar):
 
 def test_tooltips_come_from_the_text_table(bar):
     assert bar.firstButton.toolTip() == "처음으로 (Home)"
-    assert bar.prevButton.toolTip() == "한 장 뒤로 (←)"
+    assert bar.prevButton.toolTip() == "한 장 뒤로 (←, ,)"
     assert bar.playButton.toolTip() == "재생 (Space)"
-    assert bar.nextButton.toolTip() == "한 장 앞으로 (→)"
+    assert bar.nextButton.toolTip() == "한 장 앞으로 (→, .)"
     assert bar.lastButton.toolTip() == "끝으로 (End)"
     assert bar.loopButton.toolTip() == "반복 재생 (L)"
     assert bar.frameField.toolTip() == "프레임 번호 — 숫자를 치고 Enter"

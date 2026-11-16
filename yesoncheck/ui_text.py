@@ -13,10 +13,10 @@ DEFAULT_LANGUAGE = "ko"
 TEXTS = {
     # 재생 줄 (transport_bar)
     "transport.first": {"ko": "처음으로 (Home)", "en": "Go to start (Home)"},
-    "transport.prev": {"ko": "한 장 뒤로 (←)", "en": "Step back one frame (←)"},
+    "transport.prev": {"ko": "한 장 뒤로 (←, ,)", "en": "Step back one frame (←, ,)"},
     "transport.play": {"ko": "재생 (Space)", "en": "Play (Space)"},
     "transport.pause": {"ko": "일시정지 (Space)", "en": "Pause (Space)"},
-    "transport.next": {"ko": "한 장 앞으로 (→)", "en": "Step forward one frame (→)"},
+    "transport.next": {"ko": "한 장 앞으로 (→, .)", "en": "Step forward one frame (→, .)"},
     "transport.last": {"ko": "끝으로 (End)", "en": "Go to end (End)"},
     "transport.loop": {"ko": "반복 재생 (L)", "en": "Loop playback (L)"},
     "transport.frame": {"ko": "프레임 번호 — 숫자를 치고 Enter", "en": "Frame number — type a number and press Enter"},
@@ -78,8 +78,8 @@ TEXTS = {
     "menu.view.theme": {"ko": "테마 바꾸기 (T)", "en": "Switch theme (T)"},
     "menu.view.overlay_text": {"ko": "파일 이름·프레임 번호 글자 (B)", "en": "File name and frame number text (B)"},
     "menu.playback.play": {"ko": "재생/일시정지 (Space)", "en": "Play/Pause (Space)"},
-    "menu.playback.prev": {"ko": "한 장 뒤 (←)", "en": "Step back one frame (←)"},
-    "menu.playback.next": {"ko": "한 장 앞 (→)", "en": "Step forward one frame (→)"},
+    "menu.playback.prev": {"ko": "한 장 뒤 (←, ,)", "en": "Step back one frame (←, ,)"},
+    "menu.playback.next": {"ko": "한 장 앞 (→, .)", "en": "Step forward one frame (→, .)"},
     "menu.playback.first": {"ko": "처음 (Home)", "en": "Go to start (Home)"},
     "menu.playback.last": {"ko": "끝 (End)", "en": "Go to end (End)"},
     "menu.playback.loop": {"ko": "반복 재생 (L)", "en": "Loop playback (L)"},

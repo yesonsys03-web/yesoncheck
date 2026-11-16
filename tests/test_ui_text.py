@@ -42,18 +42,18 @@ def test_text_follows_language():
 def test_transport_texts_name_their_shortcuts():
     expected = {
         "transport.first": "처음으로 (Home)",
-        "transport.prev": "한 장 뒤로 (←)",
+        "transport.prev": "한 장 뒤로 (←, ,)",  # 키 처리는 ←와 쉼표를 받음 (→와 마침표)
         "transport.play": "재생 (Space)",
         "transport.pause": "일시정지 (Space)",
-        "transport.next": "한 장 앞으로 (→)",
+        "transport.next": "한 장 앞으로 (→, .)",
         "transport.last": "끝으로 (End)",
         "playlist.end": "이어 재생 끝내기",
     }
     for key, value in expected.items():
         assert ui_text.text(key) == value
     ui_text.set_language("en")
-    for key, shortcut in (("transport.first", "(Home)"), ("transport.prev", "(←)"), ("transport.play", "(Space)"),
-                          ("transport.pause", "(Space)"), ("transport.next", "(→)"), ("transport.last", "(End)")):
+    for key, shortcut in (("transport.first", "(Home)"), ("transport.prev", "(←, ,)"), ("transport.play", "(Space)"),
+                          ("transport.pause", "(Space)"), ("transport.next", "(→, .)"), ("transport.last", "(End)")):
         assert ui_text.text(key).endswith(shortcut)
 
 
@@ -82,8 +82,8 @@ SHORTCUT_TEXTS = {
     "menu.view.theme": "(T)",
     "menu.view.overlay_text": "(B)",
     "menu.playback.play": "(Space)",
-    "menu.playback.prev": "(←)",
-    "menu.playback.next": "(→)",
+    "menu.playback.prev": "(←, ,)",  # 키 처리는 ←·쉼표, →·마침표를 받음 (사용자 요청 2026-11-16 — 빠뜨린 키를 적음)
+    "menu.playback.next": "(→, .)",
     "menu.playback.first": "(Home)",
     "menu.playback.last": "(End)",
     "menu.playback.playlist": "(Enter)",
