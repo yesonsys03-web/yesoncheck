@@ -65,13 +65,15 @@ class PlayerLanguageMixin:
 
     def set_ui_language(self, code):
         """이 창의 화면 언어를 code('ko'·'en')로 — 설정 파일에 저장하고 글자를 다시 그린다. 모르는 값은 아무것도 하기 전에 ValueError.
-        지금 언어와 같으면 체크만 맞춘다. 저장 실패(깨진 파일·쓰기 오류·잠금)면 트레이스백 + 창을 보이고 언어는 그대로.
+        지금 언어와 같으면 체크만 맞춘다 — 단 설정을 읽지 못해 이 세션만 한국어인 창(SOURCE_FALLBACK)은 같은 언어여도 저장. 저장 실패(깨진 파일·쓰기 오류·잠금)면 트레이스백 + 창을 보이고 언어는 그대로.
         파일의 값이 모르는 값이었으면 고른 값으로 고쳐 쓴다(명시적 선택) — 깨진 JSON은 덮지 않는다."""
         if code not in ui_text.LANGUAGES:
             raise ValueError(f"모르는 언어: {code!r} (쓸 수 있는 값: {', '.join(ui_text.LANGUAGES)})")
-        if code == ui_text.language():
+        if code == ui_text.language() and ui_language.source() != ui_language.SOURCE_FALLBACK:
             self._sync_language_menu()
             return
+        # (설정 파일을 읽지 못해 이 세션만 한국어인 창에서 한국어를 고르면 같은 언어여도 저장 — 시작 때의 경고 창이 '메뉴에서
+        #  다시 고를 수 있다'고 약속함. 모르는 값은 고쳐 쓰고, 깨진 JSON은 save가 UserFileError를 내 아래에서 덮지 않음)
         try:
             ui_language.save(code)
         except (UserFileError, OSError, TimeoutError) as exc:

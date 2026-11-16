@@ -208,6 +208,18 @@ def test_load_ocr_result_keeps_animatic2_when_available(new_player, dialogs, tmp
     assert dialogs.errors() == []
 
 
+def test_load_complete_notice_quotes_the_reopen_button_as_it_is_on_screen(new_player, dialogs, tmp_path, monkeypatch):
+    """불러오기 완료 창의 글(한국어 그대로)이 다시 열기 단추를 인용할 때는 지금 화면의 단추 이름 — English면 'Open OCR result'."""
+    player = _prepare_player(new_player, tmp_path)
+    json_path = _write_saved_result(tmp_path, player.filename_a, "animatic")
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(json_path), "JSON Files (*.json)"))
+    player.load_ocr_result()
+    assert "'OCR 오픈' 버튼을 클릭하여 확인하세요." in dialogs.messages[-1][2]
+    player.set_ui_language("en")
+    player.load_ocr_result()
+    assert "'Open OCR result' 버튼" in dialogs.messages[-1][2] and player.ocrReopenResultButton.text() == "Open OCR result"
+
+
 # ---------------------------------------------------------------------------
 # 4) 첫 애니매틱2 분석: TensorFlow 첫 import가 몇 초 동안 GIL을 잡아 화면이 멈출 수 있으므로,
 #    워커를 시작하기 전에 진행 창에 안내를 쓰고 이벤트를 처리해 먼저 그려지게 함

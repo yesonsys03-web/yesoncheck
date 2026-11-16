@@ -1698,7 +1698,9 @@ class PlayerOcrMixin:
             if hasattr(self, 'ocrSaveResultButton'):
                 self.ocrSaveResultButton.setEnabled(True)
             
-            QMessageBox.information(self, "로드 완료", f"OCR 결과 {len(segments)}개 구간이 로드되었습니다.\n'OCR 오픈' 버튼을 클릭하여 확인하세요.")
+            # 딸린 창의 글은 한국어 그대로, 인용하는 단추 이름은 지금 화면의 글(글자 표 — 언어를 따름)
+            QMessageBox.information(self, "로드 완료", f"OCR 결과 {len(segments)}개 구간이 로드되었습니다.\n"
+                                                      f"'{ui_text.text('ocr.reopen')}' 버튼을 클릭하여 확인하세요.")
             self.update_ocr_status_label(f"OCR: 결과 로드됨 ({len(segments)}개 구간)")
         
         except Exception as e:

@@ -147,6 +147,23 @@ def test_broken_prefs_file_is_not_overwritten(shown, monkeypatch):
     assert ui_text.language() == "ko" and shown_boxes == [ui_language.SETTINGS_TITLE]
 
 
+def test_choosing_the_fallback_language_fixes_an_unknown_value_in_the_file(shown, dialogs):
+    """시작 때 모르는 값(jp)으로 이 세션만 한국어가 된 창: 경고 창이 약속한 대로 메뉴에서 '한국어'를 고르면 — 이미 한국어로
+    보이고 있어도 — 파일을 그 값으로 고침(다음에 켤 때 같은 경고가 다시 뜨지 않게). 다른 키는 그대로."""
+    import os
+
+    path = hover_strip.prefs_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write('{"ui_language": "jp", "other": 1}')
+    app_module.load_language()
+    assert ui_text.language() == "ko" and ui_language.source() == ui_language.SOURCE_FALLBACK
+    shown.language_actions["ko"].trigger()
+    assert mac_prefs.read_prefs(path) == {"ui_language": "ko", "other": 1}
+    assert ui_text.language() == "ko" and ui_language.source() == ui_language.SOURCE_MENU
+    assert checks(shown) == {"ko": True, "en": False}
+
+
 def test_unknown_value_in_the_file_is_replaced_by_the_choice(shown):
     import os
 

@@ -270,6 +270,18 @@ def test_auto_check_shows_each_different_traceback(player_with_build, fake_check
     assert len(texts) == 2 and first in texts[0] and second in texts[1]
 
 
+def test_manual_check_quotes_the_update_button_as_it_is_on_screen(player_with_build, fake_check, dialogs):
+    """수동 확인 창의 글(한국어 그대로)이 알림 띠의 단추를 인용할 때는 지금 화면의 이름 — English 화면이면 'Update'."""
+    from yesoncheck import ui_text
+
+    player = player_with_build("1.1.0", [found("NAS", "1.1.1"), expected("GitHub", GITHUB_UNREACHABLE)])
+    check_now(player, manual=True)
+    assert "창 위 알림 띠에서 '업데이트'를 누르세요." in dialogs.messages[-1][2]
+    ui_text.set_language("en")
+    check_now(player, manual=True)
+    assert "'Update'" in dialogs.messages[-1][2]
+
+
 def test_manual_check_shows_expected_problems(player_with_build, fake_check, dialogs):
     player = player_with_build("1.1.0", [expected("NAS", NAS_NOT_YET), expected("GitHub", GITHUB_UNREACHABLE)])
     check_now(player, manual=True)

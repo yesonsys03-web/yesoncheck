@@ -734,8 +734,9 @@ class PlayerUpdateMixin:
         lines.append("")
         offer = result.offer
         if offer is not None:
+            # 창의 글은 한국어 그대로, 인용하는 띠의 단추 이름은 지금 화면의 글(글자 표 — 언어를 따름)
             lines.append(f"새 버전 {offer.manifest.version}이 있습니다 ({offer.result.source}에서 받음). "
-                         "창 위 알림 띠에서 '업데이트'를 누르세요.")
+                         f"창 위 알림 띠에서 '{ui_text.text('update.update')}'를 누르세요.")
         elif all(r.manifest is not None for r in result.results):
             lines.append("지금 버전이 최신입니다.")
         else:
