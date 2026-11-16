@@ -462,3 +462,20 @@ def test_window_minimum_width_is_set_by_the_bar_or_the_columns_not_more(player):
                + splitter.handleWidth())
     floor = max(player.transportBar.minimumSizeHint().width(), columns)
     assert floor <= player.minimumSizeHint().width() <= floor + 40
+
+
+def test_toggle_controls_does_not_swallow_errors(player):
+    """컨트롤을 숨기다 난 오류는 드러남 — 조용히 건너뛰지 않음 (예전 코드를 옮기며 남았던 except를 뺌: 리뷰)."""
+
+    class Broken:
+        def setVisible(self, visible):
+            raise RuntimeError("probe")
+
+    player.control_widgets.append(Broken())
+    try:
+        with pytest.raises(RuntimeError, match="probe"):
+            player.toggle_controls()
+    finally:
+        player.control_widgets.pop()
+        if not player.controls_visible:
+            player.toggle_controls()

@@ -184,6 +184,9 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         self._tool_panel_key = None
         self._last_tool_panel = "annotation"
         self._tool_panel_width = tool_panel.PANEL_WIDTH
+        # 작품 묶음을 보일지의 기억(이 PC의 prefs — work_picker): 사이드바를 만들 때 읽음 (sidebar_controls._build_work_picker).
+        # True 읽어 온 적 있음 · False 없음 · None 모름(설정 파일을 읽지 못함 — 보이는 쪽)
+        self._work_picker_seen = None
         # 사이드바 Mov·Seq 탭 (initUI가 위젯을 만듦; SidebarSequencesMixin이 씀): 탭 위젯, Seq 목록(이미지 시퀀스), 폴더를 읽어 찾은 시퀀스
         # (path_key → [SeqInfo] — 영상 경로만 돌려주는 get_video_files_from_folder와 목록을 채우는 쪽 사이)
         self.sidebar_tabs = None

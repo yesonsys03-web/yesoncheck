@@ -4,6 +4,8 @@
 단축키는 글자로만 적는다(QAction 단축키 없음 — 키는 창의 키 처리가 받음). 체크·켜짐은 메뉴를 열 때 지금 상태로 맞춘다.
 """
 
+import sys
+
 import pytest
 from PyQt5.QtCore import QEvent, Qt
 from PyQt5.QtGui import QKeyEvent
@@ -492,3 +494,32 @@ def test_typing_in_an_input_field_is_not_a_shortcut(shown, qapp, key_calls):
     assert key_calls == []
     assert not shown.loopCheckBox.isChecked() and not shown.wipeCheckBox.isChecked()
     assert shown.ocrPatternLineEdit.text().endswith("oilw")
+
+
+def test_a_failing_shortcut_handler_runs_once_and_is_reported(shown, monkeypatch):
+    """처리기가 예상 못 한 예외를 내도 한 번만 돌고 오류로 알림.
+
+    포커스가 창 자신일 때 키는 창의 필터(`eventFilter`)를 먼저 지나는데, 거기서 예외가 새어 나가면 Qt는 '걸러지지 않음'으로
+    보고 같은 키를 `keyPressEvent`로 넘겨 처리기가 한 번 더 돎(빌드 앱: 오류 창 뒤에 파일 창이 또 뜸 — 리뷰가 돌려서 확인).
+    소스 실행은 가상 함수의 예외로 프로세스가 끝남."""
+    calls, reports, hooked = [], [], []
+
+    def failing_open(*got):
+        calls.append(got)
+        raise RuntimeError("probe")
+
+    monkeypatch.setattr(shown, "open_file", failing_open)
+    monkeypatch.setattr(player_menus.error_window, "report_from_handler",
+                        lambda prefix, context: reports.append((prefix, context)))
+    monkeypatch.setattr(sys, "excepthook", lambda *args: hooked.append(args))  # 새어 나가도 시험 프로세스가 끝나지 않게
+    QTest.keyClick(shown, Qt.Key_O)
+    assert calls == [("A",)]
+    assert len(reports) == 1 and reports[0][0] == "[단축키]"
+    assert hooked == []
+
+
+def test_shortcut_stays_consumed_when_its_handler_fails(player, monkeypatch):
+    """실패해도 그 키는 받은 것(True) — 목록의 글자 찾기 등 다른 처리로 넘어가지 않음."""
+    monkeypatch.setattr(player, "select_folder", lambda: (_ for _ in ()).throw(OSError("probe")))
+    monkeypatch.setattr(player_menus.error_window, "report_from_handler", lambda prefix, context: None)
+    assert player.eventFilter(player.sidebar, key_event(Qt.Key_I, "i")) is True

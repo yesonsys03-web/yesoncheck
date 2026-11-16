@@ -175,10 +175,7 @@ class PlayerToolsMixin:
         (도구 패널은 재생 줄을 따라 숨고 나타남 — apply_tool_panel_state)"""
         self.controls_visible = not self.controls_visible
         for widget in self.get_valid_control_widgets():
-            try:
-                widget.setVisible(self.controls_visible)
-            except (RuntimeError, AttributeError):
-                continue
+            widget.setVisible(self.controls_visible)
         if hasattr(self, 'overlayFrame'):
             if not self.controls_visible:
                 self.overlayFrame.setVisible(True)

@@ -20,7 +20,7 @@ Settings·Help 앞에 메뉴 다섯: **File · View · Playback · Compare · To
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QAction, QMenu
 
-from yesoncheck import ui_text
+from yesoncheck import error_window, ui_text
 
 SEPARATOR = None
 # (메뉴 키, 항목의 글자 표 키들 — None은 구분선)
@@ -108,14 +108,20 @@ class PlayerMenusMixin:
 
         - Ctrl·Alt·Meta와 함께 누른 키는 아님 (Ctrl+O는 오버레이 컨트롤 위치 되돌리기 — 예전 그대로).
         - 누르고 있을 때의 자동 반복은 삼킴(True — 처리기는 부르지 않음): 반복·와이프가 깜빡이거나 파일 창이 거듭 뜨지 않게.
-        - 글자를 치는 칸(프레임 번호·주석 글·OCR 패턴)은 친 글자를 자기가 받아 창까지 오지 않음."""
+        - 글자를 치는 칸(프레임 번호·주석 글·OCR 패턴)은 친 글자를 자기가 받아 창까지 오지 않음.
+        - 처리기의 예외는 여기서 받아 알림(기록 + 오류 창)하고 True: 가상 함수 안이라 새어 나가면 Qt가 같은 키를 다음 처리
+          (`eventFilter` → `keyPressEvent`)로 넘겨 처리기가 한 번 더 돌거나(빌드 앱), 프로세스가 끝남(소스 실행)."""
         if event.modifiers() & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier):
             return False
         key, text = event.key(), event.text()
         for qt_key, hangul, text_key in KEY_SHORTCUTS:
             if key == qt_key or text == hangul:
                 if not event.isAutoRepeat():
-                    self._run_menu_item(self._menu_handlers()[text_key])
+                    try:
+                        self._run_menu_item(self._menu_handlers()[text_key])
+                    except BaseException:
+                        error_window.report_from_handler(
+                            "[단축키]", f"단축키 {chr(qt_key)}의 동작을 하다가 오류가 났습니다 — {ui_text.text(text_key)}")
                 return True
         return False
 
