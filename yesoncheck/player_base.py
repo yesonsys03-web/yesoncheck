@@ -59,6 +59,7 @@ from yesoncheck.main_window_styles import (
     WORK_PATH_BUTTON_STYLE,
 )
 from yesoncheck.player_hover_thumbs import PlayerHoverThumbsMixin
+from yesoncheck.player_menus import PlayerMenusMixin
 from yesoncheck.player_ocr import PlayerOcrMixin
 from yesoncheck.player_overlay import PlayerOverlayMixin
 from yesoncheck.player_tools import PlayerToolsMixin
@@ -118,7 +119,7 @@ def korean_date(day):
     return f"{day.year}년 {day.month:02d}월 {day.day:02d}일"
 
 
-class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsMixin, PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
+class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsMixin, PlayerMenusMixin, PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
     # 창을 닫을 때 실행 중인 공유 설정 불러오기를 기다리는 최대 시간 (그 뒤에는 로그만 남기고 닫음)
     SHARED_CONFIG_CLOSE_WAIT_MS = 5000
     # 창을 닫을 때 실행 중인 분석·내보내기·병합을 기다리는 최대 시간 (그 뒤에는 끝날 때까지 붙잡아 둠)
@@ -1010,7 +1011,10 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
     def create_menu_bar(self):
         """상단 메뉴바를 생성합니다."""
         menubar = self.menuBar()
-        
+
+        # File · View · Playback · Compare · Tools (player_menus — 항목은 지금의 처리기, 단축키는 글자로만)
+        self._add_main_menus(menubar)
+
         # Settings 메뉴
         settings_menu = menubar.addMenu('&Settings')
         

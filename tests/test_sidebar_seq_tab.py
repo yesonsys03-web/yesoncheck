@@ -376,6 +376,9 @@ def test_selected_pause_button_stays_usable_while_playlist_plays_on_seq_tab(play
     player.sidebar_tabs.setCurrentIndex(1)
 
     assert player.playSelectedPauseButton.isEnabled()
+    # 새 선택 재생을 시작하는 길(Playback 메뉴의 '고른 영상 이어 재생')은 여전히 꺼짐
+    player.main_menus["playback"].aboutToShow.emit()
+    assert not player.menu_actions["menu.playback.playlist"].isEnabled()
 
     player.stop_video()  # 선택 재생 끝
     assert not player.is_playlist_playing and not player.playSelectedPauseButton.isEnabled()
