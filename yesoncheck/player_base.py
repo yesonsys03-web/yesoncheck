@@ -53,6 +53,7 @@ from yesoncheck.main_window_styles import (
     POSITION_SCROLL_STYLE,
 )
 from yesoncheck.player_hover_thumbs import PlayerHoverThumbsMixin
+from yesoncheck.player_language import PlayerLanguageMixin
 from yesoncheck.player_menus import PlayerMenusMixin
 from yesoncheck.player_ocr import PlayerOcrMixin
 from yesoncheck.player_overlay import PlayerOverlayMixin
@@ -112,7 +113,8 @@ def korean_date(day):
     return f"{day.year}년 {day.month:02d}월 {day.day:02d}일"
 
 
-class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsMixin, PlayerMenusMixin, PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
+class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsMixin, PlayerMenusMixin, PlayerLanguageMixin, PlayerOcrMixin,
+                      PlayerOverlayMixin, QMainWindow):
     # 창을 닫을 때 실행 중인 공유 설정 불러오기를 기다리는 최대 시간 (그 뒤에는 로그만 남기고 닫음)
     SHARED_CONFIG_CLOSE_WAIT_MS = 5000
     # 창을 닫을 때 실행 중인 분석·내보내기·병합을 기다리는 최대 시간 (그 뒤에는 끝날 때까지 붙잡아 둠)
@@ -917,14 +919,19 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
 
     def apply_startup_geometry(self):
         """처음 창 크기·위치와 열 너비: max(1080×720, 레이아웃이 원하는 크기)를 화면 작업 영역 안으로, 사이드바는
-        예전 처음 너비(200 — 최소 너비가 더 크면 최소 너비), 나머지는 영상 칸(도구 패널은 닫힌 채 시작)."""
+        예전 처음 너비(200 — 최소 너비가 더 크면 최소 너비, 지금 언어의 단추 글이 더 넓으면 그 폭: sidebar_start_width),
+        나머지는 영상 칸(도구 패널은 닫힌 채 시작)."""
         self._measure_polished_layout()
         rect = startup_geometry(self.sizeHint(), self.minimumSizeHint(),
                                 QApplication.primaryScreen().availableGeometry())
         self.setGeometry(rect)
         splitter = self.mainSplitter
         sidebar = splitter.widget(0)
-        side = max(200, sidebar.minimumSizeHint().width(), sidebar.minimumWidth())
+        side = self.sidebar_start_width()
+        if side + splitter.handleWidth() + splitter.widget(1).minimumSizeHint().width() > rect.width():
+            # 처음 창에 그만큼의 자리가 없으면 예전 규칙 — QSplitter는 요청한 폭을 기억했다가 창이 넓어지면 되찾으므로
+            # 자리가 없을 때 요청하면 나중에 영상 칸의 몫을 가져감
+            side = max(200, sidebar.minimumSizeHint().width(), sidebar.minimumWidth())
         splitter.setSizes([side, max(0, rect.width() - side), 0])
         # 초기 창 크기 저장 (앱 처음 실행 시) — 동영상 전용 전체화면을 끝내면 이 크기로 돌아옴
         self.initial_geometry = self.geometry()
@@ -1038,6 +1045,9 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         if paths.IS_WINDOWS:
             shared_config_action = settings_menu.addAction('공유 설정 폴더 변경...')
             shared_config_action.triggered.connect(lambda: self.choose_shared_config_dir())
+
+        # 언어 (Language) — 한국어·English (PlayerLanguageMixin): Settings의 맨 끝, 구분선 아래
+        self._add_language_menu(settings_menu)
 
         # Help 메뉴
         help_menu = menubar.addMenu('&Help')

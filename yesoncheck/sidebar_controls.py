@@ -24,16 +24,19 @@ import sys
 import traceback
 
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QMenu, QProgressBar, QPushButton, QSizePolicy,
-                             QToolButton, QVBoxLayout, QWidget)
+from PyQt5.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QMenu, QProgressBar, QSizePolicy, QToolButton, QVBoxLayout,
+                             QWidget)
 
 from yesoncheck import ui_text, work_picker
 from yesoncheck.user_files import UserFileError
+from yesoncheck.window_layout import ShrinkButton, ShrinkToolButton
 
 LOG_PREFIX = "[작품 고르기]"
 SIDEBAR_TOOL = "sidebarTool"  # 작은 단추의 objectName — 색은 두 테마 시트의 #sidebarTool 규칙
 COMBO_MINIMUM_CHARS = 6  # 콤보의 최소 너비(글자 수) — 긴 작품·job 이름이 사이드바(창)의 최소 너비를 늘리지 않게
 THUMBNAIL_BAR_LINGER_MS = 1500  # 썸네일을 다 만든 뒤 진행 막대(끝난 글자)를 보여 두는 시간
+SIDEBAR_START_WIDTH = 200  # 사이드바 칸의 처음 폭(예전부터의 값) — 최소 너비·단추 글이 더 넓으면 그쪽 (sidebar_start_width)
+TOOL_ROW_SPACING = 4  # 한 줄의 단추 사이 간격
 
 
 class WidePopupComboBox(QComboBox):
@@ -95,7 +98,8 @@ class PlaylistStateSlot:
     def _show(self):
         playing = self._PLAYING[self._text]
         button = self.button
-        button.setText(ui_text.text("playlist.pause" if playing else "playlist.play"))
+        shown, other = ("playlist.pause", "playlist.play") if playing else ("playlist.play", "playlist.pause")
+        button.set_text_key(shown, also=(other,))  # 최소 너비는 두 상태·두 언어 가운데 가장 좁은 글 (ShrinkButton)
         button.setToolTip(ui_text.text("playlist.play.tip"))
         if button.property("playing") != playing:
             button.setProperty("playing", playing)
@@ -133,9 +137,9 @@ class SidebarControlsMixin:
 
     def _build_sidebar_tools(self):
         """작은 단추 줄: 폴더 열기 · 북마크 ▾(추가·관리) · 새로고침. 한 줄 위젯을 돌려줌."""
-        self.openFolderButton = QPushButton()
+        self.openFolderButton = ShrinkButton()
         self.openFolderButton.clicked.connect(lambda: self.select_folder())
-        self.bookmarkMenuButton = QToolButton()
+        self.bookmarkMenuButton = ShrinkToolButton()
         self.bookmarkMenuButton.setPopupMode(QToolButton.InstantPopup)
         self.bookmarkMenuButton.setToolButtonStyle(Qt.ToolButtonTextOnly)
         menu = QMenu(self.bookmarkMenuButton)
@@ -145,17 +149,17 @@ class SidebarControlsMixin:
         self._bookmark_manage_action.triggered.connect(lambda: self.show_bookmarks())
         self.bookmarkMenuButton.setMenu(menu)
         # 목록 다시 읽기: 다른 PC·Finder에서 NAS의 영상을 지우거나 넣었을 때 (창이 다시 활성될 때도 저절로 읽음)
-        self.refreshListButton = QPushButton()
+        self.refreshListButton = ShrinkButton()
         self.refreshListButton.clicked.connect(lambda: self._refresh_sidebar_by_user())
         return self._tool_row(self.openFolderButton, self.bookmarkMenuButton, self.refreshListButton)
 
     def _build_view_mode_row(self):
         """목록 | 썸네일 토글 (예전 List·Thumb 단추 — 이름과 처리기는 그대로)."""
-        self.listModeButton = QPushButton()
+        self.listModeButton = ShrinkButton()
         self.listModeButton.setCheckable(True)
         self.listModeButton.setChecked(True)
         self.listModeButton.clicked.connect(self.switch_to_list_mode)
-        self.thumbnailModeButton = QPushButton()
+        self.thumbnailModeButton = ShrinkButton()
         self.thumbnailModeButton.setCheckable(True)
         self.thumbnailModeButton.clicked.connect(self.switch_to_thumbnail_mode)
         # Seq 목록도 같은 표시 모드를 따름: 위의 Mov 쪽 슬롯이 모드를 바꾼 다음에 불리도록 그 뒤에 이음 (Mov 쪽 메서드는 그대로)
@@ -168,7 +172,7 @@ class SidebarControlsMixin:
         row.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+        layout.setSpacing(TOOL_ROW_SPACING)
         for button in buttons:
             button.setObjectName(SIDEBAR_TOOL)
             button.setFocusPolicy(Qt.NoFocus)
@@ -196,7 +200,7 @@ class SidebarControlsMixin:
 
     def _build_playlist_button(self):
         """선택 재생 단추 하나: 선택 재생이 아니면 시작, 선택 재생 중이면 일시정지 ↔ 이어 재생 (`toggle_play_pause_selected`)."""
-        button = QPushButton()
+        button = ShrinkButton()
         button.setObjectName("playlistButton")
         button.setFocusPolicy(Qt.NoFocus)
         button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -208,15 +212,55 @@ class SidebarControlsMixin:
     def retranslate_sidebar_controls(self):
         """글자 표에서 사이드바 조작 묶음의 글자·툴팁을 다시 읽음 (만든 직후와 언어가 바뀐 뒤)."""
         self.workLabel.setText(ui_text.text("sidebar.works"))
-        self.openFolderButton.setText(ui_text.text("sidebar.open_folder"))
-        self.bookmarkMenuButton.setText(ui_text.text("sidebar.bookmarks"))
+        self.openFolderButton.set_text_key("sidebar.open_folder")
+        self.bookmarkMenuButton.set_text_key("sidebar.bookmarks")
         self._bookmark_add_action.setText(ui_text.text("sidebar.bookmark.add"))
         self._bookmark_manage_action.setText(ui_text.text("sidebar.bookmark.manage"))
-        self.refreshListButton.setText(ui_text.text("sidebar.refresh"))
+        self.refreshListButton.set_text_key("sidebar.refresh")
         self.refreshListButton.setToolTip(ui_text.text("sidebar.refresh.tip"))
-        self.listModeButton.setText(ui_text.text("sidebar.mode.list"))
-        self.thumbnailModeButton.setText(ui_text.text("sidebar.mode.thumb"))
+        self.listModeButton.set_text_key("sidebar.mode.list")
+        self.thumbnailModeButton.set_text_key("sidebar.mode.thumb")
         self.playSelectedPauseButton.retranslate()
+
+    # ------------------------------------------------------------ 처음 폭 (언어마다)
+    # 단추의 최소 너비는 언어와 무관하지만(ShrinkButton — 창의 최소 크기를 지킴) 바라는 너비는 지금 글의 것이라, English에서는
+    # 예전 처음 폭(200)에 작은 단추 셋의 글이 다 들어가지 않는다(이 Mac: Open … · Book… · Refr…). 그래서 '처음 폭'을 언어마다:
+    # max(200, 최소 너비, 지금 언어의 단추 줄이 다 보이는 폭). 켤 때 그 폭으로 시작하고(player_base.apply_startup_geometry),
+    # 언어를 바꿀 때 사이드바가 옛 언어의 처음 폭 그대로면 새 언어의 처음 폭으로 옮긴다(player_language.set_ui_language) —
+    # 되돌리면 돌아온다. 손으로 맞춘 폭·썸네일 모드의 폭·숨은 사이드바는 건드리지 않는다(그때 줄어 그려지는 글은 툴팁으로).
+    def sidebar_buttons_wanted_width(self):
+        """사이드바의 단추 줄(작은 단추 셋 · 목록|썸네일 · 선택 재생)이 지금 언어의 글을 줄이지 않고 보이는 사이드바 칸 너비."""
+        rows = ((self.openFolderButton, self.bookmarkMenuButton, self.refreshListButton),
+                (self.listModeButton, self.thumbnailModeButton), (self.playlistButton,))
+        margins = self.mainSplitter.widget(0).layout().contentsMargins()
+        return margins.left() + margins.right() + max(
+            sum(button.sizeHint().width() for button in row) + TOOL_ROW_SPACING * (len(row) - 1) for row in rows)
+
+    def sidebar_start_width(self):
+        """지금 언어에서의 사이드바 칸 처음 폭."""
+        side = self.mainSplitter.widget(0)
+        return max(SIDEBAR_START_WIDTH, side.minimumSizeHint().width(), side.minimumWidth(),
+                   self.sidebar_buttons_wanted_width())
+
+    def sidebar_at_start_width(self):
+        """사이드바가 (보이고, 목록 모드이고) 지금 언어의 처음 폭 그대로인가 — 손으로 맞춘 폭이 아닌가."""
+        side = self.mainSplitter.widget(0)
+        return (side.isVisible() and not self.is_thumbnail_mode
+                and self.mainSplitter.sizes()[0] == self.sidebar_start_width())
+
+    def move_sidebar_to_start_width(self):
+        """사이드바 칸을 지금 언어의 처음 폭으로 — 차이는 영상 칸에서 가져오거나 돌려줌(창·도구 패널은 그대로). 영상 칸이 최소
+        너비 아래로 내려가야 하면 아무것도 안 함(단추 글은 줄여 그려짐). 목록 모드로 돌아올 때의 폭도 같은 만큼 옮김."""
+        splitter = self.mainSplitter
+        sizes = splitter.sizes()
+        moved = self.sidebar_start_width() - sizes[0]
+        if moved == 0 or sizes[1] - moved < splitter.widget(1).minimumSizeHint().width():
+            return
+        sizes[0] += moved
+        sizes[1] -= moved
+        splitter.setSizes(sizes)
+        if self.default_sidebar_width is not None:  # 목록 폭(썸네일 모드는 그 두 배) — sidebar_thumbnails
+            self.default_sidebar_width += moved
 
     # ------------------------------------------------------------ 작품 묶음의 보임
     def _read_work_picker_seen(self):

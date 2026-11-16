@@ -57,6 +57,12 @@ TEXTS = {
     "ocr.section.roi": {"ko": "ROI 설정", "en": "ROI"},
     "ocr.section.analysis": {"ko": "OCR 분석", "en": "OCR analysis"},
     "ocr.section.results": {"ko": "결과 관리", "en": "Results"},
+    # Settings → 언어 (Language) — 메뉴 제목과 항목(한국어·English)은 두 언어에서 같음(ui_language)
+    "settings.language.tip": {"ko": "이 창은 바로, 이미 열린 다른 창은 다음에 켤 때부터",
+                              "en": "Applies to this window now; other open windows follow the next time they start"},
+    "settings.language.env_tip": {
+        "ko": "환경 변수 YESONCHECK_LANGUAGE={value} 값이 우선합니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다",
+        "en": "The environment variable YESONCHECK_LANGUAGE={value} takes precedence — remove it and restart the app to use this setting"},
     # 메뉴 — 제목은 두 언어 모두 영어, 항목의 단축키는 글자로만 알림(QAction 단축키를 걸지 않음)
     "menu.file": {"ko": "&File", "en": "&File"},
     "menu.view": {"ko": "&View", "en": "&View"},
