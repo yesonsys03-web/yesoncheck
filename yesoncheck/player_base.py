@@ -381,9 +381,9 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
             self.workComboBox.addItem(work_name)
         self._update_shared_config_title()
         self.seasonComboBox = WidePopupComboBox()
-        self.seasonComboBox.addItem("시즌선택")
+        self.seasonComboBox.addItem(ui_text.text("picker.season"))
         self.jobComboBox = WidePopupComboBox()
-        self.jobComboBox.addItem("job선택")
+        self.jobComboBox.addItem(ui_text.text("picker.job"))
 
         self.ocrSelectRoiButton = QPushButton('OCR ROI 지정')
         self.ocrSelectRoiButton.setCheckable(True)
@@ -593,7 +593,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         sidebarLayout.addWidget(self._build_thumbnail_progress_bar())
         sidebarLayout.addWidget(self._build_playlist_button())
         sidebarLayout.addWidget(self.endPlaylistButton)  # 선택 재생 중에만 보임 — 예전 Stop 단추가 하던 '선택 재생 끝내기'
-        self.retranslate_sidebar_controls()
+        self.retranslate_sidebar_controls()  # 단추 묶음의 글 — 나머지 사이드바 글은 만들 때 글자 표에서 읽음 (retranslate_sidebar)
         sidebarContainer = QWidget()
         sidebarContainer.setLayout(sidebarLayout); sidebarContainer.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 

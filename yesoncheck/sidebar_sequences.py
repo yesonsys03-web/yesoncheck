@@ -67,7 +67,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
-from yesoncheck import paths, sequence_scan, sequence_source, sidebar_sort, thumbnails, video_list
+from yesoncheck import paths, sequence_scan, sequence_source, sidebar_sort, thumbnails, ui_text, video_list
 from yesoncheck.sequence_export_worker import SequenceExportWorker, substitution_note, substitution_summary, validate_out_dir
 from yesoncheck.sequence_source import ImageSequenceCapture
 from yesoncheck.sidebar_items import THUMBNAIL_CONTEXT_ROLE, THUMBNAIL_MAKE_FAILED, THUMBNAIL_VIDEO_PROBLEM
@@ -82,18 +82,21 @@ SEQ_EXPORT_LOG_PREFIX = "[시퀀스 MOV]"
 
 
 def seq_label(seq):
-    """Seq 목록 항목의 글자: `base (0001–0306, 300프레임)`, 빠진 프레임이 있으면 뒤에 `, 빠짐 N`."""
-    text = f"{seq.base} ({seq.first:0{seq.pad}d}–{seq.last:0{seq.pad}d}, {seq.count}프레임)"
+    """Seq 목록 항목의 글자(지금 언어): `base (0001–0306, 300프레임)`, 빠진 프레임이 있으면 뒤에 `, 빠짐 N`
+    (영문 `base (0001–0306, 300 frames), N missing`)."""
+    text = ui_text.text("seq.label", base=seq.base, first=f"{seq.first:0{seq.pad}d}", last=f"{seq.last:0{seq.pad}d}",
+                        count=seq.count)
     if seq.missing > 0:
-        text += f", 빠짐 {seq.missing}"
+        text += ui_text.text("seq.label.missing", missing=seq.missing)
     return text
 
 
 def seq_tooltip(seq):
     """Seq 항목의 툴팁: 사람이 읽는 정보 (폴더 경로·프레임 범위·빠진 프레임 수). 경로 하나가 아님."""
-    lines = [seq.base, f"폴더: {seq.dir}", f"범위: {seq.first:0{seq.pad}d}–{seq.last:0{seq.pad}d} ({seq.count}프레임)"]
+    lines = [seq.base, ui_text.text("seq.tip.folder", folder=seq.dir),
+             ui_text.text("seq.tip.range", first=f"{seq.first:0{seq.pad}d}", last=f"{seq.last:0{seq.pad}d}", count=seq.count)]
     if seq.missing > 0:
-        lines.append(f"빠짐 {seq.missing}프레임")
+        lines.append(ui_text.text("seq.tip.missing", missing=seq.missing))
     return "\n".join(lines)
 
 
@@ -262,6 +265,15 @@ class SidebarSequencesMixin:
     def _current_seq_items(self):
         """지금 Seq 목록의 SeqInfo들 (목록 순서)."""
         return [self.seq_sidebar.item(i).data(Qt.UserRole) for i in range(self.seq_sidebar.count())]
+
+    def retranslate_seq_items(self):
+        """Seq 목록 항목의 글·툴팁을 지금 언어로 다시 넣음 (언어가 바뀐 뒤) — 항목은 그대로(고른 것·썸네일·차례 유지).
+        All 탭의 사본은 원본이 바뀐 신호로 다시 만들어짐."""
+        for row in range(self.seq_sidebar.count()):
+            item = self.seq_sidebar.item(row)
+            seq = item.data(Qt.UserRole)
+            item.setText(seq_label(seq))
+            item.setToolTip(seq_tooltip(seq))
 
     def _new_seq_item(self, seq, context):
         item = QListWidgetItem(seq_label(seq))
@@ -705,14 +717,15 @@ class SidebarSequencesMixin:
     def _build_seq_menu(self, menu, item):
         """Seq 항목 메뉴의 동작들 (item은 Seq 목록의 항목 — All 탭도 선택을 비춘 뒤 같은 동작을 씀)."""
         identity = item.data(Qt.UserRole).identity
-        menu.addAction("비디오 A로 열기").triggered.connect(lambda: self.open_file('A', identity))
-        menu.addAction("비디오 B로 열기").triggered.connect(lambda: self.open_file('B', identity))
+        menu.addAction(ui_text.text("side_menu.seq.open_a")).triggered.connect(lambda: self.open_file('A', identity))
+        menu.addAction(ui_text.text("side_menu.seq.open_b")).triggered.connect(lambda: self.open_file('B', identity))
         menu.addSeparator()
-        menu.addAction("선택한 시퀀스로 MOV 만들기…").triggered.connect(lambda: self.export_selected_sequences())
+        menu.addAction(ui_text.text("side_menu.seq.export")).triggered.connect(lambda: self.export_selected_sequences())
         menu.addSeparator()
-        menu.addAction("썸네일 다시 만들기").triggered.connect(lambda: self.regenerate_seq_thumbnails(self._selected_seq_items()))
+        menu.addAction(ui_text.text("side_menu.seq.thumbnails")).triggered.connect(
+            lambda: self.regenerate_seq_thumbnails(self._selected_seq_items()))
         menu.addSeparator()
-        menu.addAction("정보 보기").triggered.connect(lambda: self.show_seq_info(item))
+        menu.addAction(ui_text.text("side_menu.seq.info")).triggered.connect(lambda: self.show_seq_info(item))
 
     def show_seq_info(self, item):
         """'정보 보기': 범위·개수·빠짐은 목록의 값, 프레임 속도·해상도는 시퀀스를 잠깐 열어 읽음 (바로 놓음 — 첫 프레임을 디코드하므로

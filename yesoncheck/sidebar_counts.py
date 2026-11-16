@@ -23,9 +23,11 @@ import os
 import re
 from collections import Counter, defaultdict
 
+from yesoncheck import ui_text
+
+# 글은 글자 표(ui_text — Qt 없음)에서: 개수 `count.item(s)`·`count.sequence(s)`, 종류가 없는 묶음 `count.base`('기본'),
+# 버전 없는 파일 `count.no_version`('없음'). 영문 줄은 `12 items — Base 9 (TK1 9) · HD 3 (TK1 3)`·`3 sequences`
 TABS = ("mov", "seq", "all")
-BASIC_LABEL = "기본"  # 종류가 없는 파일의 묶음
-NO_VERSION_LABEL = "없음"  # 버전이 있는 파일과 같은 종류에 섞인, 버전 없는 파일
 VERSION_TOKEN = re.compile(r"(?i)(tk|v)(\d+)")
 
 
@@ -73,9 +75,9 @@ def kind_version_text(stems):
     parts = []
     for kind in order:
         members = versions[kind]
-        text = f"{kind or BASIC_LABEL} {len(members)}"
+        text = f"{kind or ui_text.text('count.base')} {len(members)}"
         if any(members):
-            inner = _breakdown(version or NO_VERSION_LABEL for version in members)
+            inner = _breakdown(version or ui_text.text("count.no_version") for version in members)
             text += " (" + " · ".join(f"{name} {count}" for name, count in inner) + ")"
         parts.append(text)
     return " · ".join(parts)
@@ -85,21 +87,29 @@ def _stem(path):
     return os.path.splitext(os.path.basename(path))[0]
 
 
+def _items(count):
+    return ui_text.text("count.item" if count == 1 else "count.items", count=count)
+
+
+def _sequences(count):
+    return ui_text.text("count.sequence" if count == 1 else "count.sequences", count=count)
+
+
 def count_text(tab, movie_paths, sequences) -> str:
     """tab("mov"·"seq"·"all")의 개수 줄. movie_paths: Mov 목록의 영상 경로, sequences: Seq 목록의 시퀀스마다 (이름 base, 프레임 확장자)."""
     if tab == "mov":
         split = kind_version_text([_stem(path) for path in movie_paths])
-        return f"{len(movie_paths)}개" + (f" — {split}" if split else "")
+        return _items(len(movie_paths)) + (f" — {split}" if split else "")
     if tab == "seq":
         split = kind_version_text([base for base, _ext in sequences])
-        return f"시퀀스 {len(sequences)}개" + (f" — {split}" if split else "")
+        return _sequences(len(sequences)) + (f" — {split}" if split else "")
     if tab != "all":
         raise ValueError(f"tab은 {', '.join(TABS)} 중 하나여야 합니다: {tab!r}")
     total = len(movie_paths) + len(sequences)
     if total == 0:
-        return "0개"
+        return _items(0)
     movies = _breakdown(os.path.splitext(path)[1].lstrip(".").lower() for path in movie_paths)
     frames = _breakdown(ext.lower() for _base, ext in sequences)
-    line = f"{total}개 — " + " · ".join(f"{name} {count}" for name, count in movies + frames)
+    line = f"{_items(total)} — " + " · ".join(f"{name} {count}" for name, count in movies + frames)
     split = kind_version_text([_stem(path) for path in movie_paths] + [base for base, _ext in sequences])
     return line + (f"\n{split}" if split else "")

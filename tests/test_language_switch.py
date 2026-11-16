@@ -6,9 +6,11 @@
 이 파일의 시험은 그 환경 변수를 지우고 돈다(보통 사용자의 창처럼) — conftest는 다른 시험을 위해 `ko`로 고정해 둔다.
 """
 
+import os
 import sys
 
 import pytest
+from PyQt5.QtCore import Qt
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
@@ -570,3 +572,177 @@ def test_launch_reads_the_language_before_the_other_settings(qapp, monkeypatch):
     with pytest.raises(Stop):
         app_module.launch(["yesoncheck"])
     assert order[0] == "load_language" and len(order) == 5
+
+
+# ---------------------------------------------------------------- 사이드바 (Task 6)
+
+def test_english_sidebar_has_no_hangul(shown, tmp_path):
+    """English 화면의 사이드바: 안내 항목·개수 줄·정렬 단추·Seq 항목·진행 막대, 우클릭 메뉴(Mov·Seq·All·북마크·정렬), 창 제목 꼬리."""
+    ui_texts.stage(shown, tmp_path)
+    shown.set_ui_language("en")
+    texts = ui_texts.collect(shown)
+    for area in ("sidebar", "sidebar_menus", "title"):
+        assert ui_texts.hangul(texts[area]) == [], area
+
+
+def test_count_line_in_english():
+    from yesoncheck import sidebar_counts, sidebar_take_colors
+
+    ui_text.set_language("en")
+    assert sidebar_counts.count_text("mov", ["a_TK1.mov"] * 2 + ["a_TK1_HD.mov"], []) == "3 items — Base 2 (TK1 2) · HD 1 (TK1 1)"
+    assert sidebar_counts.count_text("mov", ["a.mov"], []) == "1 item"
+    assert sidebar_counts.count_text("mov", [], []) == "0 items"
+    assert sidebar_counts.count_text("seq", [], [("bg", "tga")] * 3) == "3 sequences"
+    assert sidebar_counts.count_text("seq", [], [("bg", "tga")]) == "1 sequence"
+    assert sidebar_counts.count_text("all", ["a.mov", "b.mp4"], [("bg", "tga")]) == "3 items — mov 1 · mp4 1 · tga 1"
+    assert sidebar_counts.count_text("all", [], []) == "0 items"
+    assert sidebar_counts.count_text("mov", ["s_TK1.mov", "s_TK2.mov", "s2.mov"], []) == "3 items — Base 3 (TK1 1 · TK2 1 · none 1)"
+    # 버전·테이크 토막의 색(목록과 같은 색)은 영문 줄에서도 — 괄호 안의 'TK2 5' 꼴만 보고 칠함
+    assert "<span" in sidebar_take_colors.count_line_html("5 items — Base 5 (TK2 5)", "dark")
+
+
+def test_count_line_in_korean_is_what_it_was():
+    from yesoncheck import sidebar_counts
+
+    assert sidebar_counts.count_text("mov", ["a_TK1.mov"] * 2 + ["a_TK1_HD.mov"], []) == "3개 — 기본 2 (TK1 2) · HD 1 (TK1 1)"
+    assert sidebar_counts.count_text("mov", ["a.mov"], []) == "1개"
+    assert sidebar_counts.count_text("seq", [], [("bg", "tga")]) == "시퀀스 1개"
+    assert sidebar_counts.count_text("all", [], []) == "0개"
+    assert sidebar_counts.count_text("mov", ["s_TK1.mov", "s_TK2.mov", "s2.mov"], []) == "3개 — 기본 3 (TK1 1 · TK2 1 · 없음 1)"
+
+
+def test_sort_texts_by_language():
+    from yesoncheck import sidebar_sort
+
+    assert sidebar_sort.button_texts("kind") == ("정렬: 종류 ▾", "종류 ▾", "↕")
+    assert [sidebar_sort.label(mode) for mode in sidebar_sort.MODES] == ["이름", "종류", "버전", "시간"]
+    ui_text.set_language("en")
+    assert sidebar_sort.button_texts("kind") == ("Sort: Kind ▾", "Kind ▾", "↕")
+    assert [sidebar_sort.label(mode) for mode in sidebar_sort.MODES] == ["Name", "Kind", "Version", "Time"]
+    assert ui_texts.hangul([sidebar_sort.tip(mode) for mode in sidebar_sort.MODES] + [sidebar_sort.button_tip()]) == []
+
+
+def test_sort_button_and_its_menu_follow_the_language(shown, capsys):
+    from yesoncheck import sidebar_sort
+
+    shown.set_ui_language("en")
+    menu = shown.sidebar_sort_button.menu()
+    assert [action.text() for action in menu.actions()] == ["Name", "Kind", "Version", "Time"]
+    assert [action.toolTip() for action in menu.actions()] == [sidebar_sort.tip(mode) for mode in sidebar_sort.MODES]
+    assert shown.sidebar_sort_button.toolTip() == f"Sort: Name ▾\n{sidebar_sort.button_tip()}"
+    assert shown.sidebar_sort_button.text() in sidebar_sort.button_texts("name")
+    capsys.readouterr()
+    shown.set_sidebar_sort("kind")
+    assert shown.sidebar_sort_button.toolTip().startswith("Sort: Kind ▾\n")
+    assert "[정렬] 사이드바: 종류" in capsys.readouterr().out  # 기록 줄은 한글 그대로
+    shown.set_ui_language("ko")
+    assert [action.text() for action in menu.actions()] == ["이름", "종류", "버전", "시간"]
+    assert shown.sidebar_sort_button.toolTip().startswith("정렬: 종류 ▾\n")
+
+
+def test_placeholders_follow_the_language_without_reading_any_folder(new_player, dialogs, work_area, monkeypatch):  # noqa: F811
+    """작품·시즌·job 콤보의 안내 항목만 글이 바뀜 — 고른 것·목록은 그대로이고 어떤 폴더도 다시 읽지 않음."""
+    from tests.test_sidebar_refresh import choose, listed
+    from tests.test_work_season_job import season_player
+    from tests.test_work_paths_ui import combo_items
+    from yesoncheck import video_list
+
+    player = season_player(new_player, work_area)
+    assert (player.workComboBox.itemText(0), player.seasonComboBox.itemText(0), player.jobComboBox.itemText(0)) == (
+        "작품선택", "시즌선택", "job선택")
+    player.workComboBox.setCurrentText("BB")
+    player.seasonComboBox.setCurrentText("BB_Season1")
+    choose(player, "job_01")
+    QApplication.processEvents()
+    before = (combo_items(player.workComboBox)[1:], combo_items(player.seasonComboBox)[1:], combo_items(player.jobComboBox)[1:],
+              player.workComboBox.currentIndex(), player.seasonComboBox.currentIndex(), player.jobComboBox.currentIndex(),
+              listed(player))
+    assert before[-1] == ["a.mov"]
+    scans, listings = [], []
+    real_listdir = os.listdir
+    monkeypatch.setattr(video_list, "scan_job", lambda *args: scans.append(args))
+    monkeypatch.setattr(os, "listdir", lambda path=".": listings.append(path) or real_listdir(path))
+    player.set_ui_language("en")
+    QApplication.processEvents()
+    assert (player.workComboBox.itemText(0), player.seasonComboBox.itemText(0), player.jobComboBox.itemText(0)) == (
+        "Select show", "Select season", "Select job")
+    after = (combo_items(player.workComboBox)[1:], combo_items(player.seasonComboBox)[1:], combo_items(player.jobComboBox)[1:],
+             player.workComboBox.currentIndex(), player.seasonComboBox.currentIndex(), player.jobComboBox.currentIndex(),
+             listed(player))
+    assert after == before and scans == [] and listings == []
+    player.set_ui_language("ko")
+    assert (player.workComboBox.itemText(0), player.seasonComboBox.itemText(0), player.jobComboBox.itemText(0)) == (
+        "작품선택", "시즌선택", "job선택")
+    assert scans == [] and listings == []
+
+
+def test_unpicked_placeholders_are_translated_too(shown):
+    """아무것도 고르지 않은 콤보(안내 항목이 보이는 채) — 보이는 글과 그 툴팁이 지금 언어."""
+    shown.set_ui_language("en")
+    assert shown.workComboBox.currentText() == "Select show" and shown.seasonComboBox.currentText() == "Select season"
+    assert shown.jobComboBox.currentText() == "Select job"
+    assert ui_texts.hangul([combo.toolTip() for combo in (shown.workComboBox, shown.seasonComboBox, shown.jobComboBox)]) == []
+
+
+def test_job_selection_does_not_carry_the_placeholder_texts(shown):
+    """'읽은 job'의 표지(_job_selection)는 고르지 않은 칸을 글이 아니라 None으로 — 언어가 바뀌어도 같은 값."""
+    korean = shown._job_selection()
+    shown.set_ui_language("en")
+    assert shown._job_selection() == korean and korean[1:] == (None, None)
+
+
+def test_seq_items_are_relabelled_in_the_language(shown, tmp_path):
+    from yesoncheck.sidebar_sequences import seq_label, seq_tooltip
+
+    ui_texts.stage(shown, tmp_path)
+    item = shown.seq_sidebar.item(0)
+    seq = item.data(Qt.UserRole)
+    korean = (item.text(), item.toolTip())
+    assert korean == (seq_label(seq), seq_tooltip(seq)) and "프레임" in korean[0] and "폴더: " in korean[1]
+    shown.set_ui_language("en")
+    assert (item.text(), item.toolTip()) == (seq_label(seq), seq_tooltip(seq))
+    assert " frames)" in item.text() and "Folder: " in item.toolTip() and "Range: " in item.toolTip()
+    assert shown.seq_sidebar.item(0) is item  # 항목은 그대로 — 글만 바뀜
+    shown.set_ui_language("ko")
+    assert (item.text(), item.toolTip()) == korean
+
+
+def test_seq_label_with_missing_frames_in_both_languages():
+    from yesoncheck.sequence_scan import group_sequences
+    from yesoncheck.sidebar_sequences import seq_label, seq_tooltip
+
+    [seq] = group_sequences("/x", [f"bg-{n:04d}.tga" for n in (1, 2, 4, 7)])
+    assert seq_label(seq) == "bg (0001–0007, 4프레임), 빠짐 3"
+    assert seq_tooltip(seq).splitlines()[1:] == ["폴더: /x", "범위: 0001–0007 (4프레임)", "빠짐 3프레임"]
+    ui_text.set_language("en")
+    assert seq_label(seq) == "bg (0001–0007, 4 frames), 3 missing"
+    assert seq_tooltip(seq).splitlines()[1:] == ["Folder: /x", "Range: 0001–0007 (4 frames)", "3 frames missing"]
+
+
+def test_thumbnail_bar_texts_by_language(shown, tmp_path):
+    ui_texts.stage(shown, tmp_path)
+    assert ui_texts._thumbnail_bar_texts(shown) == [
+        "썸네일 모두 디스크에 저장됨", "썸네일 생성 중: %v/%m", "썸네일 생성 완료", "썸네일 생성 멈춤 (목록이 바뀜)",
+        "썸네일 생성 멈춤 (목록 모드로 바꿈)", "썸네일 생성 멈춤 (창을 닫음)"]
+    shown.set_ui_language("en")
+    assert ui_texts._thumbnail_bar_texts(shown) == [
+        "All thumbnails are saved on disk", "Making thumbnails: %v/%m", "Thumbnails done", "Thumbnails stopped (list changed)",
+        "Thumbnails stopped (switched to list mode)", "Thumbnails stopped (window closed)"]
+
+
+def test_window_title_tail_follows_the_language(shown):
+    korean = ui_texts._title_texts(shown)
+    assert [title.partition(" — ")[2] for title in korean] == [
+        "", "공유 설정 불러오는 중…", "공유 설정 오류 (작품 목록 없음)", korean[3].partition(" — ")[2],
+        "공유 설정 오류 (작품 목록 없음)" + " — " + korean[3].partition(" — ")[2]]
+    assert korean[3].partition(" — ")[2].startswith("변환표 오류")
+    shown.set_ui_language("en")
+    english = ui_texts._title_texts(shown)
+    assert ui_texts.hangul(english) == [] and len(set(english)) == 5
+    assert [title.partition(" — ")[0] for title in english] == [title.partition(" — ")[0] for title in korean]  # 머리는 같음
+    shown.shared_config_problem = "x"  # 문제가 있는 채 언어를 바꾸면 창 제목의 꼬리도 따라 바뀜
+    shown._update_shared_config_title()
+    assert shown.windowTitle() == english[2]
+    shown.set_ui_language("ko")
+    assert shown.windowTitle() == korean[2]
+    shown.shared_config_problem = None

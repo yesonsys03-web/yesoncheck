@@ -57,6 +57,84 @@ TEXTS = {
     "sidebar.refresh.tip": {"ko": "목록 다시 읽기 (F5)", "en": "Reload the list (F5)"},
     "sidebar.mode.list": {"ko": "목록", "en": "List"},
     "sidebar.mode.thumb": {"ko": "썸네일", "en": "Thumbnails"},
+    # 작품·시즌·job 콤보의 안내 항목(0번 — 골라도 아무 일 없음)
+    "picker.work": {"ko": "작품선택", "en": "Select show"},
+    "picker.loading": {"ko": "공유 설정 불러오는 중…", "en": "Loading shared settings…"},
+    "picker.season": {"ko": "시즌선택", "en": "Select season"},
+    "picker.job": {"ko": "job선택", "en": "Select job"},
+    # 목록 아래 개수 줄 (sidebar_counts) — 영문은 하나일 때 낱말이 다름. 괄호 안의 'TK2 5' 꼴은 두 언어에서 같음(색을 칠하는 쪽이 읽음)
+    "count.item": {"ko": "{count}개", "en": "{count} item"},
+    "count.items": {"ko": "{count}개", "en": "{count} items"},
+    "count.sequence": {"ko": "시퀀스 {count}개", "en": "{count} sequence"},
+    "count.sequences": {"ko": "시퀀스 {count}개", "en": "{count} sequences"},
+    "count.base": {"ko": "기본", "en": "Base"},  # 종류가 없는 파일의 묶음
+    "count.no_version": {"ko": "없음", "en": "none"},  # 버전이 있는 파일과 같은 종류에 섞인, 버전 없는 파일
+    # 정렬 단추 (탭 줄의 All 탭 옆 — sidebar_sort)
+    "sort.button": {"ko": "정렬: {label} ▾", "en": "Sort: {label} ▾"},
+    "sort.button.short": {"ko": "{label} ▾", "en": "{label} ▾"},
+    "sort.button.tip": {
+        "ko": "목록을 정렬합니다 — 이름·종류·버전·시간. Mov·Seq·All 탭에 함께 적용되고 선택 재생도 보이는 차례대로 재생합니다",
+        "en": "Sorts the list — name, kind, version or time. Applies to the Mov, Seq and All tabs, and playing the selected "
+              "videos in a row follows the order shown"},
+    "sort.name": {"ko": "이름", "en": "Name"},
+    "sort.kind": {"ko": "종류", "en": "Kind"},
+    "sort.version": {"ko": "버전", "en": "Version"},
+    "sort.time": {"ko": "시간", "en": "Time"},
+    "sort.name.tip": {"ko": "이름 순서 (기본)", "en": "Name order (default)"},
+    "sort.kind.tip": {"ko": "종류끼리 묶음 — 이름 끝의 OSAN·OSRO·HD 등. 묶음 안에서는 이름 순서",
+                      "en": "Groups by kind — OSAN, OSRO, HD … at the end of the name. Name order within a group"},
+    "sort.version.tip": {"ko": "버전·테이크끼리 묶음 — v01·v02·TK1·TK2 등. 묶음 안에서는 이름 순서",
+                         "en": "Groups by version or take — v01, v02, TK1, TK2 …. Name order within a group"},
+    "sort.time.tip": {
+        "ko": "파일을 고친 시각이 최근인 것부터 — 다시 렌더한 영상이 위로. 다시 고르면 시각을 다시 읽습니다",
+        "en": "Most recently modified files first — re-rendered videos move to the top. Choose it again to read the times again"},
+    # Seq 목록의 항목 글과 툴팁 (sidebar_sequences)
+    "seq.label": {"ko": "{base} ({first}–{last}, {count}프레임)", "en": "{base} ({first}–{last}, {count} frames)"},
+    "seq.label.missing": {"ko": ", 빠짐 {missing}", "en": ", {missing} missing"},
+    "seq.tip.folder": {"ko": "폴더: {folder}", "en": "Folder: {folder}"},
+    "seq.tip.range": {"ko": "범위: {first}–{last} ({count}프레임)", "en": "Range: {first}–{last} ({count} frames)"},
+    "seq.tip.missing": {"ko": "빠짐 {missing}프레임", "en": "{missing} frames missing"},
+    # 썸네일 진행 막대 (만드는 동안만 보임 — %v/%m은 QProgressBar가 채움)
+    "thumb.making": {"ko": "썸네일 생성 중: %v/%m", "en": "Making thumbnails: %v/%m"},
+    "thumb.all_saved": {"ko": "썸네일 모두 디스크에 저장됨", "en": "All thumbnails are saved on disk"},
+    "thumb.done": {"ko": "썸네일 생성 완료", "en": "Thumbnails done"},
+    "thumb.stopped": {"ko": "썸네일 생성 멈춤 ({reason})", "en": "Thumbnails stopped ({reason})"},
+    "thumb.stop.closed": {"ko": "창을 닫음", "en": "window closed"},
+    "thumb.stop.list_changed": {"ko": "목록이 바뀜", "en": "list changed"},
+    "thumb.stop.list_mode": {"ko": "목록 모드로 바꿈", "en": "switched to list mode"},
+    # 목록의 우클릭 메뉴 — Mov
+    "side_menu.open_a": {"ko": "비디오 A 열기", "en": "Open as video A"},
+    "side_menu.open_b": {"ko": "비디오 B 열기", "en": "Open as video B"},
+    "side_menu.merge": {"ko": "애니매틱 하나로 합치기", "en": "Merge animatics into one"},
+    "side_menu.copy": {"ko": "파일 복사", "en": "Copy files"},
+    "side_menu.thumbnails": {"ko": "썸네일 재생성", "en": "Regenerate thumbnails"},
+    "side_menu.info": {"ko": "미디어 정보", "en": "Media info"},
+    # Seq
+    "side_menu.seq.open_a": {"ko": "비디오 A로 열기", "en": "Open as video A"},
+    "side_menu.seq.open_b": {"ko": "비디오 B로 열기", "en": "Open as video B"},
+    "side_menu.seq.export": {"ko": "선택한 시퀀스로 MOV 만들기…", "en": "Make MOV from selected sequences…"},
+    "side_menu.seq.thumbnails": {"ko": "썸네일 다시 만들기", "en": "Remake thumbnails"},
+    "side_menu.seq.info": {"ko": "정보 보기", "en": "Show info"},
+    # All
+    "side_menu.all.select_movs": {"ko": "Mov만 모두 선택", "en": "Select all Mov only"},
+    # 맨 아래의 '다른 앱으로 열기' (sidebar_open_with)
+    "open_with.menu": {"ko": "다른 앱으로 열기", "en": "Open with another app"},
+    "open_with.count": {"ko": "{text} ({count}개)", "en": "{text} ({count})"},
+    "open_with.app": {"ko": "{app}로 열기", "en": "Open with {app}"},
+    "open_with.only_sequences.tip": {"ko": "고른 것이 시퀀스뿐입니다 — 등록한 앱으로 여세요",
+                                     "en": "Only sequences are selected — open them with a registered app"},
+    "open_with.movies_only.tip": {"ko": "시퀀스는 넘기지 않습니다 (영상만)", "en": "Sequences are not passed (videos only)"},
+    "open_with.register": {"ko": "앱 등록…", "en": "Register app…"},
+    "open_with.remove": {"ko": "앱 지우기", "en": "Remove app"},
+    "open_with.no_apps": {"ko": "(등록한 앱 없음)", "en": "(no registered apps)"},
+    "open_with.missing": {"ko": "{app} (찾을 수 없음)", "en": "{app} (not found)"},
+    "open_with.prefs_problem": {"ko": "설정 파일을 읽지 못했습니다", "en": "Could not read the settings file"},
+    # 창 제목의 꼬리 (앞은 'Yeson Checker <버전>' — 언어와 무관)
+    "title.loading": {"ko": " — 공유 설정 불러오는 중…", "en": " — loading shared settings…"},
+    "title.config_problem": {"ko": " — 공유 설정 오류 (작품 목록 없음)", "en": " — shared settings error (no show list)"},
+    "title.path_map_problem": {"ko": " — 변환표 오류", "en": " — path map error"},
+    "title.path_map_problem.windows": {"ko": " — 변환표 오류 (작품 경로 관리에서 자동 설정)",
+                                       "en": " — path map error (set it up in Manage show paths)"},
     # 도구 패널 (뷰어 오른쪽 — 주석·OCR)
     "panel.annotation": {"ko": "수정 사항 주석", "en": "Annotations"},
     "panel.ocr": {"ko": "OCR", "en": "OCR"},
@@ -182,6 +260,12 @@ def set_language(code):
 def text(key, **values):
     """키의 지금 언어 글. 모르는 키는 KeyError(글을 지어내지 않음). values는 글 안의 `{이름}`을 채움."""
     template = TEXTS[key][_language]
+    return template.format(**values) if values else template
+
+
+def korean(key, **values):
+    """키의 한국어 글 — 화면이 아니라 기록 줄·딸린 창처럼 언어와 무관하게 한글로 남는 자리에서 (같은 글을 두 곳에 적지 않게)."""
+    template = TEXTS[key][DEFAULT_LANGUAGE]
     return template.format(**values) if values else template
 
 

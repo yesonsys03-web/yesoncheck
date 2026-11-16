@@ -222,6 +222,29 @@ class SidebarControlsMixin:
         self.thumbnailModeButton.set_text_key("sidebar.mode.thumb")
         self.playSelectedPauseButton.retranslate()
 
+    def retranslate_sidebar(self):
+        """사이드바의 글자를 모두 지금 언어로 다시 (언어가 바뀐 뒤 — PlayerLanguageMixin.RETRANSLATORS): 단추 묶음, 작품·시즌·job
+        콤보의 안내 항목(0번 — 글만 바꿈: 신호를 막아 고른 것·목록을 건드리지 않고 폴더도 다시 읽지 않음), 개수 줄, 정렬 단추와 그 메뉴,
+        Seq 항목의 글·툴팁, 창 제목의 꼬리. 우클릭 메뉴는 열 때마다 만들어 그때의 언어로 나옴. 썸네일 진행 막대는 만드는 동안만
+        보이고 다음 글부터 새 언어."""
+        self.retranslate_sidebar_controls()
+        placeholders = ((self.workComboBox, self._first_work_item()), (self.seasonComboBox, ui_text.text("picker.season")),
+                        (self.jobComboBox, ui_text.text("picker.job")))
+        for combo, placeholder in placeholders:
+            if combo.count():
+                blocked = combo.blockSignals(True)
+                combo.setItemText(0, placeholder)
+                combo.blockSignals(blocked)
+            if combo.toolTip():  # 고른 글자를 비추는 툴팁(_show_combo_tooltips) — 이미 있는 것만 지금 글로
+                combo.setToolTip(combo.currentText())
+        self._update_sidebar_count()
+        self._sync_sidebar_sort_button()
+        self.retranslate_seq_items()
+        # All 목록은 Mov·Seq 목록의 사본 — 보이지 않는 동안에는 저절로 다시 만들어지지 않으므로 여기서 한 번 (낡은 글이 남지 않게)
+        self._all_rebuild_timer.stop()
+        self._rebuild_all_list()
+        self._update_shared_config_title()
+
     # ------------------------------------------------------------ 처음 폭 (언어마다)
     # 단추의 최소 너비는 언어와 무관하지만(ShrinkButton — 창의 최소 크기를 지킴) 바라는 너비는 지금 글의 것이라, English에서는
     # 예전 처음 폭(200)에 작은 단추 셋의 글이 다 들어가지 않는다(이 Mac: Open … · Book… · Refr…). 그래서 '처음 폭'을 언어마다:

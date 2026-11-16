@@ -14,20 +14,16 @@
 창에 잇는 일(단추·목록 옮기기)은 sidebar_sorting.SidebarSortMixin.
 """
 
+from yesoncheck import ui_text
 from yesoncheck.sidebar_take_colors import take_number
 from yesoncheck.sidebar_counts import kind_and_version
 
 MODES = ("name", "kind", "version", "time")
 DEFAULT_MODE = "name"
 TIME_MODE = "time"
-LABELS = {"name": "이름", "kind": "종류", "version": "버전", "time": "시간"}
-TIPS = {
-    "name": "이름 순서 (기본)",
-    "kind": "종류끼리 묶음 — 이름 끝의 OSAN·OSRO·HD 등. 묶음 안에서는 이름 순서",
-    "version": "버전·테이크끼리 묶음 — v01·v02·TK1·TK2 등. 묶음 안에서는 이름 순서",
-    "time": "파일을 고친 시각이 최근인 것부터 — 다시 렌더한 영상이 위로. 다시 고르면 시각을 다시 읽습니다",
-}
-BUTTON_TIP = "목록을 정렬합니다 — 이름·종류·버전·시간. Mov·Seq·All 탭에 함께 적용되고 선택 재생도 보이는 차례대로 재생합니다"
+# 화면의 글은 글자 표(ui_text)에서 — 기준의 이름 `sort.<기준>`(이름·종류·버전·시간 / Name·Kind·Version·Time), 그 툴팁
+# `sort.<기준>.tip`, 단추 글 `sort.button`(`정렬: 종류 ▾` / `Sort: Kind ▾`)·`sort.button.short`, 단추 툴팁 `sort.button.tip`
+LABEL_KEYS = {mode: f"sort.{mode}" for mode in MODES}
 UNKNOWN_TIME = 0.0  # 고친 시각을 읽지 못한(또는 아직 읽지 않은) 항목의 정렬 값 — 가장 오래된 것으로 쳐 맨 뒤에 (화면에 보이는 값이 아니라 차례만 정함)
 
 
@@ -37,9 +33,29 @@ def _checked(mode):
     return mode
 
 
+def label(mode) -> str:
+    """기준의 이름(지금 언어) — 메뉴 항목의 글."""
+    return ui_text.text(LABEL_KEYS[_checked(mode)])
+
+
+def tip(mode) -> str:
+    """기준의 설명(지금 언어) — 메뉴 항목의 툴팁."""
+    return ui_text.text(LABEL_KEYS[_checked(mode)] + ".tip")
+
+
+def button_tip() -> str:
+    """정렬 단추의 툴팁(지금 언어 — 첫 줄 아래에 붙는 설명)."""
+    return ui_text.text("sort.button.tip")
+
+
+def log_label(mode) -> str:
+    """기록 줄에 적는 기준의 이름 — 언어와 무관하게 한글."""
+    return ui_text.korean(LABEL_KEYS[_checked(mode)])
+
+
 def button_text(mode) -> str:
     """정렬 단추의 글 — `정렬: 종류 ▾` (끝의 세모는 누르면 고르는 목록이 뜬다는 표시)."""
-    return f"정렬: {LABELS[_checked(mode)]} ▾"
+    return ui_text.text("sort.button", label=label(mode))
 
 
 COMPACT_BUTTON_TEXT = "↕"  # 자리가 가장 모자랄 때의 단추 글 (기준은 툴팁에)
@@ -48,7 +64,7 @@ COMPACT_BUTTON_TEXT = "↕"  # 자리가 가장 모자랄 때의 단추 글 (기
 def button_texts(mode) -> tuple:
     """정렬 단추의 글 후보 — 긴 것부터: `정렬: 종류 ▾` · `종류 ▾` · `↕`. 단추는 탭 줄(All 탭 옆)에 있어 사이드바가 좁으면 탭을 가리므로
     자리에 들어가는 가장 긴 것을 씀 (sidebar_sorting._fit_sidebar_sort_button)."""
-    return button_text(mode), f"{LABELS[mode]} ▾", COMPACT_BUTTON_TEXT
+    return button_text(mode), ui_text.text("sort.button.short", label=label(mode)), COMPACT_BUTTON_TEXT
 
 
 def group_key(stem, mode, mtime=None) -> tuple:
