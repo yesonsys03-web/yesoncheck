@@ -16,6 +16,7 @@ from tests.test_manual_html import fake_image
 HANGUL_RE = re.compile(r"[ㄱ-ㆎ가-힣]")
 LETTER_RE = re.compile(r"[A-Za-zㄱ-ㆎ가-힣]")
 PRIVATE = ("/Volumes/", "/Users/", "colordata", "usadata", "USA_DB")
+WORK_FOLDER_SHAPE = "_animatic"  # 작품 폴더 이름 꼴 — 글을 소문자로 바꿔 찾음 (이름 목록은 저장소에 넣지 않음)
 
 
 def strings_of(content):
@@ -91,6 +92,7 @@ def test_english_text_has_no_private_paths():
     for where, text in list(strings_of(manual_content_en)) + list(note_strings(release_notes_en)):
         for needle in PRIVATE:
             assert needle not in text, (where, needle, text[:60])
+        assert WORK_FOLDER_SHAPE not in text.lower(), (where, text[:60])
 
 
 def test_languages_use_their_own_modules():

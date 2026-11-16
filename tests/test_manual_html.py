@@ -96,7 +96,8 @@ def test_shortcuts_page_lists_every_key_the_code_handles():
 
 
 def test_manual_text_has_no_private_paths():
-    """저장소가 공개 — 매뉴얼 글에 이 PC·NAS의 경로가 들어가면 안 됨 (바뀐 점은 test_release_notes가 봄)."""
+    """저장소가 공개 — 매뉴얼 글에 이 PC·NAS의 경로나 작품 폴더 이름(`…_Animatic` 꼴)이 들어가면 안 됨
+    (바뀐 점은 test_release_notes가 봄)."""
 
     def strings(value):
         if isinstance(value, str):
@@ -109,6 +110,7 @@ def test_manual_text_has_no_private_paths():
         for text in strings((item.title, item.lead, item.blocks)):
             for needle in ("/Volumes/", "/Users/", "colordata", "usadata", "USA_DB"):
                 assert needle not in text, (item.key, needle, text[:60])
+            assert "_animatic" not in text.lower(), (item.key, text[:60])  # 작품 폴더 이름 꼴 — 대소문자와 상관없이
 
 
 def test_script_routes_by_element_id_and_survives_a_broken_address():

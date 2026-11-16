@@ -37,11 +37,12 @@ def test_only_the_newest_release_may_lack_a_date():
 
 
 def test_notes_have_no_private_paths():
-    """저장소가 공개 — 배포 노트·매뉴얼에 이 PC·NAS의 경로가 들어가면 안 됨."""
+    """저장소가 공개 — 배포 노트·매뉴얼에 이 PC·NAS의 경로나 작품 폴더 이름(`…_Animatic` 꼴)이 들어가면 안 됨."""
     for release in release_notes.RELEASES:
         text = release_notes.notes_text(release.version)
         for needle in ("/Volumes/", "/Users/", "colordata", "usadata"):
             assert needle not in text, (release.version, needle)
+        assert "_animatic" not in text.lower(), release.version  # 작품 폴더 이름 꼴 — 대소문자와 상관없이
 
 
 def test_notes_text_shape():
