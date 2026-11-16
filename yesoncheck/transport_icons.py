@@ -1,13 +1,14 @@
 """재생 줄의 아이콘 — QPainter로 직접 그린 한 색 그림 (글꼴·이모지에 기대지 않음: 플랫폼마다 글리프가 다르거나 없음).
 
 `pixmap(종류, 색, 크기, dpr)`은 투명 바탕에 그 색 하나로 그린다. 테마가 바뀌면 부르는 쪽이 새 색으로 다시 만든다.
-종류: first(|◀ 처음) · prev(◀| 한 장 뒤) · play(▶) · pause(❙❙) · next(|▶ 한 장 앞) · last(▶| 끝) · loop(둥근 화살표) · volume(스피커).
+종류: first(|◀ 처음) · prev(◀| 한 장 뒤) · play(▶) · pause(❙❙) · next(|▶ 한 장 앞) · last(▶| 끝) · loop(둥근 화살표) · volume(스피커)
+· wipe(세로로 나뉜 사각형 — A|B 와이프) · annotate(연필 — 주석) · ocr(모서리 표시 안의 글자 줄) · close(✕ — 도구 패널 닫기).
 """
 
 from PyQt5.QtCore import QPointF, QRectF, Qt
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 
-KINDS = ("first", "prev", "play", "pause", "next", "last", "loop", "volume")
+KINDS = ("first", "prev", "play", "pause", "next", "last", "loop", "volume", "wipe", "annotate", "ocr", "close")
 ICON_DPR = 2.0  # 아이콘은 Retina에서도 또렷하게 2배로 그려 둠 (보이는 크기는 size)
 
 
@@ -55,6 +56,33 @@ def _draw(painter, kind, colour, s):
         painter.setPen(QPen(colour, s * 0.09, Qt.SolidLine, Qt.RoundCap))
         painter.drawArc(QRectF(s * 0.46, s * 0.3, s * 0.3, s * 0.4), -60 * 16, 120 * 16)
         painter.drawArc(QRectF(s * 0.44, s * 0.16, s * 0.48, s * 0.68), -60 * 16, 120 * 16)
+    elif kind == "wipe":  # 왼쪽 반은 채움(A), 오른쪽 반은 테두리만(B), 가운데에 나누는 선
+        u = s / 18.0  # 18px에서 픽셀에 맞는 눈금
+        painter.drawRect(QRectF(2 * u, 4 * u, 7 * u, 10 * u))
+        painter.drawRect(QRectF(8.5 * u, 2 * u, 1 * u, 14 * u))
+        painter.setBrush(Qt.NoBrush)
+        pen = QPen(colour, 1.4 * u)
+        pen.setJoinStyle(Qt.MiterJoin)
+        painter.setPen(pen)
+        painter.drawRect(QRectF(9 * u, 4.7 * u, 6.3 * u, 8.6 * u))
+    elif kind == "annotate":  # 연필 — 오른쪽 위에서 왼쪽 아래(촉)로
+        u = s / 18.0
+        painter.drawPolygon(QPolygonF([QPointF(12 * u, 2 * u), QPointF(16 * u, 6 * u), QPointF(8 * u, 14 * u),
+                                       QPointF(2 * u, 16 * u), QPointF(4 * u, 10 * u)]))
+    elif kind == "ocr":  # 읽을 영역의 네 모서리 표시 + 그 안의 글자 두 줄
+        u = s / 18.0
+        low, high, arm, thick = 2 * u, 16 * u, 5 * u, 2 * u
+        for x, y in ((low, low), (high - arm, low), (low, high - thick), (high - arm, high - thick)):
+            painter.drawRect(QRectF(x, y, arm, thick))  # 가로 획
+        for x, y in ((low, low), (high - thick, low), (low, high - arm), (high - thick, high - arm)):
+            painter.drawRect(QRectF(x, y, thick, arm))  # 세로 획
+        painter.drawRect(QRectF(6 * u, 7 * u, 6 * u, 2 * u))
+        painter.drawRect(QRectF(6 * u, 10 * u, 4 * u, 1.5 * u))
+    elif kind == "close":  # ✕ — 도구 패널의 닫기
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(colour, s * 0.11, Qt.SolidLine, Qt.RoundCap))
+        painter.drawLine(QPointF(s * 0.28, s * 0.28), QPointF(s * 0.72, s * 0.72))
+        painter.drawLine(QPointF(s * 0.72, s * 0.28), QPointF(s * 0.28, s * 0.72))
 
 
 def pixmap(kind, color, size=18, dpr=1.0):

@@ -115,8 +115,8 @@ def test_bar_does_not_move_when_panels_lists_and_files_change(shown, qapp, tmp_p
                  w.height()) for w in widgets]
 
     before = spots()
-    for toggle in shown.findChildren(QPushButton, "collapsibleToggle"):  # 가운데 열의 접는 상자를 모두 펼침
-        toggle.click()
+    shown.show_tool_panel("ocr")  # 도구 패널을 열고 쪽을 바꿈 (예전에는 가운데 열의 접는 상자를 모두 펼침)
+    shown.show_tool_panel("annotation")
     shown.add_files_to_sidebar([clip(tmp_path, f"list{i:02d}.mp4", 2) for i in range(30)])
     shown.open_file("A", clip(tmp_path, "EP101_SC001_a_very_long_file_name_for_the_transport_bar_TK2.mp4", 12))
     shown.play_video()

@@ -155,10 +155,10 @@ def test_mov_tab_play_selected_unchanged(player, qapp, tmp_path, monkeypatch):
 def test_play_buttons_enabled_on_all_tab(player, qapp, tmp_path):
     drop_folder(player, "video", shot(tmp_path))
     show_all_tab(player, qapp)
-    assert player.playSelectedButton.isEnabled()
+    assert player.playSelectedPauseButton.isEnabled()
     player.sidebar_tabs.setCurrentWidget(player.seq_sidebar)
     qapp.processEvents()
-    assert not player.playSelectedButton.isEnabled()
+    assert not player.playSelectedPauseButton.isEnabled()
 
 
 # ---------------------------------------------------------------- 사이드바 폭 (List/Thumb)

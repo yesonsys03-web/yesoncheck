@@ -157,7 +157,7 @@ class SidebarThumbnailsMixin:
         sizes = self.mainSplitter.sizes()
         page = self.sidebar_tabs.currentWidget()
         column = sizes[0] + list_width - page.width()
-        sizes[2] = max(0, sizes[2] - (column - sizes[0]))
+        sizes[1] = max(0, sizes[1] - (column - sizes[0]))  # 영상 칸 (스플리터: 사이드바 | 영상 | 도구 패널)
         sizes[0] = column
         self.mainSplitter.setSizes(sizes)
 
@@ -284,6 +284,7 @@ class SidebarThumbnailsMixin:
         import gc
         total = len(to_generate)
         bar = self.thumbnailProgressBar
+        self._thumbnail_bar_timer.stop()  # 진행 막대는 만드는 동안만 보임 — 앞 반복이 걸어 둔 '숨기기'를 거둠
         if total > 0:
             bar.setMaximum(total)
             bar.setValue(0)
@@ -321,10 +322,12 @@ class SidebarThumbnailsMixin:
         if stopped:
             print(f"썸네일 만들기를 멈춤 ({stopped}, {done}/{total}개에서)")
             bar.setFormat(f'썸네일 생성 멈춤 ({stopped})')
+            self._thumbnail_bar_timer.start()  # 끝난 글자를 잠깐 보인 뒤 숨김
             return started, stopped
         if total > 0:
             bar.setValue(total)
             bar.setFormat('썸네일 생성 완료')
+        self._thumbnail_bar_timer.start()  # 끝난 글자를 잠깐 보인 뒤 숨김
         return started, None
 
     def cleanup_thumbnail_workers(self):

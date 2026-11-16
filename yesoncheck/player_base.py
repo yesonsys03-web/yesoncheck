@@ -22,14 +22,12 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
-    QHBoxLayout,
     QLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QMainWindow,
     QMessageBox,
-    QProgressBar,
     QProgressDialog,
     QPushButton,
     QShortcut,
@@ -43,38 +41,31 @@ from PyQt5.QtWidgets import (
 
 from yesoncheck.video_widget import VIEWPORT_ENV, CustomVideoWidget
 from yesoncheck import bookmarks, build_info, default_app, downscale_filter, error_window, external_tools, file_associations, \
-    instance_link, instances, mac_native_gate, mac_prefs, manual_open, media_player_log, paths, timing_log, user_files, \
-    video_list, windows_display
+    instance_link, instances, mac_native_gate, mac_prefs, manual_open, media_player_log, paths, timing_log, tool_panel, \
+    user_files, video_list, windows_display
 from yesoncheck import sidebar_sort  # 사이드바 정렬 기준의 기본값 (SidebarSortMixin)
 from yesoncheck.movie_pipe_source import movie_source_mode
 from yesoncheck.user_files import UserFileError
 from yesoncheck.main_window_styles import (
-    BOOKMARK_BUTTON_STYLE,
-    BOOKMARK_LIST_REFRESH_BUTTON_STYLE,
     DARK_STYLESHEET,
     LIGHT_STYLESHEET,
-    LIST_MODE_BUTTON_STYLE,
-    OCR_OPTION_LABEL_STYLE,
     POSITION_SCROLL_INITIAL_STYLE,
     POSITION_SCROLL_STYLE,
-    THUMBNAIL_MODE_BUTTON_STYLE,
-    WORK_PATH_BUTTON_STYLE,
 )
 from yesoncheck.player_hover_thumbs import PlayerHoverThumbsMixin
+from yesoncheck.player_menus import PlayerMenusMixin
 from yesoncheck.player_ocr import PlayerOcrMixin
 from yesoncheck.player_overlay import PlayerOverlayMixin
+from yesoncheck.player_tools import PlayerToolsMixin
 from yesoncheck.player_transport import PlayerTransportMixin
+from yesoncheck.sidebar_controls import WidePopupComboBox
 from yesoncheck.slider_style import jump_to_click
 from yesoncheck.update_banner import UpdateBanner
-from yesoncheck.window_layout import ButtonPairRow, SteadyTextButton, VerticalScrollArea, startup_geometry
+from yesoncheck.window_layout import startup_geometry
 # 놓아 준 워커를 붙잡아 두는 코드는 worker_lifecycle에 있고, 기존 경로(`from yesoncheck.player_base import EXIT_WAIT_S, release_worker,
 # wait_for_released_workers`)를 위해 여기서 다시 내보냄. _RELEASED_WORKERS는 읽는 쪽(시험)용 같은 dict 객체 — 바꿔치기하려면
 # worker_lifecycle에서 할 것 (이 모듈의 이름을 바꿔도 release_worker는 worker_lifecycle의 것을 씀)
 from yesoncheck.worker_lifecycle import EXIT_WAIT_S, _RELEASED_WORKERS, release_worker, wait_for_released_workers
-
-# 처음 창에서 가운데 열을 단추 쌍이 들어가는 폭까지 넓혀 줄 때 영상 영역에 남겨야 하는 너비 (apply_startup_geometry).
-# 2026-11-16 전에는 영상 칸에 함께 있던 정보 줄의 최소 너비(보통 글꼴 193px·글자가 넓은 글꼴 356px)가 그 구실을 했음
-VIDEO_START_MINIMUM = 300
 
 # 창을 켰을 때의 볼륨 (0~100) — 재생 줄의 볼륨 슬라이더·V 모드의 오버레이 볼륨도 이 값에서 시작.
 # 2026-11-16 전에는 슬라이더만 50에서 시작하고 재생기는 100(QMediaPlayer 기본값)이라 슬라이더를 건드릴 때까지 표시와 소리가
@@ -95,7 +86,6 @@ KEEP_LATCH_LOG = "[표시] 네이티브 프레임이 아직 남아 걸쇠를 풀
 DECODER_RETRY_LOG = "[재생] 이 창은 그리기가 멈춰 있어(걸쇠) ffmpeg로 캡처를 다시 바꿔 끼우고 걸쇠를 정리함"  # 메뉴에서 이미 유효한 ffmpeg를 다시 고름 (Ruling 11, 최종 리뷰 F1)
 # 무거운 모듈들은 lazy import로 변경 (실제 사용 시점에만 로드)
 # from yesoncheck.workers import OCRWorker, OCRExportWorker, SceneDetectWorker
-# from yesoncheck.player_timeline import CollapsibleBox
 # from yesoncheck.player_review import OCRReviewDialog
 
 
@@ -122,7 +112,7 @@ def korean_date(day):
     return f"{day.year}년 {day.month:02d}월 {day.day:02d}일"
 
 
-class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
+class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsMixin, PlayerMenusMixin, PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
     # 창을 닫을 때 실행 중인 공유 설정 불러오기를 기다리는 최대 시간 (그 뒤에는 로그만 남기고 닫음)
     SHARED_CONFIG_CLOSE_WAIT_MS = 5000
     # 창을 닫을 때 실행 중인 분석·내보내기·병합을 기다리는 최대 시간 (그 뒤에는 끝날 때까지 붙잡아 둠)
@@ -189,8 +179,14 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerOcrMix
         self.setStyleSheet(DARK_STYLESHEET)
         
         self.controls_visible = True  # initUI() 호출 전에 먼저 정의
-        self.middle_panel_visible = True  # N 키로 숨기는 가운데 컨트롤 열 (middleScrollArea)
-        self._middle_panel_width = 220  # 숨기기 전 가운데 열의 스플리터 폭 (초기 setSizes의 220 — 숨긴 동안 0이 적히면 복원용)
+        # 도구 패널(뷰어 오른쪽 — 주석·OCR, PlayerToolsMixin): 열려 있는 쪽('annotation'·'ocr', 닫혀 있으면 None),
+        # N 키가 다시 여는 쪽(마지막에 쓰던 쪽 — 처음이면 주석), 패널의 폭(닫을 때 기억 — 창이 떠 있는 동안)
+        self._tool_panel_key = None
+        self._last_tool_panel = "annotation"
+        self._tool_panel_width = tool_panel.PANEL_WIDTH
+        # 작품 묶음을 보일지의 기억(이 PC의 prefs — work_picker): 사이드바를 만들 때 읽음 (sidebar_controls._build_work_picker).
+        # True 읽어 온 적 있음 · False 없음 · None 모름(설정 파일을 읽지 못함 — 보이는 쪽)
+        self._work_picker_seen = None
         # 사이드바 Mov·Seq 탭 (initUI가 위젯을 만듦; SidebarSequencesMixin이 씀): 탭 위젯, Seq 목록(이미지 시퀀스), 폴더를 읽어 찾은 시퀀스
         # (path_key → [SeqInfo] — 영상 경로만 돌려주는 get_video_files_from_folder와 목록을 채우는 쪽 사이)
         self.sidebar_tabs = None
@@ -367,25 +363,23 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerOcrMix
         self.videoWidget.set_annotation_provider(self._annotations_for_native)  # 주석도 — 네이티브 프레임은 위젯의 주석 층으로
         self.videoWidget.streamPaintFailed.connect(self._on_stream_paint_failed)  # (Mac) 네이티브 그리기 첫 실패 → 이 창만 ffmpeg
         self.videoWidget.roiSelectionFinished.connect(self.on_roi_selected)
+        # 영상 영역에서 우클릭 → 메뉴 막대의 메뉴 전부를 띄움 (player_menus — 영상 영역은 우클릭을 다른 데 쓰지 않음)
+        self.videoWidget.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.videoWidget.customContextMenuRequested.connect(lambda position: self.show_video_context_menu(position))
         self.init_annotation_system()
 
-        workLabel = QLabel("Yeson 작품")
-        workLabel.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self.workComboBox = QComboBox()
+        # 작품·시즌·job 콤보 — 사이드바 맨 위의 작품 묶음에 놓임 (sidebar_controls._build_work_picker).
+        # 영상 열기(예전 Open Video A/B 단추)는 File 메뉴와 끌어다 놓기
+        self.workComboBox = WidePopupComboBox()
         self.workComboBox.addItem(self._first_work_item())  # 불러오는 동안은 "공유 설정 불러오는 중…"
         # JSON에서 작품 목록 로드
         for work_name in sorted(self.work_paths.keys()):
             self.workComboBox.addItem(work_name)
         self._update_shared_config_title()
-        self.seasonComboBox = QComboBox()
+        self.seasonComboBox = WidePopupComboBox()
         self.seasonComboBox.addItem("시즌선택")
-        self.jobComboBox = QComboBox()
+        self.jobComboBox = WidePopupComboBox()
         self.jobComboBox.addItem("job선택")
-
-        openButtonA = QPushButton('Open Video A')
-        openButtonA.clicked.connect(lambda: self.open_file('A'))
-        openButtonB = QPushButton('Open Video B')
-        openButtonB.clicked.connect(lambda: self.open_file('B'))
 
         self.ocrSelectRoiButton = QPushButton('OCR ROI 지정')
         self.ocrSelectRoiButton.setCheckable(True)
@@ -401,8 +395,6 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerOcrMix
         self.ocrTrackingCheckBox.setEnabled(False)
 
         # OCR 분석 방식 선택
-        ocr_mode_layout = QHBoxLayout()
-        ocr_mode_label = QLabel('OCR 분석 방식:')
         self.ocrModeComboBox = QComboBox()
         self.ocrModeComboBox.addItem('Titmouse', 'titmouse')
         self.ocrModeComboBox.addItem('King', 'king')
@@ -429,8 +421,6 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerOcrMix
             timing_log.startup(f"애니매틱2(TransNetV2) 항목 숨김 — 이 빌드/환경에 없는 것: {_transnetv2_missing()}")
         self.ocrModeComboBox.setToolTip(ocr_mode_tooltip)
         self.ocrModeComboBox.currentIndexChanged.connect(self.on_ocr_mode_changed)
-        ocr_mode_layout.addWidget(ocr_mode_label)
-        ocr_mode_layout.addWidget(self.ocrModeComboBox)
         
         # All 모드용 패턴 입력 필드
         self.ocrPatternLabel = QLabel('패턴:')
@@ -449,11 +439,6 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerOcrMix
         )
         self.ocrPatternLabel.setVisible(False)
         self.ocrPatternLineEdit.setVisible(False)
-        ocr_mode_layout.addWidget(self.ocrPatternLabel)
-        ocr_mode_layout.addWidget(self.ocrPatternLineEdit)
-        
-        ocr_mode_widget = QWidget()
-        ocr_mode_widget.setLayout(ocr_mode_layout)
 
         self.ocrAnalyzeButton = QPushButton('OCR 구간 추출')
         self.ocrAnalyzeButton.clicked.connect(self.run_ocr_analysis)
@@ -485,9 +470,9 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerOcrMix
         helpButton = QPushButton('Help')
         helpButton.clicked.connect(self.show_help)
         # 재생 줄(슬라이더 바로 아래 한 줄 — transport_bar)과 선택 재생 '끝내기' 단추: 재생/일시정지·처음·끝·한 장 이동·반복·
-        # 프레임 칸·전체·시간·fps·볼륨이 모두 거기 있다. 예전의 큰 Play·Stop 막대와 정보 줄(파일·Current·Total·재생 FPS·시간),
-        # 가운데 열의 Loop Play·Volume·FPS는 없앰. 재생 코드가 쓰는 옛 이름(filenameLabel·labelFrameCount·labelTotalFrames·
-        # labelPlaybackFPS·timeLabel·playPauseButton·loopCheckBox·volumeSlider)은 이 호출이 재생 줄에 이어 둠 (player_transport)
+        # 프레임 칸·전체·시간·fps·도구 토글(와이프 X Y·주석·OCR)·볼륨이 모두 거기 있다. 재생 코드가 쓰는 옛 이름(filenameLabel·
+        # labelFrameCount·labelTotalFrames·labelPlaybackFPS·timeLabel·playPauseButton·loopCheckBox·volumeSlider·wipeCheckBox·
+        # wipeXButton·wipeYButton)은 이 호출이 재생 줄에 이어 둠 (player_transport)
         self._init_transport_bar()
 
         self.positionScroll = QSlider(Qt.Horizontal)
@@ -502,108 +487,10 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerOcrMix
         self.positionScroll.sliderMoved.connect(self.on_slider_moved)  # 드래그 중 실시간 업데이트
         self.positionScroll.sliderReleased.connect(self.sync_audio_on_release)
         
-        self.wipeCheckBox = QCheckBox('Enable Wipe Effect')
-        self.wipeCheckBox.setChecked(False)
-        self.wipeCheckBox.stateChanged.connect(self.toggle_wipe_effect)
-        self.wipeXButton = QPushButton('X-Axis Wipe'); self.wipeXButton.setCheckable(True)
-        self.wipeXButton.toggled.connect(self.toggle_wipe_x)
-        self.wipeYButton = QPushButton('Y-Axis Wipe'); self.wipeYButton.setCheckable(True)
-        self.wipeYButton.toggled.connect(self.toggle_wipe_y)
-        self.wipeXButton.setEnabled(False)
-        self.wipeYButton.setEnabled(False)
-
-        self.playSelectedButton = QPushButton('Play Selected')
-        self.playSelectedButton.clicked.connect(self.play_selected_files)
-        self.playSelectedButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        # 글자는 재생·멈춤마다 바뀜(player_playback·sidebar_playlist가 'Selected Play'/'Selected Pause'로) — 옆의 Play Selected와 한 줄을
-        # 나눠 쓰므로 크기 힌트는 둘 중 넓은 글자로 고정(SteadyTextButton). 처음 글자도 한 번 쓴 뒤와 같은 'Selected Play'
-        # (예전 처음 글자 'Play/Pause Selected'는 반 폭에 들어가지 않음)
-        self.playSelectedPauseButton = SteadyTextButton('Selected Play', ('Selected Play', 'Selected Pause'))
-        self.playSelectedPauseButton.clicked.connect(self.toggle_play_pause_selected)
-        self.playSelectedPauseButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        
-        # OCR 기능을 접을 수 있는 그룹박스로 구성 (기본 접힌 상태)
-        # 1. ROI 설정 그룹 (lazy import)
-        from yesoncheck.player_timeline import CollapsibleBox
-        roi_group = CollapsibleBox("▶ ROI 설정")
-        roi_group.toggle_button.setChecked(False)  # 접힌 상태로 시작
-        roi_group.content_area.setVisible(False)
-        
-        # 버튼 최소 너비 설정
-        self.ocrSelectRoiButton.setMinimumWidth(140)
-        self.ocrClearRoiButton.setMinimumWidth(140)
-        
-        roi_group.add_widget(self.ocrSelectRoiButton)
-        roi_group.add_widget(self.ocrClearRoiButton)
-        roi_group.add_widget(self.ocrTrackingCheckBox)
-        
-        # 2. OCR 분석 그룹
-        analysis_group = CollapsibleBox("▶ OCR 분석")
-        analysis_group.toggle_button.setChecked(False)  # 접힌 상태로 시작
-        analysis_group.content_area.setVisible(False)
-        
-        # OCR 분석 방식을 별도로 추가하여 가독성 향상
-        ocr_mode_label_widget = QLabel('OCR 분석 방식:')
-        ocr_mode_label_widget.setStyleSheet(OCR_OPTION_LABEL_STYLE)
-        analysis_group.add_widget(ocr_mode_label_widget)
-        
-        # 콤보박스 크기 정책 설정
-        self.ocrModeComboBox.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.ocrModeComboBox.setMinimumWidth(140)
-        analysis_group.add_widget(self.ocrModeComboBox)
-        
-        # All 모드용 패턴 입력 필드 (별도 줄에 배치)
-        self.ocrPatternLabel.setStyleSheet(OCR_OPTION_LABEL_STYLE)
-        self.ocrPatternLineEdit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.ocrPatternLineEdit.setMinimumWidth(140)
-        analysis_group.add_widget(self.ocrPatternLabel)
-        analysis_group.add_widget(self.ocrPatternLineEdit)
-        
-        # 버튼 최소 너비 설정
-        self.ocrAnalyzeButton.setMinimumWidth(140)
-        self.ocrAnalyzeRangeButton.setMinimumWidth(140)
-        analysis_group.add_widget(self.ocrAnalyzeButton)
-        analysis_group.add_widget(self.ocrAnalyzeRangeButton)
-        
-        # 3. 결과 관리 그룹
-        result_group = CollapsibleBox("▶ 결과 관리")
-        result_group.toggle_button.setChecked(False)  # 접힌 상태로 시작
-        result_group.content_area.setVisible(False)
-        
-        # 버튼 최소 너비 설정
-        self.ocrReopenResultButton.setMinimumWidth(140)
-        self.ocrSaveResultButton.setMinimumWidth(140)
-        self.ocrLoadResultButton.setMinimumWidth(140)
-        
-        result_group.add_widget(self.ocrReopenResultButton)
-        result_group.add_widget(self.ocrSaveResultButton)
-        result_group.add_widget(self.ocrLoadResultButton)
-
-        annotation_group = self.build_annotation_group()
-        
-        controlLayoutMiddle = QVBoxLayout()
-        # 테마전환, Previous Frame, Next Frame 버튼은 UI에서 제거 (기능은 유지)
-        # 단추 여섯은 둘씩 한 줄에(2026-11-13 — 세 줄이 줄어 접는 상자를 펼쳐도 아래 항목이 덜 밀림). 글자가 잘리지 않게
-        # 가운데 열의 최소 폭이 그만큼 늘어남: 스크롤 영역의 최소 폭 = 내용의 최소 폭 + 스크롤바 (VerticalScrollArea)
-        MIDDLE_SPACING = 5
-        controlLayoutMiddle.addWidget(ButtonPairRow(openButtonA, openButtonB, MIDDLE_SPACING))
-        
-        # OCR 그룹박스 추가 (기본 접힌 상태)
-        controlLayoutMiddle.addWidget(roi_group)
-        controlLayoutMiddle.addWidget(analysis_group)
-        controlLayoutMiddle.addWidget(result_group)
-        controlLayoutMiddle.addWidget(annotation_group)
-        # ocrStatusLabel 삭제됨 - 로그는 OCR 분석 팝업창에 표시
-        
-        # Full Screen과 Help 버튼은 UI에서 제거 (Full Screen 기능은 유지, Help는 메뉴바로 이동).
-        # 반복·볼륨은 재생 줄로 옮김, FPS 콤보는 없앰 (2026-11-16 — 값을 읽는 코드가 없었음: 영상의 fps는 재생 줄에 보임)
-        controlLayoutMiddle.addWidget(self.wipeCheckBox)
-        controlLayoutMiddle.addWidget(ButtonPairRow(self.wipeXButton, self.wipeYButton, MIDDLE_SPACING))
-        controlLayoutMiddle.addWidget(ButtonPairRow(self.playSelectedButton, self.playSelectedPauseButton, MIDDLE_SPACING))
-        controlLayoutMiddle.addWidget(workLabel); controlLayoutMiddle.addWidget(self.workComboBox)
-        controlLayoutMiddle.addWidget(self.seasonComboBox); controlLayoutMiddle.addWidget(self.jobComboBox)
-        controlLayoutMiddle.setContentsMargins(0,0,0,0)
-        controlLayoutMiddle.setSpacing(MIDDLE_SPACING)
+        # 도구 패널(뷰어 오른쪽 — 주석·OCR): 위에서 만든 OCR 위젯과 주석 위젯을 두 쪽으로 (player_tools). 예전의 가운데 열
+        # (Open Video A/B·접는 상자 넷·와이프 단추·선택 재생 단추·작품 콤보)은 없앰 — 와이프는 재생 줄의 토글, 작품 고르기와
+        # 선택 재생 단추는 사이드바(sidebar_controls), 영상 열기는 File 메뉴와 끌어다 놓기
+        self._init_tool_panel()
         
         # 창 아래: 시간 슬라이더, 그 바로 아래 재생 줄 (둘 다 창 전체 폭, 높이 고정)
         controlLayoutRight = QVBoxLayout()
@@ -687,96 +574,35 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerOcrMix
         self.sidebar_count_label.setWordWrap(True)  # All의 포맷이 많아도 줄을 바꿈 — 사이드바(창) 최소 너비를 늘리지 않게
         self._init_all_tab_hooks()  # Mov·Seq 모델 변화 → All 목록 미룬 다시 만들기·개수 줄
         self._init_sidebar_sort()  # 탭 줄 오른쪽(All 탭 옆)의 정렬 단추(self.sidebar_sort_button — 이름·종류·버전·시간)와 미룬 정렬 (SidebarSortMixin)
-        selectFolderButton = QPushButton('Select Folder'); selectFolderButton.clicked.connect(self.select_folder)
-        selectFolderButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        
-        # 북마크 관련 버튼들 추가
-        bookmarkButton = QPushButton('Add Bookmark'); bookmarkButton.clicked.connect(self.add_bookmark)
-        bookmarkButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        bookmarkButton.setStyleSheet(BOOKMARK_BUTTON_STYLE)
-        
-        bookmarkListButton = QPushButton('Bookmarks'); bookmarkListButton.clicked.connect(self.show_bookmarks)
-        bookmarkListButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        bookmarkListButton.setStyleSheet(BOOKMARK_LIST_REFRESH_BUTTON_STYLE)
-        
-        # 작품 경로 관리 버튼 추가
-        workPathButton = QPushButton('작품 경로 관리'); workPathButton.clicked.connect(self.manage_work_paths)
-        workPathButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        workPathButton.setStyleSheet(WORK_PATH_BUTTON_STYLE)
-        
-        # 사이드바 뷰 모드 전환 버튼들 추가 (가로 배치)
-        viewModeLayout = QHBoxLayout()
-        
-        self.listModeButton = QPushButton('List')
-        self.listModeButton.setCheckable(True)
-        self.listModeButton.setChecked(True)
-        self.listModeButton.clicked.connect(self.switch_to_list_mode)
-        self.listModeButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.listModeButton.setStyleSheet(LIST_MODE_BUTTON_STYLE)
-        
-        self.thumbnailModeButton = QPushButton('Thumb')
-        self.thumbnailModeButton.setCheckable(True)
-        self.thumbnailModeButton.clicked.connect(self.switch_to_thumbnail_mode)
-        self.thumbnailModeButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.thumbnailModeButton.setStyleSheet(THUMBNAIL_MODE_BUTTON_STYLE)
-        # Seq 목록도 같은 표시 모드를 따름: 위의 Mov 쪽 슬롯이 모드를 바꾼 다음에 불리도록 그 뒤에 이음 (Mov 쪽 메서드는 그대로)
-        self.listModeButton.clicked.connect(self._apply_seq_display_mode)
-        self.thumbnailModeButton.clicked.connect(self._apply_seq_display_mode)
-
-        # 목록 다시 읽기: 다른 PC·Finder에서 NAS의 영상을 지우거나 넣었을 때 (창이 다시 활성될 때도 저절로 읽음)
-        self.refreshListButton = QPushButton('새로고침')
-        self.refreshListButton.setToolTip('목록 다시 읽기 (F5)')
-        self.refreshListButton.clicked.connect(self._refresh_sidebar_by_user)
-        self.refreshListButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.refreshListButton.setStyleSheet(BOOKMARK_LIST_REFRESH_BUTTON_STYLE)
-        refresh_shortcut = QShortcut(QKeySequence(Qt.Key_F5), self)
+        refresh_shortcut = QShortcut(QKeySequence(Qt.Key_F5), self)  # 목록 다시 읽기 (새로고침 단추와 같음)
         refresh_shortcut.activated.connect(self._refresh_sidebar_by_user)
 
-        viewModeLayout.addWidget(self.listModeButton)
-        viewModeLayout.addWidget(self.thumbnailModeButton)
-        viewModeLayout.addWidget(self.refreshListButton)
-        
-        # 썸네일 진행바 추가
-        self.thumbnailProgressBar = QProgressBar()
-        self.thumbnailProgressBar.setMinimum(0)
-        self.thumbnailProgressBar.setMaximum(100)
-        self.thumbnailProgressBar.setValue(0)
-        self.thumbnailProgressBar.setTextVisible(True)
-        self.thumbnailProgressBar.setFormat('썸네일 생성 대기')
-        self.thumbnailProgressBar.setFixedHeight(18)
-        self.thumbnailProgressBar.setStyleSheet('QProgressBar {border: 1px solid #aaa; border-radius: 6px; text-align: center; background: #f8f9fa;} QProgressBar::chunk {background: #fd7e14; border-radius: 6px;}')
-        
-        sidebarLayout = QVBoxLayout(); sidebarLayout.addWidget(selectFolderButton)
-        sidebarLayout.addWidget(bookmarkButton); sidebarLayout.addWidget(bookmarkListButton)
-        sidebarLayout.addWidget(workPathButton)  # 작품 경로 관리 버튼 추가
-        sidebarLayout.addLayout(viewModeLayout)  # 가로 배치된 뷰 모드 버튼들 추가
-        sidebarLayout.addWidget(self.thumbnailProgressBar)  # 진행바를 버튼 아래에 추가
-        sidebarLayout.addWidget(self.sidebar_tabs)  # Mov(self.sidebar)·Seq 탭
+        # 사이드바 (위에서 아래로 — sidebar_controls): 작품 묶음 · 작은 단추 줄(폴더 열기·북마크·새로고침) · 목록|썸네일 ·
+        # 탭과 목록 · 개수 줄 · 썸네일 진행 막대(만드는 동안만) · 선택 재생 단추 · 끝내기 단추(선택 재생 중에만).
+        # 진행 막대는 목록 아래에 — 나타나고 사라질 때 목록의 줄이 밀리지 않게(목록의 아래 끝만 움직임)
+        sidebarLayout = QVBoxLayout()
+        sidebarLayout.addWidget(self._build_work_picker())
+        sidebarLayout.addWidget(self._build_sidebar_tools())
+        sidebarLayout.addWidget(self._build_view_mode_row())
+        sidebarLayout.addWidget(self.sidebar_tabs)  # Mov(self.sidebar)·Seq·All 탭
         sidebarLayout.addWidget(self.sidebar_count_label)
+        sidebarLayout.addWidget(self._build_thumbnail_progress_bar())
+        sidebarLayout.addWidget(self._build_playlist_button())
         sidebarLayout.addWidget(self.endPlaylistButton)  # 선택 재생 중에만 보임 — 예전 Stop 단추가 하던 '선택 재생 끝내기'
+        self.retranslate_sidebar_controls()
         sidebarContainer = QWidget()
         sidebarContainer.setLayout(sidebarLayout); sidebarContainer.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
-        middleContainer = QWidget()
-        middleLayout = QVBoxLayout()
-        middleLayout.addLayout(controlLayoutMiddle)
-        middleLayout.addStretch(1)
-        middleContainer.setLayout(middleLayout)
-        # 두 열의 버튼: 좌우 안쪽 여백만 16 → 6px (글자는 가운데 정렬이라 버튼이 글자보다 넓으면 모습은 그대로, 최소 너비만
-        # 작아짐 — 창 최소 너비). 위아래 여백·색은 창 스타일시트(테마) 그대로. 버튼 최소 너비가 글자를 지켜서
-        # 예전 setMinimumWidth(200)은 뺌 (가운데 열의 처음 너비는 스플리터 setSizes의 220 그대로).
-        compact_buttons = "QPushButton { padding-left: 6px; padding-right: 6px; }"
-        sidebarContainer.setStyleSheet(compact_buttons)
-        middleContainer.setStyleSheet(compact_buttons)
-
-        # 가운데 열은 세로 스크롤 영역 안에: 창이 낮으면 스크롤 (예전에는 이 열의 최소 높이가 창의 최소 높이를 묶어
-        # Windows 150% 배율에서 창이 화면보다 컸음). 창이 충분히 크면 스크롤바 없이 예전과 같음.
-        self.middleScrollArea = VerticalScrollArea(middleContainer)
+        # [사이드바 | 영상 | 도구 패널] — 패널은 열었을 때만 보이고(player_tools) 늘어나는 칸은 영상뿐
         mainSplitter = QSplitter(Qt.Horizontal); mainSplitter.addWidget(sidebarContainer)
-        mainSplitter.addWidget(self.middleScrollArea); mainSplitter.addWidget(videoWidgetContainer)
+        mainSplitter.addWidget(videoWidgetContainer); mainSplitter.addWidget(self.toolPanel)
         self.mainSplitter = mainSplitter
-        mainSplitter.setStretchFactor(0,0); mainSplitter.setStretchFactor(1,0); mainSplitter.setStretchFactor(2,1)
-        mainSplitter.setSizes([200, 220, 1000]); layout = QVBoxLayout(); layout.addWidget(mainSplitter)  # middle 영역 초기 너비를 220으로 증가하여 OCR 버튼 텍스트가 잘리지 않도록
+        mainSplitter.setStretchFactor(0,0); mainSplitter.setStretchFactor(1,1); mainSplitter.setStretchFactor(2,0)
+        # 영상 칸과 패널은 0폭으로 접히지 않음: 패널을 닫는 길은 닫기 단추·토글·N 키이고, 영상 칸이 한 번 접히면(좁은 창에서
+        # 패널을 열 때 폭이 모자라 0이 적히면) 스플리터가 늘어나는 폭을 사이드바에 줘 버림 (사이드바는 예전처럼 끌어서 접을 수 있음)
+        mainSplitter.setCollapsible(1, False)
+        mainSplitter.setCollapsible(2, False)
+        mainSplitter.setSizes([200, 1000, 0]); layout = QVBoxLayout(); layout.addWidget(mainSplitter)
         layout.addLayout(controlLayoutRight); layout.setContentsMargins(0,0,0,0); layout.setSpacing(5)
         # 새 버전 알림 띠: 맨 위 전체 너비, 알릴 것이 있을 때만 보임 (숨긴 동안은 자리·간격도 차지하지 않음).
         # 글자는 좁으면 …로 줄여 창의 최소 너비를 늘리지 않음 (update_banner)
@@ -786,14 +612,10 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerOcrMix
         self.setAcceptDrops(True)
         # self.sidebar는 넣지 않음: 이제 Mov 탭의 페이지라, V 키·전체화면 복원이 손으로 setVisible(True)하면 Seq 탭이 보이는 동안에도
         # Mov 목록이 보이게 됨 (사이드바 컨테이너가 이미 목록 전체를 숨기고 보임 — 보이고 숨는 모습은 예전과 같음)
-        # V 키·전체 화면이 숨기고 되돌리는 것들. 재생 줄은 통째로 하나(그 안의 단추·라벨을 따로 넣지 않음).
-        # endPlaylistButton은 넣지 않음 — 사이드바와 함께 숨고, 되돌릴 때 선택 재생이 아닌데 나타나면 안 됨
-        self.control_widgets = [
-            sidebarContainer, self.middleScrollArea, workLabel, self.workComboBox, self.seasonComboBox, self.jobComboBox,
-            self.playSelectedButton,
-            self.wipeCheckBox, self.wipeXButton, self.wipeYButton, openButtonA, openButtonB, selectFolderButton, bookmarkButton, bookmarkListButton, workPathButton, self.listModeButton, self.thumbnailModeButton, self.refreshListButton, self.thumbnailProgressBar,
-            self.transportBar,
-        ]
+        # V 키·전체 화면이 숨기고 되돌리는 것들 — 칸마다 통째로 하나(그 안의 단추·라벨을 따로 넣지 않음).
+        # 넣지 않는 것: endPlaylistButton·thumbnailProgressBar(사이드바와 함께 숨고, 되돌릴 때 저 혼자 나타나면 안 됨),
+        # toolPanel(재생 줄을 따라 숨고 나타남 — 닫혀 있던 패널이 되돌릴 때 보이면 안 됨: player_tools)
+        self.control_widgets = [sidebarContainer, self.transportBar]
 
         # positionScroll을 control_widgets에 추가
         self.control_widgets.append(self.positionScroll)
@@ -806,56 +628,12 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerOcrMix
         # 모든 주요 위젯들의 focusPolicy를 Qt.NoFocus로 설정 (전역 단축키 방해 방지)
         # (재생 줄의 단추·슬라이더는 재생 줄이 스스로 NoFocus — 프레임 칸만 눌렀을 때 포커스를 가짐)
         self.positionScroll.setFocusPolicy(Qt.NoFocus)
-        self.workComboBox.setFocusPolicy(Qt.NoFocus)
-        self.seasonComboBox.setFocusPolicy(Qt.NoFocus)
-        self.jobComboBox.setFocusPolicy(Qt.NoFocus)
-
-        # 추가 위젯들의 focusPolicy 설정
-        self.wipeCheckBox.setFocusPolicy(Qt.NoFocus)
         self.fullscreenButton.setFocusPolicy(Qt.NoFocus)
-        self.playSelectedButton.setFocusPolicy(Qt.NoFocus)
-        self.playSelectedPauseButton.setFocusPolicy(Qt.NoFocus)
-        self.wipeXButton.setFocusPolicy(Qt.NoFocus)
-        self.wipeYButton.setFocusPolicy(Qt.NoFocus)
-        openButtonA.setFocusPolicy(Qt.NoFocus)
-        openButtonB.setFocusPolicy(Qt.NoFocus)
-        selectFolderButton.setFocusPolicy(Qt.NoFocus)
-
-        # 라벨들의 focusPolicy 설정
-        workLabel.setFocusPolicy(Qt.NoFocus)
+        # (작품 콤보·사이드바의 단추·선택 재생 단추는 sidebar_controls가, 재생 줄의 토글은 재생 줄이 스스로 NoFocus)
 
         # 메인 윈도우가 항상 키보드 이벤트를 받을 수 있도록 설정
         self.setFocusPolicy(Qt.StrongFocus)
         self.setFocus()  # 초기 포커스 설정
-
-    def toggle_middle_panel(self):
-        """N 키 — 가운데 컨트롤 열(middleScrollArea) 보이기/숨기기 (왼쪽 파일 목록·비디오는 그대로)."""
-        self.middle_panel_visible = not self.middle_panel_visible
-        if not (self.middle_panel_visible and self.controls_visible):
-            sizes = self.mainSplitter.sizes()
-            if sizes[1] > 0:
-                self._middle_panel_width = sizes[1]
-            self.middleScrollArea.setVisible(False)
-            return
-        self.middleScrollArea.setVisible(True)
-        self._restore_middle_panel_width()
-
-    def _restore_middle_panel_width(self):
-        """가운데 열을 다시 보일 때 스플리터 폭 복원: 숨긴 동안 List/Thumb 폭 조절이 setSizes를 부르면 숨은 칸에
-        0이 적혀, setVisible(True)만으로는 0폭(접힌 채)으로 나타남 — 기억한 폭을 영상 칸에서 가져와 되살림."""
-        sizes = self.mainSplitter.sizes()
-        if sizes[1] > 0:
-            return
-        sizes[1] = self._middle_panel_width
-        sizes[2] = max(0, sizes[2] - self._middle_panel_width)
-        self.mainSplitter.setSizes(sizes)
-
-    def apply_middle_panel_state(self):
-        """컨트롤 복원(V 키·전체화면 해제) 뒤에도 N 키로 숨긴 가운데 열은 숨김을 유지하고, 보이는 열은 폭을 되살림."""
-        if not self.middle_panel_visible:
-            self.middleScrollArea.setVisible(False)
-        elif not self.middleScrollArea.isHidden():
-            self._restore_middle_panel_width()
 
     def eventFilter(self, source, event):
         # V키가 비활성화되어 있을 때는 오버레이 컨트롤 동작하지 않음 (컨트롤 패널이 표시되어 있을 때)
@@ -919,6 +697,11 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerOcrMix
                     event.accept()
                     return True
             
+            # 메뉴 항목의 단축키 O·I·L·W (한글 ㅐ·ㅑ·ㅣ·ㅈ) — 영상 A 열기·폴더 열기·반복 재생·와이프 켜기
+            # (player_menus.KEY_SHORTCUTS — Ctrl과 함께면 아님: Ctrl+O는 바로 위에서 이미 받음)
+            if self.run_key_shortcut(event):
+                return True
+
             # 전역 프레임 이동 단축키 (, . ← →)
             if key in [Qt.Key_Comma, Qt.Key_Left]:
                 self.prev_frame()
@@ -1017,38 +800,14 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerOcrMix
             if key == Qt.Key_V or (hasattr(event, 'text') and event.text() == 'ㅍ'):
                 print(f"EventFilter - V key pressed (key: {key}, text: '{event.text() if hasattr(event, 'text') else 'N/A'}')")  # 디버깅 출력
                 
-                # 컨트롤 패널 상태 변경
-                self.controls_visible = not self.controls_visible
-                valid_widgets = self.get_valid_control_widgets()
-                for widget in valid_widgets:
-                    try:
-                        widget.setVisible(self.controls_visible)
-                    except (RuntimeError, AttributeError):
-                        continue
-                self.apply_middle_panel_state()
-
-                # 컨트롤이 숨겨지면 오버레이를 표시하고, 컨트롤이 보이면 오버레이를 숨김
-                if hasattr(self, 'overlayFrame'):
-                    if not self.controls_visible:
-                        print("EventFilter - Showing overlay controls")  # 디버깅 출력
-                        # 오버레이를 강제로 표시
-                        self.overlayFrame.setVisible(True)
-                        self.overlayFrame.raise_()
-                        
-                        # V 키 활성화 시 하단 중앙으로 위치하도록 플래그 설정
-                        self.overlay_is_bottom_center = True
-                        
-                        self.show_overlay_controls()
-                    else:
-                        print("EventFilter - Hiding overlay controls")  # 디버깅 출력
-                        self.hide_overlay_controls()
+                self.toggle_controls()  # 컨트롤 전체 숨기기/되돌리기 + 오버레이 (player_tools)
                 
                 QTimer.singleShot(100, self.force_focus)  # V키 후 포커스 복원
                 return True
 
-            # N 키 처리 (가운데 컨트롤 열 보이기/숨기기) - 한글 ㅜ와 영문 N 모두 지원
+            # N 키 처리 (도구 패널 열고 닫기) - 한글 ㅜ와 영문 N 모두 지원
             if key == Qt.Key_N or (hasattr(event, 'text') and event.text() == 'ㅜ'):
-                self.toggle_middle_panel()
+                self.toggle_tool_panel()
                 QTimer.singleShot(100, self.force_focus)
                 return True
 
@@ -1157,25 +916,16 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerOcrMix
             QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
 
     def apply_startup_geometry(self):
-        """처음 창 크기·위치와 열 너비 (예전 모습): max(1080×720, 레이아웃이 원하는 크기)를 화면 작업 영역 안으로,
-        사이드바·가운데 열은 예전 처음 너비(스플리터 setSizes 200·220, 최소 너비가 더 크면 최소 너비). 가운데 열은 단추 쌍이
-        세로 스크롤바가 보여도 한 줄에 들어가는 폭까지(이 Mac 236 — 그보다 좁히면 쌍이 예전처럼 위아래로 놓임) — 처음 창에
-        그만큼의 자리가 있을 때만: 영상 영역이 최소 너비 밑으로 밀리는 창(작은 화면, 글자가 넓은 글꼴)에서는 예전 처음 너비.
-        스플리터는 요청한 너비를 기억했다가 창이 넓어지면 되찾으므로, 자리가 없을 때 요청하면 나중에 영상 영역의 몫을 가져감."""
+        """처음 창 크기·위치와 열 너비: max(1080×720, 레이아웃이 원하는 크기)를 화면 작업 영역 안으로, 사이드바는
+        예전 처음 너비(200 — 최소 너비가 더 크면 최소 너비), 나머지는 영상 칸(도구 패널은 닫힌 채 시작)."""
         self._measure_polished_layout()
         rect = startup_geometry(self.sizeHint(), self.minimumSizeHint(),
                                 QApplication.primaryScreen().availableGeometry())
         self.setGeometry(rect)
         splitter = self.mainSplitter
-        side, middle, video_minimum = (max(start, w.minimumSizeHint().width(), w.minimumWidth())
-                                       for start, w in ((200, splitter.widget(0)), (220, splitter.widget(1)), (0, splitter.widget(2))))
-        paired = self.middleScrollArea.width_for_content_hint()
-        handles = splitter.handleWidth() * (splitter.count() - 1)
-        # 영상 영역의 몫: 그 칸의 최소 너비와 VIDEO_START_MINIMUM 중 큰 쪽 (2026-11-16 — 정보 줄이 재생 줄로 옮겨져 영상 칸의
-        # 최소 너비가 아주 작아짐: 그것만 보면 글자가 넓은 글꼴의 작은 화면에서 가운데 열이 영상 영역을 다 가져감)
-        if paired > middle and side + paired + max(video_minimum, VIDEO_START_MINIMUM) + handles <= rect.width():
-            middle = paired
-        splitter.setSizes([side, middle, max(0, rect.width() - side - middle)])
+        sidebar = splitter.widget(0)
+        side = max(200, sidebar.minimumSizeHint().width(), sidebar.minimumWidth())
+        splitter.setSizes([side, max(0, rect.width() - side), 0])
         # 초기 창 크기 저장 (앱 처음 실행 시) — 동영상 전용 전체화면을 끝내면 이 크기로 돌아옴
         self.initial_geometry = self.geometry()
 
@@ -1229,6 +979,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerOcrMix
         self.setStyleSheet(DARK_STYLESHEET)
         self.current_theme = 'dark'
         self.transportBar.apply_theme('dark')  # 재생 줄의 아이콘은 직접 그린 그림이라 테마 색으로 다시 그림
+        self.toolPanel.apply_theme('dark')
         self.videoWidget.apply_theme_background('dark')  # GL 뷰포트는 스타일시트 배경 칠을 받지 않음
         self._apply_take_colors(repaint=True)  # Mov 항목의 테이크 색은 테마마다 다름
         self._schedule_all_rebuild()  # All 탭 시퀀스 글자 색을 테마에 맞춤
@@ -1237,6 +988,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerOcrMix
         self.setStyleSheet(LIGHT_STYLESHEET)
         self.current_theme = 'light'
         self.transportBar.apply_theme('light')  # 재생 줄의 아이콘은 직접 그린 그림이라 테마 색으로 다시 그림
+        self.toolPanel.apply_theme('light')
         self.videoWidget.apply_theme_background('light')  # GL 뷰포트는 스타일시트 배경 칠을 받지 않음
         self._apply_take_colors(repaint=True)  # Mov 항목의 테이크 색은 테마마다 다름
         self._schedule_all_rebuild()  # All 탭 시퀀스 글자 색을 테마에 맞춤
@@ -1258,7 +1010,10 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerOcrMix
     def create_menu_bar(self):
         """상단 메뉴바를 생성합니다."""
         menubar = self.menuBar()
-        
+
+        # File · View · Playback · Compare · Tools (player_menus — 항목은 지금의 처리기, 단축키는 글자로만)
+        self._add_main_menus(menubar)
+
         # Settings 메뉴
         settings_menu = menubar.addMenu('&Settings')
         

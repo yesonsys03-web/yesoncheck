@@ -116,17 +116,10 @@ class SceneContext:
         require(player.open_file(kind, self.media(name)), f"영상을 열지 못함: {kind} {name}")
 
 
-def collapsible_boxes(player):
-    # CollapsibleBox 클래스를 import하지 않고 이름으로 찾음 (모듈 위치가 바뀌어도 이 검사는 그대로)
-    from PyQt5.QtWidgets import QWidget
-
-    return [w for w in player.findChildren(QWidget) if type(w).__name__ == "CollapsibleBox"]
-
-
-def expand(box):
-    if not box.toggle_button.isChecked():
-        box.toggle_button.click()
-    require(box.content_area.isVisibleTo(box), f"접는 상자가 펼쳐지지 않음: {box.toggle_button.text()}")
+def open_tool_panel(player, key):
+    """도구 패널(뷰어 오른쪽)을 그 쪽으로 엶 — 예전의 접는 상자 넷(ROI·OCR 분석·결과 관리·주석)이 이 패널의 두 쪽이 됨."""
+    player.show_tool_panel(key)
+    require(player.tool_panel_key() == key and player.toolPanel.isVisibleTo(player), f"도구 패널이 열리지 않음: {key}")
 
 
 def scene_main_window(ctx):
@@ -171,12 +164,10 @@ def check_thumbnails_shown(player):
     require(not empty, f"썸네일이 붙지 않은 항목: {empty}")
 
 
-def scene_boxes_expanded(ctx):
+def scene_ocr_panel(ctx):
     player = ctx.new_player()
-    boxes = collapsible_boxes(player)
-    require(len(boxes) == 4, f"접는 상자가 4개(ROI·OCR 분석·결과 관리·주석)가 아님: {len(boxes)}")
-    for box in boxes:
-        expand(box)
+    open_tool_panel(player, "ocr")
+    require(player.ocrAnalyzeButton.isVisibleTo(player), "OCR 쪽의 단추가 보이지 않음")
     return player
 
 
@@ -191,9 +182,7 @@ def scene_overlay_visible(ctx):
 def scene_annotation_mode(ctx):
     player = ctx.new_player()
     ctx.open_video(player, "A", "clip_a.mp4")
-    boxes = [box for box in collapsible_boxes(player) if "수정 사항 주석" in box.toggle_button.text()]
-    require(len(boxes) == 1, f"주석 접는 상자를 하나 찾아야 함: {len(boxes)}")
-    expand(boxes[0])
+    open_tool_panel(player, "annotation")
     player.annotationModeButton.setChecked(True)  # 영상 A가 없으면 도로 꺼짐
     require(player.annotationModeButton.isChecked(), "주석 모드가 켜지지 않음")
     return player
@@ -230,9 +219,9 @@ SCENES = {
     "video_a_open": Scene(scene_video_a_open, ("clip_a.mp4",), "영상 A를 연 뒤"),
     "wipe_ab": Scene(scene_wipe_ab, ("clip_a.mp4", "clip_b.mp4"), "영상 A·B와 X·Y 와이프"),
     "thumbnail_mode": Scene(scene_thumbnail_mode, tuple(sorted(MEDIA_SOURCES)), "사이드바 썸네일 모드 (영상 3개)"),
-    "boxes_expanded": Scene(scene_boxes_expanded, (), "접는 상자 4개(ROI·OCR 분석·결과 관리·주석) 펼침"),
+    "ocr_panel": Scene(scene_ocr_panel, (), "도구 패널을 OCR 쪽으로 엶 (ROI 설정·OCR 분석·결과 관리)"),
     "overlay_visible": Scene(scene_overlay_visible, ("clip_a.mp4",), "오버레이 컨트롤 보임"),
-    "annotation_mode": Scene(scene_annotation_mode, ("clip_a.mp4",), "주석 상자를 펼치고 주석 모드 켬"),
+    "annotation_mode": Scene(scene_annotation_mode, ("clip_a.mp4",), "도구 패널을 주석 쪽으로 열고 주석 모드 켬"),
     "ocr_review": Scene(scene_ocr_review, (), "OCR 검토 창 (구간 2개, 24fps, titmouse)"),
 }
 AFTER_BACKGROUND_CHECKS = {"thumbnail_mode": check_thumbnails_shown}

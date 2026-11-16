@@ -7,10 +7,10 @@
 """
 
 # 어두운 테마 — 창을 만들 때 걸고 set_dark_theme가 다시 검
-# 두 시트의 `QPushButton#collapsibleToggle`은 접는 상자(player_timeline.CollapsibleBox) 머리 단추의 **색**(바탕·테두리·글자) — 위젯에
-# 직접 넣으면 테마를 바꿔도 남으므로(2026-11-12 전에는 밝은 테마에서도 어두운 머리) 창 시트에 둠. 어두운 쪽 값은 그때의 인라인 시트 그대로.
-# 모양(정렬·안쪽 여백·굵기·모서리)은 위젯 자신의 시트에 남김: 가운데 열 컨테이너의 시트(QPushButton 좌우 여백 6px)가 창 시트보다
-# 가까워, 여백을 여기 두면 그쪽이 이겨 글자가 2px 밀림(화면 비교로 잡음)
+# 두 시트의 `#toolPanel…`(도구 패널)·`#sidebarTool`(사이드바의 작은 단추)·`#playlistButton`·`#playlistEndButton`(선택 재생)·
+# `#thumbnailProgress`(썸네일 진행 막대) 규칙은 2026-11-16 UI 개편에서 넣은 것 — 중립 색(채도 높은 색 단추를 쓰지 않음), 색과 모양을
+# 모두 여기에 둠(위젯·컨테이너에 따로 시트를 걸지 않음: 가까운 조상의 시트가 창 시트를 이겨 테마를 바꿔도 남음).
+# 선택자와 색 아닌 속성은 두 시트가 같음 (tests/test_theme_geometry.py)
 DARK_STYLESHEET = """
 QMainWindow, QWidget {
     background: #232323;
@@ -43,16 +43,79 @@ QPushButton:disabled {
     border: 1px solid #444;
     color: #555;
 }
-QPushButton#collapsibleToggle {
+QWidget#toolPanel {
+    border-left: 1px solid #3a3a3a;
+}
+QWidget#toolPanelHeader {
+    background: #2b2b2b;
+    border-bottom: 1px solid #3a3a3a;
+}
+QWidget#toolPanelHeader QLabel {
+    background: transparent;
+}
+QLabel#toolPanelTitle {
+    color: #e0e0e0;
+    font-weight: bold;
+}
+QToolButton#toolPanelClose {
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+}
+QToolButton#toolPanelClose:hover {
+    background: #3d3d3d;
+}
+QLabel#toolPanelSection {
+    color: #a8a8a8;
+    font-weight: bold;
+}
+QPushButton#sidebarTool, QToolButton#sidebarTool, QPushButton#playlistButton, QPushButton#playlistEndButton {
     background: #2d2d2d;
-    border: 1px solid #444;
-    color: #ffae00;
+    border: 1px solid #444444;
+    border-radius: 4px;
+    color: #e0e0e0;
+    padding: 5px 6px;
 }
-QPushButton#collapsibleToggle:hover {
+QPushButton#sidebarTool:hover, QToolButton#sidebarTool:hover, QPushButton#playlistButton:hover, QPushButton#playlistEndButton:hover {
     background: #3d3d3d;
+    border: 1px solid #6a6a6a;
+    color: #ffffff;
 }
-QPushButton#collapsibleToggle:checked {
-    background: #3d3d3d;
+QPushButton#sidebarTool:pressed, QToolButton#sidebarTool:pressed, QPushButton#playlistButton:pressed, QPushButton#playlistEndButton:pressed {
+    background: #1a1a1a;
+    border: 1px solid #6a6a6a;
+}
+QPushButton#sidebarTool:checked, QPushButton#playlistButton[playing="true"] {
+    background: #4a4a4a;
+    border: 1px solid #6a6a6a;
+    color: #ffffff;
+}
+QPushButton#sidebarTool:disabled, QToolButton#sidebarTool:disabled, QPushButton#playlistButton:disabled {
+    background: #232323;
+    border: 1px solid #3a3a3a;
+    color: #555555;
+}
+QPushButton#sidebarTool, QToolButton#sidebarTool {
+    padding: 5px 3px;
+}
+QToolButton#sidebarTool {
+    padding-right: 14px;
+}
+QToolButton#sidebarTool::menu-indicator {
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    right: 4px;
+}
+QProgressBar#thumbnailProgress {
+    background: #1c1c1c;
+    border: 1px solid #444444;
+    border-radius: 4px;
+    color: #e0e0e0;
+    text-align: center;
+}
+QProgressBar#thumbnailProgress::chunk {
+    background: #5a5a5a;
+    border-radius: 3px;
 }
 QComboBox {
     background: #2d2d2d;
@@ -198,6 +261,24 @@ QWidget#transportBar QToolButton#transportButton:pressed {
 QWidget#transportBar QToolButton#transportButton:checked {
     background: #4a4a4a;
 }
+QWidget#transportBar QToolButton#transportToggle {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: #d0d0d0;
+    padding: 0px 4px;
+}
+QWidget#transportBar QToolButton#transportToggle:hover {
+    background: #3d3d3d;
+}
+QWidget#transportBar QToolButton#transportToggle:checked {
+    background: #4a4a4a;
+    border: 1px solid #6a6a6a;
+    color: #ffffff;
+}
+QWidget#transportBar QToolButton#transportToggle:disabled {
+    color: #6a6a6a;
+}
 QWidget#transportBar QLineEdit#frameField {
     background: #1c1c1c;
     border: 1px solid #444444;
@@ -296,16 +377,79 @@ QPushButton:disabled {
     border: 1px solid #e9ecef;
     color: #adb5bd;
 }
-QPushButton#collapsibleToggle {
-    background: #e9ecef;
-    border: 1px solid #ced4da;
+QWidget#toolPanel {
+    border-left: 1px solid #d8d8d8;
+}
+QWidget#toolPanelHeader {
+    background: #f0f0f0;
+    border-bottom: 1px solid #d8d8d8;
+}
+QWidget#toolPanelHeader QLabel {
+    background: transparent;
+}
+QLabel#toolPanelTitle {
     color: #2c3e50;
+    font-weight: bold;
 }
-QPushButton#collapsibleToggle:hover {
-    background: #dee2e6;
+QToolButton#toolPanelClose {
+    background: transparent;
+    border: none;
+    border-radius: 4px;
 }
-QPushButton#collapsibleToggle:checked {
-    background: #dee2e6;
+QToolButton#toolPanelClose:hover {
+    background: #dfe3e7;
+}
+QLabel#toolPanelSection {
+    color: #6c757d;
+    font-weight: bold;
+}
+QPushButton#sidebarTool, QToolButton#sidebarTool, QPushButton#playlistButton, QPushButton#playlistEndButton {
+    background: #ffffff;
+    border: 1px solid #d0d0d0;
+    border-radius: 4px;
+    color: #2c3e50;
+    padding: 5px 6px;
+}
+QPushButton#sidebarTool:hover, QToolButton#sidebarTool:hover, QPushButton#playlistButton:hover, QPushButton#playlistEndButton:hover {
+    background: #dfe3e7;
+    border: 1px solid #a8adb3;
+    color: #000000;
+}
+QPushButton#sidebarTool:pressed, QToolButton#sidebarTool:pressed, QPushButton#playlistButton:pressed, QPushButton#playlistEndButton:pressed {
+    background: #d0d4d8;
+    border: 1px solid #a8adb3;
+}
+QPushButton#sidebarTool:checked, QPushButton#playlistButton[playing="true"] {
+    background: #d0d4d8;
+    border: 1px solid #a8adb3;
+    color: #000000;
+}
+QPushButton#sidebarTool:disabled, QToolButton#sidebarTool:disabled, QPushButton#playlistButton:disabled {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    color: #adb5bd;
+}
+QPushButton#sidebarTool, QToolButton#sidebarTool {
+    padding: 5px 3px;
+}
+QToolButton#sidebarTool {
+    padding-right: 14px;
+}
+QToolButton#sidebarTool::menu-indicator {
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    right: 4px;
+}
+QProgressBar#thumbnailProgress {
+    background: #ffffff;
+    border: 1px solid #d0d0d0;
+    border-radius: 4px;
+    color: #2c3e50;
+    text-align: center;
+}
+QProgressBar#thumbnailProgress::chunk {
+    background: #b8bec5;
+    border-radius: 3px;
 }
 QComboBox {
     background: #ffffff;
@@ -453,6 +597,24 @@ QWidget#transportBar QToolButton#transportButton:pressed {
 QWidget#transportBar QToolButton#transportButton:checked {
     background: #d0d4d8;
 }
+QWidget#transportBar QToolButton#transportToggle {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: #333333;
+    padding: 0px 4px;
+}
+QWidget#transportBar QToolButton#transportToggle:hover {
+    background: #dfe3e7;
+}
+QWidget#transportBar QToolButton#transportToggle:checked {
+    background: #d0d4d8;
+    border: 1px solid #a8adb3;
+    color: #000000;
+}
+QWidget#transportBar QToolButton#transportToggle:disabled {
+    color: #a0a0a0;
+}
 QWidget#transportBar QLineEdit#frameField {
     background: #ffffff;
     border: 1px solid #c8c8c8;
@@ -559,91 +721,15 @@ OCR_OPTION_LABEL_STYLE = "padding: 2px;"
 
 
 # 사이드바 버튼: bookmarkButton
-BOOKMARK_BUTTON_STYLE = """
-QPushButton {
-    background: #28a745;
-    border: 1px solid #28a745;
-    border-radius: 6px;
-    color: white;
-    font-weight: 500;
-    padding: 8px 6px;
-}
-QPushButton:hover {
-    background: #218838;
-    border: 1px solid #1e7e34;
-}
-QPushButton:pressed {
-    background: #1e7e34;
-    border: 1px solid #1c7430;
-}
-"""
 
 
 # 사이드바 버튼: bookmarkListButton과 refreshListButton (둘이 같은 글자)
-BOOKMARK_LIST_REFRESH_BUTTON_STYLE = """
-QPushButton {
-    background: #17a2b8;
-    border: 1px solid #17a2b8;
-    border-radius: 6px;
-    color: white;
-    font-weight: 500;
-    padding: 8px 6px;
-}
-QPushButton:hover {
-    background: #138496;
-    border: 1px solid #117a8b;
-}
-QPushButton:pressed {
-    background: #117a8b;
-    border: 1px solid #10707f;
-}
-"""
 
 
 # 사이드바 버튼: workPathButton
-WORK_PATH_BUTTON_STYLE = """
-QPushButton {
-    background: #6f42c1;
-    border: 1px solid #6f42c1;
-    border-radius: 6px;
-    color: white;
-    font-weight: 500;
-    padding: 8px 6px;
-}
-QPushButton:hover {
-    background: #5a32a3;
-    border: 1px solid #5a32a3;
-}
-QPushButton:pressed {
-    background: #4c2a8a;
-    border: 1px solid #4c2a8a;
-}
-"""
 
 
 # 사이드바 버튼: listModeButton
-LIST_MODE_BUTTON_STYLE = """
-QPushButton {
-    background: #6f42c1;
-    border: 1px solid #6f42c1;
-    border-radius: 6px;
-    color: white;
-    font-weight: 500;
-    padding: 8px 6px;
-}
-QPushButton:hover {
-    background: #5a32a3;
-    border: 1px solid #4c2b8a;
-}
-QPushButton:pressed {
-    background: #4c2b8a;
-    border: 1px solid #3d2375;
-}
-QPushButton:checked {
-    background: #4c2b8a;
-    border: 1px solid #3d2375;
-}
-"""
 
 
 # 주석 모드 버튼: annotationModeButton — 켜짐만 빨강(비디오 위 '주석 모드' 배지와 같은 계열),
@@ -659,28 +745,6 @@ QPushButton:checked {
 
 
 # 사이드바 버튼: thumbnailModeButton
-THUMBNAIL_MODE_BUTTON_STYLE = """
-QPushButton {
-    background: #fd7e14;
-    border: 1px solid #fd7e14;
-    border-radius: 6px;
-    color: white;
-    font-weight: 500;
-    padding: 8px 6px;
-}
-QPushButton:hover {
-    background: #e8690b;
-    border: 1px solid #d55a00;
-}
-QPushButton:pressed {
-    background: #d55a00;
-    border: 1px solid #c05000;
-}
-QPushButton:checked {
-    background: #d55a00;
-    border: 1px solid #c05000;
-}
-"""
 
 
 # positionScroll의 마지막 시트

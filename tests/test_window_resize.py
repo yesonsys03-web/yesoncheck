@@ -8,6 +8,8 @@
 고치는 방법: 가운데 열을 세로 스크롤 영역(QScrollArea)에 넣고, 정보 줄 라벨은 글꼴로 정한 최소 너비 + 고정된 원하는
 너비(숫자가 바뀌어도 흔들리지 않게)로, 좁아지면 정해진 순서로 줄이고 넘치는 글자는 …로 줄여 그림.
 처음 창 크기는 예전처럼 1080×720 이상·레이아웃이 원하는 크기까지(화면 작업 영역 안으로) — 줄일 수만 있게 됨.
+2026-11-16 UI 개편 PR 2: 가운데 열은 없어지고 그 내용(주석·OCR)은 뷰어 오른쪽 도구 패널의 두 쪽이 됨 — 쪽마다 세로
+스크롤 영역이라 패널이 낮아도 창의 최소 높이를 묶지 않음(같은 뜻을 패널로 봄).
 
 글꼴은 플랫폼·테마마다 다르다 (Windows CI의 글자는 Mac보다 훨씬 넓고, 밝은 테마(T 키)에서는 정보 줄 라벨이 16pt).
 그래서 픽셀 숫자가 아니라 목표(900×600)와 '글자가 다 보임'으로 확인하고, 실패하면 _layout_report로 원인을 남긴다.
@@ -78,9 +80,9 @@ def _big_numbers(player):
     _settle()
 
 
-def _middle_scroll_area(player):
-    """가운데 열(영상 열기·OCR 버튼이 있는 열)을 감싼 QScrollArea — 없으면 None."""
-    widget = player.ocrAnalyzeButton.parentWidget()
+def _page_scroll_area(widget):
+    """도구 패널의 쪽(주석·OCR)을 감싼 QScrollArea — widget은 그 쪽 안의 위젯. 없으면 None."""
+    widget = widget.parentWidget()
     while widget is not None and not isinstance(widget, QScrollArea):
         widget = widget.parentWidget()
     return widget
@@ -167,27 +169,39 @@ def test_frame_numbers_never_elide_at_minimum_width(player, tmp_path):
         assert button.width() == 30 and 0 <= left and left + 30 <= player.width(), report  # 재생 단추도 온전히
 
 
-def test_middle_column_is_in_vertical_scroll_area(player):
-    area = _middle_scroll_area(player)
-    assert area is not None, "가운데 열이 QScrollArea 안에 없음"
-    assert isinstance(area.parentWidget(), QSplitter)  # 메인 스플리터의 한 칸
+@pytest.mark.parametrize("page,last", [("annotation", "annotationStatusLabel"), ("ocr", "ocrLoadResultButton")])
+def test_tool_panel_pages_are_in_vertical_scroll_areas(player, page, last):
+    """도구 패널의 쪽은 세로 스크롤 영역 안 — 창이 낮아도 맨 아래 위젯까지 스크롤로 닿음(가려지지만 사라지지 않음),
+    가로로는 잘리지 않음. 패널은 V 키·영상만 전체 화면에서 재생 줄을 따라 숨음 (test_tool_panel_player)."""
+    bottom = getattr(player, last)
+    area = _page_scroll_area(bottom)
+    assert area is not None, "쪽이 QScrollArea 안에 없음"
+    assert player.toolPanel.isAncestorOf(area) and isinstance(player.toolPanel.parentWidget(), QSplitter)
     assert area.horizontalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
-    assert area in player.control_widgets  # V 키·동영상 전용 전체화면에서 열 전체가 숨겨지도록
 
-    player.resize(TARGET)
-    for toggle in player.findChildren(QPushButton, "collapsibleToggle"):  # 접는 상자를 모두 펼침 — 2026-11-16부터 다 접은 열은 600px 창에 들어감
-        toggle.click()
+    player.show_tool_panel(page)
+    player.resize(max(TARGET.width(), player.minimumSizeHint().width()), player.minimumSizeHint().height())
     _settle()
-    # 창이 낮아도 기능은 그대로: 맨 아래 작품 선택 콤보까지 스크롤로 닿을 수 있음 (가려지지만 사라지지 않음)
-    assert area.verticalScrollBar().maximum() > 0
-    assert player.jobComboBox.isVisibleTo(player)
-    area.ensureWidgetVisible(player.jobComboBox)
-    _settle()
-    top_left = player.jobComboBox.mapTo(area.viewport(), player.jobComboBox.rect().topLeft())
-    assert area.viewport().rect().contains(top_left)
+    if area.verticalScrollBar().maximum() > 0:  # 가장 낮은 창에서 쪽이 다 안 들어감 → 스크롤로 닿음
+        assert bottom.isVisibleTo(player)
+        area.ensureWidgetVisible(bottom)
+        _settle()
+        top_left = bottom.mapTo(area.viewport(), bottom.rect().topLeft())
+        assert area.viewport().rect().contains(top_left)
+    else:
+        assert bottom.mapTo(area.viewport(), bottom.rect().bottomLeft()).y() <= area.viewport().height()
     # 세로 스크롤바가 생겨도 내용이 오른쪽에서 잘리지 않음 (가로 스크롤 없음)
     assert area.widget().width() <= area.viewport().width()
     assert area.widget().width() >= area.widget().minimumSizeHint().width()
+
+
+def test_annotation_page_scrolls_in_the_lowest_window(player):
+    """주석 쪽은 가장 낮은 창에서 스크롤됨 — 쪽의 내용이 창의 최소 높이를 묶지 않는다는 증거."""
+    area = _page_scroll_area(player.annotationStatusLabel)
+    player.show_tool_panel("annotation")
+    player.resize(max(TARGET.width(), player.minimumSizeHint().width()), player.minimumSizeHint().height())
+    _settle()
+    assert area.verticalScrollBar().maximum() > 0, _layout_report(player)
 
 
 def _tooltip_shown_for(label):
@@ -367,7 +381,51 @@ def test_real_info_labels_follow_the_shrink_order(player):
     bar = player.transportBar
     assert bar.totalLabel.minimumSizeHint().width() == bar.totalLabel.floor_width() > 0
     assert bar.frameField.minimumSizeHint().width() == bar.frameField.sizeHint().width() > 0  # 프레임 칸은 줄지 않음
-    assert bar.volumeSlider.shrink_order > max(collapse.values())  # 볼륨 슬라이더는 맨 나중에
+    assert bar.volumeSlider.shrink_order > max(collapse.values())  # 볼륨 슬라이더는 라벨들 다음에
+    # 도구 토글: 글자는 무엇보다 먼저(음수 — 라벨의 빈 공간보다도), 통째로 사라지는 것은 볼륨 슬라이더 다음
+    tool_stages = bar.toolGroup.shrink_stages()
+    assert [floor for _order, floor in tool_stages] == [bar.toolGroup.compact_width(), 0]
+    assert tool_stages[0][0] < 0 and tool_stages[1][0] > bar.volumeSlider.shrink_order
+    assert 0 < bar.toolGroup.compact_width() < bar.toolGroup.sizeHint().width()
+    assert bar.toolGroup.minimumSizeHint().width() == 0
+
+
+def test_negative_stages_shrink_before_the_slack_of_the_labels():
+    """순서가 음수인 단계는 숫자 라벨의 빈 공간보다도 먼저 줄임 (재생 줄의 도구 토글 글자)."""
+    from yesoncheck.window_layout import InfoRowLayout
+
+    class Box(QWidget):
+        def __init__(self, hint, comfortable, stages):
+            super().__init__()
+            self._hint, self._comfortable, self._stages = hint, comfortable, stages
+
+        def sizeHint(self):
+            return QSize(self._hint, 30)
+
+        def minimumSizeHint(self):
+            return QSize(0, 30)
+
+        def comfortable_width(self):
+            return self._comfortable
+
+        def shrink_stages(self):
+            return self._stages
+
+    row = QWidget()
+    layout = InfoRowLayout(row)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(0)
+    label = Box(200, 150, [(2, 40), (6, 0)])  # 빈 공간 50
+    tools = Box(300, 300, [(-1, 100), (11, 0)])
+    for box in (label, tools):
+        layout.addWidget(box)
+    assert layout.widths_for(500) == [200, 300]
+    assert layout.widths_for(400) == [200, 200]  # 토글의 글자 몫부터 — 라벨의 빈 공간은 그대로
+    assert layout.widths_for(300) == [200, 100]
+    assert layout.widths_for(270) == [170, 100]  # 그다음 라벨의 빈 공간
+    assert layout.widths_for(140) == [40, 100]  # 라벨의 단계
+    assert layout.widths_for(100) == [0, 100]  # 라벨 접기
+    assert layout.widths_for(30) == [0, 30]  # 맨 나중에 토글
 
 
 def test_collapse_stage_comes_last():
@@ -534,8 +592,8 @@ def test_startup_geometry_fits_small_screen():
 
 
 def test_startup_size_on_large_screen_is_the_polished_layout_size(new_player, dialogs, tmp_path, large_screen):
-    """화면이 충분하면 처음 창 = max(1080×720, 스타일·글꼴이 적용된 레이아웃의 원하는 크기): 가운데 열이 스크롤 없이
-    다 보이고 정보 줄 라벨이 원하는 너비 (Windows에서는 스타일 적용 전 크기로 재서 9px 낮았음)."""
+    """화면이 충분하면 처음 창 = max(1080×720, 스타일·글꼴이 적용된 레이아웃의 원하는 크기): 재생 줄의 라벨이
+    원하는 너비 (Windows에서는 스타일 적용 전 크기로 재서 9px 낮았음)."""
     player = new_player(make_config(str(tmp_path), {}))
     startup = player.size()
     assert startup.width() >= 1080 and startup.height() >= 720, startup
@@ -545,12 +603,12 @@ def test_startup_size_on_large_screen_is_the_polished_layout_size(new_player, di
     assert player.size() == startup, report
     assert player.size() == player.sizeHint().expandedTo(QSize(1080, 720)), report
     assert player.initial_geometry == player.geometry()  # 동영상 전용 전체화면을 끝내면 이 크기로 돌아옴
-    assert _middle_scroll_area(player).verticalScrollBar().maximum() == 0, report
     for name in FIXED_WIDTH_LABELS:
         label = _label(player, name)
         assert label.width() == label.sizeHint().width() > 0, (name, report)
     splitter = _main_splitter(player)
-    assert splitter.sizes()[0] >= 200 and splitter.sizes()[1] >= 220, report  # 예전 처음 열 너비 (setSizes 200·220)
+    side, video, panel = splitter.sizes()
+    assert side >= 200 and panel == 0 and video > side, report  # 사이드바는 예전 처음 너비, 나머지는 영상 칸 (도구 패널은 닫힌 채)
 
 
 def test_startup_size_on_offscreen_screen(new_player, dialogs, tmp_path):
