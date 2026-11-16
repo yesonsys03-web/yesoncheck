@@ -46,6 +46,8 @@ _CURRENT_PREFIX = "Current: "
 _TOTAL_PREFIX = "Total: "
 _TOTAL_WIPE_PREFIX = "Total "  # 와이프: 'Total A: 334 (…), B: 120 (…)'
 _FPS_PREFIX = "재생: "
+_FPS_ACTUAL = " · 실제 "  # 규약 글 안의 '실제 fps' 표지 (player_playback.update_playback_fps가 넣음)
+_FPS_STATES = {"대기": "fps.state.idle", "정지": "fps.state.stopped", "일시정지": "fps.state.paused"}  # 규약 글 → 글자 표 키
 
 
 def shown_current(raw):
@@ -62,8 +64,20 @@ def shown_total(raw):
 
 
 def shown_fps(raw):
-    """'재생: 24 FPS · 실제 23.8' → '24 fps · 실제 23.8', '재생: 정지' → '정지'. 그 꼴이 아니면 그대로."""
-    return raw[len(_FPS_PREFIX):].replace(" FPS", " fps") if raw.startswith(_FPS_PREFIX) else raw
+    """재생 코드의 규약 글(한글 — 번역하지 않는 약속) → fps 칸에 보일 글(지금 언어).
+    '재생: 24 FPS · 실제 23.8' → '24 fps · 실제 23.8' / '24 fps · real 23.8', '재생: 정지' → '정지' / 'stopped'.
+    그 꼴이 아니면 받은 글 그대로, 모르는 상태 글은 머리만 뗌(숨기지 않음)."""
+    if not raw.startswith(_FPS_PREFIX):
+        return raw
+    body = raw[len(_FPS_PREFIX):]
+    if body in _FPS_STATES:
+        return ui_text.text(_FPS_STATES[body])
+    return body.replace(" FPS", " fps").replace(_FPS_ACTUAL, f" · {ui_text.text('fps.actual')} ")
+
+
+def fps_samples():
+    """fps 칸의 너비 본보기 — 언어마다의 가장 긴 꼴. 칸의 원하는 너비는 이 가운데 넓은 쪽: 언어를 바꿔도 막대의 자리가 같게."""
+    return tuple(f"00.000 fps · {word} 00.0" for word in ui_text.TEXTS["fps.actual"].values())
 
 
 class TextSlot:
@@ -476,7 +490,8 @@ class TransportBar(QWidget):
                                      shrink_order=3, collapse_order=8)
         self.timeLabel.setText("00:00:00.000 / 00:00:00.000")
         self.fpsLabel = ElidedLabel(Qt.ElideRight, keep_text="00.000 fps · 실제 00.0", keep_prefix="",
-                                    hint_text="00.000 fps · 실제 00.0", shrink_order=2, collapse_order=6)
+                                    hint_text=fps_samples(), shrink_order=2, collapse_order=6)
+        self._fps_raw = None  # 재생 코드가 마지막으로 넣은 규약 글 — 언어가 바뀌면 이것으로 다시 그림 (retranslate)
         self.toolGroup = ToolToggleGroup()
         for name in ("wipeButton", "wipeXButton", "wipeYButton", "annotationButton", "ocrButton"):
             setattr(self, name, getattr(self.toolGroup, name))
@@ -513,6 +528,7 @@ class TransportBar(QWidget):
         self.totalLabel.setText(shown_total(raw))
 
     def show_fps(self, raw):
+        self._fps_raw = raw
         self.fpsLabel.setText(shown_fps(raw))
 
     def show_playing(self, playing):
@@ -553,3 +569,5 @@ class TransportBar(QWidget):
         self._refresh_play_button()
         self.frameField.setToolTip(ui_text.text("transport.frame"))
         self._show_volume(self.volumeSlider.value())
+        if self._fps_raw is not None:  # 멈춤·정지·대기 글은 재생 코드가 다시 보내지 않음 — 받아 둔 규약 글로 다시 그림
+            self.fpsLabel.setText(shown_fps(self._fps_raw))

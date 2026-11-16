@@ -83,6 +83,7 @@ class ElidedLabel(QLabel):
         None이면 QLabel처럼 지금 글자의 너비.
     hint_text: hint_width 대신 — 이 글자에 대한 QLabel의 원하는 너비로 고정 (모양이 늘 같은 글자, 예: 시간
         '00:00:00.000 / 00:00:00.000' — 예전과 같은 너비이면서 매 프레임 글자 너비를 다시 재지 않음).
+        글자 여럿(튜플)이면 그 가운데 가장 넓은 것 (언어마다 다른 본보기 — 칸의 너비가 언어를 따르지 않게).
     fit_text: 이 글자를 QLabel 그대로 그리는 너비까지는 빈 공간만 줄임 (InfoRowLayout이 가장 먼저 줄이는 몫).
     shrink_order: InfoRowLayout에서 빈 공간 다음으로 floor_width까지 줄이는 순서 (작을수록 먼저).
     collapse_order: 정하면 모든 라벨이 floor_width가 된 뒤 이 순서에 너비 0까지 (창이 최소 너비 근처일 때만 — 그래서
@@ -155,7 +156,8 @@ class ElidedLabel(QLabel):
             if self._hint_width is not None:
                 fixed = max(self._hint_width, fit or 0, floor)
             elif self._hint_text is not None:
-                fixed = max(self._qlabel_width(self._hint_text, margins, margin), floor)
+                samples = (self._hint_text,) if isinstance(self._hint_text, str) else self._hint_text
+                fixed = max(max(self._qlabel_width(sample, margins, margin) for sample in samples), floor)
             # 한 줄 라벨의 높이는 글자와 상관없음 (QLabel은 글자가 바뀔 때마다 다시 잼 — 그 계산을 건너뜀)
             height = super().sizeHint().height()
             self._widths = (left, right, floor, fit, fixed, height, metrics_f)

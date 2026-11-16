@@ -21,6 +21,13 @@ TEXTS = {
     "transport.loop": {"ko": "반복 재생 (L)", "en": "Loop playback (L)"},
     "transport.frame": {"ko": "프레임 번호 — 숫자를 치고 Enter", "en": "Frame number — type a number and press Enter"},
     "transport.volume": {"ko": "볼륨 {percent}%", "en": "Volume {percent}%"},
+    # 재생 줄의 fps 칸 — 재생 코드가 넣는 규약 글('재생: 24 FPS · 실제 23.8'·'재생: 정지' — 번역하지 않음)에서 보일 글만
+    # (transport_bar.shown_fps). 'real'은 '실제'보다 넓지 않은 낱말로 골랐다 — 칸의 너비 본보기는 두 언어 중 넓은 쪽이라
+    # 더 긴 낱말(actual)이면 한국어 화면의 재생 줄 자리가 달라진다.
+    "fps.actual": {"ko": "실제", "en": "real"},
+    "fps.state.idle": {"ko": "대기", "en": "idle"},
+    "fps.state.stopped": {"ko": "정지", "en": "stopped"},
+    "fps.state.paused": {"ko": "일시정지", "en": "paused"},
     # 고른 영상 이어 재생(선택 재생)
     "playlist.end": {"ko": "이어 재생 끝내기", "en": "End playlist"},
     "playlist.end.tip": {"ko": "고른 영상 이어 재생을 끝내고 처음으로 돌아갑니다",
