@@ -318,7 +318,7 @@ class TransportBar(QWidget):
         self.volumeSlider = _VolumeSlider(Qt.Horizontal)
         self.volumeSlider.setObjectName("volumeSlider")  # 테마 시트의 QSlider#volumeSlider 규칙 (가는 중립 색 슬라이더)
         self.volumeSlider.setRange(0, 100)
-        self.volumeSlider.setValue(100)  # 재생기의 처음 볼륨과 같게 (플레이어가 실제 값으로 다시 맞춤 — player_transport)
+        self.volumeSlider.setValue(50)  # 막대 혼자의 처음 값 — 창에서는 플레이어가 실제 볼륨으로 맞춤 (player_transport)
         self.volumeSlider.setFocusPolicy(Qt.NoFocus)
         self.volumeSlider.valueChanged.connect(self._show_volume)
 

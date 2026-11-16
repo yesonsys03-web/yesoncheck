@@ -76,6 +76,11 @@ from yesoncheck.worker_lifecycle import EXIT_WAIT_S, _RELEASED_WORKERS, release_
 # 2026-11-16 전에는 영상 칸에 함께 있던 정보 줄의 최소 너비(보통 글꼴 193px·글자가 넓은 글꼴 356px)가 그 구실을 했음
 VIDEO_START_MINIMUM = 300
 
+# 창을 켰을 때의 볼륨 (0~100) — 재생 줄의 볼륨 슬라이더·V 모드의 오버레이 볼륨도 이 값에서 시작.
+# 2026-11-16 전에는 슬라이더만 50에서 시작하고 재생기는 100(QMediaPlayer 기본값)이라 슬라이더를 건드릴 때까지 표시와 소리가
+# 달랐음 — 사용자 결정 "처음에 소리를 50으로": 소리를 표시(50)에 맞춤 (그 전보다 처음 소리가 작음)
+START_VOLUME = 50
+
 # Settings → '재생 디코더 (Mac)' (스펙 2026-11-04 §5.4) — 항목 차례는 mac_native_gate.DECODERS
 DECODER_MENU_TEXT = "재생 디코더 (Mac)"
 DISPLAY_TITLE = "화면 그리기 설정"  # Settings → 화면 그리기 (Windows) — windows_display
@@ -133,7 +138,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerOcrMix
         self._user_file_problem_keys = set()
         # 소리 재생기(QMediaPlayer)는 처음 쓸 때 만듦 (mediaPlayer 속성) — Windows에서 처음 만들 때 8초쯤 걸림
         self._media_player = None
-        self._media_volume = 100  # 재생기를 만들기 전에 정한 볼륨 (QMediaPlayer 기본값과 같음)
+        self._media_volume = START_VOLUME  # 재생기를 만들기 전에 정한 볼륨 — 만들 때 재생기에 줌 (처음 50)
         self.media_player_create_seconds = None  # 재생기를 만드는 데 걸린 초 (만든 뒤에 채움)
         self._shared_config_load = None  # 실행 중인 공유 설정 불러오기 (SharedConfigLoad)
         self._shared_config_closed = False  # 창이 닫힘 → 늦게 온 공유 설정 결과는 버림

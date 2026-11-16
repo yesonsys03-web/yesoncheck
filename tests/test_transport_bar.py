@@ -426,8 +426,8 @@ def test_apply_theme_recolours_the_icons_and_keeps_the_layout(bar, qapp):
 
 
 def test_volume_tooltip_follows_the_value(bar):
-    assert (bar.volumeSlider.minimum(), bar.volumeSlider.maximum(), bar.volumeSlider.value()) == (0, 100, 100)
-    assert bar.volumeSlider.toolTip() == "볼륨 100%"  # 처음 값 = 재생기의 처음 볼륨
+    assert (bar.volumeSlider.minimum(), bar.volumeSlider.maximum(), bar.volumeSlider.value()) == (0, 100, 50)
+    assert bar.volumeSlider.toolTip() == "볼륨 50%"  # 막대 혼자의 처음 값 — 창에서는 플레이어가 실제 볼륨으로 맞춤
     bar.volumeSlider.setValue(73)
     assert bar.volumeSlider.toolTip() == "볼륨 73%"
 

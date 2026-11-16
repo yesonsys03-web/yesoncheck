@@ -170,13 +170,17 @@ def test_volume_slider_reaches_the_player(player):
 
 
 def test_volume_slider_starts_at_the_actual_volume(player, tmp_path):
-    """처음 볼륨: 슬라이더·툴팁이 실제 소리 크기(100)와 같음. 예전에는 슬라이더만 50에서 시작하고 재생기는 100이라
-    (슬라이더를 건드려야 맞춰짐) 표시가 틀렸음 — 사용자 결정 2026-11-16: 소리 크기는 그대로 두고 표시를 맞춤."""
+    """처음 볼륨은 50 — 슬라이더·툴팁과 실제 소리 크기가 같음. 예전에는 슬라이더만 50에서 시작하고 재생기는 100이라
+    (슬라이더를 건드려야 맞춰짐) 표시가 틀렸음 — 사용자 결정 2026-11-16 "처음에 소리를 50으로": 소리를 표시(50)에 맞춤."""
+    from yesoncheck import player_base
+
+    assert player_base.START_VOLUME == 50
     slider = player.transportBar.volumeSlider
-    assert slider.value() == player.media_volume() == 100
-    assert slider.toolTip() == "볼륨 100%"
-    player.open_file("A", clip(tmp_path))  # 재생기를 만듦
-    assert player._media_player.volume() == 100 == slider.value()
+    assert slider.value() == player.media_volume() == 50
+    assert slider.toolTip() == "볼륨 50%"
+    player.open_file("A", clip(tmp_path))  # 재생기를 만듦 — 그때 정해 둔 볼륨을 받음
+    assert player._media_player.volume() == 50 == slider.value()
+    assert player.overlayVolume.value() == 50  # V 모드의 오버레이 볼륨도 같은 값에서
 
 
 def test_volume_slider_follows_a_change_made_in_the_overlay(player, tmp_path):
