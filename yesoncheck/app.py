@@ -7,6 +7,7 @@ import sys
 import time
 import traceback
 
+from PyQt5 import sip
 from PyQt5.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal, pyqtSlot
 from PyQt5.QtGui import QFont, QGuiApplication, QPixmap
 from PyQt5.QtWidgets import QApplication, QLabel, QMessageBox, QSplashScreen
@@ -374,6 +375,22 @@ def finish_released_workers(timeout_s):
     os._exit(0)
 
 
+def release_windows_before_app(app, router, windows):
+    """exec_()가 끝난 뒤, launch가 돌아가기 전에: 앱 전체 이벤트 필터(router — Mac만 걸려 있음)를 떼고 창들을 바로 지움.
+
+    launch가 돌아가면 지역 변수 app(QApplication의 파이썬 래퍼)이 풀리고, PyQt는 그때 살아 있는 래퍼를 모두 돌며
+    (sipVisitWrappers) 파이썬이 가진 부모 없는 QObject를 지운다(dealloc_QApplication). 창이 그 안에서 지워지면 자식 수백 개의
+    소멸 이벤트가 파이썬 이벤트 필터를 부르는데(Mac의 앱 전체 필터는 약 300번), 그렇게 불린 판에서만 간헐 세그폴트가 났음
+    (스택 dealloc_QApplication → sip_api_visit_wrappers → cleanup_qobject → sip_api_get_address — 2026-11-16 실측; 파이썬
+    호출이 만드는 새 래퍼가 돌고 있는 표를 건드리는 것으로 추정). 그래서 그 일을 여기서 — 아무도 래퍼 표를 돌고 있지 않을 때 —
+    먼저 한다: 필터를 떼면 그 뒤의 소멸 이벤트가 파이썬에 오지 않고, 창을 지우면 정리 때 지울 큰 것이 남지 않음.
+    지운 뒤에는 이 창들의 Qt 메서드를 부를 수 없음(RuntimeError) — launch의 맨 끝에서만 부를 것."""
+    app.removeEventFilter(router)  # 걸려 있지 않으면 Qt가 무시함 (Windows)
+    for window in windows:
+        if not sip.isdeleted(window):
+            sip.delete(window)
+
+
 def launch(argv=None):
     """Create and run the QApplication event loop.
 
@@ -483,6 +500,8 @@ def launch(argv=None):
         # 창을 닫을 때 끝나지 않아 붙잡아 둔 작업(예: TensorFlow 추론 중인 애니매틱2)을 EXIT_WAIT_S초까지 기다림
         # (넘으면 로그를 남기고 강제 종료 — 실행 중인 QThread가 파이썬 종료 중에 파괴되면 앱이 오류로 죽음)
         finish_released_workers(EXIT_WAIT_S)
+        # QApplication(파이썬 래퍼)이 풀리기 전에 앱 전체 이벤트 필터를 떼고 창을 먼저 지움 — 종료 때의 간헐 세그폴트
+        release_windows_before_app(app, router, (player, splash))
         return code
     return 0
 
