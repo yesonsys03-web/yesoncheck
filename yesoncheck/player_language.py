@@ -22,12 +22,14 @@ from yesoncheck.user_files import UserFileError
 
 class PlayerLanguageMixin:
     # 영역마다의 '다시 그리기' 함수 이름 — 부르는 차례. (재생 줄·도구 패널은 위젯의 retranslate()를 retranslate_ui가 먼저 부름)
-    RETRANSLATORS = ("retranslate_main_menus", "retranslate_sidebar_controls", "retranslate_playlist_end")
+    RETRANSLATORS = ("retranslate_main_menus", "retranslate_settings_menus", "retranslate_sidebar_controls",
+                     "retranslate_playlist_end")
 
     def _add_language_menu(self, settings_menu):
         """Settings의 맨 끝에 구분선 + '언어 (Language)' 하위 메뉴(항목은 언어마다 — 자기 언어로 적은 이름)."""
         settings_menu.addSeparator()
         menu = settings_menu.addMenu(ui_language.MENU_TEXT)
+        menu.menuAction().setMenuRole(QAction.NoRole)
         menu.setToolTipsVisible(True)
         self.language_menu = menu
         self.language_actions = {}  # 언어 코드 → 항목 (ui_text.LANGUAGES의 차례)

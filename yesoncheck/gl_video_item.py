@@ -59,7 +59,7 @@ from PyQt5.QtCore import QPointF, Qt, QTimer
 from PyQt5.QtGui import QImage, QOpenGLContext, QPaintEngine, QPixmap
 from PyQt5.QtWidgets import QGraphicsPixmapItem
 
-from yesoncheck import downscale_filter, error_window, gl_bindings, gl_surface, windows_display
+from yesoncheck import downscale_filter, error_window, gl_bindings, gl_surface, ui_text, windows_display
 from yesoncheck.frame_handles import native_surface_of, whole_surface_handle
 from yesoncheck.gl_bindings import (
     GL_BLEND,
@@ -86,16 +86,22 @@ from yesoncheck.gl_surface import GL_BGRA, GL_RGBA, GL_SCISSOR_TEST, GL_TEXTURE_
 VIDEO_ITEM_ENV = "YESONCHECK_VIDEO_ITEM"
 VIDEO_ITEM_MODES = ("auto", "gl", "pixmap")
 LOG_PREFIX = "[표시]"
-# (Mac) 실패 창의 킬 스위치 안내 앞에 붙는 줄 — player_base의 Settings 메뉴 '재생 디코더 (Mac)'가 그 걸쇠를 풂 (스펙 2026-11-04 §5.4 ④)
-DECODER_MENU_HINT = "Settings → 재생 디코더 (Mac) → ffmpeg (예전 방식) 으로 바꾸면 예전 방식으로 재생합니다"
+
+
+def decoder_menu_hint():
+    """(Mac) 실패 창의 킬 스위치 안내 앞에 붙는 줄 — player_base의 Settings 메뉴 '재생 디코더 (Mac)'가 그 걸쇠를 풂 (스펙 2026-11-04
+    §5.4 ④). 문장은 한글 그대로이고 메뉴 이름은 지금 화면의 글(글자 표 — 언어를 따름)."""
+    return (f"Settings → {ui_text.text('settings.decoder')} → {ui_text.text('settings.decoder.ffmpeg')} 으로 바꾸면 "
+            "예전 방식으로 재생합니다")
 
 
 def failure_menu_hint(platform_name):
-    """그리기 실패 창에서 킬 스위치 안내 앞에 붙는 줄 — 그 플랫폼에 되돌리는 메뉴가 있으면."""
+    """그리기 실패 창에서 킬 스위치 안내 앞에 붙는 줄 — 그 플랫폼에 되돌리는 메뉴가 있으면 (메뉴 이름은 지금 화면의 글)."""
     if platform_name == "darwin":
-        return DECODER_MENU_HINT
+        return decoder_menu_hint()
     if platform_name == "win32":
-        return f"Settings → {windows_display.MENU_TEXT} → {windows_display.ACTION_TEXTS['cpu']}를 고르고 앱을 다시 켜면 CPU로 그립니다"
+        return (f"Settings → {ui_text.text(windows_display.MENU_KEY)} → {ui_text.text(windows_display.ACTION_KEYS['cpu'])}를 "
+                "고르고 앱을 다시 켜면 CPU로 그립니다")
     return ""
 
 

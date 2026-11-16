@@ -14,7 +14,7 @@ import pytest
 from PyQt5.QtWidgets import QMenu, QMessageBox
 
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
-from yesoncheck import app, downscale_filter, user_files
+from yesoncheck import app, downscale_filter, ui_text, user_files
 
 
 @pytest.fixture
@@ -175,7 +175,7 @@ def test_a_bad_value_at_launch_warns_and_points_to_the_menu(local_app_data, monk
     monkeypatch.setattr(QMessageBox, "warning", lambda *args: warned.append(args[1:3]))
     app.load_downscale_filter()
     assert downscale_filter.preferred() == "linear"
-    assert len(warned) == 1 and downscale_filter.MENU_TEXT in warned[0][1]
+    assert len(warned) == 1 and ui_text.text(downscale_filter.MENU_KEY) in warned[0][1]
     assert "Traceback" in capsys.readouterr().err
     assert saved(local_app_data) == {"downscale_filter": "lanczos"}  # 파일은 그대로 — 값을 지어내 쓰지 않음
 
@@ -231,7 +231,7 @@ def test_settings_menu_has_the_filter_on_windows(new_player, dialogs, tmp_path, 
     player = new_player(make_config(str(tmp_path), {}))
     settings = next(action.menu() for action in player.menuBar().actions() if action.text() == "&Settings")
     titles = [action.text() for action in settings.actions()]
-    assert titles.index(downscale_filter.MENU_TEXT) == titles.index("화면 그리기 (Windows)") + 1
+    assert titles.index(ui_text.text(downscale_filter.MENU_KEY)) == titles.index("화면 그리기 (Windows)") + 1
     assert set(player.downscale_actions) == {"linear", "area"}
 
 
@@ -239,7 +239,7 @@ def test_no_menu_on_mac(new_player, dialogs, tmp_path, monkeypatch):  # noqa: F8
     monkeypatch.setattr(sys, "platform", "darwin")
     player = new_player(make_config(str(tmp_path), {}))
     settings = next(action.menu() for action in player.menuBar().actions() if action.text() == "&Settings")
-    assert downscale_filter.MENU_TEXT not in [action.text() for action in settings.actions()]
+    assert ui_text.text(downscale_filter.MENU_KEY) not in [action.text() for action in settings.actions()]
     assert player.downscale_actions == {}
     menu = QMenu(player)
     player._add_downscale_menu(menu)

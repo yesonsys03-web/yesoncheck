@@ -203,7 +203,11 @@ def load_mount_map():
 
 
 PLAYBACK_DECODER_TITLE = "재생 디코더 설정"
-PLAYBACK_DECODER_FALLBACK_NOTE = "이 세션은 예전 방식(ffmpeg)으로 재생합니다 — Settings → 재생 디코더 (Mac)에서 바꿀 수 있습니다"
+
+
+def playback_decoder_fallback_note():
+    """재생 디코더 설정을 읽지 못했을 때의 창 끝 글 — 메뉴 이름은 지금 화면의 글(글자 표)."""
+    return f"이 세션은 예전 방식(ffmpeg)으로 재생합니다 — Settings → {ui_text.text('settings.decoder')}에서 바꿀 수 있습니다"
 
 
 def load_playback_decoder():
@@ -226,7 +230,7 @@ def load_playback_decoder():
         )
     except (user_files.UserFileError, ValueError) as exc:
         traceback.print_exc()
-        QMessageBox.warning(None, PLAYBACK_DECODER_TITLE, f"{exc}\n\n{PLAYBACK_DECODER_FALLBACK_NOTE}")
+        QMessageBox.warning(None, PLAYBACK_DECODER_TITLE, f"{exc}\n\n{playback_decoder_fallback_note()}")
         mac_native_gate.set_preferred_decoder("ffmpeg", source=mac_native_gate.SOURCE_FALLBACK)
     decoder, source = mac_native_gate.effective_decoder()
     print(f"[재생] 디코더: {decoder} ({source})", flush=True)
@@ -245,7 +249,7 @@ def load_display_renderer():
     except (user_files.UserFileError, ValueError) as exc:
         traceback.print_exc()
         windows_display.set_preferred(windows_display.DEFAULT_RENDERER)
-        QMessageBox.warning(None, DISPLAY_RENDERER_TITLE, f"{exc}\n\n이 세션은 CPU로 그립니다 — Settings → {windows_display.MENU_TEXT}에서 바꿀 수 있습니다")
+        QMessageBox.warning(None, DISPLAY_RENDERER_TITLE, f"{exc}\n\n이 세션은 CPU로 그립니다 — Settings → {ui_text.text(windows_display.MENU_KEY)}에서 바꿀 수 있습니다")
     print(f"[뷰포트] 화면 그리기 설정: {windows_display.preferred()}", flush=True)  # '[표시]'는 GL 그리기 줄 전용 (CLAUDE.md)
 
 
@@ -260,10 +264,10 @@ def load_slider_thumbnails():
         traceback.print_exc()
         hover_strip.set_enabled(False)
         if isinstance(exc, user_files.UserFileError):
-            note = (f"이 세션은 슬라이더 썸네일을 끕니다.\n설정 파일을 고치거나 지운 뒤 다시 켜면 켜집니다 — Settings → {hover_strip.MENU_TEXT}은 "
+            note = (f"이 세션은 슬라이더 썸네일을 끕니다.\n설정 파일을 고치거나 지운 뒤 다시 켜면 켜집니다 — Settings → {ui_text.text(hover_strip.MENU_KEY)}은 "
                     "파일을 덮지 않습니다")
         else:
-            note = f"이 세션은 슬라이더 썸네일을 끕니다 — Settings → {hover_strip.MENU_TEXT}에서 다시 켤 수 있습니다"
+            note = f"이 세션은 슬라이더 썸네일을 끕니다 — Settings → {ui_text.text(hover_strip.MENU_KEY)}에서 다시 켤 수 있습니다"
         QMessageBox.warning(None, hover_strip.SETTINGS_TITLE, f"{exc}\n\n{note}")
     print(f"{hover_strip.LOG_PREFIX} 설정: {'켬' if hover_strip.enabled() else '끔'}", flush=True)
 
@@ -313,10 +317,10 @@ def load_downscale_filter():
         traceback.print_exc()
         downscale_filter.set_preferred(downscale_filter.DEFAULT_FILTER)
         if isinstance(exc, user_files.UserFileError):
-            note = (f"이 세션은 Linear로 그립니다.\n설정 파일을 고치거나 지운 뒤 다시 켜면 설정을 읽습니다 — Settings → {downscale_filter.MENU_TEXT}은 "
+            note = (f"이 세션은 Linear로 그립니다.\n설정 파일을 고치거나 지운 뒤 다시 켜면 설정을 읽습니다 — Settings → {ui_text.text(downscale_filter.MENU_KEY)}은 "
                     "파일을 덮지 않습니다")
         else:
-            note = f"이 세션은 Linear로 그립니다 — Settings → {downscale_filter.MENU_TEXT}에서 다시 고를 수 있습니다"
+            note = f"이 세션은 Linear로 그립니다 — Settings → {ui_text.text(downscale_filter.MENU_KEY)}에서 다시 고를 수 있습니다"
         QMessageBox.warning(None, downscale_filter.SETTINGS_TITLE, f"{exc}\n\n{note}")
     print(f"{downscale_filter.LOG_PREFIX} 설정: {downscale_filter.preferred()}", flush=True)
 
@@ -468,10 +472,12 @@ def launch(argv=None):
     gl_video_item.video_item_mode(os.environ)  # 영상 아이템 토글(YESONCHECK_VIDEO_ITEM)의 나쁜 값도 같은 이유로 여기서
     video_list.job_scan_threads()  # job 목록 스레드 수(YESONCHECK_JOB_SCAN_THREADS)의 나쁜 값도 — job을 고를 때 뒤늦게 알게 되지 않게
     # (Mac) 재생 디코더 설정(prefs.json)도 시작 때 한 번 읽어 게이트의 캐시에 — native_wanted는 그 캐시만 봄 (깨졌으면 알리고 이 세션은 ffmpeg)
+    # 화면 언어(한국어·English) — 창(모든 화면 글자)을 만들기 전에, 그리고 아래 설정들보다 먼저: 그 설정을 읽지 못했을 때의
+    # 경고 창이 메뉴 이름을 화면의 언어로 인용함
+    load_language()
     load_playback_decoder()
     load_display_renderer()  # (Windows) 화면 그리기 설정 — 창(뷰포트)을 만들기 전에
     load_slider_thumbnails()  # 슬라이더 썸네일 켬/끔 — 창(Settings 메뉴 체크)을 만들기 전에
-    load_language()  # 화면 언어(한국어·English) — 창(모든 화면 글자)을 만들기 전에
     load_downscale_filter()  # (Windows) 축소 필터 — 창(Settings 메뉴 체크·영상 아이템)을 만들기 전에
     # 네이티브 재생 토글(YESONCHECK_MAC_NATIVE)도 같은 이유로 여기서 — 값(native_mode)과 함께 on이 macOS 밖이면 ValueError (native_wanted가
     # 열 때마다 늦게 실패하지 않게)

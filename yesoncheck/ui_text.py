@@ -63,6 +63,62 @@ TEXTS = {
     "settings.language.env_tip": {
         "ko": "환경 변수 YESONCHECK_LANGUAGE={value} 값이 우선합니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다",
         "en": "The environment variable YESONCHECK_LANGUAGE={value} takes precedence — remove it and restart the app to use this setting"},
+    # Settings — 재생 디코더 (Mac) · 화면 그리기 (Windows) · 축소 필터 (Windows) · 슬라이더 썸네일 · 공유 설정 폴더 (Windows).
+    # 한국어 글은 옮기기 전의 글자 그대로. 이 이름들을 인용하는 알림 글(문장은 한글)은 그때의 화면 글을 끼워 씀.
+    "settings.decoder": {"ko": "재생 디코더 (Mac)", "en": "Playback decoder (Mac)"},
+    "settings.decoder.videotoolbox": {"ko": "VideoToolbox (기본)", "en": "VideoToolbox (default)"},
+    "settings.decoder.ffmpeg": {"ko": "ffmpeg (예전 방식)", "en": "ffmpeg (legacy)"},
+    "settings.decoder.tip": {
+        "ko": "이 창은 바로 바꾸고 이 Mac의 설정 파일(prefs.json)에 저장합니다 — 이미 열린 다른 창은 다음에 켤 때부터 따릅니다",
+        "en": "Switches this window now and saves to this Mac's settings file (prefs.json) — other open windows follow the next "
+              "time they start"},
+    "settings.decoder.cv2_tip": {
+        "ko": "YESONCHECK_MOVIE_SOURCE=cv2가 모든 빠른 디코더를 끕니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다",
+        "en": "YESONCHECK_MOVIE_SOURCE=cv2 turns off every fast decoder — remove it and restart the app to use this setting"},
+    # 환경 변수가 디코더를 덮을 때 — 값마다 키: 한국어는 받침에 맞는 조사(on이·off가)
+    "settings.decoder.env_tip.on": {
+        "ko": "환경 변수 YESONCHECK_MAC_NATIVE=on이 우선합니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다",
+        "en": "The environment variable YESONCHECK_MAC_NATIVE=on takes precedence — remove it and restart the app to use this "
+              "setting"},
+    "settings.decoder.env_tip.off": {
+        "ko": "환경 변수 YESONCHECK_MAC_NATIVE=off가 우선합니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다",
+        "en": "The environment variable YESONCHECK_MAC_NATIVE=off takes precedence — remove it and restart the app to use this "
+              "setting"},
+    # 체크된 디코더의 툴팁에 보이는 출처 — 한국어 글은 mac_native_gate의 출처 글(기록·비교용)과 같음 (player_base.DECODER_SOURCE_KEYS)
+    "settings.decoder.source.fallback": {"ko": "prefs.json 읽기 실패 — 이 세션만 ffmpeg",
+                                         "en": "Could not read prefs.json — ffmpeg for this session only"},
+    "settings.decoder.source.gl_fallback": {"ko": "네이티브 화면 그리기 실패 — 이 창만 ffmpeg",
+                                            "en": "Native drawing failed — ffmpeg for this window only"},
+    "settings.display": {"ko": "화면 그리기 (Windows)", "en": "Display rendering (Windows)"},
+    "settings.display.cpu": {"ko": "CPU (기본)", "en": "CPU (default)"},
+    "settings.display.gpu": {"ko": "GPU", "en": "GPU"},
+    "settings.display.tip": {"ko": "이 PC의 설정 파일(prefs.json)에 저장합니다 — 다음에 여는 창부터 적용됩니다",
+                             "en": "Saved to this PC's settings file (prefs.json) — applies from the next window you open"},
+    "settings.display.env_tip": {"ko": "{name}={value}가 우선합니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다",
+                                 "en": "{name}={value} takes precedence — remove it and restart the app to use this setting"},
+    "settings.display.status": {"ko": "지금 이 창: {renderer}", "en": "This window: {renderer}"},
+    "settings.downscale": {"ko": "축소 필터 (Windows)", "en": "Downscale filter (Windows)"},
+    "settings.downscale.linear": {"ko": "Linear (기본)", "en": "Linear (default)"},
+    "settings.downscale.area": {"ko": "고품질 (면적 평균)", "en": "High quality (area average)"},
+    "settings.downscale.linear.tip": {
+        "ko": "예전 방식 — 가장 빠름. 영상을 반쯤으로 줄여 보면 가는 선이 고르지 않을 수 있습니다",
+        "en": "The original method — fastest. Thin lines may look uneven when the video is shown at about half size"},
+    "settings.downscale.area.tip": {
+        "ko": "줄여 볼 때 가는 선이 고르게 보입니다 — 프레임마다 CPU로 줄이므로 4K 재생이 느려지면 Linear로 되돌리세요 (이 창에 바로 적용)",
+        "en": "Thin lines look even when the video is scaled down — every frame is scaled on the CPU, so switch back to Linear "
+              "if 4K playback slows down (applies to this window right away)"},
+    "settings.hover_thumbs": {"ko": "슬라이더 썸네일", "en": "Slider thumbnails"},
+    "settings.hover_thumbs.tip": {
+        "ko": "슬라이더 위에 커서를 올리면 그 프레임의 작은 그림을 보여 줍니다 — 이 창은 바로, 이미 열린 다른 창은 다음에 켤 때부터",
+        "en": "Shows a small picture of the frame under the cursor on the slider — applies to this window now; other open "
+              "windows follow the next time they start"},
+    "settings.shared_config": {"ko": "공유 설정 폴더 변경...", "en": "Change shared settings folder..."},
+    # Help
+    "help.manual": {"ko": "사용법", "en": "User guide"},
+    "help.update_check": {"ko": "업데이트 확인…", "en": "Check for updates…"},
+    "help.default_app": {"ko": "동영상 기본 앱으로 정하기…", "en": "Set as default video app…"},
+    "help.default_apps_settings": {"ko": "동영상 기본 앱 설정 열기…", "en": "Open default video app settings…"},
+    "help.about": {"ko": "정보", "en": "About"},
     # 메뉴 — 제목은 두 언어 모두 영어, 항목의 단축키는 글자로만 알림(QAction 단축키를 걸지 않음)
     "menu.file": {"ko": "&File", "en": "&File"},
     "menu.view": {"ko": "&View", "en": "&View"},

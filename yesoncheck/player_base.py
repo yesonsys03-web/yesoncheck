@@ -18,6 +18,7 @@ from PyQt5.QtCore import (
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtMultimedia import QMediaPlayer
 from PyQt5.QtWidgets import (
+    QAction,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -42,7 +43,7 @@ from PyQt5.QtWidgets import (
 from yesoncheck.video_widget import VIEWPORT_ENV, CustomVideoWidget
 from yesoncheck import bookmarks, build_info, default_app, downscale_filter, error_window, external_tools, file_associations, \
     instance_link, instances, mac_native_gate, mac_prefs, manual_open, media_player_log, paths, timing_log, tool_panel, \
-    user_files, video_list, windows_display
+    ui_text, user_files, video_list, windows_display
 from yesoncheck import sidebar_sort  # 사이드바 정렬 기준의 기본값 (SidebarSortMixin)
 from yesoncheck.movie_pipe_source import movie_source_mode
 from yesoncheck.user_files import UserFileError
@@ -73,15 +74,16 @@ from yesoncheck.worker_lifecycle import EXIT_WAIT_S, _RELEASED_WORKERS, release_
 # 달랐음 — 사용자 결정 "처음에 소리를 50으로": 소리를 표시(50)에 맞춤 (그 전보다 처음 소리가 작음)
 START_VOLUME = 50
 
-# Settings → '재생 디코더 (Mac)' (스펙 2026-11-04 §5.4) — 항목 차례는 mac_native_gate.DECODERS
-DECODER_MENU_TEXT = "재생 디코더 (Mac)"
+# Settings → '재생 디코더 (Mac)' (스펙 2026-11-04 §5.4) — 항목 차례는 mac_native_gate.DECODERS.
+# 화면의 글·툴팁은 글자 표(ui_text)에서 읽음(언어를 따름 — 2026-11-16 UI 개편 PR 3): 여기에는 그 키만.
+DECODER_MENU_KEY = "settings.decoder"
+DECODER_ACTION_KEYS = {"videotoolbox": "settings.decoder.videotoolbox", "ffmpeg": "settings.decoder.ffmpeg"}
+# 체크된 디코더의 툴팁에 보이는 출처: mac_native_gate의 출처 글(한글 — 기록·비교용, 그대로 둠) → 보일 때의 글자 표 키
+DECODER_SOURCE_KEYS = {mac_native_gate.SOURCE_FALLBACK: "settings.decoder.source.fallback",
+                       mac_native_gate.SOURCE_GL_FALLBACK: "settings.decoder.source.gl_fallback"}
 DISPLAY_TITLE = "화면 그리기 설정"  # Settings → 화면 그리기 (Windows) — windows_display
-DISPLAY_TIP = "이 PC의 설정 파일(prefs.json)에 저장합니다 — 다음에 여는 창부터 적용됩니다"
-DECODER_ACTION_TEXTS = {"videotoolbox": "VideoToolbox (기본)", "ffmpeg": "ffmpeg (예전 방식)"}
 DECODER_SAVE_TITLE = "재생 디코더 설정"  # 저장 실패 창 제목 (app.load_playback_decoder의 읽기 실패 창과 같은 제목)
-DECODER_TIP = "이 창은 바로 바꾸고 이 Mac의 설정 파일(prefs.json)에 저장합니다 — 이미 열린 다른 창은 다음에 켤 때부터 따릅니다"
 DECODER_ENV_SOURCE_PREFIX = "환경 변수"  # mac_native_gate.effective_decoder가 환경 변수(YESONCHECK_MAC_NATIVE=on|off)가 덮을 때 돌려주는 출처의 머리
-DECODER_CV2_TIP = "YESONCHECK_MOVIE_SOURCE=cv2가 모든 빠른 디코더를 끕니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다"
 GL_FALLBACK_LOG = "[표시] GL 텍스처 스트리밍 실패 — 이 창을 ffmpeg 방식으로 바꿉니다"  # 네이티브 그리기 실패 폴백의 기록 줄 (스펙 2026-11-04 §5.8)
 KEEP_LATCH_LOG = "[표시] 네이티브 프레임이 아직 남아 걸쇠를 풀지 않음 — 다시 그리면 또 실패하므로 영상 영역은 비워 둠"
 DECODER_RETRY_LOG = "[재생] 이 창은 그리기가 멈춰 있어(걸쇠) ffmpeg로 캡처를 다시 바꿔 끼우고 걸쇠를 정리함"  # 메뉴에서 이미 유효한 ffmpeg를 다시 고름 (Ruling 11, 최종 리뷰 F1)
@@ -1021,17 +1023,20 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         # File · View · Playback · Compare · Tools (player_menus — 항목은 지금의 처리기, 단축키는 글자로만)
         self._add_main_menus(menubar)
 
-        # Settings 메뉴
+        # Settings 메뉴 — 항목의 글·툴팁은 글자 표(ui_text)에서: _menu_text가 넣고 (항목, 글 키, 툴팁 키)를 적어 두면
+        # 언어가 바뀔 때 retranslate_settings_menus가 다시 읽음. 메뉴 제목 &Settings·&Help는 두 언어에서 같음
+        self._settings_texts = []
         settings_menu = menubar.addMenu('&Settings')
         
         # 재생 디코더 서브메뉴 (Mac만 — VideoToolbox는 macOS에만 있음; Windows·Linux 메뉴는 그대로). 라디오의 체크는 맞춤 함수(_sync_decoder_menu)가 정함
         self.decoder_action_group = []  # 항목 차례(mac_native_gate.DECODERS) — Mac이 아니면 빈 채
         self.decoder_actions = {}  # 디코더 이름 → 항목
         if sys.platform == "darwin":
-            decoder_menu = settings_menu.addMenu(DECODER_MENU_TEXT)
+            decoder_menu = settings_menu.addMenu("")
+            self._menu_text(decoder_menu.menuAction(), DECODER_MENU_KEY)
             decoder_menu.setToolTipsVisible(True)  # 비활성 사유·출처를 항목 툴팁으로 알림
             for name in mac_native_gate.DECODERS:
-                action = decoder_menu.addAction(DECODER_ACTION_TEXTS[name])
+                action = self._menu_text(decoder_menu.addAction(""), DECODER_ACTION_KEYS[name])
                 action.setCheckable(True)
                 action.triggered.connect(lambda checked, decoder=name: self.set_playback_decoder(decoder))
                 self.decoder_action_group.append(action)
@@ -1042,9 +1047,9 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         self._add_hover_thumbs_menu(settings_menu)  # 슬라이더 썸네일 켜기/끄기 (PlayerHoverThumbsMixin)
 
         # 공유 설정 폴더 변경 (Windows: PC마다 고름)
+        self.shared_config_action = None
         if paths.IS_WINDOWS:
-            shared_config_action = settings_menu.addAction('공유 설정 폴더 변경...')
-            shared_config_action.triggered.connect(lambda: self.choose_shared_config_dir())
+            self._add_shared_config_action(settings_menu)
 
         # 언어 (Language) — 한국어·English (PlayerLanguageMixin): Settings의 맨 끝, 구분선 아래
         self._add_language_menu(settings_menu)
@@ -1053,26 +1058,51 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         help_menu = menubar.addMenu('&Help')
         
         # Help 액션
-        help_action = help_menu.addAction('사용법')
+        help_action = self._menu_text(help_menu.addAction(""), "help.manual")
         help_action.setShortcut('F1')
         help_action.triggered.connect(self.show_help)
         
         # 업데이트 확인 (NAS·GitHub — 결과 창을 언제나 보임, PlayerUpdateMixin)
-        update_check_action = help_menu.addAction('업데이트 확인…')
+        update_check_action = self._menu_text(help_menu.addAction(""), "help.update_check")
         update_check_action.triggered.connect(lambda: self.start_update_check(manual=True))
 
         # (Mac) .mov·.mp4를 더블클릭하면 YesonCheck로 — 묻지 않고 기본 앱으로 정함 (default_app, 처음 켤 때 묻기와 같은 일)
         if default_app.IS_MAC:
-            default_app_action = help_menu.addAction(default_app.MENU_TEXT)
+            default_app_action = self._menu_text(help_menu.addAction(""), default_app.MENU_KEY)
             default_app_action.triggered.connect(lambda: default_app.set_default_from_menu(self))
         # (Windows) 기본 앱은 앱이 바꿀 수 없음(Windows 10·11) → Windows 기본 앱 설정 화면의 YesonCheck 항목을 엶 (file_associations)
         if file_associations.IS_WINDOWS:
-            default_apps_settings_action = help_menu.addAction(file_associations.MENU_TEXT)
+            default_apps_settings_action = self._menu_text(help_menu.addAction(""), file_associations.MENU_KEY)
             default_apps_settings_action.triggered.connect(lambda: file_associations.open_default_apps_settings())
 
         # About 액션
-        about_action = help_menu.addAction('정보')
+        about_action = self._menu_text(help_menu.addAction(""), "help.about")
         about_action.triggered.connect(self.show_about)
+
+    def _menu_text(self, action, text_key, tip_key=None):
+        """Settings·Help의 항목 하나에 글(과 툴팁)을 글자 표에서 넣고, 언어가 바뀌면 다시 읽게 적어 둔다. 항목을 돌려줌.
+        NoRole: Mac이 English 글('About'·'… settings…')을 보고 항목을 앱 메뉴로 옮기지 않게."""
+        action.setMenuRole(QAction.NoRole)
+        action.setText(ui_text.text(text_key))
+        if tip_key is not None:
+            action.setToolTip(ui_text.text(tip_key))
+        self._settings_texts.append((action, text_key, tip_key))
+        return action
+
+    def _add_shared_config_action(self, settings_menu):
+        """(Windows) Settings → 공유 설정 폴더 변경... — PC마다 고름. create_menu_bar가 Windows에서만 부름."""
+        self.shared_config_action = self._menu_text(settings_menu.addAction(""), "settings.shared_config")
+        self.shared_config_action.triggered.connect(lambda: self.choose_shared_config_dir())
+
+    def retranslate_settings_menus(self):
+        """Settings·Help의 항목 글·툴팁을 글자 표에서 다시 읽음 (언어가 바뀐 뒤 — PlayerLanguageMixin.RETRANSLATORS).
+        상태에 따라 바뀌는 툴팁(디코더·화면 그리기)과 '지금 이 창' 줄은 맞춤 함수가 다시 넣음. 메뉴 제목과 언어 메뉴는 그대로."""
+        for action, text_key, tip_key in self._settings_texts:
+            action.setText(ui_text.text(text_key))
+            if tip_key is not None:
+                action.setToolTip(ui_text.text(tip_key))
+        self._sync_decoder_menu()
+        self._sync_display_menu()
     
     def set_playback_decoder(self, name: str) -> None:
         """(Mac) Settings → 재생 디코더 (Mac)에서 고른 디코더(mac_native_gate.DECODERS — videotoolbox·ffmpeg)를 이 Mac의 설정 파일에 저장하고 이 창에 바로 적용
@@ -1116,7 +1146,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
             print(f"[재생] 디코더 설정을 저장하지 못해 바꾸지 않음: {name} — {mac_prefs.prefs_path()}", flush=True)
             traceback.print_exc()
             QMessageBox.critical(self, DECODER_SAVE_TITLE,
-                                 f"재생 디코더 설정({DECODER_ACTION_TEXTS[name]})을 설정 파일에 저장하지 못해 바꾸지 않았습니다 — 지금 디코더 그대로입니다.\n"
+                                 f"재생 디코더 설정({ui_text.text(DECODER_ACTION_KEYS[name])})을 설정 파일에 저장하지 못해 바꾸지 않았습니다 — 지금 디코더 그대로입니다.\n"
                                  f"설정 파일: {mac_prefs.prefs_path()}\n이유: {type(e).__name__}: {e}\n\n{details}")
             self._sync_decoder_menu()
             return
@@ -1200,15 +1230,17 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         self.display_status_action = None
         if sys.platform != "win32":
             return
-        menu = settings_menu.addMenu(windows_display.MENU_TEXT)
+        menu = settings_menu.addMenu("")
+        self._menu_text(menu.menuAction(), windows_display.MENU_KEY)
         menu.setToolTipsVisible(True)
         for name in windows_display.RENDERERS:
-            action = menu.addAction(windows_display.ACTION_TEXTS[name])
+            action = self._menu_text(menu.addAction(""), windows_display.ACTION_KEYS[name])
             action.setCheckable(True)
             action.triggered.connect(lambda checked, renderer=name: self.set_display_renderer(renderer))
             self.display_actions[name] = action
         menu.addSeparator()
         self.display_status_action = menu.addAction("")
+        self.display_status_action.setMenuRole(QAction.NoRole)
         self.display_status_action.setEnabled(False)
         self._sync_display_menu()
         menu.aboutToShow.connect(self._sync_display_menu)  # 메뉴는 영상 화면(videoWidget)보다 먼저 만들어지므로 '지금 이 창'은 열 때 맞춤
@@ -1221,20 +1253,21 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         forced = os.environ.get(VIEWPORT_ENV)
         if forced:
             chosen, enabled = ("gpu" if forced == "gl" else "cpu"), False
-            tip = f"{VIEWPORT_ENV}={forced}가 우선합니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다"
+            tip = ui_text.text("settings.display.env_tip", name=VIEWPORT_ENV, value=forced)
         else:
             try:  # 창마다 프로세스 — 다른 창이 고쳤을 수 있으니 파일을 다시 읽음. 깨졌으면 기록만 남기고 지금 값으로 (시작·저장 때 창으로 알림)
                 windows_display.set_preferred(windows_display.read())
             except (user_files.UserFileError, ValueError):
                 traceback.print_exc()
-            chosen, enabled, tip = windows_display.preferred(), True, DISPLAY_TIP
+            chosen, enabled, tip = windows_display.preferred(), True, ui_text.text("settings.display.tip")
         for name, action in self.display_actions.items():
             action.setChecked(name == chosen)
             action.setEnabled(enabled)
             action.setToolTip(tip)
         widget = getattr(self, "videoWidget", None)  # 창을 만드는 중이면 아직 없음
         if widget is not None:
-            self.display_status_action.setText(f"지금 이 창: {'GPU' if widget.display_path() == 'gl' else 'CPU'}")
+            self.display_status_action.setText(
+                ui_text.text("settings.display.status", renderer="GPU" if widget.display_path() == "gl" else "CPU"))
 
     def set_display_renderer(self, name):
         """(Windows) 메뉴에서 고른 화면 그리기를 이 PC의 설정 파일에 저장. 뷰포트는 창을 만들 때 정하므로 다음에 여는 창부터 적용 — 지금 창은 그대로. 저장 실패는 창으로 알리고 바꾸지 않음
@@ -1252,7 +1285,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         windows_display.set_preferred(name)
         print(f"[뷰포트] 화면 그리기 설정: {name} (Settings 메뉴)", flush=True)
         self._sync_display_menu()
-        QMessageBox.information(self, DISPLAY_TITLE, f"{windows_display.ACTION_TEXTS[name]}로 저장했습니다. 다음에 여는 창부터 적용됩니다.\n{self.display_status_action.text()}")
+        QMessageBox.information(self, DISPLAY_TITLE, f"{ui_text.text(windows_display.ACTION_KEYS[name])}로 저장했습니다. 다음에 여는 창부터 적용됩니다.\n{self.display_status_action.text()}")
 
     def _add_downscale_menu(self, settings_menu):
         """(Windows) Settings → 축소 필터 — Linear(기본)·고품질(면적 평균) 라디오. 다른 플랫폼은 메뉴 없음(늘 Linear — 사용자 지시 'Mac은 수정하지 않아도 됨').
@@ -1260,12 +1293,12 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         self.downscale_actions = {}
         if sys.platform != "win32":
             return
-        menu = settings_menu.addMenu(downscale_filter.MENU_TEXT)
+        menu = settings_menu.addMenu("")
+        self._menu_text(menu.menuAction(), downscale_filter.MENU_KEY)
         menu.setToolTipsVisible(True)
         for name in downscale_filter.FILTERS:
-            action = menu.addAction(downscale_filter.ACTION_TEXTS[name])
+            action = self._menu_text(menu.addAction(""), downscale_filter.ACTION_KEYS[name], downscale_filter.TIP_KEYS[name])
             action.setCheckable(True)
-            action.setToolTip(downscale_filter.TIPS[name])
             action.triggered.connect(lambda checked, chosen=name: self.set_downscale_filter(chosen))
             self.downscale_actions[name] = action
         self._sync_downscale_menu()
@@ -1301,22 +1334,26 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
     def _sync_decoder_menu(self):
         """(Mac) Settings → 재생 디코더 (Mac)의 체크·활성·툴팁을 지금 유효한 디코더(mac_native_gate.effective_decoder)에 맞춤 — 메뉴를 만들 때, 고른 뒤(저장
         실패면 되돌림), 디코더 캐시를 바꾼 다른 길(네이티브 그리기 실패 폴백) 뒤에 부름. 메뉴가 없으면(macOS가 아님) 할 일이 없음.
-        - YESONCHECK_MOVIE_SOURCE=cv2(킬 스위치 — 네이티브·파이프 모두 끔): 두 항목 비활성 + DECODER_CV2_TIP (환경 변수보다 먼저 — cv2가 둘 다 덮음)
-        - 환경 변수 YESONCHECK_MAC_NATIVE=on|off가 설정을 덮음(출처가 "환경 변수"로 시작): 그 값으로 체크, 두 항목 비활성 + "<출처>이|가 우선합니다 — …"(on이·off가)
-        - 출처가 prefs.json·기본값: 두 항목 활성 + DECODER_TIP(다른 창은 다음에 켤 때 — 스펙 §5.2)
-        - 그 밖의 출처(prefs.json을 읽지 못해 이 세션만 ffmpeg — SOURCE_FALLBACK 등): 활성, 체크된 항목의 툴팁이 그 출처 글."""
+        - YESONCHECK_MOVIE_SOURCE=cv2(킬 스위치 — 네이티브·파이프 모두 끔): 두 항목 비활성 + 글자 표의 settings.decoder.cv2_tip (환경 변수보다 먼저 — cv2가 둘 다 덮음)
+        - 환경 변수 YESONCHECK_MAC_NATIVE=on|off가 설정을 덮음(출처가 "환경 변수"로 시작): 그 값으로 체크, 두 항목 비활성 + settings.decoder.env_tip.on|off
+          (한국어 "<출처>이|가 우선합니다 — …" — on이·off가)
+        - 출처가 prefs.json·기본값: 두 항목 활성 + settings.decoder.tip(다른 창은 다음에 켤 때 — 스펙 §5.2)
+        - 그 밖의 출처(prefs.json을 읽지 못해 이 세션만 ffmpeg — SOURCE_FALLBACK 등): 활성, 체크된 항목의 툴팁이 그 출처의 글
+          (DECODER_SOURCE_KEYS — 지금 언어로; 표에 없는 출처는 출처 글 그대로).
+        글은 모두 글자 표에서 — 언어가 바뀌면 retranslate_settings_menus가 이 함수를 다시 부름."""
         if not self.decoder_actions:
             return
         decoder, source = mac_native_gate.effective_decoder()
         if movie_source_mode() == "cv2":
-            enabled, tips = False, dict.fromkeys(self.decoder_actions, DECODER_CV2_TIP)
+            enabled, tips = False, dict.fromkeys(self.decoder_actions, ui_text.text("settings.decoder.cv2_tip"))
         elif source.startswith(DECODER_ENV_SOURCE_PREFIX):
-            josa = "이" if source.endswith("=on") else "가"  # 받침 따라: on(온)이 · off(오프)가
-            enabled, tips = False, dict.fromkeys(self.decoder_actions, f"{source}{josa} 우선합니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다")
+            value = "on" if source.endswith("=on") else "off"  # 값마다 글이 따로 — 한국어는 받침 따라 on(온)이 · off(오프)가
+            enabled, tips = False, dict.fromkeys(self.decoder_actions, ui_text.text(f"settings.decoder.env_tip.{value}"))
         else:
-            enabled, tips = True, dict.fromkeys(self.decoder_actions, DECODER_TIP)
+            enabled, tips = True, dict.fromkeys(self.decoder_actions, ui_text.text("settings.decoder.tip"))
             if source not in (mac_native_gate.SOURCE_PREFS, mac_native_gate.SOURCE_DEFAULT):
-                tips[decoder] = source
+                key = DECODER_SOURCE_KEYS.get(source)
+                tips[decoder] = ui_text.text(key) if key is not None else source
         for name, action in self.decoder_actions.items():
             action.setChecked(name == decoder)
             action.setEnabled(enabled)

@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import QApplication, QMenu, QMessageBox
 
 from tests.conftest import write_test_video
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
-from yesoncheck import app, gl_bindings, gl_video_item, user_files, video_widget, windows_display
+from yesoncheck import app, gl_bindings, gl_video_item, ui_text, user_files, video_widget, windows_display
 from yesoncheck.player_playback import _MeasureRun, measurement_line
 from yesoncheck.video_widget import CustomVideoWidget, viewport_mode
 
@@ -147,7 +147,7 @@ def test_unusable_gl_falls_back_to_cpu_and_tells_why(qapp, gpu_on_windows, monke
     widget = CustomVideoWidget()
     assert widget.video_item_stream is False
     assert widget.display_path() == "raster"
-    assert "ANGLE" in widget.viewport_fallback_reason and windows_display.MENU_TEXT in widget.viewport_fallback_reason
+    assert "ANGLE" in widget.viewport_fallback_reason and ui_text.text(windows_display.MENU_KEY) in widget.viewport_fallback_reason
     assert "raster로 계속" in capsys.readouterr().out
 
 
@@ -260,7 +260,7 @@ def test_context_info_refuses_a_null_renderer(monkeypatch):
 
 def test_paint_failure_points_to_the_menu_on_windows():
     """GL 그리기가 실패하면 영상 영역이 비므로 창이 되돌리는 길을 알려야 함."""
-    assert windows_display.MENU_TEXT in gl_video_item.failure_menu_hint("win32")
+    assert ui_text.text(windows_display.MENU_KEY) in gl_video_item.failure_menu_hint("win32")
     assert "재생 디코더" in gl_video_item.failure_menu_hint("darwin")
     assert gl_video_item.failure_menu_hint("linux") == ""
 

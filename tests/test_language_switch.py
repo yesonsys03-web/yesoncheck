@@ -6,13 +6,18 @@
 이 파일의 시험은 그 환경 변수를 지우고 돈다(보통 사용자의 창처럼) — conftest는 다른 시험을 위해 `ko`로 고정해 둔다.
 """
 
+import sys
+
 import pytest
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
 from tests import ui_texts
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
-from yesoncheck import hover_strip, mac_prefs, player_language, ui_language, ui_text
+from yesoncheck import (app as app_module, default_app, file_associations, gl_video_item, hover_strip, mac_native_gate,
+                        mac_native_source, mac_prefs, player_base, player_language, ui_language, ui_text, windows_display)
+
+mac_only = pytest.mark.skipif(sys.platform != "darwin", reason="Mac에서만 만드는 메뉴(재생 디코더)")
 
 
 @pytest.fixture(autouse=True)
@@ -416,3 +421,152 @@ def test_shrink_button_counts_the_other_states_of_the_same_button(qapp):
     button.set_text_key("playlist.pause", also=("playlist.play",))
     assert button.minimumSizeHint().width() == playing
     button.deleteLater()
+
+
+# ---------------------------------------------------------------- Settings·Help 메뉴 (Task 4)
+
+LANGUAGE_NAMES = ["언어 (Language)", "한국어"]  # 두 언어에서 같은 글 — English 화면의 메뉴 막대에 남는 한글은 이것뿐
+ENV_TIP_KO = "환경 변수 YESONCHECK_MAC_NATIVE={value}{josa} 우선합니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다"
+ENV_TIP_EN = ("The environment variable YESONCHECK_MAC_NATIVE={value} takes precedence — remove it and restart the app to use "
+              "this setting")
+
+
+def test_english_menubar_keeps_only_the_language_names(shown):
+    shown.set_ui_language("en")
+    assert ui_texts.hangul(ui_texts.menubar_texts(shown)) == LANGUAGE_NAMES
+
+
+def test_help_and_settings_items_are_not_moved_to_the_mac_app_menu(player):
+    """English 글('About'·'… settings…')을 보고 macOS가 항목을 앱 메뉴로 옮기지 않게 — 두 메뉴의 항목은 모두 NoRole."""
+    from PyQt5.QtWidgets import QAction
+
+    def items(menu):
+        for action in menu.actions():
+            if action.isSeparator():
+                continue
+            yield action
+            if action.menu() is not None:
+                yield from items(action.menu())
+
+    for title in ("&Settings", "&Help"):
+        menu = next(action.menu() for action in player.menuBar().actions() if action.text() == title)
+        assert [action.text() for action in items(menu) if action.menuRole() != QAction.NoRole] == [], title
+
+
+@pytest.fixture
+def windows_player(new_player, dialogs, tmp_path, monkeypatch):  # noqa: F811
+    """Windows에서만 만드는 메뉴(화면 그리기·축소 필터·공유 설정 폴더·기본 앱 설정)를 가진 창 — 플랫폼 표지를 바꿔 끼움."""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(file_associations, "IS_WINDOWS", True)
+    monkeypatch.setattr(default_app, "IS_MAC", False)
+    player = new_player(make_config(str(tmp_path / "config"), {}))
+    if player.shared_config_action is None:  # 진짜 Windows에서는 창이 이미 만들었음 (paths.IS_WINDOWS)
+        player._add_shared_config_action(settings_menu(player))
+    return player
+
+
+def test_windows_settings_and_help_follow_the_language(windows_player):
+    player = windows_player
+    korean = ui_texts.menubar_texts(player)
+    for text in ("화면 그리기 (Windows)", "CPU (기본)", "GPU", "지금 이 창: CPU", "축소 필터 (Windows)", "Linear (기본)",
+                 "고품질 (면적 평균)", "슬라이더 썸네일", "공유 설정 폴더 변경...", "사용법", "업데이트 확인…",
+                 "동영상 기본 앱 설정 열기…", "정보", "이 PC의 설정 파일(prefs.json)에 저장합니다 — 다음에 여는 창부터 적용됩니다"):
+        assert text in korean, text
+    player.set_ui_language("en")
+    english = ui_texts.menubar_texts(player)
+    assert ui_texts.hangul(english) == LANGUAGE_NAMES
+    assert "This window: CPU" in english and len(english) == len(korean)
+    player.set_ui_language("ko")
+    assert ui_texts.menubar_texts(player) == korean
+
+
+def test_display_menu_env_tooltip_follows_the_language(windows_player, monkeypatch):
+    monkeypatch.setenv(player_base.VIEWPORT_ENV, "raster")
+    windows_player._sync_display_menu()
+    tip = windows_player.display_actions["gpu"].toolTip()
+    assert tip == "YESONCHECK_VIEWPORT=raster가 우선합니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다"
+    windows_player.set_ui_language("en")
+    assert windows_player.display_actions["gpu"].toolTip() == (
+        "YESONCHECK_VIEWPORT=raster takes precedence — remove it and restart the app to use this setting")
+
+
+def test_every_decoder_source_shown_in_the_menu_has_a_text():
+    """메뉴 툴팁에 보이는 출처(설정 파일·기본값·환경 변수가 아닌 것)마다 글자 표의 글이 있고, 한국어 글은 출처 글 그대로."""
+    shown_sources = {value for name, value in vars(mac_native_gate).items() if name.startswith("SOURCE_")}
+    shown_sources -= {mac_native_gate.SOURCE_PREFS, mac_native_gate.SOURCE_DEFAULT}
+    assert set(player_base.DECODER_SOURCE_KEYS) == shown_sources
+    for source, key in player_base.DECODER_SOURCE_KEYS.items():
+        assert ui_text.TEXTS[key]["ko"] == source
+
+
+@mac_only
+@pytest.mark.parametrize("source", [mac_native_gate.SOURCE_FALLBACK, mac_native_gate.SOURCE_GL_FALLBACK])
+def test_decoder_tooltip_names_the_source_in_the_current_language(new_player, dialogs, tmp_path, monkeypatch, source):  # noqa: F811
+    monkeypatch.delenv(mac_native_gate.NATIVE_MODE_ENV, raising=False)
+    mac_native_gate.set_preferred_decoder("ffmpeg", source=source)
+    player = new_player(make_config(str(tmp_path / "config"), {}))
+    key = player_base.DECODER_SOURCE_KEYS[source]
+    assert player.decoder_actions["ffmpeg"].toolTip() == source
+    player.set_ui_language("en")
+    assert player.decoder_actions["ffmpeg"].toolTip() == ui_text.TEXTS[key]["en"]
+    assert player.decoder_actions["videotoolbox"].toolTip() == ui_text.TEXTS["settings.decoder.tip"]["en"]
+    assert [action.text() for action in player.decoder_action_group] == ["VideoToolbox (default)", "ffmpeg (legacy)"]
+
+
+@mac_only
+@pytest.mark.parametrize("value, josa", [("on", "이"), ("off", "가")])
+def test_decoder_env_tooltip_in_both_languages(new_player, dialogs, tmp_path, monkeypatch, value, josa):  # noqa: F811
+    monkeypatch.setenv(mac_native_gate.NATIVE_MODE_ENV, value)
+    player = new_player(make_config(str(tmp_path / "config"), {}))
+    assert player.decoder_actions["ffmpeg"].toolTip() == ENV_TIP_KO.format(value=value, josa=josa)
+    player.set_ui_language("en")
+    assert player.decoder_actions["ffmpeg"].toolTip() == ENV_TIP_EN.format(value=value)
+
+
+@mac_only
+def test_decoder_cv2_tooltip_in_both_languages(new_player, dialogs, tmp_path, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("YESONCHECK_MOVIE_SOURCE", "cv2")
+    player = new_player(make_config(str(tmp_path / "config"), {}))
+    assert player.decoder_actions["ffmpeg"].toolTip() == (
+        "YESONCHECK_MOVIE_SOURCE=cv2가 모든 빠른 디코더를 끕니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다")
+    player.set_ui_language("en")
+    assert player.decoder_actions["ffmpeg"].toolTip() == ui_text.TEXTS["settings.decoder.cv2_tip"]["en"]
+    assert ui_texts.hangul([ui_text.TEXTS["settings.decoder.cv2_tip"]["en"]]) == []
+
+
+def test_notices_quote_the_menu_name_that_is_on_screen():
+    """메뉴 이름을 인용하는 알림 글(문장은 한글 그대로): 이름 자리는 지금 화면의 글 — 한국어 화면에서는 예전 글 그대로."""
+    assert gl_video_item.decoder_menu_hint() == "Settings → 재생 디코더 (Mac) → ffmpeg (예전 방식) 으로 바꾸면 예전 방식으로 재생합니다"
+    assert gl_video_item.failure_menu_hint("win32") == (
+        "Settings → 화면 그리기 (Windows) → CPU (기본)를 고르고 앱을 다시 켜면 CPU로 그립니다")
+    assert mac_native_source.native_escape_hint() == (
+        "탈출구(네이티브 재생을 끄고 ffmpeg 파이프로 엶): Settings → 재생 디코더 (Mac) → ffmpeg (예전 방식) — 또는 환경 변수 "
+        "YESONCHECK_MAC_NATIVE=off (그 실행만)")
+    assert app_module.playback_decoder_fallback_note() == (
+        "이 세션은 예전 방식(ffmpeg)으로 재생합니다 — Settings → 재생 디코더 (Mac)에서 바꿀 수 있습니다")
+    assert windows_display.fallback_text("x").endswith("Settings → 화면 그리기 (Windows) → CPU (기본)를 고르면 이 알림이 뜨지 않습니다.")
+    ui_text.set_language("en")
+    assert "Settings → Playback decoder (Mac) → ffmpeg (legacy) " in gl_video_item.decoder_menu_hint()
+    assert "Settings → Display rendering (Windows) → CPU (default)" in gl_video_item.failure_menu_hint("win32")
+    assert "Settings → Playback decoder (Mac) → ffmpeg (legacy) " in mac_native_source.native_escape_hint()
+    assert "Settings → Playback decoder (Mac)" in app_module.playback_decoder_fallback_note()
+    assert "Settings → Display rendering (Windows) → CPU (default)" in windows_display.fallback_text("x")
+
+
+def test_launch_reads_the_language_before_the_other_settings(qapp, monkeypatch):
+    """시작 때의 설정 경고 창(재생 디코더·화면 그리기 …)이 메뉴 이름을 화면의 언어로 인용하려면 언어를 가장 먼저 읽어야 함."""
+    order = []
+    for name in ("load_language", "load_playback_decoder", "load_display_renderer", "load_slider_thumbnails", "load_downscale_filter"):
+        monkeypatch.setattr(app_module, name, lambda name=name: order.append(name))
+
+    class Stop(Exception):
+        pass
+
+    def no_window(**_kwargs):
+        raise Stop
+
+    monkeypatch.setattr(app_module, "VideoPlayer", no_window)
+    with pytest.raises(Stop):
+        app_module.launch(["yesoncheck"])
+    assert order[0] == "load_language" and len(order) == 5

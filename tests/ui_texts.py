@@ -126,7 +126,7 @@ def _menu_texts(menu):
     return found
 
 
-def _menubar_texts(player):
+def menubar_texts(player):
     found = []
     for action in player.menuBar().actions():
         found.append(action.text())
@@ -247,7 +247,7 @@ def collect(player):
     """영역(`AREAS`) → 화면 글자 목록. 빈 글은 빼고, 임시 폴더·창 제목의 머리는 바꿔 적는다."""
     pages = player.toolPanel._pages
     raw = {
-        "menubar": _menubar_texts(player),
+        "menubar": menubar_texts(player),
         "transport": _tree_texts(player.transportBar) + _fps_texts(player),
         "sidebar": _tree_texts(player.mainSplitter.widget(0)) + _thumbnail_bar_texts(player),
         "sidebar_menus": _context_menu_texts(player),

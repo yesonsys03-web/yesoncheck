@@ -34,10 +34,13 @@ from yesoncheck import error_window, mac_native_source  # noqa: E402
 from yesoncheck.frame_handles import native_surface_of, whole_surface_handle  # noqa: E402
 from yesoncheck.mac_native_gate import native_ineligible_reason  # noqa: E402
 from yesoncheck.mac_native_source import (  # noqa: E402
-    NATIVE_ESCAPE_HINT, NATIVE_FAILURE_HEADLINE, NATIVE_KEEP_BEHIND, NATIVE_LOG_PREFIX, NATIVE_READ_TIMEOUT_S, NATIVE_READAHEAD,
+    NATIVE_FAILURE_HEADLINE, NATIVE_KEEP_BEHIND, NATIVE_LOG_PREFIX, NATIVE_READ_TIMEOUT_S, NATIVE_READAHEAD,
     NATIVE_READER_THREAD, NATIVE_SEEK_FORWARD_MAX, NativeCaptureError, NativeVTCapture, open_native_capture,
 )
 from yesoncheck.movie_pipe_source import probe_movie  # noqa: E402
+
+NATIVE_ESCAPE_HINT = ("탈출구(네이티브 재생을 끄고 ffmpeg 파이프로 엶): Settings → 재생 디코더 (Mac) → ffmpeg (예전 방식) — "
+                      "또는 환경 변수 YESONCHECK_MAC_NATIVE=off (그 실행만)")  # 한국어 화면의 글 — native_escape_hint()
 
 POS = cv2.CAP_PROP_POS_FRAMES
 COLOR_TOLERANCE = 4  # 사용자 허용 폭 (스펙 — 4:4:4는 Stage 0 실측 최대 1)

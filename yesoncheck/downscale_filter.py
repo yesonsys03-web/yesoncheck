@@ -30,12 +30,9 @@ from yesoncheck import mac_prefs, windows_display
 PREF_KEY = "downscale_filter"
 FILTERS = ("linear", "area")
 DEFAULT_FILTER = "linear"
-MENU_TEXT = "축소 필터 (Windows)"
-ACTION_TEXTS = {"linear": "Linear (기본)", "area": "고품질 (면적 평균)"}
-TIPS = {
-    "linear": "예전 방식 — 가장 빠름. 영상을 반쯤으로 줄여 보면 가는 선이 고르지 않을 수 있습니다",
-    "area": "줄여 볼 때 가는 선이 고르게 보입니다 — 프레임마다 CPU로 줄이므로 4K 재생이 느려지면 Linear로 되돌리세요 (이 창에 바로 적용)",
-}
+MENU_KEY = "settings.downscale"  # 글자 표(ui_text)의 키 — 화면의 글은 ui_text.text(MENU_KEY) (언어를 따름)
+ACTION_KEYS = {"linear": "settings.downscale.linear", "area": "settings.downscale.area"}
+TIP_KEYS = {"linear": "settings.downscale.linear.tip", "area": "settings.downscale.area.tip"}
 SETTINGS_TITLE = "축소 필터 설정"
 LOG_PREFIX = "[축소 필터]"
 # 이 배율 미만으로 줄여 그릴 때만 미리 줄임 — 1:1 언저리(반올림으로 한두 픽셀 모자란 크기)는 예전 그리기가 더 정확함
