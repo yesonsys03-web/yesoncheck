@@ -68,8 +68,8 @@ SHORTCUT_TEXTS = {
     "menu.file.bookmark_manage": "(P)",
     "menu.view.fit": "(3)",
     "menu.view.original": "(4)",
-    "menu.view.zoom_in": "(+)",
-    "menu.view.zoom_out": "(-)",
+    "menu.view.zoom_in": "(2, +)",  # 키 처리는 2·+·= 를 받음 — 숫자 키(1 축소·2 확대·3 맞춤·4 원본)가 한 벌 (사용자 지적 2026-11-16)
+    "menu.view.zoom_out": "(1, -)",
     "menu.view.fullscreen": "(F)",
     "menu.view.video_only": "(Shift+F)",
     "menu.view.controls": "(V)",
