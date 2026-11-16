@@ -2,13 +2,13 @@
 
 `pixmap(종류, 색, 크기, dpr)`은 투명 바탕에 그 색 하나로 그린다. 테마가 바뀌면 부르는 쪽이 새 색으로 다시 만든다.
 종류: first(|◀ 처음) · prev(◀| 한 장 뒤) · play(▶) · pause(❙❙) · next(|▶ 한 장 앞) · last(▶| 끝) · loop(둥근 화살표) · volume(스피커)
-· wipe(세로로 나뉜 사각형 — A|B 와이프) · annotate(연필 — 주석) · ocr(모서리 표시 안의 글자 줄).
+· wipe(세로로 나뉜 사각형 — A|B 와이프) · annotate(연필 — 주석) · ocr(모서리 표시 안의 글자 줄) · close(✕ — 도구 패널 닫기).
 """
 
 from PyQt5.QtCore import QPointF, QRectF, Qt
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 
-KINDS = ("first", "prev", "play", "pause", "next", "last", "loop", "volume", "wipe", "annotate", "ocr")
+KINDS = ("first", "prev", "play", "pause", "next", "last", "loop", "volume", "wipe", "annotate", "ocr", "close")
 ICON_DPR = 2.0  # 아이콘은 Retina에서도 또렷하게 2배로 그려 둠 (보이는 크기는 size)
 
 
@@ -78,6 +78,11 @@ def _draw(painter, kind, colour, s):
             painter.drawRect(QRectF(x, y, thick, arm))  # 세로 획
         painter.drawRect(QRectF(6 * u, 7 * u, 6 * u, 2 * u))
         painter.drawRect(QRectF(6 * u, 10 * u, 4 * u, 1.5 * u))
+    elif kind == "close":  # ✕ — 도구 패널의 닫기
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(colour, s * 0.11, Qt.SolidLine, Qt.RoundCap))
+        painter.drawLine(QPointF(s * 0.28, s * 0.28), QPointF(s * 0.72, s * 0.72))
+        painter.drawLine(QPointF(s * 0.72, s * 0.28), QPointF(s * 0.28, s * 0.72))
 
 
 def pixmap(kind, color, size=18, dpr=1.0):

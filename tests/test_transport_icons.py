@@ -27,7 +27,7 @@ def test_each_kind_draws_in_the_given_colour_on_transparent(qapp, kind):
 
 def test_kinds_are_the_transport_and_tool_pictures():
     assert transport_icons.KINDS == ("first", "prev", "play", "pause", "next", "last", "loop", "volume",
-                                     "wipe", "annotate", "ocr")
+                                     "wipe", "annotate", "ocr", "close")
 
 
 def test_wipe_picture_is_split_into_a_filled_and_an_open_half(qapp):
