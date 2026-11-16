@@ -266,6 +266,23 @@ TEXTS = {
     "ocr.load.tip": {"ko": "저장된 OCR 분석 결과를 불러옵니다", "en": "Loads a saved OCR result"},
     # 뷰어 오른쪽 위의 배지 (주석 모드 동안)
     "badge.annotation": {"ko": "주석 모드", "en": "Annotation mode"},
+    # V 모드의 오버레이 컨트롤 — 안내 글 (우클릭으로 보임)
+    "overlay.help": {"ko": "드래그로 이동, 테두리로 크기조절, Ctrl+휠로 확대/축소, Ctrl+O로 리셋",
+                     "en": "Drag to move, drag the border to resize, Ctrl+wheel to zoom, Ctrl+O to reset"},
+    # 업데이트 알림 띠 (창 맨 위) — 글과 단추. 기록 줄에는 한국어 글이 그대로 남음 (Message)
+    "update.offer": {"ko": "⬆ 새 버전 {new}이 나왔습니다 · 지금 {current}", "en": "⬆ Version {new} is available · now {current}"},
+    "update.download": {"ko": "{version} 받는 중 ({source})… {done} / {total} MB",
+                        "en": "Downloading {version} ({source})… {done} / {total} MB"},
+    "update.staging": {"ko": "준비 중…", "en": "Preparing…"},
+    "update.cancelling": {"ko": "취소하는 중…", "en": "Cancelling…"},
+    "update.helper": {"ko": "업데이트 도우미를 시작하는 중…", "en": "Starting the update helper…"},
+    "update.checking": {"ko": "다른 창 확인 중…", "en": "Checking other windows…"},
+    "update.closing": {"ko": "다른 창을 닫는 중…", "en": "Closing other windows…"},
+    "update.updated": {"ko": "{version}로 업데이트했습니다", "en": "Updated to {version}"},
+    "update.notes": {"ko": "바뀐 점", "en": "What's new"},
+    "update.update": {"ko": "업데이트", "en": "Update"},
+    "update.later": {"ko": "나중에", "en": "Later"},
+    "update.cancel": {"ko": "취소", "en": "Cancel"},
     # 도구 패널 (뷰어 오른쪽 — 주석·OCR)
     "panel.annotation": {"ko": "수정 사항 주석", "en": "Annotations"},
     "panel.ocr": {"ko": "OCR", "en": "OCR"},
@@ -398,6 +415,26 @@ def korean(key, **values):
     """키의 한국어 글 — 화면이 아니라 기록 줄·딸린 창처럼 언어와 무관하게 한글로 남는 자리에서 (같은 글을 두 곳에 적지 않게)."""
     template = TEXTS[key][DEFAULT_LANGUAGE]
     return template.format(**values) if values else template
+
+
+class Message(str):
+    """글자 표의 글 하나를 '키와 값'째로 들고 다니는 글자. **값은 늘 한국어 글**(기록 줄에 적고 견줄 수 있음 — 기록은 언어와
+    무관하게 한글), `shown()`이 지금 언어로 만든 화면 글. 완성된 글을 받아 보이는 위젯(업데이트 알림 띠)이 언어가 바뀐 뒤
+    같은 뜻의 글로 다시 그릴 수 있게 — 그냥 글자를 넘기면 그 위젯은 받은 글 그대로 둔다."""
+
+    def __new__(cls, key, **values):
+        self = super().__new__(cls, korean(key, **values))
+        self.key = key
+        self.values = values
+        return self
+
+    def shown(self):
+        return text(self.key, **self.values)
+
+
+def shown(value):
+    """화면에 보일 글: Message면 지금 언어로 만든 글, 그냥 글자면 받은 그대로."""
+    return value.shown() if isinstance(value, Message) else value
 
 
 def missing():

@@ -945,3 +945,116 @@ def test_ocr_mode_tooltip_lists_the_modes_that_exist(shown):
     shown.set_ui_language("en")
     assert ("Animatic 2: " in combo.toolTip()) is has_animatic2 and "- Animatic: " in combo.toolTip()
     assert ui_texts.hangul([combo.toolTip()]) == []
+
+
+# ---------------------------------------------------------------- V 모드 오버레이와 업데이트 알림 띠 (Task 9)
+
+BANNER_BUTTONS_KO = ["바뀐 점", "업데이트", "나중에", "취소"]
+BANNER_BUTTONS_EN = ["What's new", "Update", "Later", "Cancel"]
+
+
+def banner_buttons(player):
+    banner = player.update_banner
+    return [button.text() for button in (banner.notes_button, banner.update_button, banner.later_button, banner.cancel_button)]
+
+
+def test_english_banner_and_overlay_have_no_hangul(shown, tmp_path):
+    ui_texts.stage(shown, tmp_path)
+    shown.set_ui_language("en")
+    texts = ui_texts.collect(shown)
+    assert ui_texts.hangul(texts["banner"]) == [] and ui_texts.hangul(texts["overlay"]) == []
+    assert banner_buttons(shown) == BANNER_BUTTONS_EN
+
+
+@pytest.mark.parametrize("shape, korean, english", [
+    ("offer", "⬆ 새 버전 9.9.9이 나왔습니다 · 지금 1.0.0", "⬆ Version 9.9.9 is available · now 1.0.0"),
+    ("download", "9.9.9 받는 중 (NAS)… 1.0 / 2.0 MB", "Downloading 9.9.9 (NAS)… 1.0 / 2.0 MB"),
+    ("staging", "준비 중…", "Preparing…"),
+    ("checking", "다른 창 확인 중…", "Checking other windows…"),
+    ("closing", "다른 창을 닫는 중…", "Closing other windows…"),
+    ("cancelling", "취소하는 중…", "Cancelling…"),
+    ("helper", "업데이트 도우미를 시작하는 중…", "Starting the update helper…"),
+    ("updated", "9.9.9로 업데이트했습니다", "Updated to 9.9.9"),
+])
+def test_banner_shown_before_the_switch_is_redrawn(shown, shape, korean, english):
+    """띠가 떠 있는 채 언어를 바꾸면 같은 뜻의 글로 다시 그림(모양·단추의 보임은 그대로) — 띠의 글은 그 일이 다시 일어나야 다시 옴."""
+    banner = shown.update_banner
+    dict(ui_texts.banner_shapes(shown))[shape]()
+    visible = [button.isVisibleTo(banner) for button in (banner.notes_button, banner.update_button, banner.later_button,
+                                                           banner.cancel_button, banner.progress_bar)]
+    mode = banner.mode()
+    assert banner.full_text() == korean and banner.text_label.toolTip() == korean and banner_buttons(shown) == BANNER_BUTTONS_KO
+    shown.set_ui_language("en")
+    assert banner.full_text() == english and banner.text_label.toolTip() == english and banner_buttons(shown) == BANNER_BUTTONS_EN
+    assert banner.mode() == mode and [button.isVisibleTo(banner) for button in (
+        banner.notes_button, banner.update_button, banner.later_button, banner.cancel_button, banner.progress_bar)] == visible
+    shown.set_ui_language("ko")
+    assert banner.full_text() == korean and banner_buttons(shown) == BANNER_BUTTONS_KO
+    banner.hide_banner()
+
+
+def test_banner_shown_in_english_from_the_start(shown):
+    shown.set_ui_language("en")
+    shown.update_banner.show_offer("1.1.1", "1.1.0")
+    assert shown.update_banner.full_text() == "⬆ Version 1.1.1 is available · now 1.1.0"
+    shown.update_banner.hide_banner()
+
+
+def test_banner_keeps_a_plain_text_as_it_is(shown):
+    """글자 표의 글이 아닌 그냥 글자를 받으면 언어가 바뀌어도 그대로 보임(지어내지 않음)."""
+    banner = shown.update_banner
+    banner.show_progress(1, 4, "1.1.1 받는 중…")
+    shown.set_ui_language("en")
+    assert banner.full_text() == "1.1.1 받는 중…" and banner.mode() == "progress"
+    banner.hide_banner()
+
+
+def test_update_messages_are_korean_as_values_and_follow_the_language_when_shown():
+    """알림 띠에 넘기는 글(ui_text.Message): 값은 늘 한국어 글(기록 줄·비교용), 보일 때의 글은 지금 언어."""
+    from yesoncheck import player_update
+
+    message = player_update.download_text("1.1.1", "NAS", 1_500_000, 3_000_000)
+    assert message == "1.1.1 받는 중 (NAS)… 1.5 / 3.0 MB" and ui_text.shown(message) == message
+    assert player_update.updated_message("1.1.1") == "1.1.1로 업데이트했습니다"
+    ui_text.set_language("en")
+    assert ui_text.shown(message) == "Downloading 1.1.1 (NAS)… 1.5 / 3.0 MB" and message == "1.1.1 받는 중 (NAS)… 1.5 / 3.0 MB"
+    again = player_update.download_text("1.1.1", "NAS", 1_500_000, 3_000_000)
+    assert again == message  # English 화면에서 만들어도 값은 한국어 (기록 줄은 언어와 무관)
+    assert ui_text.shown(player_update.STAGING_TEXT) == "Preparing…" and player_update.STAGING_TEXT == "준비 중…"
+    assert ui_text.shown("그냥 글자") == "그냥 글자"
+
+
+def test_download_progress_from_the_worker_is_worded_in_the_window_language(shown, monkeypatch):
+    """받기 스레드는 진행 신호에 글이 아니라 단계만 실음 — 띠의 글은 창(GUI 쪽)이 지금 언어로 만듦."""
+    from types import SimpleNamespace
+
+    from yesoncheck import player_update
+
+    run = SimpleNamespace(version="1.1.1", source="NAS", download=SimpleNamespace(is_cancelled=lambda: False))
+    monkeypatch.setattr(shown, "_update_run", run)
+    shown.set_ui_language("en")
+    shown._on_update_progress(1_000_000, 4_000_000, player_update.STAGE_DOWNLOAD)
+    assert shown.update_banner.full_text() == "Downloading 1.1.1 (NAS)… 1.0 / 4.0 MB"
+    shown._on_update_progress(0, 0, player_update.STAGE_STAGING)
+    assert shown.update_banner.full_text() == "Preparing…"
+    shown.set_ui_language("ko")
+    assert shown.update_banner.full_text() == "준비 중…"
+    shown.update_banner.hide_banner()
+
+
+def test_overlay_help_follows_the_language(shown):
+    label = shown.overlayHelpLabel
+    assert label.text() == "드래그로 이동, 테두리로 크기조절, Ctrl+휠로 확대/축소, Ctrl+O로 리셋"
+    shown.set_ui_language("en")
+    assert label.text() == "Drag to move, drag the border to resize, Ctrl+wheel to zoom, Ctrl+O to reset"
+    shown.set_ui_language("ko")
+    assert label.text() == "드래그로 이동, 테두리로 크기조절, Ctrl+휠로 확대/축소, Ctrl+O로 리셋"
+
+
+def test_english_screen_keeps_only_the_language_names(shown, tmp_path):
+    """모든 영역을 옮긴 뒤: English 화면에 남는 한글은 언어 메뉴의 두 글(두 언어에서 같은 이름)뿐."""
+    ui_texts.stage(shown, tmp_path)
+    shown.set_ui_language("en")
+    texts = ui_texts.collect(shown)
+    left = {area: ui_texts.hangul(found) for area, found in texts.items() if ui_texts.hangul(found)}
+    assert left == {"menubar": LANGUAGE_NAMES}

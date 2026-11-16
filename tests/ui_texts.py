@@ -211,7 +211,7 @@ def banner_shapes(player):
         ("closing", lambda: banner.show_progress(0, 0, player_update.CLOSING_OTHERS_TEXT, cancellable=False)),
         ("cancelling", lambda: banner.show_progress(0, 0, player_update.CANCELLING_TEXT)),
         ("helper", lambda: banner.show_progress(0, 0, player_update.HELPER_STARTING_TEXT, cancellable=False)),
-        ("updated", lambda: banner.show_message(player_update.UPDATED_MESSAGE.format(version="9.9.9"))),
+        ("updated", lambda: banner.show_message(player_update.updated_message("9.9.9"))),
     )
 
 

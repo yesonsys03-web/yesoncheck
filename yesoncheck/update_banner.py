@@ -13,9 +13,11 @@
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal
 from PyQt5.QtWidgets import QFrame, QHBoxLayout, QProgressBar, QPushButton, QSizePolicy
 
+from yesoncheck import ui_text
 from yesoncheck.window_layout import ElidedLabel
 
-OFFER_TEXT = "⬆ 새 버전 {new}이 나왔습니다 · 지금 {current}"
+# 글과 단추는 글자 표(ui_text — update.*)에서. 띠에 보일 글은 ui_text.Message(키와 값)로 받으면 언어가 바뀐 뒤 같은 뜻의 글로
+# 다시 그림(retranslate) — 그냥 글자를 받으면 받은 그대로 보이고 그대로 둠
 PROGRESS_STEPS = 1000  # 진행 막대는 천분율 (바이트 수는 QProgressBar의 int 범위를 넘을 수 있음)
 PROGRESS_MAX_WIDTH = 160
 
@@ -58,11 +60,14 @@ class UpdateBanner(QFrame):
         self.progress_bar.setRange(0, PROGRESS_STEPS)
         self.progress_bar.setTextVisible(False)
         self.progress_bar.setMaximumWidth(PROGRESS_MAX_WIDTH)
-        self.notes_button = self._button("바뀐 점", self.notes_clicked)
-        self.update_button = self._button("업데이트", self.update_clicked)
+        self.notes_button = self._button("update.notes", self.notes_clicked)
+        self.update_button = self._button("update.update", self.update_clicked)
         self.update_button.setObjectName("updateBannerUpdate")
-        self.later_button = self._button("나중에", self.later_clicked)
-        self.cancel_button = self._button("취소", self.cancel_clicked)
+        self.later_button = self._button("update.later", self.later_clicked)
+        self.cancel_button = self._button("update.cancel", self.cancel_clicked)
+        self._button_keys = ((self.notes_button, "update.notes"), (self.update_button, "update.update"),
+                             (self.later_button, "update.later"), (self.cancel_button, "update.cancel"))
+        self._text = ""  # 마지막으로 받은 글(그냥 글자 또는 ui_text.Message) — retranslate가 다시 그림
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 4, 10, 4)
         layout.setSpacing(8)
@@ -77,8 +82,8 @@ class UpdateBanner(QFrame):
         self.hide()
 
     @staticmethod
-    def _button(text, signal):
-        button = QPushButton(text)
+    def _button(text_key, signal):
+        button = QPushButton(ui_text.text(text_key))
         button.setFocusPolicy(Qt.NoFocus)
         button.setCursor(Qt.PointingHandCursor)
         button.clicked.connect(signal)
@@ -88,15 +93,28 @@ class UpdateBanner(QFrame):
         """mode 모양으로 보임: text(줄이기 전 전체 — 툴팁에도), widgets만 보이고 나머지 버튼·진행 막대는 숨김."""
         self._hide_timer.stop()
         self._mode = mode
-        self.text_label.setText(text)
-        self.text_label.setToolTip(text)
+        self._text = text
+        self._draw_text()
         for widget in (self.progress_bar, self.notes_button, self.update_button, self.later_button, self.cancel_button):
             widget.setVisible(widget in widgets)
         self.show()
 
+    def _draw_text(self):
+        """받아 둔 글을 지금 언어로 라벨과 그 툴팁에 (ui_text.Message가 아니면 받은 글 그대로)."""
+        shown = ui_text.shown(self._text)
+        self.text_label.setText(shown)
+        self.text_label.setToolTip(shown)
+
+    def retranslate(self):
+        """단추의 글을 글자 표에서 다시 읽고, 보이던 글을 지금 언어로 다시 그림 (언어가 바뀐 뒤). 모양·단추의 보임·숨기기 타이머는
+        그대로 — 띠의 글은 그 일이 다시 일어나야 다시 오므로 여기서 옮겨 준다."""
+        for button, key in self._button_keys:
+            button.setText(ui_text.text(key))
+        self._draw_text()
+
     def show_offer(self, new: str, current: str) -> None:
         """새 버전 알림: "⬆ 새 버전 {new}이 나왔습니다 · 지금 {current}" + [바뀐 점] [업데이트] [나중에]."""
-        self._show("offer", OFFER_TEXT.format(new=new, current=current),
+        self._show("offer", ui_text.Message("update.offer", new=new, current=current),
                    (self.notes_button, self.update_button, self.later_button))
 
     def show_progress(self, done: int, total: int, text: str, cancellable: bool = True) -> None:

@@ -23,7 +23,8 @@ from yesoncheck.user_files import UserFileError
 class PlayerLanguageMixin:
     # 영역마다의 '다시 그리기' 함수 이름 — 부르는 차례. (재생 줄·도구 패널은 위젯의 retranslate()를 retranslate_ui가 먼저 부름)
     RETRANSLATORS = ("retranslate_main_menus", "retranslate_settings_menus", "retranslate_sidebar", "retranslate_playlist_end",
-                     "retranslate_annotation_page", "retranslate_ocr_page")
+                     "retranslate_annotation_page", "retranslate_ocr_page", "retranslate_overlay_controls",
+                     "retranslate_update_banner")
 
     def _add_language_menu(self, settings_menu):
         """Settings의 맨 끝에 구분선 + '언어 (Language)' 하위 메뉴(항목은 언어마다 — 자기 언어로 적은 이름)."""
