@@ -2548,9 +2548,11 @@ class PlayerPlaybackMixin:
         self._media_volume = volume
         if self._media_player is not None:
             self._media_player.setVolume(volume)
-        # 볼륨 퍼센트 레이블 업데이트
-        if hasattr(self, 'volumePercentLabel'):
-            self.volumePercentLabel.setText(f"{volume}%")
+        # 재생 줄의 볼륨 슬라이더(와 그 툴팁의 퍼센트)를 실제 볼륨에 맞춤 — V 모드의 오버레이 볼륨으로 바꿨을 때도.
+        # (슬라이더가 스스로 바뀌어 여기 온 것이면 값이 이미 같아 아무것도 안 함; 2026-11-16 전에는 퍼센트 라벨을 고쳤음)
+        slider = getattr(self, 'volumeSlider', None)
+        if slider is not None and slider.value() != volume:
+            slider.setValue(volume)
 
     def on_fit_to_window_changed(self, is_fit):
         self.is_fit_to_window = is_fit

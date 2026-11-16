@@ -169,6 +169,32 @@ def test_volume_slider_reaches_the_player(player):
     assert player._media_volume == 30
 
 
+def test_volume_slider_starts_at_the_actual_volume(player, tmp_path):
+    """처음 볼륨: 슬라이더·툴팁이 실제 소리 크기(100)와 같음. 예전에는 슬라이더만 50에서 시작하고 재생기는 100이라
+    (슬라이더를 건드려야 맞춰짐) 표시가 틀렸음 — 사용자 결정 2026-11-16: 소리 크기는 그대로 두고 표시를 맞춤."""
+    slider = player.transportBar.volumeSlider
+    assert slider.value() == player.media_volume() == 100
+    assert slider.toolTip() == "볼륨 100%"
+    player.open_file("A", clip(tmp_path))  # 재생기를 만듦
+    assert player._media_player.volume() == 100 == slider.value()
+
+
+def test_volume_slider_follows_a_change_made_in_the_overlay(player, tmp_path):
+    """V 모드의 오버레이 볼륨으로 바꾸면 재생 줄의 슬라이더·툴팁도 그 값 (돌아왔을 때 옛 값을 보이지 않게)."""
+    slider = player.transportBar.volumeSlider
+    player.overlayVolume.setValue(30)  # 영상을 열기 전(재생기 없음)에도
+    assert player.media_volume() == 30
+    assert slider.value() == 30 and slider.toolTip() == "볼륨 30%"
+    player.open_file("A", clip(tmp_path))
+    assert player._media_player.volume() == 30 == slider.value()
+    player.overlayVolume.setValue(45)
+    assert player._media_player.volume() == 45 == slider.value() and slider.toolTip() == "볼륨 45%"
+    slider.setValue(70)  # 재생 줄에서 바꾸면 오버레이는 다음에 갱신될 때 맞춤 (update_overlay_controls — 예전 그대로)
+    assert player._media_player.volume() == 70
+    player.update_overlay_controls()
+    assert player.overlayVolume.value() == 70
+
+
 def test_first_button_is_the_old_stop_outside_a_playlist(player, tmp_path):
     player.open_file("A", clip(tmp_path))
     player.play_video()

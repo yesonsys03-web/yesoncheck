@@ -45,6 +45,9 @@ class PlayerTransportMixin:
         bar.firstButton.clicked.connect(self.go_to_first)
         bar.lastButton.clicked.connect(self.go_to_last)
         bar.loopButton.toggled.connect(lambda on: self.toggle_loop_play(Qt.Checked if on else Qt.Unchecked))
+        # 볼륨: 슬라이더를 실제 볼륨(재생기에 줄 값)에서 시작 — 예전에는 슬라이더만 50에서 시작하고 재생기는 100이라
+        # 슬라이더를 건드릴 때까지 표시가 틀렸음. 그 뒤로는 setVolume이 볼륨이 바뀔 때마다 이 슬라이더를 맞춤(오버레이에서 바꿔도)
+        bar.volumeSlider.setValue(self.media_volume())
         bar.volumeSlider.valueChanged.connect(self.setVolume)
         bar.frameField.frameEntered.connect(self.go_to_frame_number)
         bar.frameField.editingEnded.connect(self.setFocus)  # 창이 포커스를 되찾아 Space·← → 같은 단축키가 다시 먹게
