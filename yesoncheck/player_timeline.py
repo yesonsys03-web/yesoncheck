@@ -11,7 +11,6 @@ from PyQt5.QtCore import (
     QRect,
     QRectF,
     QSize,
-    QTimer,
     Qt,
     pyqtSlot,
     QItemSelectionModel,
@@ -22,82 +21,11 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
-    QPushButton,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
     QScrollArea,
 )
-class CollapsibleBox(QWidget):
-    """접을 수 있는 그룹박스 위젯"""
-    def __init__(self, title="", parent=None):
-        super().__init__(parent)
-        
-        self.toggle_button = QPushButton(title)
-        self.toggle_button.setCheckable(True)
-        self.toggle_button.setChecked(True)
-        # 색(바탕·테두리·글자)은 창의 테마 시트가 정함(main_window_styles의 QPushButton#collapsibleToggle — 어두운·밝은 테마마다):
-        # 여기서 색을 직접 넣으면 창 시트보다 우선이라 테마를 바꿔도 남음. 테마와 상관없는 모양만 여기에
-        self.toggle_button.setObjectName("collapsibleToggle")
-        self.toggle_button.setStyleSheet("QPushButton { text-align: left; padding: 8px; font-weight: bold; border-radius: 4px; }")
-        self.toggle_button.clicked.connect(self.toggle)
-        
-        self.content_area = QWidget()
-        self.content_layout = QVBoxLayout()
-        self.content_layout.setContentsMargins(10, 8, 5, 8)
-        self.content_layout.setSpacing(8)  # 위젯 간 간격 증가
-        self.content_area.setLayout(self.content_layout)
-        
-        layout = QVBoxLayout(self)
-        layout.setSpacing(0)
-        layout.setContentsMargins(0, 0, 0, 5)
-        layout.addWidget(self.toggle_button)
-        layout.addWidget(self.content_area)
-        
-        # 크기 정책 설정
-        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
-        
-    def toggle(self):
-        self.content_area.setVisible(self.toggle_button.isChecked())
-        # 버튼 텍스트 업데이트 (▼/▶)
-        if self.toggle_button.isChecked():
-            text = self.toggle_button.text().replace("▶", "▼")
-            if "▼" not in text:
-                text = "▼ " + text
-        else:
-            text = self.toggle_button.text().replace("▼", "▶")
-            if "▶" not in text:
-                text = "▶ " + text.strip()
-        self.toggle_button.setText(text)
-        
-        # 레이아웃 자동 조정 - 펼칠 때와 접을 때 모두
-        self.updateGeometry()
-        
-        # 부모 위젯들의 레이아웃도 업데이트
-        parent = self.parent()
-        while parent:
-            parent.updateGeometry()
-            if parent.layout():
-                parent.layout().update()
-                parent.layout().activate()
-            parent = parent.parent()
-        
-        # 약간의 지연 후 강제 업데이트 (접을 때 UI 축소)
-        QTimer.singleShot(10, self._delayed_update)
-    
-    def _delayed_update(self):
-        """레이아웃 업데이트를 지연 실행하여 UI가 제대로 축소되도록 함"""
-        self.updateGeometry()
-        if self.parent():
-            self.parent().updateGeometry()
-            if self.parent().layout():
-                self.parent().layout().activate()
-    
-    def add_widget(self, widget):
-        self.content_layout.addWidget(widget)
-    
-    def add_layout(self, layout):
-        self.content_layout.addLayout(layout)
 
 
 class OCRTimelineWidget(QWidget):

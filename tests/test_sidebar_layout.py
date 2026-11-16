@@ -152,7 +152,7 @@ def test_sidebar_runs_top_to_bottom_in_the_new_order(with_works, qapp):
     assert tops == sorted(tops) and len(set(tops)) == len(tops)
     # 작은 단추 셋은 한 줄에 왼쪽부터, 목록|썸네일도 한 줄
     tools = [player.openFolderButton, player.bookmarkMenuButton, player.refreshListButton]
-    assert len({top_in(side, w) + w.height() // 2 for w in tools}) == 1
+    assert len({(top_in(side, w), w.height()) for w in tools}) == 1  # 같은 줄·같은 높이 (북마크는 QToolButton이어도)
     lefts = [left_in(side, w) for w in tools]
     assert lefts == sorted(lefts) and len(set(lefts)) == 3
     assert top_in(side, player.listModeButton) == top_in(side, player.thumbnailModeButton)

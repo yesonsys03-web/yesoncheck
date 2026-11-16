@@ -61,6 +61,7 @@ class ToolPanel(QWidget):
 
         header = QWidget()
         header.setObjectName("toolPanelHeader")
+        header.setAttribute(Qt.WA_StyledBackground, True)
         header.setFixedHeight(HEADER_HEIGHT)
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(10, 0, 4, 0)

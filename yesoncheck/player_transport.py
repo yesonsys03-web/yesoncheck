@@ -62,6 +62,7 @@ class PlayerTransportMixin:
         bar.frameField.editingEnded.connect(self.setFocus)  # 창이 포커스를 되찾아 Space·← → 같은 단축키가 다시 먹게
 
         self.endPlaylistButton = QPushButton(ui_text.text("playlist.end"))
+        self.endPlaylistButton.setObjectName("playlistEndButton")  # 색·모양은 두 테마 시트의 #playlistEndButton
         self.endPlaylistButton.setToolTip(ui_text.text("playlist.end.tip"))
         self.endPlaylistButton.setFocusPolicy(Qt.NoFocus)
         self.endPlaylistButton.clicked.connect(self.end_playlist)

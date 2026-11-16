@@ -47,16 +47,10 @@ from yesoncheck import sidebar_sort  # 사이드바 정렬 기준의 기본값 (
 from yesoncheck.movie_pipe_source import movie_source_mode
 from yesoncheck.user_files import UserFileError
 from yesoncheck.main_window_styles import (
-    BOOKMARK_BUTTON_STYLE,
-    BOOKMARK_LIST_REFRESH_BUTTON_STYLE,
     DARK_STYLESHEET,
     LIGHT_STYLESHEET,
-    LIST_MODE_BUTTON_STYLE,
-    OCR_OPTION_LABEL_STYLE,
     POSITION_SCROLL_INITIAL_STYLE,
     POSITION_SCROLL_STYLE,
-    THUMBNAIL_MODE_BUTTON_STYLE,
-    WORK_PATH_BUTTON_STYLE,
 )
 from yesoncheck.player_hover_thumbs import PlayerHoverThumbsMixin
 from yesoncheck.player_menus import PlayerMenusMixin
@@ -92,7 +86,6 @@ KEEP_LATCH_LOG = "[표시] 네이티브 프레임이 아직 남아 걸쇠를 풀
 DECODER_RETRY_LOG = "[재생] 이 창은 그리기가 멈춰 있어(걸쇠) ffmpeg로 캡처를 다시 바꿔 끼우고 걸쇠를 정리함"  # 메뉴에서 이미 유효한 ffmpeg를 다시 고름 (Ruling 11, 최종 리뷰 F1)
 # 무거운 모듈들은 lazy import로 변경 (실제 사용 시점에만 로드)
 # from yesoncheck.workers import OCRWorker, OCRExportWorker, SceneDetectWorker
-# from yesoncheck.player_timeline import CollapsibleBox
 # from yesoncheck.player_review import OCRReviewDialog
 
 
@@ -593,11 +586,6 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         self.retranslate_sidebar_controls()
         sidebarContainer = QWidget()
         sidebarContainer.setLayout(sidebarLayout); sidebarContainer.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
-
-        # 사이드바의 단추: 좌우 안쪽 여백만 16 → 6px (글자는 가운데 정렬이라 단추가 글자보다 넓으면 모습은 그대로, 최소 너비만
-        # 작아짐 — 창 최소 너비). 위아래 여백·색은 창 스타일시트(테마) 그대로
-        compact_buttons = "QPushButton { padding-left: 6px; padding-right: 6px; }"
-        sidebarContainer.setStyleSheet(compact_buttons)
 
         # [사이드바 | 영상 | 도구 패널] — 패널은 열었을 때만 보이고(player_tools) 늘어나는 칸은 영상뿐
         mainSplitter = QSplitter(Qt.Horizontal); mainSplitter.addWidget(sidebarContainer)

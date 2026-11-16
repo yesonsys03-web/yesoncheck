@@ -156,13 +156,15 @@ class SidebarControlsMixin:
 
     def _tool_row(self, *buttons):
         row = QWidget()
+        row.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
         for button in buttons:
             button.setObjectName(SIDEBAR_TOOL)
             button.setFocusPolicy(Qt.NoFocus)
-            button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            # 세로는 줄의 높이까지 늘어남 — QPushButton과 QToolButton(북마크)의 바라는 높이가 1~2px 달라도 한 줄이 같은 높이
+            button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
             layout.addWidget(button)
         return row
 
