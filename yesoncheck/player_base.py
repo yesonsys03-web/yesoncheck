@@ -15,7 +15,7 @@ from PyQt5.QtCore import (
     Qt,
     pyqtSlot,
 )
-from PyQt5.QtGui import QFont, QKeySequence
+from PyQt5.QtGui import QKeySequence
 from PyQt5.QtMultimedia import QMediaPlayer
 from PyQt5.QtWidgets import (
     QApplication,
@@ -52,34 +52,34 @@ from yesoncheck.main_window_styles import (
     BOOKMARK_BUTTON_STYLE,
     BOOKMARK_LIST_REFRESH_BUTTON_STYLE,
     DARK_STYLESHEET,
-    FILENAME_LABEL_STYLE,
-    FRAME_COUNT_LABEL_STYLE,
     LIGHT_STYLESHEET,
     LIST_MODE_BUTTON_STYLE,
     OCR_OPTION_LABEL_STYLE,
-    PLAYBACK_FPS_LABEL_STYLE,
-    PLAY_PAUSE_BUTTON_STYLE,
     POSITION_SCROLL_INITIAL_STYLE,
     POSITION_SCROLL_STYLE,
-    STOP_BUTTON_STYLE,
     THUMBNAIL_MODE_BUTTON_STYLE,
-    TIME_LABEL_STYLE,
-    TOTAL_FRAMES_LABEL_STYLE,
-    VOLUME_SLIDER_STYLE,
     WORK_PATH_BUTTON_STYLE,
 )
 from yesoncheck.player_hover_thumbs import PlayerHoverThumbsMixin
 from yesoncheck.player_ocr import PlayerOcrMixin
 from yesoncheck.player_overlay import PlayerOverlayMixin
+from yesoncheck.player_transport import PlayerTransportMixin
 from yesoncheck.slider_style import jump_to_click
 from yesoncheck.update_banner import UpdateBanner
-from yesoncheck.window_layout import (
-    ButtonPairRow, ElidedLabel, InfoRowLayout, SteadyTextButton, VerticalScrollArea, startup_geometry,
-)
+from yesoncheck.window_layout import ButtonPairRow, SteadyTextButton, VerticalScrollArea, startup_geometry
 # 놓아 준 워커를 붙잡아 두는 코드는 worker_lifecycle에 있고, 기존 경로(`from yesoncheck.player_base import EXIT_WAIT_S, release_worker,
 # wait_for_released_workers`)를 위해 여기서 다시 내보냄. _RELEASED_WORKERS는 읽는 쪽(시험)용 같은 dict 객체 — 바꿔치기하려면
 # worker_lifecycle에서 할 것 (이 모듈의 이름을 바꿔도 release_worker는 worker_lifecycle의 것을 씀)
 from yesoncheck.worker_lifecycle import EXIT_WAIT_S, _RELEASED_WORKERS, release_worker, wait_for_released_workers
+
+# 처음 창에서 가운데 열을 단추 쌍이 들어가는 폭까지 넓혀 줄 때 영상 영역에 남겨야 하는 너비 (apply_startup_geometry).
+# 2026-11-16 전에는 영상 칸에 함께 있던 정보 줄의 최소 너비(보통 글꼴 193px·글자가 넓은 글꼴 356px)가 그 구실을 했음
+VIDEO_START_MINIMUM = 300
+
+# 창을 켰을 때의 볼륨 (0~100) — 재생 줄의 볼륨 슬라이더·V 모드의 오버레이 볼륨도 이 값에서 시작.
+# 2026-11-16 전에는 슬라이더만 50에서 시작하고 재생기는 100(QMediaPlayer 기본값)이라 슬라이더를 건드릴 때까지 표시와 소리가
+# 달랐음 — 사용자 결정 "처음에 소리를 50으로": 소리를 표시(50)에 맞춤 (그 전보다 처음 소리가 작음)
+START_VOLUME = 50
 
 # Settings → '재생 디코더 (Mac)' (스펙 2026-11-04 §5.4) — 항목 차례는 mac_native_gate.DECODERS
 DECODER_MENU_TEXT = "재생 디코더 (Mac)"
@@ -122,7 +122,7 @@ def korean_date(day):
     return f"{day.year}년 {day.month:02d}월 {day.day:02d}일"
 
 
-class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
+class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
     # 창을 닫을 때 실행 중인 공유 설정 불러오기를 기다리는 최대 시간 (그 뒤에는 로그만 남기고 닫음)
     SHARED_CONFIG_CLOSE_WAIT_MS = 5000
     # 창을 닫을 때 실행 중인 분석·내보내기·병합을 기다리는 최대 시간 (그 뒤에는 끝날 때까지 붙잡아 둠)
@@ -138,7 +138,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         self._user_file_problem_keys = set()
         # 소리 재생기(QMediaPlayer)는 처음 쓸 때 만듦 (mediaPlayer 속성) — Windows에서 처음 만들 때 8초쯤 걸림
         self._media_player = None
-        self._media_volume = 100  # 재생기를 만들기 전에 정한 볼륨 (QMediaPlayer 기본값과 같음)
+        self._media_volume = START_VOLUME  # 재생기를 만들기 전에 정한 볼륨 — 만들 때 재생기에 줌 (처음 50)
         self.media_player_create_seconds = None  # 재생기를 만드는 데 걸린 초 (만든 뒤에 채움)
         self._shared_config_load = None  # 실행 중인 공유 설정 불러오기 (SharedConfigLoad)
         self._shared_config_closed = False  # 창이 닫힘 → 늦게 온 공유 설정 결과는 버림
@@ -484,53 +484,12 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         self.fullscreenButton.clicked.connect(self.toggle_fullscreen)
         helpButton = QPushButton('Help')
         helpButton.clicked.connect(self.show_help)
-        self.loopCheckBox = QCheckBox("Loop Play")
-        self.loopCheckBox.setToolTip('Enable loop playback')
-        self.loopCheckBox.stateChanged.connect(self.toggle_loop_play)
-        self.playPauseButton = QPushButton('Play')
-        self.playPauseButton.clicked.connect(self.toggle_play_pause)
-        self.playPauseButton.setFixedHeight(80)
-        self.playPauseButton.setMinimumHeight(80)
-        self.playPauseButton.setMaximumHeight(80)
-        self.playPauseButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.playPauseButton.setStyleSheet(PLAY_PAUSE_BUTTON_STYLE)
-        stopButton = QPushButton('Stop')
-        stopButton.clicked.connect(self.stop_video)
-        stopButton.setFixedHeight(80)
-        stopButton.setMinimumHeight(80)
-        stopButton.setMaximumHeight(80)
-        stopButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        stopButton.setStyleSheet(STOP_BUTTON_STYLE)
-        # 정보 줄 라벨 (예전 고정 너비 200·200·150이 창의 최소 너비를 묶었음). 너비는 글꼴로, 최소 너비는 라벨이 실제로
-        # 그리는 방법 그대로 잼 (플랫폼·테마마다 글꼴이 다름). 자리가 있으면 예전과 같은 너비(글자가 더 넓은 글꼴이면
-        # 글자 너비, 숫자가 바뀌어도 그대로). 모자라면 InfoRowLayout이 이 순서로 줄임 (줄여 그려지면 전체 글자는 툴팁,
-        # 좁으면 글자가 안쪽 여백까지 씀):
-        #   숫자 라벨의 빈 공간 → 파일 이름(가운데를 줄여 'A: H….mov'까지) → 재생 FPS('…'까지) →
-        #   시간('00:00:00.000 / …'까지) → Total의 '(…F …f)'('Total: 00000…'까지)
-        #   → 그래도 모자랄 때만(창이 최소 너비 근처) 칸을 접음: 재생 FPS → 파일 이름 → 시간.
-        # 프레임 숫자는 창이 최소 너비여도 언제나 다 보임 (Current 전부, Total은 'Total: 00000'까지).
-        self.filenameLabel = ElidedLabel(Qt.ElideMiddle, keep_ends=(4, 4), shrink_order=1, collapse_order=7,
-                                         full_text_tooltip=True)
-        self.labelFrameCount = ElidedLabel(Qt.ElideRight, keep_text="Current: 00000", hint_width=200,
-                                           fit_text="Current: 00000", shrink_order=4)
-        self.labelTotalFrames = ElidedLabel(Qt.ElideRight, keep_text="Total: 00000 (000F 00f)",
-                                            keep_prefix="Total: 00000", hint_width=200,
-                                            fit_text="Total: 00000 (000F 00f)", shrink_order=4)
-        self.labelPlaybackFPS = ElidedLabel(Qt.ElideRight, keep_text="재생: 00.000 FPS · 실제 00.0", keep_prefix="",
-                                            hint_width=150, fit_text="재생: 00.000 FPS · 실제 00.0", shrink_order=2,
-                                            collapse_order=6)  # 재생 FPS 표시 위젯 — 재생 중엔 실제로 그린 fps도 (update_playback_fps)
-        font = QFont(); font.setPointSize(16)
-        self.filenameLabel.setFont(font)
-        self.labelFrameCount.setFont(font)
-        self.labelTotalFrames.setFont(font)
-        self.labelPlaybackFPS.setFont(font)  # FPS 위젯에도 폰트 적용
-        self.filenameLabel.setStyleSheet(FILENAME_LABEL_STYLE)
-        self.labelFrameCount.setStyleSheet(FRAME_COUNT_LABEL_STYLE)
-        self.labelTotalFrames.setStyleSheet(TOTAL_FRAMES_LABEL_STYLE)
-        self.labelPlaybackFPS.setStyleSheet(PLAYBACK_FPS_LABEL_STYLE)
-        # FPS 위젯 초기 텍스트 설정
-        self.labelPlaybackFPS.setText('재생: 대기')
-        
+        # 재생 줄(슬라이더 바로 아래 한 줄 — transport_bar)과 선택 재생 '끝내기' 단추: 재생/일시정지·처음·끝·한 장 이동·반복·
+        # 프레임 칸·전체·시간·fps·볼륨이 모두 거기 있다. 예전의 큰 Play·Stop 막대와 정보 줄(파일·Current·Total·재생 FPS·시간),
+        # 가운데 열의 Loop Play·Volume·FPS는 없앰. 재생 코드가 쓰는 옛 이름(filenameLabel·labelFrameCount·labelTotalFrames·
+        # labelPlaybackFPS·timeLabel·playPauseButton·loopCheckBox·volumeSlider)은 이 호출이 재생 줄에 이어 둠 (player_transport)
+        self._init_transport_bar()
+
         self.positionScroll = QSlider(Qt.Horizontal)
         self.positionScroll.setMinimum(0)
         self.positionScroll.setMaximum(100)
@@ -543,18 +502,6 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         self.positionScroll.sliderMoved.connect(self.on_slider_moved)  # 드래그 중 실시간 업데이트
         self.positionScroll.sliderReleased.connect(self.sync_audio_on_release)
         
-        self.frameRateLabel = QLabel("FPS")
-        self.frameRateComboBox = QComboBox()
-        self.frameRateComboBox.setToolTip('Frame rate (frames per second)')
-        self.frameRateComboBox.setEditable(True)  # 직접 입력 가능하게
-        # 일반적인 비표준 FPS 값들 추가 (23.976, 29.97, 59.94)
-        common_fps = ["23.976", "29.97", "59.94"]
-        # 정수 FPS (1-60)
-        integer_fps = [str(i) for i in range(1, 61)]
-        # 중복 제거하고 정렬
-        all_fps = sorted(set(common_fps + integer_fps), key=lambda x: float(x) if x.replace('.', '').isdigit() else 999)
-        self.frameRateComboBox.addItems(all_fps)
-        self.frameRateComboBox.setCurrentText('24')
         self.wipeCheckBox = QCheckBox('Enable Wipe Effect')
         self.wipeCheckBox.setChecked(False)
         self.wipeCheckBox.stateChanged.connect(self.toggle_wipe_effect)
@@ -565,22 +512,6 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         self.wipeXButton.setEnabled(False)
         self.wipeYButton.setEnabled(False)
 
-        # 볼륨 슬라이더 (QSlider로 변경)
-        self.volumeSlider = QSlider(Qt.Horizontal)
-        self.volumeSlider.setRange(0, 100)
-        self.volumeSlider.setValue(50)
-        self.volumeSlider.setMinimumWidth(100)  # 자리가 있으면 예전처럼 150, 가운데 열이 좁으면 100까지
-        self.volumeSlider.setMaximumWidth(150)
-        self.volumeSlider.setToolTip("오디오 볼륨")
-        self.volumeSlider.valueChanged.connect(self.setVolume)
-        self.volumeSlider.setStyleSheet(VOLUME_SLIDER_STYLE)
-
-        volumeLabel = QLabel("🔊 Volume:")
-        volumeLabel.setStyleSheet("QLabel { font-weight: bold; }")
-
-        # 볼륨 퍼센트 레이블
-        self.volumePercentLabel = QLabel("50%")
-        self.volumePercentLabel.setStyleSheet("QLabel { color: #ffae00; font-weight: bold; min-width: 40px; }")
         self.playSelectedButton = QPushButton('Play Selected')
         self.playSelectedButton.clicked.connect(self.play_selected_files)
         self.playSelectedButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -664,10 +595,8 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         controlLayoutMiddle.addWidget(annotation_group)
         # ocrStatusLabel 삭제됨 - 로그는 OCR 분석 팝업창에 표시
         
-        # Full Screen과 Help 버튼은 UI에서 제거 (Full Screen 기능은 유지, Help는 메뉴바로 이동)
-        controlLayoutMiddle.addWidget(self.loopCheckBox)
-        controlLayoutMiddle.addWidget(volumeLabel); controlLayoutMiddle.addWidget(self.volumeSlider); controlLayoutMiddle.addWidget(self.volumePercentLabel)
-        controlLayoutMiddle.addWidget(self.frameRateLabel); controlLayoutMiddle.addWidget(self.frameRateComboBox)
+        # Full Screen과 Help 버튼은 UI에서 제거 (Full Screen 기능은 유지, Help는 메뉴바로 이동).
+        # 반복·볼륨은 재생 줄로 옮김, FPS 콤보는 없앰 (2026-11-16 — 값을 읽는 코드가 없었음: 영상의 fps는 재생 줄에 보임)
         controlLayoutMiddle.addWidget(self.wipeCheckBox)
         controlLayoutMiddle.addWidget(ButtonPairRow(self.wipeXButton, self.wipeYButton, MIDDLE_SPACING))
         controlLayoutMiddle.addWidget(ButtonPairRow(self.playSelectedButton, self.playSelectedPauseButton, MIDDLE_SPACING))
@@ -676,22 +605,18 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         controlLayoutMiddle.setContentsMargins(0,0,0,0)
         controlLayoutMiddle.setSpacing(MIDDLE_SPACING)
         
+        # 창 아래: 시간 슬라이더, 그 바로 아래 재생 줄 (둘 다 창 전체 폭, 높이 고정)
         controlLayoutRight = QVBoxLayout()
         controlLayoutRight.addWidget(self.positionScroll)
-        controlLayoutRight.addWidget(self.playPauseButton, 0)  # stretch factor 0으로 고정
-        controlLayoutRight.addWidget(stopButton, 0)  # stretch factor 0으로 고정
+        controlLayoutRight.addWidget(self.transportBar)
         controlLayoutRight.setContentsMargins(0,0,0,0)
-        controlLayoutRight.setSpacing(5)
-        
-        fileInfoLayout = InfoRowLayout()  # 예전 QHBoxLayout + addStretch와 같은 배치 (시간 라벨은 오른쪽 끝)
-        fileInfoLayout.addWidget(self.filenameLabel); fileInfoLayout.addWidget(self.labelFrameCount)
-        fileInfoLayout.addWidget(self.labelTotalFrames); fileInfoLayout.addWidget(self.labelPlaybackFPS)
-        fileInfoLayout.setContentsMargins(0,0,0,0); fileInfoLayout.setSpacing(5)
-        splitter = QSplitter(Qt.Vertical); videoWidgetContainer = QWidget()
+        controlLayoutRight.setSpacing(4)
+
+        # 영상 칸 (예전에는 세로 스플리터로 영상과 정보 줄을 나눴음 — 정보는 재생 줄로 옮겨 영상 칸만 남음)
+        videoWidgetContainer = QWidget()
         videoWidgetLayout = QVBoxLayout(); videoWidgetLayout.addWidget(self.videoWidget)
         videoWidgetContainer.setLayout(videoWidgetLayout); videoWidgetLayout.setContentsMargins(0,0,0,0)
-        videoWidgetLayout.setSpacing(0); fileInfoWidget = QWidget(); fileInfoWidget.setLayout(fileInfoLayout)
-        splitter.addWidget(videoWidgetContainer); splitter.addWidget(fileInfoWidget); splitter.setSizes([700, 50])
+        videoWidgetLayout.setSpacing(0)
         self.sidebar = QListWidget(); self.sidebar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.sidebar.setSelectionMode(QListWidget.ExtendedSelection)
         self.sidebar.itemClicked.connect(self.on_sidebar_item_clicked)
@@ -828,6 +753,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         sidebarLayout.addWidget(self.thumbnailProgressBar)  # 진행바를 버튼 아래에 추가
         sidebarLayout.addWidget(self.sidebar_tabs)  # Mov(self.sidebar)·Seq 탭
         sidebarLayout.addWidget(self.sidebar_count_label)
+        sidebarLayout.addWidget(self.endPlaylistButton)  # 선택 재생 중에만 보임 — 예전 Stop 단추가 하던 '선택 재생 끝내기'
         sidebarContainer = QWidget()
         sidebarContainer.setLayout(sidebarLayout); sidebarContainer.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
@@ -847,7 +773,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         # Windows 150% 배율에서 창이 화면보다 컸음). 창이 충분히 크면 스크롤바 없이 예전과 같음.
         self.middleScrollArea = VerticalScrollArea(middleContainer)
         mainSplitter = QSplitter(Qt.Horizontal); mainSplitter.addWidget(sidebarContainer)
-        mainSplitter.addWidget(self.middleScrollArea); mainSplitter.addWidget(splitter)
+        mainSplitter.addWidget(self.middleScrollArea); mainSplitter.addWidget(videoWidgetContainer)
         self.mainSplitter = mainSplitter
         mainSplitter.setStretchFactor(0,0); mainSplitter.setStretchFactor(1,0); mainSplitter.setStretchFactor(2,1)
         mainSplitter.setSizes([200, 220, 1000]); layout = QVBoxLayout(); layout.addWidget(mainSplitter)  # middle 영역 초기 너비를 220으로 증가하여 OCR 버튼 텍스트가 잘리지 않도록
@@ -860,30 +786,17 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         self.setAcceptDrops(True)
         # self.sidebar는 넣지 않음: 이제 Mov 탭의 페이지라, V 키·전체화면 복원이 손으로 setVisible(True)하면 Seq 탭이 보이는 동안에도
         # Mov 목록이 보이게 됨 (사이드바 컨테이너가 이미 목록 전체를 숨기고 보임 — 보이고 숨는 모습은 예전과 같음)
+        # V 키·전체 화면이 숨기고 되돌리는 것들. 재생 줄은 통째로 하나(그 안의 단추·라벨을 따로 넣지 않음).
+        # endPlaylistButton은 넣지 않음 — 사이드바와 함께 숨고, 되돌릴 때 선택 재생이 아닌데 나타나면 안 됨
         self.control_widgets = [
-            sidebarContainer, self.middleScrollArea, workLabel, stopButton, self.frameRateLabel, volumeLabel, self.workComboBox, self.seasonComboBox, self.jobComboBox,
-            self.loopCheckBox, self.playPauseButton, self.playSelectedButton,
-            self.volumeSlider, self.frameRateComboBox, self.wipeCheckBox, self.wipeXButton, self.wipeYButton, openButtonA, openButtonB, self.volumeSlider, selectFolderButton, bookmarkButton, bookmarkListButton, workPathButton, self.listModeButton, self.thumbnailModeButton, self.refreshListButton, self.thumbnailProgressBar
+            sidebarContainer, self.middleScrollArea, workLabel, self.workComboBox, self.seasonComboBox, self.jobComboBox,
+            self.playSelectedButton,
+            self.wipeCheckBox, self.wipeXButton, self.wipeYButton, openButtonA, openButtonB, selectFolderButton, bookmarkButton, bookmarkListButton, workPathButton, self.listModeButton, self.thumbnailModeButton, self.refreshListButton, self.thumbnailProgressBar,
+            self.transportBar,
         ]
-        # 시간: 줄이면 뒤쪽(전체 시간)부터 …로 ('00:00:00.000 / …'까지). 너비는 예전처럼 이 모양의 글자 너비로 고정
-        self.timeLabel = ElidedLabel(Qt.ElideRight, keep_text="00:00:00.000 / 00:00:00.000",
-                                     keep_prefix="00:00:00.000 /", hint_text="00:00:00.000 / 00:00:00.000",
-                                     shrink_order=3, collapse_order=8)
-        self.timeLabel.setText("00:00:00.000 / 00:00:00.000"); self.timeLabel.setFont(QFont("Arial", 16))
-        self.timeLabel.setStyleSheet(TIME_LABEL_STYLE)
-        fileInfoLayout.addWidget(self.timeLabel); fileInfoLayout.setAlignment(self.timeLabel, Qt.AlignRight)
-        
-        # timeLabel을 control_widgets에 추가
-        self.control_widgets.append(self.timeLabel)
-        
+
         # positionScroll을 control_widgets에 추가
         self.control_widgets.append(self.positionScroll)
-        
-        # 나머지 UI 라벨들을 control_widgets에 추가
-        self.control_widgets.append(self.filenameLabel)
-        self.control_widgets.append(self.labelFrameCount)
-        self.control_widgets.append(self.labelTotalFrames)
-        self.control_widgets.append(self.labelPlaybackFPS)
 
         # 스크롤바 핸들(thumb) 크기를 고정 (예: 80px)
         self.positionScroll.setStyleSheet(POSITION_SCROLL_STYLE)
@@ -891,17 +804,14 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         jump_to_click(self.positionScroll)
 
         # 모든 주요 위젯들의 focusPolicy를 Qt.NoFocus로 설정 (전역 단축키 방해 방지)
+        # (재생 줄의 단추·슬라이더는 재생 줄이 스스로 NoFocus — 프레임 칸만 눌렀을 때 포커스를 가짐)
         self.positionScroll.setFocusPolicy(Qt.NoFocus)
-        self.volumeSlider.setFocusPolicy(Qt.NoFocus)
         self.workComboBox.setFocusPolicy(Qt.NoFocus)
         self.seasonComboBox.setFocusPolicy(Qt.NoFocus)
         self.jobComboBox.setFocusPolicy(Qt.NoFocus)
-        self.frameRateComboBox.setFocusPolicy(Qt.NoFocus)
-        
+
         # 추가 위젯들의 focusPolicy 설정
-        self.loopCheckBox.setFocusPolicy(Qt.NoFocus)
         self.wipeCheckBox.setFocusPolicy(Qt.NoFocus)
-        self.playPauseButton.setFocusPolicy(Qt.NoFocus)
         self.fullscreenButton.setFocusPolicy(Qt.NoFocus)
         self.playSelectedButton.setFocusPolicy(Qt.NoFocus)
         self.playSelectedPauseButton.setFocusPolicy(Qt.NoFocus)
@@ -909,17 +819,10 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
         self.wipeYButton.setFocusPolicy(Qt.NoFocus)
         openButtonA.setFocusPolicy(Qt.NoFocus)
         openButtonB.setFocusPolicy(Qt.NoFocus)
-        stopButton.setFocusPolicy(Qt.NoFocus)
         selectFolderButton.setFocusPolicy(Qt.NoFocus)
-        
+
         # 라벨들의 focusPolicy 설정
-        self.filenameLabel.setFocusPolicy(Qt.NoFocus)
-        self.labelFrameCount.setFocusPolicy(Qt.NoFocus)
-        self.labelTotalFrames.setFocusPolicy(Qt.NoFocus)
-        self.timeLabel.setFocusPolicy(Qt.NoFocus)
         workLabel.setFocusPolicy(Qt.NoFocus)
-        volumeLabel.setFocusPolicy(Qt.NoFocus)
-        self.frameRateLabel.setFocusPolicy(Qt.NoFocus)
 
         # 메인 윈도우가 항상 키보드 이벤트를 받을 수 있도록 설정
         self.setFocusPolicy(Qt.StrongFocus)
@@ -1082,8 +985,14 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
             # 사이드바 목록(Mov·Seq·All 어느 쪽이든 목록이 포커스를 가진 채)에서 먹는 단축키: 재생/정지와 확대·축소·화면 맞춤.
             # 선택 재생(Enter·\)은 재생목록 기계장치가 Mov 경로 전제라 위의 Mov·All 목록 전용
             if source in (self.sidebar, self.seq_sidebar, self.all_sidebar):
-                if key == Qt.Key_Space: 
+                if key == Qt.Key_Space:
                     self.toggle_play_pause()
+                    return True
+                elif key == Qt.Key_Home:  # 처음·끝 — 목록의 첫 줄·끝 줄 이동(Qt 기본) 대신 프레임 이동 (← → Space처럼)
+                    self.go_to_first()
+                    return True
+                elif key == Qt.Key_End:
+                    self.go_to_last()
                     return True
                 elif key in [Qt.Key_Plus, Qt.Key_Equal, Qt.Key_2]: 
                     print("EventFilter - Zoom in triggered")
@@ -1262,7 +1171,9 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
                                        for start, w in ((200, splitter.widget(0)), (220, splitter.widget(1)), (0, splitter.widget(2))))
         paired = self.middleScrollArea.width_for_content_hint()
         handles = splitter.handleWidth() * (splitter.count() - 1)
-        if paired > middle and side + paired + video_minimum + handles <= rect.width():
+        # 영상 영역의 몫: 그 칸의 최소 너비와 VIDEO_START_MINIMUM 중 큰 쪽 (2026-11-16 — 정보 줄이 재생 줄로 옮겨져 영상 칸의
+        # 최소 너비가 아주 작아짐: 그것만 보면 글자가 넓은 글꼴의 작은 화면에서 가운데 열이 영상 영역을 다 가져감)
+        if paired > middle and side + paired + max(video_minimum, VIDEO_START_MINIMUM) + handles <= rect.width():
             middle = paired
         splitter.setSizes([side, middle, max(0, rect.width() - side - middle)])
         # 초기 창 크기 저장 (앱 처음 실행 시) — 동영상 전용 전체화면을 끝내면 이 크기로 돌아옴
@@ -1317,6 +1228,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
     def set_dark_theme(self):
         self.setStyleSheet(DARK_STYLESHEET)
         self.current_theme = 'dark'
+        self.transportBar.apply_theme('dark')  # 재생 줄의 아이콘은 직접 그린 그림이라 테마 색으로 다시 그림
         self.videoWidget.apply_theme_background('dark')  # GL 뷰포트는 스타일시트 배경 칠을 받지 않음
         self._apply_take_colors(repaint=True)  # Mov 항목의 테이크 색은 테마마다 다름
         self._schedule_all_rebuild()  # All 탭 시퀀스 글자 색을 테마에 맞춤
@@ -1324,6 +1236,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerOcrMixin, PlayerOverlayMixin
     def set_light_theme(self):
         self.setStyleSheet(LIGHT_STYLESHEET)
         self.current_theme = 'light'
+        self.transportBar.apply_theme('light')  # 재생 줄의 아이콘은 직접 그린 그림이라 테마 색으로 다시 그림
         self.videoWidget.apply_theme_background('light')  # GL 뷰포트는 스타일시트 배경 칠을 받지 않음
         self._apply_take_colors(repaint=True)  # Mov 항목의 테이크 색은 테마마다 다름
         self._schedule_all_rebuild()  # All 탭 시퀀스 글자 색을 테마에 맞춤

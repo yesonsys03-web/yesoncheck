@@ -180,7 +180,7 @@ def test_open_file_pipe_sets_ui(player, pipe_log, prores_clip, dialogs):
     assert len(pipe_log.captures) == 1 and len(pipe_log.sessions) == 1  # 열면서 ffmpeg가 하나
     assert cap.get(cv2.CAP_PROP_FRAME_COUNT) == A_COUNT
     assert player.positionScroll.maximum() == A_COUNT - 1
-    assert player.frameRateComboBox.currentText() == "24"  # detect_fps
+    assert cap.get(cv2.CAP_PROP_FPS) == 24  # 재생 줄의 fps가 읽는 값 (2026-11-16 전에는 FPS 콤보에도 적었음 — 없앰)
     assert player.labelTotalFrames.text().startswith(f"Total: {A_COUNT}")
     assert player.timeLabel.text().endswith(player.format_time((A_COUNT - 1) / 24))
     assert player.filenameLabel.text() == "A: numbered_4444.mov"

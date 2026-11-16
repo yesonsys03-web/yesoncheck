@@ -411,7 +411,6 @@ class PlayerPlaybackMixin:
                 self.filenameLabel.setText(f"A: {os.path.basename(self.filename_a)}")
 
             self.videoWidget.initial_fit = True
-            self.detect_fps()
             self.labelPlaybackFPS.setText('재생: 대기')
             # 스레드 안전성을 위해 QTimer.singleShot 대신 직접 호출
             mark = time.perf_counter()
@@ -710,34 +709,6 @@ class PlayerPlaybackMixin:
                 gpu_frame = cv2.UMat(frame)
                 return cv2.cvtColor(gpu_frame, cv2.COLOR_BGR2RGB).get()
         return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-    def detect_fps(self):
-        if self.cap_a:
-            fps = self.cap_a.get(cv2.CAP_PROP_FPS)
-            if fps > 0:
-                # 일반적인 비표준 FPS 값들 감지 (23.976, 29.97, 59.94 등)
-                # 23.976 감지 (23.98 근사값도 처리)
-                if abs(fps - 23.976) < 0.01:
-                    fps_str = "23.976"
-                # 29.97 감지
-                elif abs(fps - 29.97) < 0.01:
-                    fps_str = "29.97"
-                # 59.94 감지
-                elif abs(fps - 59.94) < 0.01:
-                    fps_str = "59.94"
-                # 정수 FPS인 경우
-                elif fps == int(fps):
-                    fps_str = str(int(fps))
-                # 기타 소수점 FPS는 정확한 값 사용
-                else:
-                    fps_str = f"{fps:.3f}"
-                
-                # 콤보박스에 값이 없으면 추가
-                existing_items = [self.frameRateComboBox.itemText(i) for i in range(self.frameRateComboBox.count())]
-                if fps_str not in existing_items:
-                    self.frameRateComboBox.addItem(fps_str)
-                
-                self.frameRateComboBox.setCurrentText(fps_str)
 
     def display_first_frame(self):
         if self.cap_a:
@@ -2185,10 +2156,14 @@ class PlayerPlaybackMixin:
             self.prev_frame()
         elif key in [Qt.Key_Period, Qt.Key_Right]: 
             self.next_frame()
-        elif key == Qt.Key_Space: 
+        elif key == Qt.Key_Space:
             self.toggle_play_pause()
-        elif key in [Qt.Key_Plus, Qt.Key_Equal, Qt.Key_2]: 
-            print("Zoom in triggered"); 
+        elif key == Qt.Key_Home:  # 재생 줄의 '처음' 단추와 같음 (player_transport)
+            self.go_to_first()
+        elif key == Qt.Key_End:  # 재생 줄의 '끝' 단추와 같음
+            self.go_to_last()
+        elif key in [Qt.Key_Plus, Qt.Key_Equal, Qt.Key_2]:
+            print("Zoom in triggered");
             # 마우스 커서 위치를 비디오 위젯 좌표로 변환하여 전달
             cursor_pos = self.videoWidget.mapFromGlobal(self.cursor().pos())
             self.videoWidget.zoom_in(cursor_pos)
@@ -2573,9 +2548,11 @@ class PlayerPlaybackMixin:
         self._media_volume = volume
         if self._media_player is not None:
             self._media_player.setVolume(volume)
-        # 볼륨 퍼센트 레이블 업데이트
-        if hasattr(self, 'volumePercentLabel'):
-            self.volumePercentLabel.setText(f"{volume}%")
+        # 재생 줄의 볼륨 슬라이더(와 그 툴팁의 퍼센트)를 실제 볼륨에 맞춤 — V 모드의 오버레이 볼륨으로 바꿨을 때도.
+        # (슬라이더가 스스로 바뀌어 여기 온 것이면 값이 이미 같아 아무것도 안 함; 2026-11-16 전에는 퍼센트 라벨을 고쳤음)
+        slider = getattr(self, 'volumeSlider', None)
+        if slider is not None and slider.value() != volume:
+            slider.setValue(volume)
 
     def on_fit_to_window_changed(self, is_fit):
         self.is_fit_to_window = is_fit

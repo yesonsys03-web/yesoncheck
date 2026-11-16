@@ -45,12 +45,13 @@ def player(large_screen, new_player, dialogs, tmp_path):  # noqa: F811
 
 @pytest.fixture
 def small_screen(monkeypatch):
-    """화면 작업 영역이 500×400인 것처럼 — 처음 창이 최소 크기로 뜸 (가운데 열을 넓혀 줄 자리가 없음)."""
+    """화면 작업 영역이 400×300인 것처럼 — 처음 창이 최소 크기로 뜸 (가운데 열을 넓혀 줄 자리가 없음).
+    (2026-11-16 전에는 500×400 — 정보 줄이 없어져 창의 최소 너비가 이 Mac 572 → 431로 줄었음)"""
     real_screen = QApplication.primaryScreen()
 
     class SmallScreen:
         def availableGeometry(self):
-            return QRect(0, 0, 500, 400)
+            return QRect(0, 0, 400, 300)
 
         def __getattr__(self, name):
             return getattr(real_screen, name)
@@ -98,10 +99,12 @@ def set_column_width(player, width):
 
 
 def show_scrollbar(player):
-    """창을 낮추고 접는 상자를 펼쳐 가운데 열에 세로 스크롤바가 생기게 (내용 폭이 스크롤바만큼 줄어듦)."""
-    player.resize(player.width(), 700)
+    """창을 낮추고 접는 상자를 모두 펼쳐 가운데 열에 세로 스크롤바가 생기게 (내용 폭이 스크롤바만큼 줄어듦).
+    2026-11-16부터 가운데 열이 짧아지고(반복·볼륨·FPS가 재생 줄로) 창 아래의 큰 Play·Stop 막대가 없어져, 상자 하나로는 모자람."""
+    player.resize(player.width(), 600)
     settle()
-    column(player).findChildren(CollapsibleBox)[-1].toggle_button.click()
+    for box in column(player).findChildren(CollapsibleBox):
+        box.toggle_button.click()
     settle()
     assert player.middleScrollArea.verticalScrollBar().isVisible(), "스크롤바가 생기지 않음 (시험 조건이 틀림)"
 
@@ -152,7 +155,7 @@ def test_pair_buttons_share_the_row_equally(player):
 
 def test_rows_span_the_same_width_as_the_other_controls(player):
     """둘을 합친 줄은 한 줄짜리 위젯(콤보 상자)과 왼쪽·오른쪽 끝이 같음."""
-    combo = player.frameRateComboBox
+    combo = player.workComboBox  # 가운데 열의 한 줄짜리 위젯 (2026-11-16 전에는 FPS 콤보 — 없앰)
     start = left_edge(combo, player).x()
     end = start + combo.width()
     for left, right in pairs(player):
@@ -218,6 +221,32 @@ def test_start_window_without_room_keeps_the_old_start_width(small_screen, new_p
     assert player.mainSplitter.sizes()[1] == max(OLD_START_WIDTH, area.minimumWidth()) < area.width_for_content_hint()
     for left, right in pairs(player):  # 그 폭에서도 글자는 잘리지 않음 (들어가는 쌍은 한 줄, 아니면 위아래)
         assert_fits(left, right)
+
+
+def test_start_width_does_not_squeeze_the_video_area(monkeypatch, new_player, dialogs, tmp_path):  # noqa: F811
+    """쌍이 들어갈 폭까지 넓히는 것은 영상 영역이 처음에 300px은 남을 때만. 2026-11-16 전에는 영상 칸에 정보 줄이 함께 있어 그 최소
+    너비가 이 일을 했음(보통 글꼴 193px·글자가 넓은 글꼴 356px) — 정보 줄이 재생 줄로 옮겨지자 영상 칸의 최소가 79px이 되어, 글자가
+    넓은 글꼴의 작은 화면에서 가운데 열이 398px로 넓어지고 영상 영역이 147px로 밀렸음(넓은 글꼴 흉내에서 잼)."""
+    from yesoncheck import player_base
+
+    real_screen = QApplication.primaryScreen()
+
+    class NarrowScreen:
+        def availableGeometry(self):
+            return QRect(0, 0, 620, 560)  # 사이드바 200 + 쌍 236 + 영상 영역 약 160 — 넓히면 영상 영역이 300 밑
+
+        def __getattr__(self, name):
+            return getattr(real_screen, name)
+
+    monkeypatch.setattr(QApplication, "primaryScreen", staticmethod(lambda: NarrowScreen()))
+    player = new_player(make_config(str(tmp_path), {}))
+    player.show()
+    settle()
+    area = player.middleScrollArea
+    side, middle, video = player.mainSplitter.sizes()
+    assert middle == max(OLD_START_WIDTH, area.minimumWidth()) < area.width_for_content_hint()
+    wanted = area.width_for_content_hint() - middle  # 넓혔다면 영상 영역에서 가져갔을 폭
+    assert video - wanted < player_base.VIDEO_START_MINIMUM == 300  # 넓혔다면 300 밑이었을 창 (시험 조건)
 
 
 # ---- 좁으면 예전처럼 위아래 ----

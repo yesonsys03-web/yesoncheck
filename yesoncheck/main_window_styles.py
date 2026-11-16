@@ -174,6 +174,78 @@ QSlider::add-page:horizontal {
     background: #353535;
     border-radius: 4px;
 }
+QWidget#transportBar {
+    background: #2b2b2b;
+    border-top: 1px solid #3a3a3a;
+}
+QWidget#transportBar QWidget {
+    background: transparent;
+}
+QWidget#transportBar QLabel {
+    color: #d0d0d0;
+}
+QWidget#transportBar QToolButton#transportButton {
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+}
+QWidget#transportBar QToolButton#transportButton:hover {
+    background: #3d3d3d;
+}
+QWidget#transportBar QToolButton#transportButton:pressed {
+    background: #4a4a4a;
+}
+QWidget#transportBar QToolButton#transportButton:checked {
+    background: #4a4a4a;
+}
+QWidget#transportBar QLineEdit#frameField {
+    background: #1c1c1c;
+    border: 1px solid #444444;
+    border-radius: 3px;
+    color: #f0f0f0;
+    padding: 2px 4px;
+    selection-background-color: #606060;
+    selection-color: #ffffff;
+}
+QWidget#transportBar QLineEdit#frameField:focus {
+    border: 1px solid #909090;
+}
+QWidget#transportBar QSlider#volumeSlider:horizontal {
+    height: 18px;
+    background: transparent;
+}
+QWidget#transportBar QSlider#volumeSlider::groove:horizontal {
+    height: 4px;
+    background: #555555;
+    border: none;
+    border-radius: 2px;
+}
+QWidget#transportBar QSlider#volumeSlider::handle:horizontal {
+    width: 12px;
+    min-width: 12px;
+    max-width: 12px;
+    height: 12px;
+    background: #d0d0d0;
+    border: none;
+    border-radius: 6px;
+    margin: -4px 0;
+}
+QWidget#transportBar QSlider#volumeSlider::handle:horizontal:hover {
+    background: #ffffff;
+    border: none;
+}
+QWidget#transportBar QSlider#volumeSlider::handle:horizontal:pressed {
+    background: #ffffff;
+    border: none;
+}
+QWidget#transportBar QSlider#volumeSlider::sub-page:horizontal {
+    background: #a0a0a0;
+    border-radius: 2px;
+}
+QWidget#transportBar QSlider#volumeSlider::add-page:horizontal {
+    background: #555555;
+    border-radius: 2px;
+}
 QMessageBox {
     background: #232323;
     color: #fafafa;
@@ -357,6 +429,78 @@ QSlider::add-page:horizontal {
     background: #e9ecef;
     border-radius: 4px;
 }
+QWidget#transportBar {
+    background: #f0f0f0;
+    border-top: 1px solid #d8d8d8;
+}
+QWidget#transportBar QWidget {
+    background: transparent;
+}
+QWidget#transportBar QLabel {
+    color: #333333;
+}
+QWidget#transportBar QToolButton#transportButton {
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+}
+QWidget#transportBar QToolButton#transportButton:hover {
+    background: #dfe3e7;
+}
+QWidget#transportBar QToolButton#transportButton:pressed {
+    background: #d0d4d8;
+}
+QWidget#transportBar QToolButton#transportButton:checked {
+    background: #d0d4d8;
+}
+QWidget#transportBar QLineEdit#frameField {
+    background: #ffffff;
+    border: 1px solid #c8c8c8;
+    border-radius: 3px;
+    color: #222222;
+    padding: 2px 4px;
+    selection-background-color: #c8c8c8;
+    selection-color: #000000;
+}
+QWidget#transportBar QLineEdit#frameField:focus {
+    border: 1px solid #707070;
+}
+QWidget#transportBar QSlider#volumeSlider:horizontal {
+    height: 18px;
+    background: transparent;
+}
+QWidget#transportBar QSlider#volumeSlider::groove:horizontal {
+    height: 4px;
+    background: #c8c8c8;
+    border: none;
+    border-radius: 2px;
+}
+QWidget#transportBar QSlider#volumeSlider::handle:horizontal {
+    width: 12px;
+    min-width: 12px;
+    max-width: 12px;
+    height: 12px;
+    background: #555555;
+    border: none;
+    border-radius: 6px;
+    margin: -4px 0;
+}
+QWidget#transportBar QSlider#volumeSlider::handle:horizontal:hover {
+    background: #222222;
+    border: none;
+}
+QWidget#transportBar QSlider#volumeSlider::handle:horizontal:pressed {
+    background: #222222;
+    border: none;
+}
+QWidget#transportBar QSlider#volumeSlider::sub-page:horizontal {
+    background: #888888;
+    border-radius: 2px;
+}
+QWidget#transportBar QSlider#volumeSlider::add-page:horizontal {
+    background: #c8c8c8;
+    border-radius: 2px;
+}
 QMessageBox {
     background: #fafafa;
     color: #2c3e50;
@@ -364,102 +508,8 @@ QMessageBox {
 """
 
 
-# playPauseButton (Play/Pause) — 밝은 테마의 QPushButton 규칙과 같은 글자. 재생 중에는 "background-color: yellow;"로 바뀌었다가 ""로 지워짐
-PLAY_PAUSE_BUTTON_STYLE = """
-QPushButton {
-    background: #ffffff;
-    border: 1px solid #e0e0e0;
-    border-radius: 6px;
-    color: #2c3e50;
-    font-weight: 500;
-    padding: 8px 16px;
-    min-height: 20px;
-}
-QPushButton:hover {
-    background: #f8f9fa;
-    border: 1px solid #d0d0d0;
-    color: #1a252f;
-}
-QPushButton:pressed {
-    background: #e9ecef;
-    border: 1px solid #c0c0c0;
-}
-"""
-
-
-# stopButton (Stop)
-STOP_BUTTON_STYLE = """
-QPushButton {
-    background: #6c757d;
-    border: 1px solid #5a6268;
-    border-radius: 6px;
-    color: white;
-    font-weight: 500;
-    font-size: 14px;
-    padding: 12px 24px;
-    min-height: 20px;
-}
-QPushButton:hover {
-    background: #5a6268;
-    border: 1px solid #495057;
-}
-QPushButton:pressed {
-    background: #495057;
-    border: 1px solid #343a40;
-}
-"""
-
-
-# 정보 줄: 파일 이름 라벨 filenameLabel
-FILENAME_LABEL_STYLE = """
-QLabel {
-    background: #f8f9fa;
-    border: 1px solid #e9ecef;
-    border-radius: 6px;
-    color: #495057;
-    font-weight: 500;
-    padding: 10px;
-}
-"""
-
-
-# 정보 줄: 현재 프레임 라벨 labelFrameCount
-FRAME_COUNT_LABEL_STYLE = """
-QLabel {
-    background: #e9ecef;
-    border: 1px solid #dee2e6;
-    border-radius: 6px;
-    color: #495057;
-    font-weight: 500;
-    padding: 10px;
-}
-"""
-
-
-# 정보 줄: 전체 프레임 라벨 labelTotalFrames
-TOTAL_FRAMES_LABEL_STYLE = """
-QLabel {
-    background: #dee2e6;
-    border: 1px solid #ced4da;
-    border-radius: 6px;
-    color: #495057;
-    font-weight: 500;
-    padding: 10px;
-}
-"""
-
-
-# 정보 줄: 재생 FPS 라벨 labelPlaybackFPS
-PLAYBACK_FPS_LABEL_STYLE = """
-QLabel {
-    background: #d1ecf1;
-    border: 1px solid #bee5eb;
-    border-radius: 6px;
-    color: #0c5460;
-    font-weight: 500;
-    padding: 10px;
-}
-"""
+# (2026-11-16) 큰 Play·Stop 단추와 정보 줄 라벨 넷의 시트는 없앰 — 그 조작과 정보는 재생 줄(transport_bar)에 있고,
+# 재생 줄의 색은 위 두 테마 시트의 `QWidget#transportBar …` 규칙(재생 줄 바탕·단추·프레임 칸·볼륨 슬라이더)이 정함.
 
 
 # positionScroll의 처음 시트 — 밝은 테마의 QSlider 규칙 7개와 같은 글자. initUI가 뒤에서 POSITION_SCROLL_STYLE로 덮어 씀
@@ -501,33 +551,6 @@ QSlider::add-page:horizontal {
     border-radius: 3px;
 }
 """
-
-
-# volumeSlider
-VOLUME_SLIDER_STYLE = """
-            QSlider::groove:horizontal {
-                border: 1px solid #555;
-                height: 8px;
-                background: #333;
-                border-radius: 4px;
-            }
-            QSlider::handle:horizontal {
-                background: #ffae00;
-                border: 1px solid #ffae00;
-                width: 18px;
-                height: 18px;
-                margin: -5px 0;
-                border-radius: 9px;
-            }
-            QSlider::handle:horizontal:hover {
-                background: #ffc850;
-                border: 1px solid #ffc850;
-            }
-            QSlider::sub-page:horizontal {
-                background: #ffae00;
-                border-radius: 4px;
-            }
-        """
 
 
 # OCR 분석 방식 라벨과 패턴 라벨 (둘이 같은 글자). 글자색은 넣지 않음 — 테마 시트의 QLabel 색을 따름(어두운 #e0e0e0·밝은 #2c3e50;
@@ -656,20 +679,6 @@ QPushButton:pressed {
 QPushButton:checked {
     background: #d55a00;
     border: 1px solid #c05000;
-}
-"""
-
-
-# timeLabel
-TIME_LABEL_STYLE = """
-QLabel {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 #f39c12, stop:1 #e67e22);
-    border: 1px solid #e67e22;
-    border-radius: 6px;
-    color: white;
-    font-weight: bold;
-    padding: 10px;
 }
 """
 

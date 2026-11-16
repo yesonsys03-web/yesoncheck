@@ -120,7 +120,8 @@ def test_nan_fps_does_not_raise(player, monkeypatch):
 
 
 def test_label_shows_the_whole_measured_text_in_a_roomy_window(player, qapp):
-    """넉넉한 창에서 '재생: 23.976 FPS · 실제 23.9'가 …로 잘리지 않고 다 보임 (keep_text·fit_text를 긴 글로 넓힌 효과)."""
+    """넉넉한 창에서 가장 긴 fps 글이 …로 잘리지 않고 다 보임. 2026-11-16부터 화면에는 재생 줄의 fps 칸이
+    '23.976 fps · 실제 23.9'로 보이고(`labelPlaybackFPS`는 재생 코드의 글을 받아 넘기는 어댑터 — 받은 글은 그대로)."""
     from PyQt5.QtCore import QSize
 
     text = "재생: 23.976 FPS · 실제 23.9"
@@ -128,4 +129,6 @@ def test_label_shows_the_whole_measured_text_in_a_roomy_window(player, qapp):
     player.resize(player.sizeHint().expandedTo(QSize(1400, 800)))
     player.show()
     qapp.processEvents()
-    assert player.labelPlaybackFPS.displayed_text() == text
+    assert player.labelPlaybackFPS.text() == text
+    shown = player.transportBar.fpsLabel
+    assert shown.text() == "23.976 fps · 실제 23.9" and shown.displayed_text() == shown.text()
