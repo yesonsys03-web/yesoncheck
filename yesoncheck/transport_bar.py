@@ -20,8 +20,8 @@ from PyQt5.QtGui import QColor, QIntValidator
 from PyQt5.QtWidgets import (QHBoxLayout, QLabel, QLayout, QLineEdit, QSizePolicy, QSlider, QToolButton,
                              QWidget)
 
-from . import transport_icons, ui_text
-from .window_layout import ElidedLabel, InfoRowLayout
+from yesoncheck import transport_icons, ui_text
+from yesoncheck.window_layout import ElidedLabel, InfoRowLayout
 
 BAR_HEIGHT = 44
 BUTTON_SIZE = 30

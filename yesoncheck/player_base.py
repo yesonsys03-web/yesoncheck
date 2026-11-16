@@ -15,7 +15,7 @@ from PyQt5.QtCore import (
     Qt,
     pyqtSlot,
 )
-from PyQt5.QtGui import QFont, QKeySequence
+from PyQt5.QtGui import QKeySequence
 from PyQt5.QtMultimedia import QMediaPlayer
 from PyQt5.QtWidgets import (
     QApplication,
@@ -71,6 +71,10 @@ from yesoncheck.window_layout import ButtonPairRow, SteadyTextButton, VerticalSc
 # wait_for_released_workers`)를 위해 여기서 다시 내보냄. _RELEASED_WORKERS는 읽는 쪽(시험)용 같은 dict 객체 — 바꿔치기하려면
 # worker_lifecycle에서 할 것 (이 모듈의 이름을 바꿔도 release_worker는 worker_lifecycle의 것을 씀)
 from yesoncheck.worker_lifecycle import EXIT_WAIT_S, _RELEASED_WORKERS, release_worker, wait_for_released_workers
+
+# 처음 창에서 가운데 열을 단추 쌍이 들어가는 폭까지 넓혀 줄 때 영상 영역에 남겨야 하는 너비 (apply_startup_geometry).
+# 2026-11-16 전에는 영상 칸에 함께 있던 정보 줄의 최소 너비(보통 글꼴 193px·글자가 넓은 글꼴 356px)가 그 구실을 했음
+VIDEO_START_MINIMUM = 300
 
 # Settings → '재생 디코더 (Mac)' (스펙 2026-11-04 §5.4) — 항목 차례는 mac_native_gate.DECODERS
 DECODER_MENU_TEXT = "재생 디코더 (Mac)"
@@ -1162,7 +1166,9 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerOcrMix
                                        for start, w in ((200, splitter.widget(0)), (220, splitter.widget(1)), (0, splitter.widget(2))))
         paired = self.middleScrollArea.width_for_content_hint()
         handles = splitter.handleWidth() * (splitter.count() - 1)
-        if paired > middle and side + paired + video_minimum + handles <= rect.width():
+        # 영상 영역의 몫: 그 칸의 최소 너비와 VIDEO_START_MINIMUM 중 큰 쪽 (2026-11-16 — 정보 줄이 재생 줄로 옮겨져 영상 칸의
+        # 최소 너비가 아주 작아짐: 그것만 보면 글자가 넓은 글꼴의 작은 화면에서 가운데 열이 영상 영역을 다 가져감)
+        if paired > middle and side + paired + max(video_minimum, VIDEO_START_MINIMUM) + handles <= rect.width():
             middle = paired
         splitter.setSizes([side, middle, max(0, rect.width() - side - middle)])
         # 초기 창 크기 저장 (앱 처음 실행 시) — 동영상 전용 전체화면을 끝내면 이 크기로 돌아옴

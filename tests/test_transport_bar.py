@@ -356,6 +356,24 @@ def test_the_file_name_gives_way_before_the_right_side(bar, qapp):
     assert bar.filenameLabel.width() == 0 or right_zone.width() == full  # 오른쪽이 줄기 시작할 때 파일 이름은 이미 접힘
 
 
+def test_file_name_is_dropped_rather_than_squeezed_below_what_it_can_show(bar, qapp):
+    """파일 이름 자리가 줄인 이름('A: E….mov')도 못 그릴 만큼 좁으면 통째로 접음 — 몇 픽셀짜리 조각을 남기지 않음."""
+    bar.filenameLabel.setText(LONG_NAME)
+    qapp.processEvents()
+    right_zone = bar.volumeSlider.parentWidget()
+    left, right = group_edges(bar)
+    floor = bar.filenameLabel.floor_width()
+    assert floor > 10
+    packed = 2 * transport_bar.SIDE_MARGIN + right_zone.sizeHint().width() + 2 * transport_bar.ZONE_GAP + (right - left)
+    set_width(bar, packed + floor - 5, qapp)  # 파일 이름 자리 = 최소 너비보다 5px 모자람
+    assert bar.filenameLabel.width() == 0
+    assert right_zone.width() == right_zone.sizeHint().width()  # 오른쪽 구역은 아직 그대로
+    set_width(bar, packed + floor + 20, qapp)
+    assert bar.filenameLabel.width() == floor + 20
+    shown = bar.filenameLabel.displayed_text()
+    assert "…" in shown and shown.startswith("A: E") and shown.endswith(".mov")
+
+
 def test_long_total_is_elided_with_the_number_kept(bar, qapp):
     bar.show_total(WIPE_TOTAL)
     qapp.processEvents()
