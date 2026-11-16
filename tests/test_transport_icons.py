@@ -25,8 +25,31 @@ def test_each_kind_draws_in_the_given_colour_on_transparent(qapp, kind):
     assert (data[..., 3] == 0).any(), "바탕이 투명하지 않음"
 
 
-def test_kinds_are_the_eight_transport_pictures():
-    assert transport_icons.KINDS == ("first", "prev", "play", "pause", "next", "last", "loop", "volume")
+def test_kinds_are_the_transport_and_tool_pictures():
+    assert transport_icons.KINDS == ("first", "prev", "play", "pause", "next", "last", "loop", "volume",
+                                     "wipe", "annotate", "ocr")
+
+
+def test_wipe_picture_is_split_into_a_filled_and_an_open_half(qapp):
+    """와이프 = 세로로 나뉜 사각형: 왼쪽 반은 채우고 오른쪽 반은 테두리만 — 왼쪽이 더 진함."""
+    alpha = pixels(transport_icons.pixmap("wipe", QColor("#ffffff"), 18))[..., 3].astype(int)
+    assert alpha[:, :9].sum() > 1.5 * alpha[:, 9:].sum() > 0
+
+
+def test_ocr_picture_has_marks_in_all_four_corners(qapp):
+    """OCR = 모서리 표시(읽을 영역) 안의 글자 줄 — 네 모서리 모두에 그림이 있음."""
+    alpha = pixels(transport_icons.pixmap("ocr", QColor("#ffffff"), 18))[..., 3]
+    for rows, cols in ((slice(0, 6), slice(0, 6)), (slice(0, 6), slice(12, 18)),
+                       (slice(12, 18), slice(0, 6)), (slice(12, 18), slice(12, 18))):
+        assert (alpha[rows, cols] == 255).any()
+    assert (alpha[7:11, 6:12] == 255).any()  # 가운데의 글자 줄
+
+
+def test_annotate_picture_is_a_diagonal_pencil(qapp):
+    """주석 = 연필: 오른쪽 위에서 왼쪽 아래로 — 그 대각선 위에만 그림이 있고 반대쪽 모서리는 비어 있음."""
+    alpha = pixels(transport_icons.pixmap("annotate", QColor("#ffffff"), 18))[..., 3]
+    assert (alpha[2:6, 11:16] == 255).any() and (alpha[11:16, 3:7] > 0).any()
+    assert not alpha[:5, :5].any() and not alpha[13:, 13:].any()
 
 
 def test_kinds_look_different_from_each_other(qapp):

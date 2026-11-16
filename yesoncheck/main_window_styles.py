@@ -198,6 +198,24 @@ QWidget#transportBar QToolButton#transportButton:pressed {
 QWidget#transportBar QToolButton#transportButton:checked {
     background: #4a4a4a;
 }
+QWidget#transportBar QToolButton#transportToggle {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: #d0d0d0;
+    padding: 0px 4px;
+}
+QWidget#transportBar QToolButton#transportToggle:hover {
+    background: #3d3d3d;
+}
+QWidget#transportBar QToolButton#transportToggle:checked {
+    background: #4a4a4a;
+    border: 1px solid #6a6a6a;
+    color: #ffffff;
+}
+QWidget#transportBar QToolButton#transportToggle:disabled {
+    color: #6a6a6a;
+}
 QWidget#transportBar QLineEdit#frameField {
     background: #1c1c1c;
     border: 1px solid #444444;
@@ -452,6 +470,24 @@ QWidget#transportBar QToolButton#transportButton:pressed {
 }
 QWidget#transportBar QToolButton#transportButton:checked {
     background: #d0d4d8;
+}
+QWidget#transportBar QToolButton#transportToggle {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: #333333;
+    padding: 0px 4px;
+}
+QWidget#transportBar QToolButton#transportToggle:hover {
+    background: #dfe3e7;
+}
+QWidget#transportBar QToolButton#transportToggle:checked {
+    background: #d0d4d8;
+    border: 1px solid #a8adb3;
+    color: #000000;
+}
+QWidget#transportBar QToolButton#transportToggle:disabled {
+    color: #a0a0a0;
 }
 QWidget#transportBar QLineEdit#frameField {
     background: #ffffff;

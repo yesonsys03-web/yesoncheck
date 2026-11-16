@@ -367,7 +367,51 @@ def test_real_info_labels_follow_the_shrink_order(player):
     bar = player.transportBar
     assert bar.totalLabel.minimumSizeHint().width() == bar.totalLabel.floor_width() > 0
     assert bar.frameField.minimumSizeHint().width() == bar.frameField.sizeHint().width() > 0  # 프레임 칸은 줄지 않음
-    assert bar.volumeSlider.shrink_order > max(collapse.values())  # 볼륨 슬라이더는 맨 나중에
+    assert bar.volumeSlider.shrink_order > max(collapse.values())  # 볼륨 슬라이더는 라벨들 다음에
+    # 도구 토글: 글자는 무엇보다 먼저(음수 — 라벨의 빈 공간보다도), 통째로 사라지는 것은 볼륨 슬라이더 다음
+    tool_stages = bar.toolGroup.shrink_stages()
+    assert [floor for _order, floor in tool_stages] == [bar.toolGroup.compact_width(), 0]
+    assert tool_stages[0][0] < 0 and tool_stages[1][0] > bar.volumeSlider.shrink_order
+    assert 0 < bar.toolGroup.compact_width() < bar.toolGroup.sizeHint().width()
+    assert bar.toolGroup.minimumSizeHint().width() == 0
+
+
+def test_negative_stages_shrink_before_the_slack_of_the_labels():
+    """순서가 음수인 단계는 숫자 라벨의 빈 공간보다도 먼저 줄임 (재생 줄의 도구 토글 글자)."""
+    from yesoncheck.window_layout import InfoRowLayout
+
+    class Box(QWidget):
+        def __init__(self, hint, comfortable, stages):
+            super().__init__()
+            self._hint, self._comfortable, self._stages = hint, comfortable, stages
+
+        def sizeHint(self):
+            return QSize(self._hint, 30)
+
+        def minimumSizeHint(self):
+            return QSize(0, 30)
+
+        def comfortable_width(self):
+            return self._comfortable
+
+        def shrink_stages(self):
+            return self._stages
+
+    row = QWidget()
+    layout = InfoRowLayout(row)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(0)
+    label = Box(200, 150, [(2, 40), (6, 0)])  # 빈 공간 50
+    tools = Box(300, 300, [(-1, 100), (11, 0)])
+    for box in (label, tools):
+        layout.addWidget(box)
+    assert layout.widths_for(500) == [200, 300]
+    assert layout.widths_for(400) == [200, 200]  # 토글의 글자 몫부터 — 라벨의 빈 공간은 그대로
+    assert layout.widths_for(300) == [200, 100]
+    assert layout.widths_for(270) == [170, 100]  # 그다음 라벨의 빈 공간
+    assert layout.widths_for(140) == [40, 100]  # 라벨의 단계
+    assert layout.widths_for(100) == [0, 100]  # 라벨 접기
+    assert layout.widths_for(30) == [0, 30]  # 맨 나중에 토글
 
 
 def test_collapse_stage_comes_last():

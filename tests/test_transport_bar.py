@@ -1,8 +1,10 @@
 """재생 줄(`transport_bar`) — 위젯 단위 시험 (플레이어 없이 막대만 띄움).
 
-재생 줄은 슬라이더 아래 한 줄: [파일 이름] [처음·한 장 뒤·재생·한 장 앞·끝·반복] [프레임 칸 / 전체 · 시간 · fps · 볼륨].
+재생 줄은 슬라이더 아래 한 줄: [파일 이름] [처음·한 장 뒤·재생·한 장 앞·끝·반복]
+[프레임 칸 / 전체 · 시간 · fps · 도구 토글(와이프 X Y · 주석 · OCR) · 볼륨].
 지키는 것: 높이·단추 자리가 글자와 상관없이 고정, 좁아져도 단추와 프레임 숫자는 다 보임, 재생 코드가 옛 이름으로
 넣는 글자(`Current: 12`·`Total: …`·`재생: …`·`Play`/`Pause`)를 어댑터가 받아 재생 줄의 모양으로 보임.
+좁아질 때의 차례: 도구 토글의 글자(아이콘만 남김) → 파일 이름 → fps → 시간 → 볼륨 슬라이더 → 도구 토글.
 """
 
 import pytest
@@ -12,8 +14,8 @@ from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QHBoxLayout, QStyle, QStyleOptionFrame, QToolButton, QWidget
 
 from yesoncheck import transport_bar, transport_icons, ui_text
-from yesoncheck.transport_bar import (FrameField, PlayStateSlot, TextSlot, TransportBar, shown_current, shown_fps,
-                                      shown_total)
+from yesoncheck.transport_bar import (FrameField, PlayStateSlot, TextSlot, ToolToggle, TransportBar, shown_current,
+                                      shown_fps, shown_total)
 
 LONG_NAME = "A: " + "EP101_SC001_아주_긴_파일_이름_" * 8 + ".mov"
 WIPE_TOTAL = "Total A: 12345 (771F 09f), B: 12345 (771F 09f)"
@@ -300,7 +302,8 @@ def test_transport_buttons_sit_in_the_middle_when_there_is_room(bar, qapp):
 
 def test_transport_buttons_move_left_of_the_middle_rather_than_overlap_the_right_side(bar, qapp):
     right_zone = bar.volumeSlider.parentWidget()
-    narrow = right_zone.sizeHint().width() + 400  # 한가운데에 두면 오른쪽 구역과 겹치는 너비
+    narrow = bar.sizeHint().width() + 20  # 모두 원하는 너비로 들어가지만, 한가운데에 두면 오른쪽 구역과 겹치는 너비
+    assert narrow < 2 * right_zone.sizeHint().width()
     set_width(bar, narrow, qapp)
     left, right = group_edges(bar)
     zone_left = right_zone.mapTo(bar, right_zone.rect().topLeft()).x()
@@ -354,36 +357,41 @@ def test_minimum_width_does_not_follow_the_texts(bar, qapp):
     bar.show_fps("재생: 23.976 FPS · 실제 23.9")
     qapp.processEvents()
     assert bar.minimumSizeHint().width() == before
-    # 최소 너비에 드는 것은 단추 묶음 + 프레임 칸 + '/ 00000' + 볼륨 아이콘뿐 (파일 이름·fps·시간·볼륨 슬라이더는 0까지 접힘).
+    # 최소 너비에 드는 것은 단추 묶음 + 프레임 칸 + '/ 00000' + 볼륨 아이콘뿐
+    # (파일 이름·fps·시간·도구 토글·볼륨 슬라이더는 0까지 접힘 — 접힌 항목도 사이 간격은 차지: 항목 7개 → 간격 6).
     # 픽셀 값은 글꼴마다 다름(이 Mac 387, 글꼴 없는 Windows CI 527) — 그래서 관계로 봄
     right_zone = bar.volumeSlider.parentWidget()
     left, right = group_edges(bar)
     assert before == 2 * transport_bar.SIDE_MARGIN + (right - left) + transport_bar.ZONE_GAP + right_zone.minimumSizeHint().width()
     assert right_zone.minimumSizeHint().width() == (bar.frameField.sizeHint().width() + bar.totalLabel.floor_width()
-                                                    + transport_bar.ICON_SIZE + 5 * transport_bar.INFO_SPACING)
+                                                    + transport_bar.ICON_SIZE + 6 * transport_bar.INFO_SPACING)
 
 
-def test_the_file_name_gives_way_before_the_right_side(bar, qapp):
+def compact_right_width(bar):
+    """도구 토글이 아이콘만일 때 오른쪽 구역이 원하는 너비 (글자와 무관 — 토글의 글자는 언어가 정함)."""
+    return bar.volumeSlider.parentWidget().sizeHint().width() - bar.toolGroup.text_saving()
+
+
+def test_the_file_name_gives_way_before_the_rest_of_the_right_side(bar, qapp):
+    """토글의 글자가 아이콘으로 준 뒤: 파일 이름이 먼저 줄어 사라지고, 그다음에야 오른쪽 구역(fps·시간 …)이 줆."""
     bar.filenameLabel.setText(LONG_NAME)
     bar.show_total("Total: 12345 (771F 09f)")
     bar.show_fps("재생: 23.976 FPS · 실제 23.9")
     qapp.processEvents()
     right_zone = bar.volumeSlider.parentWidget()
-    left, right = group_edges(bar)
-    # 오른쪽 구역이 원하는 너비를 다 받고 파일 이름에도 400px이 남는 너비에서 시작 (픽셀 값은 글꼴마다 다름 — Windows CI는 훨씬 넓음)
-    width = (2 * transport_bar.SIDE_MARGIN + right_zone.sizeHint().width() + 2 * transport_bar.ZONE_GAP + (right - left)
-             + 400)
+    compact = compact_right_width(bar)
+    width = bar.sizeHint().width() - bar.toolGroup.text_saving()  # 토글이 막 아이콘만 된 너비 — 파일 이름 몫은 그대로
     set_width(bar, width, qapp)
-    full = right_zone.width()
-    assert full == right_zone.sizeHint().width()
+    assert right_zone.width() == compact and bar.filenameLabel.width() == transport_bar.NAME_HINT
     name_widths = []
-    while right_zone.width() == full and width > bar.minimumSizeHint().width():
+    while right_zone.width() == compact and width > bar.minimumSizeHint().width():
         name_widths.append(bar.filenameLabel.width())
         width -= 40
         set_width(bar, width, qapp)
     assert name_widths[0] > 100 and name_widths == sorted(name_widths, reverse=True)
     assert name_widths[-1] < name_widths[0]  # 오른쪽 구역이 줄기 전에 파일 이름이 먼저 줄었음
-    assert bar.filenameLabel.width() == 0 or right_zone.width() == full  # 오른쪽이 줄기 시작할 때 파일 이름은 이미 접힘
+    assert bar.filenameLabel.width() == 0  # 오른쪽 구역이 줄기 시작할 때 파일 이름은 이미 접힘
+    assert right_zone.width() < compact
 
 
 def test_file_name_is_dropped_rather_than_squeezed_below_what_it_can_show(bar, qapp):
@@ -394,10 +402,11 @@ def test_file_name_is_dropped_rather_than_squeezed_below_what_it_can_show(bar, q
     left, right = group_edges(bar)
     floor = bar.filenameLabel.floor_width()
     assert floor > 10
-    packed = 2 * transport_bar.SIDE_MARGIN + right_zone.sizeHint().width() + 2 * transport_bar.ZONE_GAP + (right - left)
+    compact = compact_right_width(bar)
+    packed = 2 * transport_bar.SIDE_MARGIN + compact + 2 * transport_bar.ZONE_GAP + (right - left)
     set_width(bar, packed + floor - 5, qapp)  # 파일 이름 자리 = 최소 너비보다 5px 모자람
     assert bar.filenameLabel.width() == 0
-    assert right_zone.width() == right_zone.sizeHint().width()  # 오른쪽 구역은 아직 그대로
+    assert right_zone.width() == compact  # 오른쪽 구역은 (토글의 글자 말고는) 아직 그대로
     set_width(bar, packed + floor + 20, qapp)
     assert bar.filenameLabel.width() == floor + 20
     shown = bar.filenameLabel.displayed_text()
@@ -473,3 +482,158 @@ def test_language_change_event_is_not_needed_for_plain_use(bar):
     # 재생 줄은 QEvent.LanguageChange에 기대지 않음 — 글은 retranslate()가 글자 표에서 다시 읽음
     QApplication.sendEvent(bar, QEvent(QEvent.LanguageChange))
     assert bar.playButton.toolTip() == "재생 (Space)"
+
+
+# ---------------------------------------------------------------- 도구 토글 (와이프 X Y · 주석 · OCR)
+
+def toggles(bar):
+    return [bar.wipeButton, bar.annotationButton, bar.ocrButton]
+
+
+def left_of(bar, widget):
+    return widget.mapTo(bar, widget.rect().topLeft()).x()
+
+
+def test_tool_toggle_full_width_is_what_qt_wants_for_text_beside_icon(qapp):
+    toggle = ToolToggle()
+    toggle.setText("A|B 와이프")
+    toggle.setIcon(transport_icons.icon("wipe", QColor("#d0d0d0")))
+    assert toggle.toolButtonStyle() == Qt.ToolButtonTextBesideIcon and not toggle.is_compact()
+    wanted = QToolButton.sizeHint(toggle).width()
+    assert toggle.full_width() == wanted == toggle.sizeHint().width() > transport_bar.BUTTON_SIZE
+    toggle.set_compact(True)
+    assert toggle.toolButtonStyle() == Qt.ToolButtonIconOnly and toggle.is_compact()
+    assert toggle.sizeHint().width() == transport_bar.BUTTON_SIZE
+    assert toggle.full_width() == wanted  # 지금 모양과 무관 — 글자까지 보일 때의 너비
+    toggle.setText("OCR")
+    assert toggle.full_width() < wanted
+    toggle.set_compact(False)
+    assert toggle.toolButtonStyle() == Qt.ToolButtonTextBesideIcon
+    toggle.deleteLater()
+
+
+def test_tool_toggles_are_checkable_and_read_the_text_table(bar):
+    expected = ((bar.wipeButton, "A|B 와이프", "A와 B를 와이프로 견줍니다"),
+                (bar.annotationButton, "주석", "수정 사항 주석 패널을 열고 닫습니다"),
+                (bar.ocrButton, "OCR", "OCR 패널을 열고 닫습니다"))
+    for button, label, tip in expected:
+        assert isinstance(button, ToolToggle) and button.isCheckable() and not button.isChecked()
+        assert button.objectName() == "transportToggle" and button.focusPolicy() == Qt.NoFocus
+        assert button.text() == label and button.toolTip() == tip and not button.icon().isNull()
+    for button, label, tip in ((bar.wipeXButton, "X", "좌우로 나눔 (X축)"), (bar.wipeYButton, "Y", "위아래로 나눔 (Y축)")):
+        assert isinstance(button, QToolButton) and button.isCheckable() and not button.isChecked()
+        assert button.objectName() == "transportToggle" and button.focusPolicy() == Qt.NoFocus
+        assert button.text() == label and button.toolTip() == tip
+        assert not button.isEnabled()  # 와이프를 켜야 켜짐 (플레이어가 맡음)
+    ui_text.set_language("en")
+    try:
+        bar.retranslate()
+        assert bar.wipeButton.text() == "A|B Wipe" and bar.annotationButton.text() == "Annotate"
+        assert bar.ocrButton.toolTip() == "Opens and closes the OCR panel"
+    finally:
+        ui_text.set_language("ko")
+        bar.retranslate()
+    assert bar.annotationButton.text() == "주석"
+
+
+def test_tool_toggles_sit_between_the_fps_and_the_volume_in_order(bar, qapp):
+    set_width(bar, bar.sizeHint().width() + 40, qapp)
+    row = [bar.fpsLabel, bar.wipeButton, bar.wipeXButton, bar.wipeYButton, bar.annotationButton, bar.ocrButton,
+           bar.volumeIcon, bar.volumeSlider]
+    xs = [left_of(bar, widget) for widget in row]
+    assert xs == sorted(xs) and len(set(xs)) == len(xs)
+    for widget, following in zip(row, row[1:]):
+        assert left_of(bar, widget) + widget.width() <= left_of(bar, following)  # 겹치지 않음
+    for toggle in toggles(bar):
+        assert toggle.isVisible() and toggle.toolButtonStyle() == Qt.ToolButtonTextBesideIcon
+        assert toggle.width() == toggle.full_width() and toggle.height() == transport_bar.BUTTON_SIZE
+    assert bar.toolGroup.width() == bar.toolGroup.sizeHint().width()
+    # 와이프 묶음(와이프·X·Y)과 패널 토글(주석·OCR) 사이는 묶음 안 간격보다 넓음
+    inner = left_of(bar, bar.wipeYButton) - (left_of(bar, bar.wipeXButton) + bar.wipeXButton.width())
+    between = left_of(bar, bar.annotationButton) - (left_of(bar, bar.wipeYButton) + bar.wipeYButton.width())
+    assert between > inner >= 0
+
+
+def test_toggle_texts_give_way_first_while_everything_else_stays(bar, qapp):
+    """막대가 모든 것을 원하는 너비로 못 담게 되면 맨 먼저 토글의 글자가 빠짐(아이콘만) — 그 몫만큼 줄어드는 동안
+    파일 이름 몫·재생 단추와 프레임 칸의 자리·라벨과 볼륨의 너비는 그대로."""
+    bar.filenameLabel.setText(LONG_NAME)
+    saving = bar.toolGroup.text_saving()
+    assert saving > 0 and bar.toolGroup.compact_width() == bar.toolGroup.sizeHint().width() - saving
+    full = bar.sizeHint().width()
+    set_width(bar, full, qapp)
+    assert all(t.toolButtonStyle() == Qt.ToolButtonTextBesideIcon for t in toggles(bar))
+    assert bar.filenameLabel.width() == transport_bar.NAME_HINT
+    before = spots(bar)
+    others = [bar.totalLabel.width(), bar.timeLabel.width(), bar.fpsLabel.width(), bar.volumeSlider.width()]
+    volume_x = left_of(bar, bar.volumeIcon) - bar.width()
+
+    set_width(bar, full - 1, qapp)
+    assert all(t.toolButtonStyle() == Qt.ToolButtonIconOnly and t.isVisible() for t in toggles(bar))
+    assert all(t.width() == transport_bar.BUTTON_SIZE for t in toggles(bar))
+    assert bar.wipeXButton.isVisible() and bar.wipeYButton.isVisible()
+    assert all(not t.icon().isNull() for t in toggles(bar))
+    icon_spots = [left_of(bar, w) - bar.width() for w in toggles(bar) + [bar.wipeXButton, bar.wipeYButton]]
+
+    for width in (full - saving // 2, full - saving):
+        set_width(bar, width, qapp)
+        assert bar.filenameLabel.width() == transport_bar.NAME_HINT
+        assert spots(bar) == before
+        assert [bar.totalLabel.width(), bar.timeLabel.width(), bar.fpsLabel.width(), bar.volumeSlider.width()] == others
+        assert left_of(bar, bar.volumeIcon) - bar.width() == volume_x
+        # 아이콘만일 때 토글은 묶음의 오른쪽에 붙음 — 막대의 오른쪽 끝에서 잰 자리가 그대로
+        assert [left_of(bar, w) - bar.width() for w in toggles(bar) + [bar.wipeXButton, bar.wipeYButton]] == icon_spots
+    assert bar.toolGroup.width() == bar.toolGroup.compact_width()
+
+    set_width(bar, full - saving - 30, qapp)  # 그보다 좁아지면 파일 이름이 줄기 시작
+    assert bar.filenameLabel.width() == transport_bar.NAME_HINT - 30
+    assert bar.toolGroup.width() == bar.toolGroup.compact_width()
+    assert [bar.totalLabel.width(), bar.timeLabel.width(), bar.fpsLabel.width(), bar.volumeSlider.width()] == others
+
+    set_width(bar, full, qapp)  # 다시 넓히면 글자가 돌아옴
+    assert all(t.toolButtonStyle() == Qt.ToolButtonTextBesideIcon for t in toggles(bar))
+    assert spots(bar) == before
+
+
+def test_toggles_go_last_after_the_labels_and_the_volume_slider(bar, qapp):
+    """아주 좁아지면: fps·시간이 접히고 볼륨 슬라이더가 사라진 뒤에야 토글 묶음이 사라짐 — 잘린 단추는 보이지 않음."""
+    group, compact = bar.toolGroup, bar.toolGroup.compact_width()
+    width = bar.sizeHint().width()
+    whole_while_volume_shrinks = hidden_steps = 0
+    while width >= bar.minimumSizeHint().width():
+        set_width(bar, width, qapp)
+        shown = [w.isVisible() for w in toggles(bar) + [bar.wipeXButton, bar.wipeYButton]]
+        if group.width() >= compact:
+            assert all(shown), width
+            if bar.volumeSlider.width() < transport_bar.VOLUME_WIDTH // 2:
+                whole_while_volume_shrinks += 1  # 볼륨 슬라이더가 절반 넘게 줄었는데도 토글은 온전
+        else:  # 묶음이 줄기 시작함 — 다른 것은 이미 다 접혔고, 토글은 통째로 숨음
+            assert not any(shown), width
+            assert bar.volumeSlider.width() == 0 and bar.fpsLabel.width() == 0 and bar.timeLabel.width() == 0, width
+            hidden_steps += 1
+        width -= 9
+    assert whole_while_volume_shrinks >= 2 and hidden_steps >= 2
+    set_width(bar, bar.minimumSizeHint().width(), qapp)
+    assert group.width() == 0 and not bar.wipeButton.isVisible()
+    for button in buttons(bar):
+        assert (button.width(), button.height()) == (30, 30)
+    set_width(bar, bar.sizeHint().width(), qapp)
+    assert all(w.isVisible() for w in toggles(bar) + [bar.wipeXButton, bar.wipeYButton])
+
+
+def test_toggle_group_width_does_not_follow_the_checked_state(bar, qapp):
+    set_width(bar, bar.sizeHint().width(), qapp)
+    before = spots(bar), bar.toolGroup.sizeHint().width(), bar.minimumSizeHint().width()
+    bar.wipeXButton.setEnabled(True)
+    for button in toggles(bar) + [bar.wipeXButton, bar.wipeYButton]:
+        button.setChecked(True)
+    qapp.processEvents()
+    assert (spots(bar), bar.toolGroup.sizeHint().width(), bar.minimumSizeHint().width()) == before
+
+
+def test_theme_recolours_the_toggle_icons(bar, qapp):
+    bar.apply_theme("light")
+    for button, kind in ((bar.wipeButton, "wipe"), (bar.annotationButton, "annotate"), (bar.ocrButton, "ocr")):
+        expected = transport_icons.icon(kind, QColor("#333333")).pixmap(18, 18).toImage().convertToFormat(QImage.Format_ARGB32)
+        assert icon_pixels(button) == bytes(expected.bits().asarray(expected.byteCount())), kind
+    bar.apply_theme("dark")

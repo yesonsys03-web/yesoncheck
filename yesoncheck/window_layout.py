@@ -520,6 +520,7 @@ class InfoRowLayout(QLayout):
     자리가 남으면 그 사이가 빈칸 — 예전 QHBoxLayout(… addStretch … 시간 라벨)과 같은 배치.
 
     자리가 모자라면 이 순서로 줄임 (QHBoxLayout은 모든 항목에서 똑같이 빼서 글자가 꽉 찬 라벨도 같이 잘림):
+      0) 순서가 음수인 단계 (아래 2의 단계 중 — 빈 공간보다도 먼저 줄일 것: 재생 줄의 도구 토글 글자)
       1) 빈 공간: 원하는 너비 − 글자가 다 들어가는 너비 (comfortable_width — 숫자 라벨), 모두 똑같이
       2) 단계 순서대로 (shrink_stages() → [(순서, 그 단계의 가장 작은 너비)], 없으면 [(shrink_order, 최소 너비)]):
          순서가 작은 단계부터, 같은 순서끼리는 똑같이
@@ -591,11 +592,9 @@ class InfoRowLayout(QLayout):
         _items, hints, _minimums, comfortable, stages, _hint, _minimum = self._data()
         widths = list(hints)
         excess = sum(widths) - available
-        if excess > 0:
-            excess = _take_equally(widths, comfortable, range(len(widths)), excess)
-        for order in sorted({order for item_stages in stages for order, _floor in item_stages}):
-            if excess <= 0:
-                break
+        orders = sorted({order for item_stages in stages for order, _floor in item_stages})
+
+        def take_stage(order, excess):
             floors = list(widths)
             indices = []
             for i, item_stages in enumerate(stages):
@@ -603,7 +602,16 @@ class InfoRowLayout(QLayout):
                     if stage_order == order:
                         floors[i] = min(widths[i], floor)
                         indices.append(i)
-            excess = _take_equally(widths, floors, indices, excess)
+            return _take_equally(widths, floors, indices, excess)
+
+        for order in orders:
+            if order < 0 and excess > 0:
+                excess = take_stage(order, excess)
+        if excess > 0:
+            excess = _take_equally(widths, comfortable, range(len(widths)), excess)
+        for order in orders:
+            if order >= 0 and excess > 0:
+                excess = take_stage(order, excess)
         return widths
 
     def setGeometry(self, rect):

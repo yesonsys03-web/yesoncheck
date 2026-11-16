@@ -18,10 +18,10 @@ from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_
 # 스크롤바·슬라이더 치수)이 달라 테마를 바꾸면 위젯이 전부 움직였음. 어두운 시트는 그대로
 # 2026-11-16 (재생 줄 — tests/test_transport_bar.py·test_transport_player.py): 두 시트에 재생 줄의 색 규칙(`QWidget#transportBar …` —
 # 바탕·단추·프레임 칸·볼륨 슬라이더, 같은 선택자·같은 치수에 색만 다름)을 더함. 그 밖의 규칙은 글자 그대로
-DARK_SHA256 = "9aea02031aa80c6c1389d465248eea9768ea43620d85a7958f3cb8acdd29fa3c"  # 어두운 시트, 5,364자
-LIGHT_SHA256 = "6cfbeb6530e24f9caac414b631547c09a63c68ed86b3eca6f708832ba3fa019f"  # 밝은 시트, 5,903자
-DARK_LENGTH = 5364
-LIGHT_LENGTH = 5903
+DARK_SHA256 = "228dcfffb6835dde2fb324e20f2b97d4c563928c1110c93ed4256e3a8adb4f79"  # 어두운 시트, 5,850자
+LIGHT_SHA256 = "1af7289d51cc675c1cfd8de8357ca0bf78c16fcbb46116fd89ed708398683e28"  # 밝은 시트, 6,389자
+DARK_LENGTH = 5850
+LIGHT_LENGTH = 6389
 
 
 def sha256_of(sheet):
