@@ -37,13 +37,22 @@ THUMBNAIL_BAR_LINGER_MS = 1500  # 썸네일을 다 만든 뒤 진행 막대(끝�
 
 
 class WidePopupComboBox(QComboBox):
-    """펼친 목록이 내용만큼 넓은 콤보 — 사이드바 폭의 좁은 콤보에서도 긴 작품·job 이름을 목록에서는 끝까지 읽게."""
+    """사이드바의 작품·시즌·job 콤보.
+
+    - 펼친 목록이 내용만큼 넓음 — 사이드바 폭의 좁은 콤보에서도 긴 작품·job 이름을 목록에서는 끝까지 읽게.
+    - **휠로 항목을 바꾸지 않음**(사용자 지시 2026-11-16): Windows 스타일의 콤보는 포커스가 없어도 위에서 휠을 굴리면 항목을
+      바꾸는데, 목록 바로 위라 굴리다 job이 바뀌면 목록을 다시 읽고 첫 영상을 엶. 휠은 받지 않고 넘김(창의 휠 처리로 —
+      이 옆의 단추 위에서 굴릴 때와 같음). 펼친 목록 안의 휠은 그 목록(다른 위젯)이 받아 그대로 스크롤.
+    """
 
     def showPopup(self):
         view = self.view()
         wanted = view.sizeHintForColumn(0) + 2 * view.frameWidth() + view.verticalScrollBar().sizeHint().width()
         view.setMinimumWidth(max(self.width(), wanted))
         super().showPopup()
+
+    def wheelEvent(self, event):
+        event.ignore()
 
 
 class PlaylistStateSlot:

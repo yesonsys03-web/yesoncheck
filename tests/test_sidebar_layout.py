@@ -10,9 +10,10 @@ import json
 import os
 
 import pytest
-from PyQt5.QtCore import QEvent, Qt
+from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt
+from PyQt5.QtGui import QWheelEvent
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QPushButton, QToolButton
+from PyQt5.QtWidgets import QApplication, QComboBox, QPushButton, QStyleFactory, QToolButton
 
 from tests.conftest import write_test_video
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
@@ -376,3 +377,53 @@ def test_playlist_button_follows_the_language(player):
         ui_text.set_language("ko")
         player.retranslate_sidebar_controls()
     assert player.playSelectedPauseButton.button.text() == "고른 영상 이어 재생"
+
+
+def wheel_down_on(combo):
+    """콤보 위에서 휠을 한 칸 아래로 — 받았는지(accepted)를 돌려줌."""
+    event = QWheelEvent(QPointF(5, 5), QPointF(combo.mapToGlobal(QPoint(5, 5))), QPoint(0, 0), QPoint(0, -120),
+                        Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False)
+    QApplication.sendEvent(combo, event)
+    return event.isAccepted()
+
+
+def test_wheel_over_a_picker_combo_does_not_change_the_item(qapp):
+    """작품·시즌·job 콤보 위에서 휠을 굴려도 항목이 바뀌지 않고 휠을 받지 않음 (사용자 지시 2026-11-16) — 받지 않은 진짜 휠은
+    Qt가 부모로 넘김(창의 휠 처리). 그 넘어감은 여기서 못 봄: sendEvent로 보낸 휠은 Qt가 받는 위젯에만 건넴.
+
+    Windows 스타일의 콤보는 포커스가 없어도 휠로 항목을 바꿈 — 목록 바로 위라 굴리다 job이 바뀌면 목록을 다시 읽고 첫 영상을
+    엶. 그 스타일 규칙을 가진 Fusion으로 봄(이 Mac의 기본 스타일은 원래 안 바꿈): 보통 콤보는 같은 휠에 바뀜을 먼저 확인."""
+    from yesoncheck.sidebar_controls import WidePopupComboBox
+
+    style = QStyleFactory.create("Fusion")
+    seen = []
+    for cls in (QComboBox, WidePopupComboBox):
+        combo = cls()
+        combo.setStyle(style)
+        combo.addItems(["job선택", "EP101", "EP102"])
+        combo.show()
+        qapp.processEvents()
+        accepted = wheel_down_on(combo)
+        seen.append((cls.__name__, combo.currentIndex(), accepted))
+        combo.close()
+        combo.deleteLater()
+    assert seen == [("QComboBox", 1, True), ("WidePopupComboBox", 0, False)]
+
+
+def test_the_three_picker_combos_ignore_the_wheel(with_works, qapp):
+    """진짜 창의 세 콤보가 그 콤보이고, 휠을 굴려도 고른 것이 그대로."""
+    from yesoncheck.sidebar_controls import WidePopupComboBox
+
+    style = QStyleFactory.create("Fusion")
+    for combo in (with_works.workComboBox, with_works.seasonComboBox, with_works.jobComboBox):
+        assert isinstance(combo, WidePopupComboBox)
+        combo.setStyle(style)
+        combo.blockSignals(True)  # 넣는 동안 목록을 읽지 않게 — 휠은 신호를 푼 뒤에 굴림
+        combo.addItems(["probe-1", "probe-2"])
+        combo.blockSignals(False)
+        before = combo.currentIndex()
+        changes = []
+        combo.currentIndexChanged.connect(changes.append)
+        wheel_down_on(combo)
+        assert combo.currentIndex() == before and changes == []
+
