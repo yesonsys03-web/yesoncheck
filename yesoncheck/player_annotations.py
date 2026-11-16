@@ -12,7 +12,6 @@ from PyQt5.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFileDialog,
-    QFrame,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -22,8 +21,6 @@ from PyQt5.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
-    QScrollArea,
-    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -52,9 +49,10 @@ from yesoncheck.frame_annotations import (
     is_annotation_storage_writable,
     new_annotation_id,
 )
-from yesoncheck.player_timeline import CollapsibleBox
+from yesoncheck.window_layout import VerticalScrollArea
 
-ANNOTATION_PANEL_MAX_HEIGHT = 300
+ANNOTATION_PAGE_MARGIN = 10
+ANNOTATION_LIST_MINIMUM_HEIGHT = 90  # 패널이 낮아도 주석 목록에 남기는 높이 (그보다 낮으면 쪽이 스크롤)
 
 
 class PlayerAnnotationsMixin:
@@ -174,7 +172,7 @@ class PlayerAnnotationsMixin:
         self._style_controls_updating = False
 
         self.annotationListWidget = QListWidget()
-        self.annotationListWidget.setMaximumHeight(120)
+        self.annotationListWidget.setMinimumHeight(ANNOTATION_LIST_MINIMUM_HEIGHT)
         self.annotationListWidget.setToolTip(
             "전체 주석 목록 · 클릭하면 시작 프레임으로 이동"
         )
@@ -555,28 +553,17 @@ class PlayerAnnotationsMixin:
             self._update_annotation_list_ui(frame_idx)
             self._redraw_frame_with_annotations()
 
-    def build_annotation_group(self):
-        group = CollapsibleBox("▶ 수정 사항 주석")
-        group.toggle_button.setChecked(False)
-        group.content_area.setVisible(False)
-
+    def build_annotation_page(self):
+        """도구 패널의 주석 쪽: 주석 위젯을 위에서 아래로 (예전 '수정 사항 주석' 접는 상자의 내용 그대로 — 위젯을 옮기기만 함).
+        가운데 열용 높이 제한(상자 300px·목록 120px)은 풂: 주석 목록이 패널의 남는 높이를 쓰고, 패널이 낮으면 쪽이 세로로 스크롤."""
         inner = QWidget()
         inner_layout = QVBoxLayout(inner)
-        inner_layout.setContentsMargins(0, 0, 0, 0)
+        inner_layout.setContentsMargins(ANNOTATION_PAGE_MARGIN, ANNOTATION_PAGE_MARGIN, ANNOTATION_PAGE_MARGIN,
+                                        ANNOTATION_PAGE_MARGIN)
         inner_layout.setSpacing(5)
         for widget in self.annotation_ui_widgets:
-            inner_layout.addWidget(widget)
-
-        scroll = QScrollArea()
-        scroll.setWidget(inner)
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setMaximumHeight(ANNOTATION_PANEL_MAX_HEIGHT)
-        scroll.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
-        group.add_widget(scroll)
-        return group
+            inner_layout.addWidget(widget, 1 if widget is self.annotationListWidget else 0)
+        return VerticalScrollArea(inner)
 
     def get_current_frame_index(self):
         if not self.cap_a:

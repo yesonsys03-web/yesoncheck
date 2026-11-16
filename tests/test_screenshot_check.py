@@ -88,7 +88,7 @@ def test_compare_detects_difference(real_captures, tmp_path):
 
 # ---------------------------------------------------------------- 손으로 만든 장면 폴더
 
-ALL_SCENES = ["main_window", "light_theme", "video_a_open", "wipe_ab", "thumbnail_mode", "boxes_expanded",
+ALL_SCENES = ["main_window", "light_theme", "video_a_open", "wipe_ab", "thumbnail_mode", "ocr_panel",
               "overlay_visible", "annotation_mode", "ocr_review"]  # 이름이 고정된 장면 9개
 ONE_SCENE = ("--scene", "main_window")  # 손으로 만든 폴더에는 장면 하나만 있으므로 그 장면만 비교
 ENVIRONMENT = {"python": "3.10.0", "qt": "5.15.14", "pyqt": "5.15.11", "platform": "x", "machine": "x86_64",

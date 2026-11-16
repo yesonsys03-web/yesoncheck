@@ -461,12 +461,11 @@ class SidebarSequencesMixin:
                 self._load_seq_thumbnails()
 
     def _sync_selected_play_buttons(self):
-        """선택 재생 단추를 보이는 탭에 맞춤. Seq 탭에서는 'Play Selected'뿐 아니라 그 옆의 짝 단추
-        'Selected Play'도 끔 — 누르면 보이지 않는 Mov 목록의 선택(폴더를 불러올 때 selectAll)으로 선택 재생이 시작되어 열어 둔 시퀀스를
-        닫기 때문. 다만 선택 재생이 이미 돌고 있으면 짝 단추는 그 재생의 일시정지 단추('Selected Pause')라 켜 둠 (Mov 탭에서 시작한 선택
-        재생을 보다가 Seq 탭으로 옮겨도 멈출 수 있게). 탭 전환과, 선택 재생이 끝나는 길(stop_video·_end_playlist_mode)이 부름."""
+        """선택 재생 단추(고른 영상 이어 재생)를 보이는 탭에 맞춤. Seq 탭에서는 끔 — 누르면 보이지 않는 Mov 목록의 선택(폴더를
+        불러올 때 selectAll)으로 선택 재생이 시작되어 열어 둔 시퀀스를 닫기 때문. 다만 선택 재생이 이미 돌고 있으면 그 재생의
+        일시정지 단추라 켜 둠 (Mov 탭에서 시작한 선택 재생을 보다가 Seq 탭으로 옮겨도 멈출 수 있게). 탭 전환과, 선택 재생이
+        끝나는 길(stop_video·_end_playlist_mode)이 부름. (playSelectedPauseButton은 그 단추의 어댑터 — sidebar_controls)"""
         on_seq_page = self.sidebar_tabs.currentWidget() is self.seq_sidebar
-        self.playSelectedButton.setEnabled(not on_seq_page)
         self.playSelectedPauseButton.setEnabled(not on_seq_page or self.is_playlist_playing)
 
     # ---------------------------------------------------------------- 썸네일 (짝 영상의 썸네일 재사용 — 읽기 전용 경량 경로)

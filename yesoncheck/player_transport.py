@@ -4,7 +4,7 @@
 여기서 둘을 잇는다:
 
 - **옛 이름 잇기**(`_init_transport_bar`): 재생 코드가 표시를 고칠 때 쓰는 이름 — `filenameLabel`·`timeLabel`·
-  `volumeSlider`·`loopCheckBox`는 재생 줄의 위젯 그 자체, `labelFrameCount`·`labelTotalFrames`·`labelPlaybackFPS`·
+  `volumeSlider`·`loopCheckBox`·`wipeCheckBox`·`wipeXButton`·`wipeYButton`은 재생 줄의 위젯 그 자체, `labelFrameCount`·`labelTotalFrames`·`labelPlaybackFPS`·
   `playPauseButton`은 받은 글자를 재생 줄에 넘기는 어댑터(`TextSlot`·`PlayStateSlot` — `text()`는 받은 글 그대로라
   그 글자를 보는 코드·시험이 그대로 돈다).
 - **단추 = 지금의 처리기**: 재생/일시정지 `toggle_play_pause`, 한 장 앞뒤 `next_frame`·`prev_frame`(← → 키와 같음),
@@ -45,6 +45,14 @@ class PlayerTransportMixin:
         bar.firstButton.clicked.connect(self.go_to_first)
         bar.lastButton.clicked.connect(self.go_to_last)
         bar.loopButton.toggled.connect(lambda on: self.toggle_loop_play(Qt.Checked if on else Qt.Unchecked))
+        # 와이프: 예전 체크 상자(Enable Wipe Effect)와 X/Y-Axis Wipe 단추의 이름을 재생 줄의 토글에 이음 —
+        # isChecked·setChecked·setEnabled는 같고 처리기도 그대로 (X·Y는 와이프를 켜야 켜짐: toggle_wipe_effect)
+        self.wipeCheckBox = bar.wipeButton
+        self.wipeXButton = bar.wipeXButton
+        self.wipeYButton = bar.wipeYButton
+        bar.wipeButton.toggled.connect(lambda on: self.toggle_wipe_effect(Qt.Checked if on else Qt.Unchecked))
+        bar.wipeXButton.toggled.connect(self.toggle_wipe_x)
+        bar.wipeYButton.toggled.connect(self.toggle_wipe_y)
         # 볼륨: 슬라이더를 실제 볼륨(재생기에 줄 값 — 처음 player_base.START_VOLUME 50)에서 시작. 예전에는 슬라이더만 50에서
         # 시작하고 재생기는 100이라 슬라이더를 건드릴 때까지 표시와 소리가 달랐음. 그 뒤로는 setVolume이 볼륨이 바뀔 때마다
         # 이 슬라이더를 맞춤(오버레이에서 바꿔도)

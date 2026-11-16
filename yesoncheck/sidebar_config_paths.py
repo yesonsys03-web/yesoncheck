@@ -430,6 +430,7 @@ class SidebarConfigPathsMixin:
             self.workComboBox.addItem(work_name)
         self.workComboBox.blockSignals(False)
         self._update_shared_config_title()
+        self._sync_work_picker()  # 작품을 읽어 왔으면 사이드바의 작품 묶음을 보임 (sidebar_controls)
         self.update_season_list()
 
     def save_work_paths(self, parent=None):
@@ -771,6 +772,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         # 콤보박스에도 추가
         if work_name not in [self.workComboBox.itemText(i) for i in range(self.workComboBox.count())]:
             self.workComboBox.addItem(work_name)
+        self._sync_work_picker()
         self._refresh_work_path_table(table)
         QMessageBox.information(dialog, "추가 완료", f"'{work_name}' 작품이 추가되었습니다.")
 

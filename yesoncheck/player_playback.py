@@ -2063,33 +2063,14 @@ class PlayerPlaybackMixin:
         
         # V 키 처리 (한글 ㅍ과 영문 V 모두 지원)
         if key == Qt.Key_V or text == 'ㅍ':
-            self.controls_visible = not self.controls_visible
-            print(f"V key pressed (key: {key}, text: '{text}') - controls_visible: {self.controls_visible}")  # 디버깅 출력
-            valid_widgets = self.get_valid_control_widgets()
-            for widget in valid_widgets:
-                try:
-                    widget.setVisible(self.controls_visible)
-                except (RuntimeError, AttributeError):
-                    continue
-            self.apply_middle_panel_state()
-            # 컨트롤이 숨겨지면 오버레이를 표시하고, 컨트롤이 보이면 오버레이를 숨김
-            if hasattr(self, 'overlayFrame'):
-                if not self.controls_visible:
-                    print("Showing overlay controls")  # 디버깅 출력
-                    # 오버레이를 강제로 표시
-                    self.overlayFrame.setVisible(True)
-                    self.overlayFrame.raise_()
-                    self.show_overlay_controls()
-                else:
-                    print("Hiding overlay controls")  # 디버깅 출력
-                    self.hide_overlay_controls()
+            self.toggle_controls()  # 컨트롤 전체 숨기기/되돌리기 + 오버레이 (player_tools — eventFilter의 V와 같은 일)
             QTimer.singleShot(100, self.force_focus)  # V키 후 포커스 복원
             event.accept()
             return
 
-        # N 키 처리 (한글 ㅜ와 영문 N 모두 지원) — 가운데 컨트롤 열 보이기/숨기기
+        # N 키 처리 (한글 ㅜ와 영문 N 모두 지원) — 도구 패널(주석·OCR) 열고 닫기
         if key == Qt.Key_N or text == 'ㅜ':
-            self.toggle_middle_panel()
+            self.toggle_tool_panel()
             QTimer.singleShot(100, self.force_focus)
             event.accept()
             return
@@ -2350,7 +2331,6 @@ class PlayerPlaybackMixin:
                 widget.setVisible(self.controls_visible)
             except (RuntimeError, AttributeError):
                 continue
-        self.apply_middle_panel_state()
 
     def wheelEvent(self, event):
         """전역 휠 이벤트 처리 - 사이드바를 제외한 모든 영역에서 프레임 이동"""
