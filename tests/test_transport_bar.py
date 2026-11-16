@@ -351,9 +351,16 @@ def test_minimum_width_does_not_follow_the_texts(bar, qapp):
     before = bar.minimumSizeHint().width()
     bar.filenameLabel.setText(LONG_NAME)
     bar.show_total(WIPE_TOTAL)
+    bar.show_fps("재생: 23.976 FPS · 실제 23.9")
     qapp.processEvents()
     assert bar.minimumSizeHint().width() == before
-    assert before <= 480  # 창의 최소 너비(이 Mac 572)를 묶지 않음
+    # 최소 너비에 드는 것은 단추 묶음 + 프레임 칸 + '/ 00000' + 볼륨 아이콘뿐 (파일 이름·fps·시간·볼륨 슬라이더는 0까지 접힘).
+    # 픽셀 값은 글꼴마다 다름(이 Mac 387, 글꼴 없는 Windows CI 527) — 그래서 관계로 봄
+    right_zone = bar.volumeSlider.parentWidget()
+    left, right = group_edges(bar)
+    assert before == 2 * transport_bar.SIDE_MARGIN + (right - left) + transport_bar.ZONE_GAP + right_zone.minimumSizeHint().width()
+    assert right_zone.minimumSizeHint().width() == (bar.frameField.sizeHint().width() + bar.totalLabel.floor_width()
+                                                    + transport_bar.ICON_SIZE + 5 * transport_bar.INFO_SPACING)
 
 
 def test_the_file_name_gives_way_before_the_right_side(bar, qapp):
@@ -362,10 +369,14 @@ def test_the_file_name_gives_way_before_the_right_side(bar, qapp):
     bar.show_fps("재생: 23.976 FPS · 실제 23.9")
     qapp.processEvents()
     right_zone = bar.volumeSlider.parentWidget()
+    left, right = group_edges(bar)
+    # 오른쪽 구역이 원하는 너비를 다 받고 파일 이름에도 400px이 남는 너비에서 시작 (픽셀 값은 글꼴마다 다름 — Windows CI는 훨씬 넓음)
+    width = (2 * transport_bar.SIDE_MARGIN + right_zone.sizeHint().width() + 2 * transport_bar.ZONE_GAP + (right - left)
+             + 400)
+    set_width(bar, width, qapp)
     full = right_zone.width()
     assert full == right_zone.sizeHint().width()
     name_widths = []
-    width = 1400
     while right_zone.width() == full and width > bar.minimumSizeHint().width():
         name_widths.append(bar.filenameLabel.width())
         width -= 40
