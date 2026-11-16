@@ -244,6 +244,25 @@ def test_video_and_panel_columns_cannot_be_collapsed_by_the_handle(player):
     assert splitter.isCollapsible(0)  # 사이드바는 예전처럼 끌어서 접을 수 있음
 
 
+@pytest.mark.parametrize("opened", ["annotation", "ocr", None])
+def test_long_file_names_do_not_widen_the_panel_or_the_window(shown, qapp, tmp_path, opened):
+    """주석 쪽의 저장 위치·보내기 폴더 라벨에는 영상 이름·폴더 경로가 들어감 — 끊을 데가 없는 긴 이름이 패널(과 창)의
+    최소 너비를 늘리지 않음. (늘리면 긴 이름의 영상을 여는 순간 패널이 넓어지고 좁은 창은 저절로 커짐 —
+    넓은 글꼴 흉내에서 재생 줄 시험이 잡음)"""
+    if opened:
+        shown.show_tool_panel(opened)
+    settle(qapp)
+    before = (shown.toolPanel.minimumSizeHint().width(), shown.minimumSizeHint().width(), shown.width(), sizes(shown))
+    long_name = "EP101_SC001_" + "아주_긴_이름_" * 14 + "TK2.mp4"
+    shown.open_file("A", write_test_video(str(tmp_path / long_name), frames=6))
+    shown.annotation_export_dir = "/Volumes/Project/" + "끊을_데가_없는_긴_폴더_이름_" * 8
+    shown._update_annotation_export_dir_label()
+    settle(qapp)
+    assert long_name[:-4] in shown.annotationStorageLabel.text()  # 라벨에는 그 이름이 들어 있음
+    assert (shown.toolPanel.minimumSizeHint().width(), shown.minimumSizeHint().width(), shown.width(),
+            sizes(shown)) == before
+
+
 def test_transport_bar_does_not_move_when_the_panel_opens(shown, qapp):
     bar, central = shown.transportBar, shown.centralWidget()
     before = bar.geometry(), bar.mapTo(central, bar.rect().topLeft())

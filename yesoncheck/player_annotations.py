@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -563,6 +564,13 @@ class PlayerAnnotationsMixin:
         inner_layout.setSpacing(5)
         for widget in self.annotation_ui_widgets:
             inner_layout.addWidget(widget, 1 if widget is self.annotationListWidget else 0)
+        # 경로·파일 이름이 들어가는 줄 바꿈 라벨: 가로 크기 힌트를 무시하게 함 — 줄 바꿈 라벨의 최소 너비는 '끊을 데가 없는 가장
+        # 긴 낱말'이라, 긴 영상 이름·폴더 이름이 쪽 → 패널 → 창의 최소 너비를 늘림(긴 이름의 영상을 여는 순간 패널이 넓어지고 좁은 창은
+        # 저절로 커짐). 쪽의 너비에 맞춰 줄을 바꾸고, 그래도 넘치는 낱말은 오른쪽이 잘림(예전 가운데 열에서도 잘렸음)
+        for label in (self.annotationExportDirLabel, self.annotationStorageLabel, self.annotationStatusLabel):
+            policy = label.sizePolicy()  # 줄 바꿈 라벨의 높이-너비 연동(heightForWidth)은 그대로
+            policy.setHorizontalPolicy(QSizePolicy.Ignored)
+            label.setSizePolicy(policy)
         return VerticalScrollArea(inner)
 
     def get_current_frame_index(self):
