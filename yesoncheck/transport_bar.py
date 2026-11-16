@@ -311,6 +311,7 @@ class TransportBar(QWidget):
         self.volumeIcon = QLabel()
         self.volumeIcon.setFixedSize(ICON_SIZE, ICON_SIZE)
         self.volumeSlider = _VolumeSlider(Qt.Horizontal)
+        self.volumeSlider.setObjectName("volumeSlider")  # 테마 시트의 QSlider#volumeSlider 규칙 (가는 중립 색 슬라이더)
         self.volumeSlider.setRange(0, 100)
         self.volumeSlider.setValue(50)
         self.volumeSlider.setFocusPolicy(Qt.NoFocus)

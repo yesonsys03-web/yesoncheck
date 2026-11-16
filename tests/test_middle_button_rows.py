@@ -45,12 +45,13 @@ def player(large_screen, new_player, dialogs, tmp_path):  # noqa: F811
 
 @pytest.fixture
 def small_screen(monkeypatch):
-    """화면 작업 영역이 500×400인 것처럼 — 처음 창이 최소 크기로 뜸 (가운데 열을 넓혀 줄 자리가 없음)."""
+    """화면 작업 영역이 400×300인 것처럼 — 처음 창이 최소 크기로 뜸 (가운데 열을 넓혀 줄 자리가 없음).
+    (2026-11-16 전에는 500×400 — 정보 줄이 없어져 창의 최소 너비가 이 Mac 572 → 431로 줄었음)"""
     real_screen = QApplication.primaryScreen()
 
     class SmallScreen:
         def availableGeometry(self):
-            return QRect(0, 0, 500, 400)
+            return QRect(0, 0, 400, 300)
 
         def __getattr__(self, name):
             return getattr(real_screen, name)
@@ -98,10 +99,12 @@ def set_column_width(player, width):
 
 
 def show_scrollbar(player):
-    """창을 낮추고 접는 상자를 펼쳐 가운데 열에 세로 스크롤바가 생기게 (내용 폭이 스크롤바만큼 줄어듦)."""
-    player.resize(player.width(), 700)
+    """창을 낮추고 접는 상자를 모두 펼쳐 가운데 열에 세로 스크롤바가 생기게 (내용 폭이 스크롤바만큼 줄어듦).
+    2026-11-16부터 가운데 열이 짧아지고(반복·볼륨·FPS가 재생 줄로) 창 아래의 큰 Play·Stop 막대가 없어져, 상자 하나로는 모자람."""
+    player.resize(player.width(), 600)
     settle()
-    column(player).findChildren(CollapsibleBox)[-1].toggle_button.click()
+    for box in column(player).findChildren(CollapsibleBox):
+        box.toggle_button.click()
     settle()
     assert player.middleScrollArea.verticalScrollBar().isVisible(), "스크롤바가 생기지 않음 (시험 조건이 틀림)"
 
@@ -152,7 +155,7 @@ def test_pair_buttons_share_the_row_equally(player):
 
 def test_rows_span_the_same_width_as_the_other_controls(player):
     """둘을 합친 줄은 한 줄짜리 위젯(콤보 상자)과 왼쪽·오른쪽 끝이 같음."""
-    combo = player.frameRateComboBox
+    combo = player.workComboBox  # 가운데 열의 한 줄짜리 위젯 (2026-11-16 전에는 FPS 콤보 — 없앰)
     start = left_edge(combo, player).x()
     end = start + combo.width()
     for left, right in pairs(player):
