@@ -53,12 +53,13 @@ def player(new_player, dialogs, tmp_path):
 
 @pytest.fixture
 def large_screen(monkeypatch):
-    """화면 작업 영역이 1920×1040인 것처럼 (offscreen 화면은 800×600)."""
+    """화면 작업 영역이 2560×1400인 것처럼 (offscreen 화면은 800×600). 레이아웃이 원하는 너비보다 넉넉해야 함 — 재생 줄이
+    토글의 글자·fps 칸까지 원하는 너비는 글꼴이 넓은 환경(글꼴 없는 CI·그 흉내)에서 1,900px을 넘음(2026-11-16 전에는 1920×1040)."""
     real_screen = QApplication.primaryScreen()
 
     class LargeScreen:
         def availableGeometry(self):
-            return QRect(0, 0, 1920, 1040)
+            return QRect(0, 0, 2560, 1400)
 
         def __getattr__(self, name):
             return getattr(real_screen, name)

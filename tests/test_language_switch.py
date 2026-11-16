@@ -247,18 +247,21 @@ def test_sidebar_width_set_by_hand_is_kept(shown):
 
 def test_sidebar_stays_when_the_video_column_has_no_room_to_give(shown):
     """영상 칸이 최소 너비 가까이면 사이드바를 넓히지 않음(영상 칸을 최소 너비 아래로 밀지 않음) — 단추 글은 줄여 그림."""
+    # 영상 칸이 최소 너비 가까이 가는 것은 도구 패널을 연 좁은 창에서 (패널이 닫힌 창은 재생 줄의 최소 너비가 먼저 막음)
+    shown.show_tool_panel("annotation")
+    splitter = shown.mainSplitter
     shown.set_ui_language("en")
-    wanted = shown.sidebar_start_width()
+    QApplication.processEvents()
+    wanted, panel_english = shown.sidebar_start_width(), splitter.widget(2).minimumSizeHint().width()
     shown.set_ui_language("ko")
+    QApplication.processEvents()
     start = shown.sidebar_start_width()
     if wanted == start:
         pytest.skip("이 글꼴에서는 English 단추 글이 한국어의 처음 폭에 다 들어감")
-    # 영상 칸이 최소 너비 가까이 가는 것은 도구 패널을 연 좁은 창에서 (패널이 닫힌 창은 재생 줄의 최소 너비가 먼저 막음)
-    shown.show_tool_panel("annotation")
-    QApplication.processEvents()
-    splitter = shown.mainSplitter
     video = splitter.widget(1).minimumSizeHint().width() + (wanted - start) - 1  # 줄 자리가 1px 모자람
-    panel = splitter.widget(2).minimumSizeHint().width()
+    # 패널은 두 언어 중 넓은 쪽의 최소 너비로 — 글꼴 없는 환경(영문 글자도 한글만큼 넓게 잼)에서는 English 패널이 더 넓어
+    # 언어를 바꿀 때 패널이 영상·사이드바의 몫을 가져가면 이 시험이 보려는 것(영상 칸의 자리)이 흐려짐
+    panel = max(splitter.widget(2).minimumSizeHint().width(), panel_english)
     shown.resize(shown.width() + (start + video + panel) - sum(splitter.sizes()), shown.height())
     QApplication.processEvents()
     splitter.setSizes([start, video, panel])
@@ -868,11 +871,14 @@ def test_export_folder_label_follows_the_language(shown, tmp_path):
     assert label.text() == f"보내기 저장 폴더: {tmp_path}"
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="글꼴 없는 Windows CI는 영문 글자도 한글만큼 넓게 재 패널이 넓어짐 — 실제 글꼴에서 봄")
 def test_tool_panel_minimum_width_in_english_stays_within_the_panel_width(shown):
-    """도구 패널의 최소 너비(두 쪽 중 넓은 쪽)는 English에서도 패널의 처음 너비(340) 이하 — 패널을 열어도 창이 더 넓어지지 않게."""
+    """도구 패널의 최소 너비(두 쪽 중 넓은 쪽)는 English에서도 패널의 처음 너비(340) 이하 — 패널을 열어도 창이 더 넓어지지 않게.
+    실제 글꼴에서만 봄: 글꼴 없는 환경(Windows CI·그 흉내)은 영문 글자도 한글만큼 넓게 재 영문 라벨이 한글 라벨보다 길어짐."""
     from yesoncheck import tool_panel
 
+    metrics = shown.annotationDeleteButton.fontMetrics()
+    if metrics.horizontalAdvance("a") * 10 >= metrics.horizontalAdvance("가") * 9:
+        pytest.skip("이 글꼴은 영문 글자를 한글만큼 넓게 잼 — 실제 글꼴이 아님")
     korean = shown.toolPanel.minimumSizeHint().width()
     shown.set_ui_language("en")
     for key in ("annotation", "ocr"):
@@ -1058,3 +1064,30 @@ def test_english_screen_keeps_only_the_language_names(shown, tmp_path):
     texts = ui_texts.collect(shown)
     left = {area: ui_texts.hangul(found) for area, found in texts.items() if ui_texts.hangul(found)}
     assert left == {"menubar": LANGUAGE_NAMES}
+
+
+# ---------------------------------------------------------------- 전체 (Task 10)
+
+def test_playback_tick_does_the_same_work_in_both_languages(shown, tmp_path, monkeypatch):
+    """재생 틱 한 번이 글자 표에서 읽는 글(= 틱마다 다시 만드는 화면 글)이 두 언어에서 같고 몇 개뿐 — English라고 틱이 더
+    무겁지 않게. (Qt 클래스의 메서드를 바꿔 끼워 setText를 세지는 않음 — sip 클래스에 되돌려 놓으면 묶이지 않은 함수가 됨)"""
+    ui_texts.stage(shown, tmp_path)
+    real_text = ui_text.text
+    work = {}
+    for code in ("ko", "en"):
+        shown.set_ui_language(code)
+        shown.seek_to_frame(1)
+        QApplication.processEvents()
+        lookups = []
+        monkeypatch.setattr(ui_text, "text", lambda key, **values: (lookups.append(key), real_text(key, **values))[1])
+        shown.timer.start(600000)  # 재생 중 상태 — 간격이 길어 저절로는 울리지 않고 여기서 틱을 직접 부름
+        try:
+            for _ in range(3):
+                shown.next_frame_playback()
+        finally:
+            shown.timer.stop()
+            monkeypatch.setattr(ui_text, "text", real_text)
+        work[code] = lookups
+    assert work["ko"] == work["en"]
+    per_tick = len(work["ko"]) / 3
+    assert 0 < per_tick <= 6, work["ko"]  # 틱마다: 주석 상태 줄 한 번 + 주석 목록의 항목 글 정도

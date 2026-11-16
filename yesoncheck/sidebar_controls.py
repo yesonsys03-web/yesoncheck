@@ -298,8 +298,6 @@ class SidebarControlsMixin:
 
     def _sync_work_picker(self):
         """작품 묶음의 보임을 맞춤: 작품이 있으면 보이고 그 사실을 기억, 없으면 기억대로 (모듈 설명 — work_picker)."""
-        if not hasattr(self, "workPickerGroup"):
-            return  # 창을 만드는 중 — 묶음이 생긴 뒤 _build_work_picker가 다시 부름
         if self.work_paths and self._work_picker_seen is False:
             self._work_picker_seen = True
             try:

@@ -32,7 +32,6 @@ from yesoncheck import error_window, tool_panel
 from yesoncheck.main_window_styles import OCR_OPTION_LABEL_STYLE
 from yesoncheck.window_layout import VerticalScrollArea
 
-PANEL_KEYS = ("annotation", "ocr")
 VIDEO_KEEP = 200  # 패널을 열 때 영상 칸에 남겨 두는 폭 — 창이 좁으면 패널이 그만큼 좁게 열림
 PAGE_MARGIN = 10
 OCR_CONTROL_MINIMUM_WIDTH = 140  # 예전 접는 상자 안에서의 최소 폭 그대로
