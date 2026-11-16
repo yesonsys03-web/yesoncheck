@@ -82,7 +82,7 @@ TEXTS = {
     "sort.time": {"ko": "시간", "en": "Time"},
     "sort.name.tip": {"ko": "이름 순서 (기본)", "en": "Name order (default)"},
     "sort.kind.tip": {"ko": "종류끼리 묶음 — 이름 끝의 OSAN·OSRO·HD 등. 묶음 안에서는 이름 순서",
-                      "en": "Groups by kind — OSAN, OSRO, HD … at the end of the name. Name order within a group"},
+                      "en": "Groups by kind — HD, TX … at the end of the name. Name order within a group"},
     "sort.version.tip": {"ko": "버전·테이크끼리 묶음 — v01·v02·TK1·TK2 등. 묶음 안에서는 이름 순서",
                          "en": "Groups by version or take — v01, v02, TK1, TK2 …. Name order within a group"},
     "sort.time.tip": {
@@ -252,7 +252,7 @@ TEXTS = {
               "- space = space\n"
               "Examples:\n"
               "- \"seq 04A_S05 - Panel 1\" → \"### WW#_#WW - #### W\"\n"
-              "- \"MS101_B010\" → \"##WWW_#WWW\""},
+              "- \"AB101_C010\" → \"##WWW_#WWW\""},
     "ocr.analyze": {"ko": "OCR 구간 추출", "en": "Extract OCR segments"},
     "ocr.analyze_range": {"ko": "선택 구간 분석", "en": "Analyze a frame range"},
     "ocr.analyze_range.tip": {"ko": "지정한 프레임 범위만 OCR 분석합니다. 결과는 기존 분석 결과에 병합됩니다.",

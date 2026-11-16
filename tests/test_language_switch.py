@@ -653,14 +653,14 @@ def test_placeholders_follow_the_language_without_reading_any_folder(new_player,
     player = season_player(new_player, work_area)
     assert (player.workComboBox.itemText(0), player.seasonComboBox.itemText(0), player.jobComboBox.itemText(0)) == (
         "작품선택", "시즌선택", "job선택")
-    player.workComboBox.setCurrentText("BB")
-    player.seasonComboBox.setCurrentText("BB_Season1")
-    choose(player, "job_01")
+    player.workComboBox.setCurrentIndex(1)  # 시험용 작품의 첫 작품 → 첫 시즌 → 첫 job (이름은 도우미가 정함)
+    player.seasonComboBox.setCurrentIndex(1)
+    choose(player, player.jobComboBox.itemText(1))
     QApplication.processEvents()
     before = (combo_items(player.workComboBox)[1:], combo_items(player.seasonComboBox)[1:], combo_items(player.jobComboBox)[1:],
               player.workComboBox.currentIndex(), player.seasonComboBox.currentIndex(), player.jobComboBox.currentIndex(),
               listed(player))
-    assert before[-1] == ["a.mov"]
+    assert len(before[-1]) == 1 and before[3:6] == (1, 1, 1)  # job의 영상 하나가 목록에 — 세 콤보 모두 고른 상태
     scans, listings = [], []
     real_listdir = os.listdir
     monkeypatch.setattr(video_list, "scan_job", lambda *args: scans.append(args))
