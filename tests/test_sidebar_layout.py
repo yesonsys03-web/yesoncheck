@@ -10,7 +10,7 @@ import json
 import os
 
 import pytest
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QEvent, Qt
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QPushButton, QToolButton
 
@@ -205,15 +205,27 @@ def test_small_buttons_call_the_same_handlers_as_before(player, qapp, monkeypatc
 
 
 def test_long_names_in_the_combos_do_not_widen_the_sidebar(with_works, qapp):
+    """긴 작품·job 이름이 콤보에 있어도 사이드바·창의 최소 너비가 그대로.
+
+    QComboBox는 크기 힌트를 한 번 계산해 쥐고 있어(기본 정책은 처음 보일 때의 내용 기준) 이름을 나중에 넣기만 하면 어떤
+    정책이든 그대로로 보임 — 실제로는 작품 묶음이 작품을 읽어 온 뒤에야 처음 보이므로 긴 이름이 든 채 계산됨. 그래서 넣은 뒤
+    힌트를 다시 계산시킴(StyleChange — 값은 안 바꾸고 캐시만 버림)."""
     side = with_works.mainSplitter.widget(0)
-    before = side.minimumSizeHint().width(), with_works.minimumSizeHint().width()
+    combos = (with_works.workComboBox, with_works.seasonComboBox, with_works.jobComboBox)
+
+    def minimum_widths():
+        for combo in combos:
+            QApplication.sendEvent(combo, QEvent(QEvent.StyleChange))
+        qapp.processEvents()
+        return ([combo.minimumSizeHint().width() for combo in combos], side.minimumSizeHint().width(),
+                with_works.minimumSizeHint().width())
+
+    before = minimum_widths()
     long_name = "아주_긴_작품_이름_" * 12
-    with_works.workComboBox.addItem(long_name)
-    with_works.seasonComboBox.addItem(long_name)
-    with_works.jobComboBox.addItem(long_name)
+    for combo in combos:
+        combo.addItem(long_name)
     with_works.jobComboBox.setCurrentIndex(with_works.jobComboBox.count() - 1)
-    qapp.processEvents()
-    assert (side.minimumSizeHint().width(), with_works.minimumSizeHint().width()) == before
+    assert minimum_widths() == before
 
 
 def test_combos_take_no_focus_and_show_the_whole_name_as_a_tooltip(with_works, qapp):

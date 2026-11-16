@@ -26,7 +26,7 @@ sys.path.insert(0, sys.argv[1])
 scenario = sys.argv[2]
 from PyQt5 import sip
 from PyQt5.QtCore import QPoint, QTimer
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QAction, QApplication, QWidget
 from yesoncheck import app as app_module
 
 LAUNCH_FILE = os.path.abspath(app_module.__file__)
@@ -47,6 +47,14 @@ def close_popup():
 def player_factory(**kwargs):
     player = real_player(**kwargs)
     created.append(player)
+    if scenario == "stray":
+        # launch가 모르는, 부모 없는 위젯들(보이지 않음 — 창을 닫으면 앱이 끝나게): QApplication이 정리될 때에야 지워짐.
+        # 지워지며 자기 QAction이 떼어지는 이벤트(ActionRemoved)를 받고, 앱 전체 필터가 걸려 있으면 그것이 파이썬으로 옴.
+        # 여럿인 까닭: 정리는 래퍼를 주소 순으로 도는데 필터(router)가 먼저 지워진 뒤의 위젯은 필터를 거치지 않음
+        for _ in range(24):
+            stray = QWidget()
+            stray.addAction(QAction("stray", stray))
+            created.append(stray)
 
     def use_menu(times):
         if times == 0:
@@ -104,10 +112,12 @@ def run_child(tmp_path, scenario):
     return done.returncode, out, f"종료 코드 {done.returncode}\n--- stdout ---\n{out}\n--- stderr ---\n{err}"
 
 
-@pytest.mark.parametrize("scenario", ["plain", "menu"])
+@pytest.mark.parametrize("scenario", ["plain", "menu", "stray"])
 def test_window_is_gone_before_the_application_and_no_app_code_runs_after_launch(tmp_path, scenario):
-    """창을 닫아 끝낼 때(그냥 닫기 · 영상 영역의 우클릭 메뉴를 세 번 쓴 뒤 닫기): launch가 돌아가는 순간 창이 이미 지워져
-    있고, 그 뒤 QApplication이 정리되는 동안 앱의 파이썬 코드(이벤트 필터 등)가 불리지 않으며, 정상 종료."""
+    """창을 닫아 끝낼 때(그냥 닫기 · 영상 영역의 우클릭 메뉴를 세 번 쓴 뒤 닫기 · launch가 모르는 부모 없는 위젯이 남은 채):
+    launch가 돌아가는 순간 창이 이미 지워져 있고, 그 뒤 QApplication이 정리되는 동안 앱의 파이썬 코드(이벤트 필터 등)가
+    불리지 않으며, 정상 종료. 'stray'는 앱 전체 필터를 떼는 쪽을 봄(Mac — 그 필터는 Mac에만 걸림): 남은 위젯은 정리 중에
+    지워지므로 필터가 걸려 있으면 그때 파이썬으로 옴."""
     code, out, report = run_child(tmp_path, scenario)
     if scenario == "menu":
         assert out.count("CHILD: 팝업 QMenu") == 3, report
