@@ -8,11 +8,12 @@
 
 import time
 
+import cv2
 import pytest
 from PyQt5.QtCore import QEvent, Qt
 from PyQt5.QtGui import QColor, QImage, QKeyEvent
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QPushButton
+from PyQt5.QtWidgets import QApplication, QPushButton, QStyle, QStyleOptionFrame, QWidget
 
 from tests.conftest import write_test_video
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
@@ -240,6 +241,77 @@ def test_frame_field_goes_to_the_typed_frame(shown, qapp, tmp_path):
     type_frame(shown, qapp, "99999")
     assert current(shown) == 48 and shown.transportBar.frameField.text() == "48"
     assert shown.positionScroll.value() == shown.positionScroll.maximum()
+
+
+def test_typing_a_frame_after_the_end_shows_that_frame(shown, qapp, tmp_path):
+    """'끝'(또는 슬라이더 오른쪽 끝)에 있다가 번호를 쳐서 가면 번호·시간·슬라이더가 모두 그 프레임 (리뷰에서 잡음 —
+    슬라이더가 끝에 남은 채 이동하면 update_position_info가 Current를 전체 장수로 적어, 영상은 10번인데 번호는 48)."""
+    shown.open_file("A", clip(tmp_path, frames=48))
+    shown.transportBar.lastButton.click()
+    assert current(shown) == 48
+    type_frame(shown, qapp, "10")
+    assert current(shown) == 10 and shown.transportBar.frameField.text() == "10"
+    assert int(shown.cap_a.get(cv2.CAP_PROP_POS_FRAMES)) == 10
+    assert shown.positionScroll.value() == round(9 / 47 * shown.positionScroll.maximum())
+    assert shown.timeLabel.text().startswith(shown.format_time(9 / 24) + " /")
+    shown.positionScroll.setValue(shown.positionScroll.maximum())  # 슬라이더 오른쪽 끝을 누른 뒤에도
+    assert current(shown) == 48
+    type_frame(shown, qapp, "5")
+    assert current(shown) == 5 and shown.transportBar.frameField.text() == "5"
+    assert shown.timeLabel.text().startswith(shown.format_time(4 / 24) + " /")
+
+
+def test_typing_the_next_frame_near_the_end_moves_there(shown, qapp, tmp_path):
+    """끝에서 셋째 장 안에서 바로 다음 번호 (리뷰에서 잡음 — 그 구간의 이동 _seek_conservative는 '목표 == 캡처가 다음에 읽을 자리'면
+    이미 거기 있다고 보고 아무것도 안 함: 45번에서 46을 치면 45 그대로였음)."""
+    shown.open_file("A", clip(tmp_path, frames=48))
+    for number in (44, 45, 46, 47, 48, 47, 46, 45, 46, 44):
+        type_frame(shown, qapp, str(number))
+        assert current(shown) == number, number
+        assert shown.transportBar.frameField.text() == str(number), number
+        assert int(shown.cap_a.get(cv2.CAP_PROP_POS_FRAMES)) == number, number  # 캡처도 그 프레임을 막 읽은 자리
+
+
+def test_coming_back_from_another_app_while_typing_leaves_the_shortcuts_working(shown, qapp, tmp_path):
+    """번호를 치다 말고 다른 창으로 갔다 오면 치던 글은 버리고 포커스는 창으로 — 칸에 남으면 돌아온 뒤 Space·← →가 먹지 않음."""
+    shown.open_file("A", clip(tmp_path, frames=48))
+    field = shown.transportBar.frameField
+    QTest.mouseClick(field, Qt.LeftButton)
+    qapp.processEvents()
+    QTest.keyClicks(field, "3")
+    other = QWidget()
+    other.show()
+    try:
+        QApplication.setActiveWindow(other)
+        qapp.processEvents()
+        assert field.text() == str(current(shown))
+        QApplication.setActiveWindow(shown)
+        qapp.processEvents()
+        assert shown.hasFocus() and not field.hasFocus()
+        QTest.keyClick(shown, Qt.Key_Space)
+        assert shown.timer.isActive()
+        shown.pause_video()
+    finally:
+        other.close()
+        other.deleteLater()
+
+
+def test_frame_field_fits_six_digits_under_the_theme_sheet(shown, qapp):
+    """프레임 칸의 글자 자리(테두리·안쪽 여백을 뺀 곳)에 숫자 여섯 자리가 들어감 — 두 테마에서 (text()는 칸이 좁아도 전체 글이라 '보인다'의 증거가 아님)."""
+    field = shown.transportBar.frameField
+
+    def room():
+        option = QStyleOptionFrame()
+        field.initStyleOption(option)
+        inside = field.style().subElementRect(QStyle.SE_LineEditContents, option, field)
+        widest = max("0123456789", key=field.fontMetrics().horizontalAdvance)
+        return inside.width() - (field.fontMetrics().horizontalAdvance(widest * 6) + 4)  # QLineEdit는 글자 양옆에 2px씩 둠
+
+    assert room() >= 0
+    shown.set_light_theme()
+    qapp.processEvents()
+    assert room() >= 0
+    shown.set_dark_theme()
 
 
 def test_after_typing_a_frame_the_shortcuts_work_again(shown, qapp, tmp_path):

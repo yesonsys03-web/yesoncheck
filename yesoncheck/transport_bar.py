@@ -106,7 +106,8 @@ class FrameField(QLineEdit):
     - `show_number(글)`: 보일 글. 편집 중(포커스가 있는 동안)에는 기억만 하고 치던 글자를 덮지 않는다.
     - Enter: 숫자면 `frameEntered(값)`, 그리고 편집 끝. 빈 글이면 되돌리고 편집 끝. Esc: 되돌리고 편집 끝.
       편집 끝 = 기억한 글로 되돌림 + 포커스 놓음 + `editingEnded`(창이 포커스를 되찾아 단축키가 다시 먹게).
-    - 다른 곳을 눌러 포커스가 떠나면 되돌리기만 한다(`editingEnded` 없음 — 눌린 위젯의 포커스를 뺏지 않게).
+    - 창 안의 다른 곳을 눌러 포커스가 떠나면 되돌리기만 한다(`editingEnded` 없음 — 눌린 위젯의 포커스를 뺏지 않게).
+      다른 앱·창으로 가서 창이 비활성이 되면 편집 끝(`editingEnded`) — 돌아왔을 때 포커스가 칸에 남지 않게.
     너비는 숫자 여섯 자리로 고정(글자가 바뀌어도 옆 위젯이 움직이지 않게).
     """
 
@@ -180,6 +181,10 @@ class FrameField(QLineEdit):
         if self.text() != self._number:
             self.setText(self._number)
         self.deselect()
+        if event.reason() == Qt.ActiveWindowFocusReason:
+            # 다른 앱·창으로 가서 창이 비활성이 됨: 편집을 끝냄 — 포커스가 칸에 남으면 돌아왔을 때 단축키가 칸으로 감.
+            # (창 안의 다른 위젯을 눌러 떠날 때는 신호 없음 — 그 위젯의 포커스를 뺏지 않게)
+            self.editingEnded.emit()
 
 
 class _VolumeSlider(QSlider):

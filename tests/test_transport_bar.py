@@ -7,9 +7,9 @@
 
 import pytest
 from PyQt5.QtCore import QEvent, Qt
-from PyQt5.QtGui import QColor, QImage
+from PyQt5.QtGui import QColor, QFocusEvent, QImage
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QHBoxLayout, QToolButton, QWidget
+from PyQt5.QtWidgets import QApplication, QHBoxLayout, QStyle, QStyleOptionFrame, QToolButton, QWidget
 
 from yesoncheck import transport_bar, transport_icons, ui_text
 from yesoncheck.transport_bar import (FrameField, PlayStateSlot, TextSlot, TransportBar, shown_current, shown_fps,
@@ -174,6 +174,25 @@ def test_frame_field_losing_focus_reverts_without_claiming_focus_back(field, qap
     field.clearFocus()  # 다른 곳을 눌러 포커스가 떠남 — 그 위젯의 포커스를 도로 뺏지 않게 신호 없음
     qapp.processEvents()
     assert field.text() == "5" and ended == []
+
+
+def test_frame_field_ends_editing_when_its_window_is_deactivated(field, qapp):
+    """다른 앱·창으로 가서 창이 비활성이 되면 편집을 끝냄(끝 신호) — 그냥 되돌리기만 하면 돌아왔을 때 포커스가 칸에 남음."""
+    ended = []
+    field.editingEnded.connect(lambda: ended.append(1))
+    field.show_number("5")
+    focus(field, qapp)
+    QTest.keyClicks(field, "99")
+    QApplication.sendEvent(field, QFocusEvent(QEvent.FocusOut, Qt.ActiveWindowFocusReason))
+    assert field.text() == "5" and ended == [1]
+
+
+def test_frame_field_has_room_for_six_digits(field):
+    option = QStyleOptionFrame()
+    field.initStyleOption(option)
+    inside = field.style().subElementRect(QStyle.SE_LineEditContents, option, field)
+    widest = max("0123456789", key=field.fontMetrics().horizontalAdvance)
+    assert field.fontMetrics().horizontalAdvance(widest * 6) + 4 <= inside.width()  # QLineEdit는 글자 양옆에 2px씩 둠
 
 
 def test_frame_field_takes_digits_only(field, qapp):

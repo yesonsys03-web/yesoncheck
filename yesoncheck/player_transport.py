@@ -69,22 +69,30 @@ class PlayerTransportMixin:
 
     def end_playlist(self):
         """선택 재생 끝내기 — 예전 Stop 단추가 하던 일 그대로(멈춤 + 1번 프레임 + 선택 재생 끝 + 목록 강조 되돌림)."""
-        self._slider_to_start()
+        self._slider_to_frame(0)
         self.stop_video()
 
     # --- 처음 · 끝 · 프레임 번호 ---
-    def _slider_to_start(self):
-        """1번 프레임으로 가기 직전에 슬라이더를 신호 없이 맨 앞으로. 슬라이더가 오른쪽 끝에 남은 채 이동하면
-        `update_position_info`가 '오른쪽 끝'으로 보고 Current를 전체 장수로 적는다('끝' 다음에 '처음'을 누르면 늘 그 자리)
-        — `open_file`이 슬라이더 범위를 정할 때 하는 것과 같은 조치."""
+    def _slider_to_frame(self, index):
+        """이동 직전에 슬라이더를 신호 없이 그 프레임(0부터)의 자리로 — 마지막 프레임이면 오른쪽 끝, 아니면 끝이 아닌 자리.
+        `update_position_info`는 그 순간의 슬라이더가 오른쪽 끝이면 Current를 전체 장수로(시간도 끝으로) 적으므로, 슬라이더가
+        끝에 남은 채 다른 프레임으로 가면 영상은 그 프레임인데 번호는 마지막 장으로 보인다('끝' 다음 '처음'·'끝' 다음 번호 입력)
+        — `open_file`이 슬라이더 범위를 정할 때 하는 것과 같은 조치. 영상이 없으면 아무것도 안 함."""
+        total = self._transport_total_frames()
+        if total < 1:
+            return
+        maximum = self.positionScroll.maximum()
+        if index >= total - 1:
+            value = maximum
+        else:
+            value = min(round(index / (total - 1) * maximum), max(0, maximum - 1))
         self.positionScroll.blockSignals(True)
-        self.positionScroll.setValue(0)
+        self.positionScroll.setValue(value)
         self.positionScroll.blockSignals(False)
 
     def go_to_first(self):
         """'처음' 단추·Home: 멈추고 1번 프레임으로(예전 Stop). 선택 재생 중에는 지금 영상의 처음으로만 — 선택 재생은 유지."""
-        if self.cap_a:
-            self._slider_to_start()
+        self._slider_to_frame(0)
         if self.is_playlist_playing and self.cap_a:
             self.pause_video()
             self.seek_to_frame(1)
@@ -98,6 +106,7 @@ class PlayerTransportMixin:
             return
         if self.timer.isActive():
             self.pause_video()
+        self._slider_to_frame(total - 1)
         self._precise_seek(total - 1, total)
 
     def go_to_frame_number(self, number):
@@ -106,7 +115,16 @@ class PlayerTransportMixin:
         total = self._transport_total_frames()
         if total < 1:
             return
-        self._precise_seek(max(1, min(int(number), total)) - 1, total)
+        import cv2  # 지연 import — _transport_total_frames와 같은 까닭
+
+        target = max(1, min(int(number), total)) - 1
+        self._slider_to_frame(target)
+        self._precise_seek(target, total)
+        if target < total - 1 and int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES)) - 1 != target:
+            # _precise_seek가 아무것도 안 했음: 끝에서 셋째 장 안(목표 ≥ 전체 − 3)의 이동 _seek_conservative는 '목표 == 캡처가
+            # 다음에 읽을 자리'(= 지금 프레임의 바로 다음 장)면 이미 거기 있다고 보고 돌아옴 — 직접 이동으로 맞춤
+            # (슬라이더를 놓을 때 sync_audio_on_release가 같은 경우에 하는 보정; 마지막 프레임 길은 그대로 둠)
+            self._seek_direct(target, total)
 
     def _transport_total_frames(self):
         """열린 영상 A의 전체 장수, 없으면 0."""
