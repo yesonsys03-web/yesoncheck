@@ -385,17 +385,23 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         self.jobComboBox = WidePopupComboBox()
         self.jobComboBox.addItem(ui_text.text("picker.job"))
 
-        self.ocrSelectRoiButton = QPushButton('OCR ROI 지정')
+        # OCR 쪽(도구 패널)의 위젯 — 화면 글자는 글자 표(ui_text)에서: _ocr_text가 넣고 적어 두면 언어가 바뀔 때
+        # retranslate_ocr_page가 다시 넣음 (PlayerOcrMixin). ROI 단추의 툴팁은 방식·영상에 따라 바뀜(_sync_ocr_roi_tooltip)
+        self._ocr_texts = []
+        self.ocrSelectRoiButton = QPushButton()
+        self._ocr_text(self.ocrSelectRoiButton.setText, "ocr.roi.select")
         self.ocrSelectRoiButton.setCheckable(True)
         self.ocrSelectRoiButton.toggled.connect(self.toggle_ocr_roi_selection)
-        self.ocrSelectRoiButton.setToolTip('영상에서 OCR 분석에 사용할 영역을 드래그하여 지정합니다.')
+        self.ocrSelectRoiButton.setToolTip(ui_text.text("ocr.roi.select.tip"))
 
-        self.ocrClearRoiButton = QPushButton('ROI 초기화')
+        self.ocrClearRoiButton = QPushButton()
+        self._ocr_text(self.ocrClearRoiButton.setText, "ocr.roi.clear")
         self.ocrClearRoiButton.clicked.connect(self.clear_ocr_roi)
         self.ocrClearRoiButton.setEnabled(False)
 
-        self.ocrTrackingCheckBox = QCheckBox('ROI 트래킹 활성화')
-        self.ocrTrackingCheckBox.setToolTip('활성화하면 지정한 ROI 영역이 동영상에서 이동하는 텍스트를 자동으로 추적합니다.')
+        self.ocrTrackingCheckBox = QCheckBox()
+        self._ocr_text(self.ocrTrackingCheckBox.setText, "ocr.roi.tracking")
+        self._ocr_text(self.ocrTrackingCheckBox.setToolTip, "ocr.roi.tracking.tip")
         self.ocrTrackingCheckBox.setEnabled(False)
 
         # OCR 분석 방식 선택
@@ -403,70 +409,56 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         self.ocrModeComboBox.addItem('Titmouse', 'titmouse')
         self.ocrModeComboBox.addItem('King', 'king')
         self.ocrModeComboBox.addItem('Bento', 'bento')
-        self.ocrModeComboBox.addItem('All (사용자 패턴)', 'all')
-        self.ocrModeComboBox.addItem('애니매틱 (Auto Cut)', 'animatic')
-        ocr_mode_tooltip = (
-            '이미지에 따라 분석 정확도가 다를 수 있으므로 적합한 방식을 선택하세요.\n'
-            '- Titmouse: 기본 OCR 설정\n'
-            '- King: 빨간색 텍스트 인식 최적화\n'
-            '- Bento: 작은 텍스트 및 특수 패턴 인식 최적화 (예: Seq 02A_S09 - Panel 6)\n'
-            '- All: 사용자 정의 패턴으로 텍스트 인식 (#=영문, W=숫자, 예: "### WW#_#WW - #### W")\n'
-            '- 애니매틱: PySceneDetect를 사용한 자동 컷 감지 (ROI 불필요)'
-        )
+        # 고유 이름 셋(위)은 두 언어에서 같고, 나머지 항목의 글은 글자 표에서 (player_ocr.OCR_MODE_TEXT_KEYS — 값은 itemData)
+        self.ocrModeComboBox.addItem(ui_text.text("ocr.mode.all"), 'all')
+        self.ocrModeComboBox.addItem(ui_text.text("ocr.mode.animatic"), 'animatic')
         # 애니매틱2(TransNetV2)는 선택적 의존성 — 설치되지 않은 빌드/환경에서는 목록에 보이지 않음
         # (선택해도 분석이 되지 않는 개발자용 pip 안내 오류를 사용자가 보지 않도록)
         if _transnetv2_available():
-            self.ocrModeComboBox.addItem('애니매틱2 (TransNetV2)', 'animatic2')
-            ocr_mode_tooltip += (
-                '\n- 애니매틱2: TransNetV2(딥러닝)를 사용한 컷 감지 (디졸브/페이드 감지 향상, ROI 불필요)'
-            )
+            self.ocrModeComboBox.addItem(ui_text.text("ocr.mode.animatic2"), 'animatic2')
         else:
             # 조용히 숨기지 않음: 왜 없는지(TensorFlow·가중치·CPU AVX) 시작 로그에 남김
             timing_log.startup(f"애니매틱2(TransNetV2) 항목 숨김 — 이 빌드/환경에 없는 것: {_transnetv2_missing()}")
-        self.ocrModeComboBox.setToolTip(ocr_mode_tooltip)
+        self.ocrModeComboBox.setToolTip(self._ocr_mode_tooltip())  # 방식마다 한 줄 — 애니매틱2 줄은 그 항목이 있을 때만
         self.ocrModeComboBox.currentIndexChanged.connect(self.on_ocr_mode_changed)
         
         # All 모드용 패턴 입력 필드
-        self.ocrPatternLabel = QLabel('패턴:')
+        self.ocrPatternLabel = QLabel()
+        self._ocr_text(self.ocrPatternLabel.setText, "ocr.pattern.label")
         self.ocrPatternLineEdit = QLineEdit()
-        self.ocrPatternLineEdit.setPlaceholderText('예: ### WW#_#WW - #### W (#=영문, W=숫자)')
-        self.ocrPatternLineEdit.setToolTip(
-            'All 모드에서 사용할 텍스트 패턴을 입력하세요.\n'
-            '- # = 영문 (A-Z, a-z)\n'
-            '- W = 숫자 (0-9)\n'
-            '- _ = 언더바\n'
-            '- - = 하이픈\n'
-            '- 공백 = 공백\n'
-            '예시:\n'
-            '- "seq 04A_S05 - Panel 1" → "### WW#_#WW - #### W"\n'
-            '- "MS101_B010" → "##WWW_#WWW"'
-        )
+        self._ocr_text(self.ocrPatternLineEdit.setPlaceholderText, "ocr.pattern.placeholder")
+        self._ocr_text(self.ocrPatternLineEdit.setToolTip, "ocr.pattern.tip")
         self.ocrPatternLabel.setVisible(False)
         self.ocrPatternLineEdit.setVisible(False)
 
-        self.ocrAnalyzeButton = QPushButton('OCR 구간 추출')
+        self.ocrAnalyzeButton = QPushButton()
+        self._ocr_text(self.ocrAnalyzeButton.setText, "ocr.analyze")
         self.ocrAnalyzeButton.clicked.connect(self.run_ocr_analysis)
         self.ocrAnalyzeButton.setEnabled(False)
         
-        self.ocrAnalyzeRangeButton = QPushButton('선택 구간 분석')
+        self.ocrAnalyzeRangeButton = QPushButton()
+        self._ocr_text(self.ocrAnalyzeRangeButton.setText, "ocr.analyze_range")
         self.ocrAnalyzeRangeButton.clicked.connect(self.run_ocr_analysis_range)
         self.ocrAnalyzeRangeButton.setEnabled(False)
-        self.ocrAnalyzeRangeButton.setToolTip('지정한 프레임 범위만 OCR 분석합니다. 결과는 기존 분석 결과에 병합됩니다.')
+        self._ocr_text(self.ocrAnalyzeRangeButton.setToolTip, "ocr.analyze_range.tip")
         
-        self.ocrReopenResultButton = QPushButton('OCR 오픈')
+        self.ocrReopenResultButton = QPushButton()
+        self._ocr_text(self.ocrReopenResultButton.setText, "ocr.reopen")
         self.ocrReopenResultButton.clicked.connect(self.reopen_ocr_result)
         self.ocrReopenResultButton.setEnabled(False)
-        self.ocrReopenResultButton.setToolTip('이전에 분석한 OCR 결과를 다시 엽니다 (분석한 내용과 수정한 내용이 모두 표시됩니다)')
+        self._ocr_text(self.ocrReopenResultButton.setToolTip, "ocr.reopen.tip")
         
-        self.ocrSaveResultButton = QPushButton('OCR 저장')
+        self.ocrSaveResultButton = QPushButton()
+        self._ocr_text(self.ocrSaveResultButton.setText, "ocr.save")
         self.ocrSaveResultButton.clicked.connect(self.save_ocr_result)
         self.ocrSaveResultButton.setEnabled(False)
-        self.ocrSaveResultButton.setToolTip('현재 OCR 분석 결과를 파일로 저장합니다')
+        self._ocr_text(self.ocrSaveResultButton.setToolTip, "ocr.save.tip")
         
-        self.ocrLoadResultButton = QPushButton('OCR 로드')
+        self.ocrLoadResultButton = QPushButton()
+        self._ocr_text(self.ocrLoadResultButton.setText, "ocr.load")
         self.ocrLoadResultButton.clicked.connect(self.load_ocr_result)
         self.ocrLoadResultButton.setEnabled(True)
-        self.ocrLoadResultButton.setToolTip('저장된 OCR 분석 결과를 불러옵니다')
+        self._ocr_text(self.ocrLoadResultButton.setToolTip, "ocr.load.tip")
 
 # ocrStatusLabel 삭제됨 - 로그는 OCR 분석 팝업창에 표시
         self.fullscreenButton = QPushButton('Full screen')

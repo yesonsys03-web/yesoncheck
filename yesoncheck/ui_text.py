@@ -199,6 +199,71 @@ TEXTS = {
     "annot.kind.line": {"ko": "line", "en": "line"},
     "annot.kind.arrow": {"ko": "arrow", "en": "arrow"},
     "annot.list.text": {"ko": "[{range} 텍스트 {size}px] {preview}", "en": "[{range} text {size}px] {preview}"},
+    # OCR 쪽 (도구 패널) — 방식 이름 Titmouse·King·Bento는 두 언어에서 같음(글자 표에 없음)
+    "ocr.roi.select": {"ko": "OCR ROI 지정", "en": "Set OCR ROI"},
+    "ocr.roi.select.tip": {"ko": "영상에서 OCR 분석에 사용할 영역을 드래그하여 지정합니다.",
+                           "en": "Drag on the video to set the area used for OCR analysis."},
+    "ocr.roi.sequence.tip": {"ko": "이미지 시퀀스에서는 OCR·컷 감지를 쓸 수 없습니다.",
+                             "en": "OCR and cut detection cannot be used on image sequences."},
+    "ocr.roi.not_needed.tip": {"ko": "{mode} 모드는 ROI가 필요 없습니다.", "en": "{mode} mode does not need an ROI."},
+    "ocr.mode_name.animatic": {"ko": "애니매틱", "en": "Animatic"},
+    "ocr.mode_name.animatic2": {"ko": "애니매틱2", "en": "Animatic 2"},
+    "ocr.roi.clear": {"ko": "ROI 초기화", "en": "Reset ROI"},
+    "ocr.roi.tracking": {"ko": "ROI 트래킹 활성화", "en": "Enable ROI tracking"},
+    "ocr.roi.tracking.tip": {"ko": "활성화하면 지정한 ROI 영역이 동영상에서 이동하는 텍스트를 자동으로 추적합니다.",
+                             "en": "When on, the ROI automatically follows text that moves in the video."},
+    "ocr.mode.label": {"ko": "OCR 분석 방식:", "en": "OCR method:"},
+    "ocr.mode.all": {"ko": "All (사용자 패턴)", "en": "All (custom pattern)"},
+    "ocr.mode.animatic": {"ko": "애니매틱 (Auto Cut)", "en": "Animatic (Auto Cut)"},
+    "ocr.mode.animatic2": {"ko": "애니매틱2 (TransNetV2)", "en": "Animatic 2 (TransNetV2)"},
+    "ocr.mode.tip": {
+        "ko": "이미지에 따라 분석 정확도가 다를 수 있으므로 적합한 방식을 선택하세요.\n"
+              "- Titmouse: 기본 OCR 설정\n"
+              "- King: 빨간색 텍스트 인식 최적화\n"
+              "- Bento: 작은 텍스트 및 특수 패턴 인식 최적화 (예: Seq 02A_S09 - Panel 6)\n"
+              "- All: 사용자 정의 패턴으로 텍스트 인식 (#=영문, W=숫자, 예: \"### WW#_#WW - #### W\")\n"
+              "- 애니매틱: PySceneDetect를 사용한 자동 컷 감지 (ROI 불필요)",
+        "en": "Accuracy depends on the picture, so choose the method that fits.\n"
+              "- Titmouse: the standard OCR settings\n"
+              "- King: tuned for red text\n"
+              "- Bento: tuned for small text and special patterns (e.g. Seq 02A_S09 - Panel 6)\n"
+              "- All: reads text by a pattern you define (#=letter, W=digit, e.g. \"### WW#_#WW - #### W\")\n"
+              "- Animatic: automatic cut detection with PySceneDetect (no ROI needed)"},
+    "ocr.mode.tip.animatic2": {
+        "ko": "\n- 애니매틱2: TransNetV2(딥러닝)를 사용한 컷 감지 (디졸브/페이드 감지 향상, ROI 불필요)",
+        "en": "\n- Animatic 2: cut detection with TransNetV2 (deep learning — better at dissolves and fades, no ROI needed)"},
+    "ocr.pattern.label": {"ko": "패턴:", "en": "Pattern:"},
+    "ocr.pattern.placeholder": {"ko": "예: ### WW#_#WW - #### W (#=영문, W=숫자)", "en": "e.g. ### WW#_#WW - #### W (#=letter, W=digit)"},
+    "ocr.pattern.tip": {
+        "ko": "All 모드에서 사용할 텍스트 패턴을 입력하세요.\n"
+              "- # = 영문 (A-Z, a-z)\n"
+              "- W = 숫자 (0-9)\n"
+              "- _ = 언더바\n"
+              "- - = 하이픈\n"
+              "- 공백 = 공백\n"
+              "예시:\n"
+              "- \"seq 04A_S05 - Panel 1\" → \"### WW#_#WW - #### W\"\n"
+              "- \"MS101_B010\" → \"##WWW_#WWW\"",
+        "en": "Enter the text pattern to use in All mode.\n"
+              "- # = letter (A-Z, a-z)\n"
+              "- W = digit (0-9)\n"
+              "- _ = underscore\n"
+              "- - = hyphen\n"
+              "- space = space\n"
+              "Examples:\n"
+              "- \"seq 04A_S05 - Panel 1\" → \"### WW#_#WW - #### W\"\n"
+              "- \"MS101_B010\" → \"##WWW_#WWW\""},
+    "ocr.analyze": {"ko": "OCR 구간 추출", "en": "Extract OCR segments"},
+    "ocr.analyze_range": {"ko": "선택 구간 분석", "en": "Analyze a frame range"},
+    "ocr.analyze_range.tip": {"ko": "지정한 프레임 범위만 OCR 분석합니다. 결과는 기존 분석 결과에 병합됩니다.",
+                              "en": "Runs the analysis on the frame range you give only. The result is merged into the existing one."},
+    "ocr.reopen": {"ko": "OCR 오픈", "en": "Open OCR result"},
+    "ocr.reopen.tip": {"ko": "이전에 분석한 OCR 결과를 다시 엽니다 (분석한 내용과 수정한 내용이 모두 표시됩니다)",
+                       "en": "Reopens the last OCR result (shows both what was analyzed and what you edited)"},
+    "ocr.save": {"ko": "OCR 저장", "en": "Save OCR result"},
+    "ocr.save.tip": {"ko": "현재 OCR 분석 결과를 파일로 저장합니다", "en": "Saves the current OCR result to a file"},
+    "ocr.load": {"ko": "OCR 로드", "en": "Load OCR result"},
+    "ocr.load.tip": {"ko": "저장된 OCR 분석 결과를 불러옵니다", "en": "Loads a saved OCR result"},
     # 뷰어 오른쪽 위의 배지 (주석 모드 동안)
     "badge.annotation": {"ko": "주석 모드", "en": "Annotation mode"},
     # 도구 패널 (뷰어 오른쪽 — 주석·OCR)

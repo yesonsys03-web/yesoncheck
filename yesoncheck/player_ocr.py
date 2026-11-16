@@ -31,7 +31,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
-from yesoncheck import image_io, paths
+from yesoncheck import image_io, paths, ui_text
 from yesoncheck.main_window_styles import OCR_LOG_TEXT_STYLE
 from yesoncheck.worker_lifecycle import release_worker
 
@@ -45,7 +45,8 @@ def stored_and_native_path(stored_path, native_path):
 
 # 이미지 시퀀스가 열려 있을 때 OCR·컷 감지를 쓰려 하면 알리는 글 (OCR은 영상 파일을 다시 열어 분석하는데 시퀀스는 그럴 파일이 없음)
 OCR_SEQUENCE_UNAVAILABLE = "이미지 시퀀스에서는 OCR·컷 감지를 쓸 수 없습니다.\n영상(mov)을 열어서 사용해 주세요."
-OCR_SEQUENCE_TOOLTIP = "이미지 시퀀스에서는 OCR·컷 감지를 쓸 수 없습니다."
+# 방식 콤보에서 글이 언어를 따르는 항목: 값(itemData) → 글자 표의 키. Titmouse·King·Bento는 두 언어에서 같은 이름
+OCR_MODE_TEXT_KEYS = {"all": "ocr.mode.all", "animatic": "ocr.mode.animatic", "animatic2": "ocr.mode.animatic2"}
 
 
 class PlayerOcrMixin:
@@ -102,6 +103,46 @@ class PlayerOcrMixin:
         # 모드에 따라 UI 업데이트
         self.on_ocr_mode_changed()
 
+    # ---------------------------------------------------------------- 화면 글자 (글자 표 — 언어를 따름)
+    def _ocr_text(self, setter, key):
+        """OCR 쪽의 고정된 글·툴팁 하나: 글자 표의 글을 넣고, 언어가 바뀌면 다시 넣게 적어 둠 (위젯은 initUI가 만듦)."""
+        setter(ui_text.text(key))
+        self._ocr_texts.append((setter, key))
+
+    def _ocr_mode_tooltip(self):
+        """방식 콤보의 툴팁(지금 언어) — 방식마다 한 줄, 애니매틱2 줄은 그 항목이 목록에 있을 때만."""
+        tip = ui_text.text("ocr.mode.tip")
+        if self.ocrModeComboBox.findData("animatic2") >= 0:
+            tip += ui_text.text("ocr.mode.tip.animatic2")
+        return tip
+
+    def _sync_ocr_roi_tooltip(self):
+        """ROI 단추의 툴팁을 지금 상태(이미지 시퀀스·방식)와 지금 언어에 맞춤 — on_ocr_mode_changed와 retranslate_ocr_page가 부름.
+        툴팁만 바꿈: 단추의 켜짐·ROI·분석 단추는 건드리지 않음."""
+        mode = self.ocrModeComboBox.currentData()
+        if self._ocr_blocked_by_sequence():
+            tip = ui_text.text("ocr.roi.sequence.tip")
+        elif mode in ("animatic", "animatic2"):
+            tip = ui_text.text("ocr.roi.not_needed.tip", mode=ui_text.text(f"ocr.mode_name.{mode}"))
+        else:
+            tip = ui_text.text("ocr.roi.select.tip")
+        self.ocrSelectRoiButton.setToolTip(tip)
+
+    def retranslate_ocr_page(self):
+        """OCR 쪽의 글자를 지금 언어로 다시 (언어가 바뀐 뒤 — PlayerLanguageMixin.RETRANSLATORS). 방식 콤보는 글만 바꿈 —
+        고른 방식(itemData)은 그대로이고 '방식이 바뀜' 신호를 내지 않음: on_ocr_mode_changed는 ROI·단추 상태를 건드리므로 부르지 않는다."""
+        for setter, key in self._ocr_texts:
+            setter(ui_text.text(key))
+        combo = self.ocrModeComboBox
+        blocked = combo.blockSignals(True)
+        for index in range(combo.count()):
+            key = OCR_MODE_TEXT_KEYS.get(combo.itemData(index))
+            if key is not None:
+                combo.setItemText(index, ui_text.text(key))
+        combo.blockSignals(blocked)
+        combo.setToolTip(self._ocr_mode_tooltip())
+        self._sync_ocr_roi_tooltip()
+
     def on_ocr_mode_changed(self):
         """OCR 모드 변경 시 UI 업데이트"""
         ocr_mode = self.ocrModeComboBox.currentData() if hasattr(self, 'ocrModeComboBox') else 'titmouse'
@@ -125,7 +166,7 @@ class PlayerOcrMixin:
         if self._ocr_blocked_by_sequence():
             if hasattr(self, 'ocrSelectRoiButton'):
                 self.ocrSelectRoiButton.setEnabled(False)
-                self.ocrSelectRoiButton.setToolTip(OCR_SEQUENCE_TOOLTIP)
+                self._sync_ocr_roi_tooltip()
             for name in ('ocrTrackingCheckBox', 'ocrAnalyzeButton', 'ocrAnalyzeRangeButton'):
                 if hasattr(self, name):
                     getattr(self, name).setEnabled(False)
@@ -135,8 +176,7 @@ class PlayerOcrMixin:
         if ocr_mode in ['animatic', 'animatic2']:
             if hasattr(self, 'ocrSelectRoiButton'):
                 self.ocrSelectRoiButton.setEnabled(False)
-                mode_name = '애니매틱2' if ocr_mode == 'animatic2' else '애니매틱'
-                self.ocrSelectRoiButton.setToolTip(f'{mode_name} 모드는 ROI가 필요 없습니다.')
+                self._sync_ocr_roi_tooltip()
             if hasattr(self, 'ocrTrackingCheckBox'):
                 self.ocrTrackingCheckBox.setEnabled(False)
 
@@ -149,7 +189,7 @@ class PlayerOcrMixin:
             # OCR 모드일 때는 ROI 선택 버튼 활성화
             if hasattr(self, 'ocrSelectRoiButton'):
                 self.ocrSelectRoiButton.setEnabled(True)
-                self.ocrSelectRoiButton.setToolTip('영상에서 OCR 분석에 사용할 영역을 드래그하여 지정합니다.')
+                self._sync_ocr_roi_tooltip()
             if hasattr(self, 'ocrTrackingCheckBox'):
                 self.ocrTrackingCheckBox.setEnabled(True)
             

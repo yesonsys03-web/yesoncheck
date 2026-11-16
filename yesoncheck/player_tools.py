@@ -78,7 +78,8 @@ class PlayerToolsMixin:
         layout.setContentsMargins(PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN)
         layout.setSpacing(5)
 
-        mode_label = QLabel('OCR 분석 방식:')
+        mode_label = QLabel()
+        self._ocr_text(mode_label.setText, "ocr.mode.label")
         mode_label.setStyleSheet(OCR_OPTION_LABEL_STYLE)
         self.ocrPatternLabel.setStyleSheet(OCR_OPTION_LABEL_STYLE)
         sections = (

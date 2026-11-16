@@ -879,3 +879,69 @@ def test_tool_panel_minimum_width_in_english_stays_within_the_panel_width(shown)
         shown.show_tool_panel(key)
         QApplication.processEvents()
         assert shown.toolPanel.minimumSizeHint().width() <= max(korean, tool_panel.PANEL_WIDTH), key
+
+
+# ---------------------------------------------------------------- OCR 쪽 (Task 8)
+
+def test_english_ocr_page_has_no_hangul(shown, tmp_path):
+    ui_texts.stage(shown, tmp_path)
+    shown.show_tool_panel("ocr")
+    shown.set_ui_language("en")
+    assert ui_texts.hangul(ui_texts.collect(shown)["ocr"]) == []
+
+
+def test_switching_language_leaves_the_ocr_mode_and_roi_alone(shown, tmp_path):
+    """방식 콤보는 글만 바뀜 — 고른 방식(itemData)·ROI·단추의 켜짐은 그대로이고 '방식이 바뀜' 신호도 없음(그 처리기는 ROI 상태를 건드림)."""
+    ui_texts.stage(shown, tmp_path)
+    combo = shown.ocrModeComboBox
+    combo.setCurrentIndex(combo.findData("all"))
+    changes, calls = [], []
+    combo.currentIndexChanged.connect(changes.append)
+    shown.on_ocr_mode_changed = lambda *args: calls.append(args)  # 다시 그리기가 부르면 안 됨
+    buttons = (shown.ocrSelectRoiButton, shown.ocrClearRoiButton, shown.ocrTrackingCheckBox, shown.ocrAnalyzeButton,
+               shown.ocrAnalyzeRangeButton, shown.ocrReopenResultButton, shown.ocrSaveResultButton, shown.ocrLoadResultButton)
+    before = (combo.currentData(), combo.currentIndex(), [combo.itemData(i) for i in range(combo.count())], shown.ocr_roi,
+              [button.isEnabled() for button in buttons], shown.ocrPatternLineEdit.isVisibleTo(shown.toolPanel))
+    korean = [combo.itemText(i) for i in range(combo.count())]
+    assert korean[:5] == ["Titmouse", "King", "Bento", "All (사용자 패턴)", "애니매틱 (Auto Cut)"]
+    shown.set_ui_language("en")
+    english = [combo.itemText(i) for i in range(combo.count())]
+    assert english[:5] == ["Titmouse", "King", "Bento", "All (custom pattern)", "Animatic (Auto Cut)"]
+    if combo.findData("animatic2") >= 0:
+        assert (korean[5], english[5]) == ("애니매틱2 (TransNetV2)", "Animatic 2 (TransNetV2)")
+    assert (combo.currentData(), combo.currentIndex(), [combo.itemData(i) for i in range(combo.count())], shown.ocr_roi,
+            [button.isEnabled() for button in buttons], shown.ocrPatternLineEdit.isVisibleTo(shown.toolPanel)) == before
+    assert changes == [] and calls == []
+    shown.set_ui_language("ko")
+    assert [combo.itemText(i) for i in range(combo.count())] == korean and changes == [] and calls == []
+    del shown.on_ocr_mode_changed
+
+
+def test_roi_button_tooltip_follows_the_mode_and_the_language(shown, tmp_path):
+    """ROI 단추의 툴팁은 방식·영상 종류에 따라 바뀜 — 언어를 바꾸면 지금 상태의 글이 새 언어로."""
+    ui_texts.stage(shown, tmp_path)
+    combo, button = shown.ocrModeComboBox, shown.ocrSelectRoiButton
+    combo.setCurrentIndex(combo.findData("king"))
+    assert button.toolTip() == "영상에서 OCR 분석에 사용할 영역을 드래그하여 지정합니다."
+    shown.set_ui_language("en")
+    assert button.toolTip() == "Drag on the video to set the area used for OCR analysis."
+    combo.setCurrentIndex(combo.findData("animatic"))
+    assert button.toolTip() == "Animatic mode does not need an ROI."
+    shown.set_ui_language("ko")
+    assert button.toolTip() == "애니매틱 모드는 ROI가 필요 없습니다."
+    shown._ocr_blocked_by_sequence = lambda: True  # 이미지 시퀀스가 열려 있음
+    shown.on_ocr_mode_changed()
+    assert button.toolTip() == "이미지 시퀀스에서는 OCR·컷 감지를 쓸 수 없습니다."
+    shown.set_ui_language("en")
+    assert button.toolTip() == "OCR and cut detection cannot be used on image sequences."
+    del shown._ocr_blocked_by_sequence
+
+
+def test_ocr_mode_tooltip_lists_the_modes_that_exist(shown):
+    """방식 콤보의 툴팁: 애니매틱2 줄은 그 항목이 있을 때만 — 두 언어 모두."""
+    combo = shown.ocrModeComboBox
+    has_animatic2 = combo.findData("animatic2") >= 0
+    assert ("애니매틱2: TransNetV2" in combo.toolTip()) is has_animatic2 and "- 애니매틱: PySceneDetect" in combo.toolTip()
+    shown.set_ui_language("en")
+    assert ("Animatic 2: " in combo.toolTip()) is has_animatic2 and "- Animatic: " in combo.toolTip()
+    assert ui_texts.hangul([combo.toolTip()]) == []
