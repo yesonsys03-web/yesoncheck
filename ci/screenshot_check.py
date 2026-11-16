@@ -420,6 +420,7 @@ def check_isolated_environment(work):
         "USERPROFILE": os.path.join(work, "home"),
         "YESONCHECK_CONFIG_DIR": os.path.join(work, "share", ".yesoncheck"),
         "YESONCHECK_INSTANCES_DIR": os.path.join(work, "instances"),
+        "YESONCHECK_LANGUAGE": "ko",  # 화면 언어를 기계의 OS 언어에 맡기지 않음 — 장면의 글자가 기계마다 같게
     }
     for key, value in expected.items():
         require(os.environ.get(key) == value, f"격리 환경 변수가 다름: {key}={os.environ.get(key)!r} (기대 {value!r})")
@@ -621,6 +622,7 @@ def child_environment(work, root):
         "LOCALAPPDATA": os.path.join(home, "AppData", "Local"),
         "YESONCHECK_CONFIG_DIR": os.path.join(work, "share", ".yesoncheck"),
         "YESONCHECK_INSTANCES_DIR": os.path.join(work, "instances"),
+        "YESONCHECK_LANGUAGE": "ko",  # 화면 언어를 기계의 OS 언어에 맡기지 않음 — 장면의 글자가 기계마다 같게
         "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONUTF8": "1",
         "PYTHONIOENCODING": "utf-8",

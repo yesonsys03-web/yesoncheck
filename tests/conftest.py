@@ -22,6 +22,9 @@ os.environ.pop("YESONCHECK_JOB_SCAN_THREADS", None)  # job 목록 스레드 수 
 # Mac에서 기존 플레이어 시험의 작은(320×180) ProRes 클립이 VideoToolbox로 열려 파이프·cv2 단언이 깨진다. 네이티브를 겨누는 시험이
 # YESONCHECK_MAC_NATIVE=on을 명시하거나 native_wanted를 바꿔치기해 켠다
 os.environ["YESONCHECK_MAC_NATIVE"] = "off"
+# 화면 언어도 고정: 없으면 app.launch가 OS 언어를 따라(CI 러너는 영어) 글자 표의 언어가 프로세스 전체에서 바뀌고, 화면 글자를
+# 단언하는 시험이 기계마다 달라진다. 다른 길(prefs.json·OS 언어)을 보는 시험이 이 변수를 지운다 (tests/test_ui_language.py)
+os.environ["YESONCHECK_LANGUAGE"] = "ko"
 
 # fetch_ffmpeg.sh / fetch_ffmpeg_windows.ps1로 받은 정적 ffmpeg를 PATH 맨 앞에 둠
 _FFMPEG_DIR = os.path.join(
@@ -212,6 +215,18 @@ def _isolated_prefs_and_decoder_cache(monkeypatch, tmp_path_factory):
     mac_native_gate.set_preferred_decoder("videotoolbox")
     windows_display.set_preferred(windows_display.DEFAULT_RENDERER)
     downscale_filter.set_preferred(downscale_filter.DEFAULT_FILTER)
+
+
+@pytest.fixture(autouse=True)
+def _korean_ui():
+    """글자 표의 언어(프로세스에 하나)를 시험 앞뒤로 한국어로 — 언어를 바꾸는 시험의 값이 다른 시험에 남지 않게."""
+    from yesoncheck import ui_language, ui_text
+
+    ui_text.set_language("ko")
+    ui_language.set_source(ui_language.SOURCE_ENV)
+    yield
+    ui_text.set_language("ko")
+    ui_language.set_source(ui_language.SOURCE_ENV)
 
 
 @pytest.fixture(autouse=True)

@@ -8,7 +8,7 @@ import time
 import traceback
 
 from PyQt5 import sip
-from PyQt5.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal, pyqtSlot
+from PyQt5.QtCore import QLocale, QObject, Qt, QThread, QTimer, pyqtSignal, pyqtSlot
 from PyQt5.QtGui import QFont, QGuiApplication, QPixmap
 from PyQt5.QtWidgets import QApplication, QLabel, QMessageBox, QSplashScreen
 
@@ -18,8 +18,8 @@ if __package__ in (None, ""):
     from yesoncheck.main_window import VideoPlayer  # type: ignore  # pylint: disable=import-error
     from yesoncheck import (  # type: ignore  # pylint: disable=import-error
         build_info, default_app, downscale_filter, error_window, file_associations, gl_video_item, hover_strip, launch_args, mac_app_events,
-        mac_mounts, mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, qt_messages, timing_log, update_install,
-        user_files, video_list, windows_display,
+        mac_mounts, mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, qt_messages, timing_log, ui_language, ui_text,
+        update_install, user_files, video_list, windows_display,
     )
     from yesoncheck.player_base import EXIT_WAIT_S, wait_for_released_workers  # type: ignore  # pylint: disable=import-error
     from yesoncheck.player_update import BOX_TITLE_PROPERTY  # type: ignore  # pylint: disable=import-error
@@ -27,8 +27,8 @@ else:
     from .main_window import VideoPlayer
     from . import (
         build_info, default_app, downscale_filter, error_window, file_associations, gl_video_item, hover_strip, launch_args, mac_app_events,
-        mac_mounts, mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, qt_messages, timing_log, update_install,
-        user_files, video_list, windows_display,
+        mac_mounts, mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, qt_messages, timing_log, ui_language, ui_text,
+        update_install, user_files, video_list, windows_display,
     )
     from .player_base import EXIT_WAIT_S, wait_for_released_workers
     from .player_update import BOX_TITLE_PROPERTY
@@ -268,6 +268,39 @@ def load_slider_thumbnails():
     print(f"{hover_strip.LOG_PREFIX} 설정: {'켬' if hover_strip.enabled() else '끔'}", flush=True)
 
 
+def system_ui_languages():
+    """OS의 화면 언어 목록 (앞이 먼저 — 예 ['ko-KR', 'en-US']). 지역(날짜·숫자 형식)이 아니라 화면 언어를 봄:
+    영문 macOS를 한국 지역으로 쓰면 QLocale.system().name()은 en_KR이고 이 목록의 첫 항목은 en-KR."""
+    return list(QLocale.system().uiLanguages())
+
+
+def load_language():
+    """화면 언어(한국어·English)를 시작 때 한 번 정해 글자 표(ui_text)에 둠 — 창을 만들기 전에. 모든 플랫폼.
+    우선순위: 환경 변수 YESONCHECK_LANGUAGE(나쁜 값은 ValueError — 다른 토글처럼 시작 때 크게) > prefs.json의 ui_language >
+    OS의 화면 언어(첫 언어가 한국어면 한국어, 아니면 English). 깨진 파일·모르는 값은 OS 언어로 넘기지 않고 트레이스백·창을 보인 뒤
+    이 세션만 한국어(SOURCE_FALLBACK) — 파일은 건드리지 않는다. 창의 끝 글은 둘: 모르는 값은 메뉴에서 고르면 고쳐 쓰고, 깨진 JSON은 메뉴도 덮지 않음."""
+    code = ui_language.env_language()
+    source = ui_language.SOURCE_ENV
+    if code is None:
+        try:
+            code = ui_language.read()
+            source = ui_language.SOURCE_PREFS
+        except (user_files.UserFileError, ValueError) as exc:
+            traceback.print_exc()
+            code, source = "ko", ui_language.SOURCE_FALLBACK
+            if isinstance(exc, user_files.UserFileError):
+                note = (f"이 세션은 한국어로 보입니다.\n설정 파일을 고치거나 지운 뒤 다시 켜면 설정을 읽습니다 — Settings → {ui_language.MENU_TEXT}은 "
+                        "파일을 덮지 않습니다")
+            else:
+                note = f"이 세션은 한국어로 보입니다 — Settings → {ui_language.MENU_TEXT}에서 다시 고를 수 있습니다"
+            QMessageBox.warning(None, ui_language.SETTINGS_TITLE, f"{exc}\n\n{note}")
+        if code is None:
+            code, source = ui_language.from_locale(system_ui_languages()), ui_language.SOURCE_OS
+    ui_text.set_language(code)
+    ui_language.set_source(source)
+    print(f"{ui_language.LOG_PREFIX} 설정: {ui_language.NAMES[code]} ({source})", flush=True)
+
+
 def load_downscale_filter():
     """(Windows) 축소 필터 설정(Linear·고품질)을 시작 때 한 번 읽어 downscale_filter의 캐시에 둠 — 영상 아이템이 그릴 때마다 그 캐시를 봄. 다른 플랫폼은 읽지 않음
     (늘 Linear — 예전 그리기 그대로). 깨진 파일·모르는 값은 기본으로 치지 않고 트레이스백·창을 보인 뒤 이 세션은 Linear, 파일은 건드리지 않는다.
@@ -438,6 +471,7 @@ def launch(argv=None):
     load_playback_decoder()
     load_display_renderer()  # (Windows) 화면 그리기 설정 — 창(뷰포트)을 만들기 전에
     load_slider_thumbnails()  # 슬라이더 썸네일 켬/끔 — 창(Settings 메뉴 체크)을 만들기 전에
+    load_language()  # 화면 언어(한국어·English) — 창(모든 화면 글자)을 만들기 전에
     load_downscale_filter()  # (Windows) 축소 필터 — 창(Settings 메뉴 체크·영상 아이템)을 만들기 전에
     # 네이티브 재생 토글(YESONCHECK_MAC_NATIVE)도 같은 이유로 여기서 — 값(native_mode)과 함께 on이 macOS 밖이면 ValueError (native_wanted가
     # 열 때마다 늦게 실패하지 않게)
