@@ -28,7 +28,7 @@ sys.path.insert(0, sys.argv[1])
 scenario = sys.argv[2]
 from PyQt5 import sip
 from PyQt5.QtCore import QPoint, QTimer
-from PyQt5.QtWidgets import QAction, QApplication, QMessageBox, QWidget
+from PyQt5.QtWidgets import QAction, QApplication, QDialog, QWidget
 from yesoncheck import app as app_module
 
 LAUNCH_FILE = os.path.abspath(app_module.__file__)
@@ -73,8 +73,12 @@ def player_factory(**kwargs):
             box.accept()
 
     def show_dialog_then_close():
+        # 보통 모달 창(QDialog) — QMessageBox가 아님: Windows의 화면 없는(offscreen) Qt는 진짜 QMessageBox를 띄우는 자리에서
+        # 접근 위반으로 죽음(CI에서 faulthandler 스택으로 확인 — 종료 정리와 무관; 다른 시험들은 QMessageBox를 바꿔 끼움)
+        dialog = QDialog(player)
         QTimer.singleShot(200, dismiss_dialog)
-        QMessageBox.information(player, "probe", "probe")  # 닫힐 때까지 여기서 돎 (dismiss_dialog가 닫음)
+        dialog.exec_()  # 닫힐 때까지 여기서 돎 (dismiss_dialog가 닫음)
+        dialog.deleteLater()
         QTimer.singleShot(300, player.close)
 
     if scenario == "dialog":
@@ -117,8 +121,8 @@ def run_child(tmp_path, scenario):
     for folder in (home, config, instances):
         folder.mkdir(parents=True)
     (config / "work_paths.json").write_text("{}", encoding="utf-8")
-    # 변환표도 둠: 없으면 Windows는 켜자마자 '변환표 오류' 모달 창을 띄움(자식 프로세스라 아무도 못 닫음) — 그 창이 뜬 채
-    # 타이머로 창을 닫는 것은 사람이 만들 수 없는 장면이고, 이 시험이 보려는 '그냥 닫기'가 아님 (첫 Windows CI에서 0xC0000005)
+    # 변환표도 둠: 없으면 Windows는 켜자마자 '변환표 오류' 알림 창(QMessageBox)을 띄움 — 자식 프로세스라 아무도 못 닫고,
+    # Windows의 화면 없는(offscreen) Qt는 진짜 QMessageBox를 띄우는 자리에서 접근 위반으로 죽음(첫 Windows CI의 0xC0000005)
     path_map = {"version": 1, "shares": [{"mac": "/MyShare", "windows": [r"\\myserver\myshare"]}]}
     (config / "path_map.json").write_text(json.dumps(path_map), encoding="utf-8")
     env = {key: value for key, value in os.environ.items() if not key.startswith("YESONCHECK_")}
@@ -144,7 +148,7 @@ def test_window_is_gone_before_the_application_and_no_app_code_runs_after_launch
     if scenario == "menu":
         assert out.count("CHILD: 팝업 QMenu") == 3, report
     if scenario == "dialog":
-        assert "CHILD: 모달 QMessageBox" in out, report
+        assert "CHILD: 모달 QDialog" in out, report
     assert f"{RETURN_LINE} True" in out, report
     late = [line for line in out.splitlines() if line.startswith(LATE_CALL_LINE)]
     assert late == [], report
