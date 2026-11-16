@@ -321,3 +321,9 @@ def tmp_state_dir(monkeypatch, tmp_path):
     from yesoncheck import update_install
 
     return update_install.state_dir()
+
+
+def pytest_addoption(parser):
+    # 한국어 화면 글자의 기준 파일(tests/data/main_window_texts_ko.json)을 다시 적음 — tests/test_ui_texts_baseline.py
+    parser.addoption("--write-ui-texts", action="store_true", default=False,
+                     help="메인 창의 한국어 화면 글자 기준 파일을 지금 화면으로 다시 적는다 (화면 글자를 일부러 바꿨을 때만)")
