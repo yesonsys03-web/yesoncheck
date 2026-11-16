@@ -161,7 +161,7 @@ def test_sidebar_runs_top_to_bottom_in_the_new_order(with_works, qapp):
     inside = [player.workLabel, player.workComboBox, player.seasonComboBox, player.jobComboBox]
     tops = [top_in(side, widget) for widget in inside]
     assert tops == sorted(tops) and len(set(tops)) == 4
-    assert player.workLabel.text() == "Yeson 작품"
+    assert player.workLabel.text() == "작품 선택"  # 사용자 지시 2026-11-16 (예전 가운데 열의 글자는 'Yeson 작품')
 
 
 def test_list_keeps_its_place_when_the_work_picker_is_hidden_or_shown(player, qapp):
@@ -356,7 +356,7 @@ def test_playlist_button_follows_the_language(player):
         player.retranslate_sidebar_controls()
         assert player.playSelectedPauseButton.button.text() == "Play selected in a row"
         assert player.openFolderButton.text() == "Open folder" and player.listModeButton.text() == "List"
-        assert player.workLabel.text() == "Yeson shows"
+        assert player.workLabel.text() == "Select show"
         assert [a.text() for a in player.bookmarkMenuButton.menu().actions()] == ["Add bookmark", "Manage bookmarks… (P)"]
     finally:
         ui_text.set_language("ko")

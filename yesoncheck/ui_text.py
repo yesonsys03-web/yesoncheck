@@ -41,7 +41,7 @@ TEXTS = {
     "transport.ocr": {"ko": "OCR", "en": "OCR"},
     "transport.ocr.tip": {"ko": "OCR 패널을 열고 닫습니다", "en": "Opens and closes the OCR panel"},
     # 사이드바
-    "sidebar.works": {"ko": "Yeson 작품", "en": "Yeson shows"},
+    "sidebar.works": {"ko": "작품 선택", "en": "Select show"},  # 사용자 지시 2026-11-16 (예전 가운데 열의 글자는 'Yeson 작품')
     "sidebar.open_folder": {"ko": "폴더 열기", "en": "Open folder"},
     "sidebar.bookmarks": {"ko": "북마크", "en": "Bookmarks"},
     "sidebar.bookmark.add": {"ko": "북마크 추가", "en": "Add bookmark"},
