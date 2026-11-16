@@ -39,7 +39,7 @@ from PyQt5.QtWidgets import (
     QOpenGLWidget,
 )
 
-from yesoncheck import gl_bindings, paths, windows_display
+from yesoncheck import gl_bindings, paths, ui_text, windows_display
 from yesoncheck.annotation_overlay import AnnotationOverlay
 from yesoncheck.frame_handles import native_surface_of, whole_surface_handle
 from yesoncheck.gl_video_item import LOG_PREFIX, VIDEO_ITEM_ENV, VideoFrameItem, use_stream_item, video_item_mode
@@ -248,7 +248,7 @@ class CustomVideoWidget(QGraphicsView):
         self.zoom_label.hide()
 
         # 주석 모드 배지 — 접힌 주석 패널 밖에서도 모드가 켜진 것을 알 수 있게 (enable_annotation_mode가 보임/숨김)
-        self.annotation_mode_label = QLabel("주석 모드", self)
+        self.annotation_mode_label = QLabel(ui_text.text("badge.annotation"), self)
         self.annotation_mode_label.setAlignment(Qt.AlignCenter)
         self.annotation_mode_label.setStyleSheet(
             "background-color: rgba(200, 30, 30, 230); color: white; font-weight: bold; padding: 5px; border-radius: 3px;"
@@ -317,6 +317,11 @@ class CustomVideoWidget(QGraphicsView):
 
     def update_zoom_label_position(self):
         self.zoom_label.move(10, 10)
+
+    def set_annotation_badge_text(self, text):
+        """주석 모드 배지의 글을 바꾸고(언어가 바뀐 뒤) 크기·자리를 다시 맞춤 — 글이 잘리지 않고 오른쪽 위에 그대로."""
+        self.annotation_mode_label.setText(text)
+        self.update_annotation_mode_label_position()
 
     def update_annotation_mode_label_position(self):
         self.annotation_mode_label.adjustSize()

@@ -746,3 +746,136 @@ def test_window_title_tail_follows_the_language(shown):
     shown.set_ui_language("ko")
     assert shown.windowTitle() == korean[2]
     shown.shared_config_problem = None
+
+
+# ---------------------------------------------------------------- 주석 쪽과 뷰어의 배지 (Task 7)
+
+def annotation_combos(player):
+    return (player.annotationToolCombo, player.annotationColorCombo)
+
+
+def test_english_annotation_page_and_badge_have_no_hangul(shown, tmp_path):
+    ui_texts.stage(shown, tmp_path)
+    shown.show_tool_panel("annotation")
+    shown.annotationModeButton.setChecked(True)  # 배지가 보임
+    shown.set_ui_language("en")
+    texts = ui_texts.collect(shown)
+    assert ui_texts.hangul(texts["annotation"]) == [] and ui_texts.hangul(texts["viewer"]) == []
+    assert shown.videoWidget.annotation_mode_label.text() == "Annotation mode"
+    shown.annotationModeButton.setChecked(False)
+
+
+def test_annotation_choices_keep_their_values(shown):
+    """도구·색 콤보: 글만 바뀌고 고른 번호·값(itemData)은 그대로, 고른 것이 바뀌었다는 신호도 없음."""
+    shown.annotationToolCombo.setCurrentIndex(3)
+    shown.annotationColorCombo.setCurrentIndex(2)
+    changes = []
+    for combo in annotation_combos(shown):
+        combo.currentIndexChanged.connect(changes.append)
+    before = [(combo.currentData(), combo.currentIndex(), [combo.itemData(i) for i in range(combo.count())])
+              for combo in annotation_combos(shown)]
+    korean = [[combo.itemText(i) for i in range(combo.count())] for combo in annotation_combos(shown)]
+    assert korean == [["텍스트", "사각형", "타원", "선", "화살표"], ["빨강", "노랑", "초록", "하늘", "흰색"]]
+    shown.set_ui_language("en")
+    assert [[combo.itemText(i) for i in range(combo.count())] for combo in annotation_combos(shown)] == [
+        ["Text", "Rectangle", "Ellipse", "Line", "Arrow"], ["Red", "Yellow", "Green", "Sky blue", "White"]]
+    assert [(combo.currentData(), combo.currentIndex(), [combo.itemData(i) for i in range(combo.count())])
+            for combo in annotation_combos(shown)] == before and changes == []
+    shown.set_ui_language("ko")
+    assert [[combo.itemText(i) for i in range(combo.count())] for combo in annotation_combos(shown)] == korean
+
+
+def test_annotation_badge_is_refitted_to_the_new_text(shown, tmp_path):
+    """뷰어 오른쪽 위의 '주석 모드' 배지: 글이 바뀌면 크기를 다시 재고 오른쪽 위에 다시 놓음(글이 잘리지 않게)."""
+    ui_texts.stage(shown, tmp_path)  # 주석 모드는 영상 A가 열려 있어야 켜짐
+    shown.annotationModeButton.setChecked(True)
+    badge = shown.videoWidget.annotation_mode_label
+    for code, text in (("en", "Annotation mode"), ("ko", "주석 모드")):
+        shown.set_ui_language(code)
+        assert badge.text() == text and badge.isVisible()
+        assert badge.width() >= badge.sizeHint().width()
+        assert badge.x() + badge.width() == shown.videoWidget.width() - 10 and badge.y() == 10
+    shown.annotationModeButton.setChecked(False)
+
+
+def test_annotation_status_messages_are_redrawn_in_the_new_language(shown, tmp_path):
+    """상태 줄의 한 번짜리 글(주석 n개 자동 로드·주석 추가 …)은 다시 만드는 코드가 없음 — 만든 때의 뜻을 기억했다가 다시 그림."""
+    ui_texts.stage(shown, tmp_path)
+    label = shown.annotationStatusLabel
+    shown.on_annotation_shape_finished({"type": "rect", "norm_x1": 0.1, "norm_y1": 0.1, "norm_x2": 0.4, "norm_y2": 0.4,
+                                        "color": "#ff3333", "id": "probe-rect"})
+    korean = label.text()
+    assert korean.startswith("프레임 ") and korean.endswith("에 rect 주석 추가 (자동 저장)")  # 한국어 글은 예전 그대로(내부 이름째)
+    shown.set_ui_language("en")
+    assert label.text().startswith("Added: rectangle annotation on frames ") and ui_texts.hangul([label.text()]) == []
+    shown.set_ui_language("ko")
+    assert label.text() == korean
+
+
+def test_annotation_list_items_are_relabelled(shown, tmp_path):
+    ui_texts.stage(shown, tmp_path)
+    shown.annotation_store.add(0, {"type": "text", "norm_x1": 0.2, "norm_y1": 0.2, "norm_x2": 0.2, "norm_y2": 0.2, "text": "fix this",
+                                   "color": "#ff3333", "font_size": 24, "id": "probe-text"}, start_frame=0, end_frame=2)
+    shown.refresh_annotation_ui(redraw=False)
+    rows = shown.annotationListWidget
+    korean = [rows.item(i).text() for i in range(rows.count())]
+    assert "[F1~3 텍스트 24px] fix this" in korean and any(text.startswith("[F") and " rect " in text for text in korean)
+    rows.setCurrentRow(0)
+    chosen = rows.currentItem().data(Qt.UserRole)
+    shown.set_ui_language("en")
+    english = [rows.item(i).text() for i in range(rows.count())]
+    assert "[F1~3 text 24px] fix this" in english and any(" rectangle " in text for text in english)
+    assert ui_texts.hangul(english) == [] and rows.currentItem().data(Qt.UserRole) == chosen  # 고른 주석은 그대로
+    shown.set_ui_language("ko")
+    assert [rows.item(i).text() for i in range(rows.count())] == korean
+
+
+def test_storage_warning_is_redrawn_in_the_new_language(shown, tmp_path, monkeypatch):
+    """⚠ 저장 불가·저장 실패 같은 글은 그 상태가 다시 오지 않으면 다시 만들어지지 않음 — 언어를 바꾸면 같은 뜻의 글로."""
+    from yesoncheck import player_annotations
+
+    ui_texts.stage(shown, tmp_path)
+    label = shown.annotationStorageLabel
+    monkeypatch.setattr(player_annotations, "is_annotation_storage_writable", lambda _path: False)
+    assert shown.auto_save_annotations() is False
+    korean = label.text()
+    assert korean.startswith("⚠ 주석 저장 불가 (쓰기 권한 없음): ")
+    shown.set_ui_language("en")
+    assert label.text() == "⚠ Cannot save annotations (no write permission): " + korean.partition(": ")[2]
+    shown.set_ui_language("ko")
+    assert label.text() == korean
+
+    monkeypatch.setattr(player_annotations, "is_annotation_storage_writable", lambda _path: True)
+    monkeypatch.setattr(shown.annotation_store, "save", lambda: (_ for _ in ()).throw(OSError("disk full")))
+    monkeypatch.setattr(shown, "_show_annotation_problem_once", lambda *args: None)
+    assert shown.auto_save_annotations() is False
+    assert label.text() == "⚠ 주석 저장 실패: OSError: disk full"
+    shown.set_ui_language("en")
+    assert label.text() == "⚠ Saving annotations failed: OSError: disk full"
+
+
+def test_export_folder_label_follows_the_language(shown, tmp_path):
+    label = shown.annotationExportDirLabel
+    shown.annotation_export_dir = ""
+    shown._update_annotation_export_dir_label()
+    assert label.text() == "보내기 저장 폴더: 미지정 (선택 필요)"
+    shown.set_ui_language("en")
+    assert label.text() == "Export folder: not set (choose one)"
+    shown.annotation_export_dir = str(tmp_path)
+    shown._update_annotation_export_dir_label()
+    assert label.text() == f"Export folder: {tmp_path}"
+    shown.set_ui_language("ko")
+    assert label.text() == f"보내기 저장 폴더: {tmp_path}"
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="글꼴 없는 Windows CI는 영문 글자도 한글만큼 넓게 재 패널이 넓어짐 — 실제 글꼴에서 봄")
+def test_tool_panel_minimum_width_in_english_stays_within_the_panel_width(shown):
+    """도구 패널의 최소 너비(두 쪽 중 넓은 쪽)는 English에서도 패널의 처음 너비(340) 이하 — 패널을 열어도 창이 더 넓어지지 않게."""
+    from yesoncheck import tool_panel
+
+    korean = shown.toolPanel.minimumSizeHint().width()
+    shown.set_ui_language("en")
+    for key in ("annotation", "ocr"):
+        shown.show_tool_panel(key)
+        QApplication.processEvents()
+        assert shown.toolPanel.minimumSizeHint().width() <= max(korean, tool_panel.PANEL_WIDTH), key
