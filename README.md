@@ -1,5 +1,7 @@
 # YesonCheck
 
+**한국어** | [English](README.en.md) | [Español](README.es.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
+
 ## 소개
 YesonCheck는 애니메이션 제작의 검수를 위한 영상 플레이어입니다(PyQt5). 영상과 이미지 시퀀스를 프레임 단위로 재생하고, 두 영상을 겹쳐 비교하고(A/B 와이프), 프레임마다 수정 사항 주석을 남기고, OCR·컷 감지로 애니매틱을 구간으로 나눠 클립으로 내보내는 일을 한 창에서 합니다. Mac(Intel·Apple Silicon)과 Windows에서 돌고, 메인 창의 글자는 한국어 / English로 고를 수 있습니다.
 
