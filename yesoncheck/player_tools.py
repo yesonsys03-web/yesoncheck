@@ -17,7 +17,7 @@
   (`apply_tool_panel_state`) — V 키·영상만 전체 화면이 컨트롤(`control_widgets` — 사이드바·재생 줄·슬라이더)을 숨기면
   재생 줄이 숨는 그 순간 패널도 숨고, 되돌아오면 열려 있던 쪽 그대로 같은 폭으로 나타난다. 닫혀 있던 패널은 그동안
   한 번도 보이지 않는다(그래서 패널은 `control_widgets`에 넣지 않는다 — 넣으면 되돌릴 때 일단 보이게 됨).
-  재생 줄의 보임은 작은 이벤트 필터(`_VisibilityWatcher`)가 지켜본다: 숨기고 되돌리는 코드가 여러 곳(V 키 처리 둘,
+  재생 줄의 보임은 작은 이벤트 필터(`window_layout.VisibilityWatcher`)가 지켜본다: 숨기고 되돌리는 코드가 여러 곳(V 키 처리 둘,
   `hide_all_ui_elements`·`restore_ui_elements`)이라 곳마다 부르지 않고.
 
 **스플리터 함정**: `QSplitter.setSizes`는 숨은 칸의 저장된 폭도 고친다 — 사이드바가 숨은 동안(V 키) 0을 넣으면
@@ -25,33 +25,15 @@
 영상 칸에 줌), 폭을 정하는 `setSizes`는 열 때 사이드바가 보이는 경우에만 부른다.
 """
 
-from PyQt5.QtCore import QEvent, QObject
 from PyQt5.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
 
-from yesoncheck import error_window, tool_panel
+from yesoncheck import tool_panel
 from yesoncheck.main_window_styles import OCR_OPTION_LABEL_STYLE
-from yesoncheck.window_layout import VerticalScrollArea
+from yesoncheck.window_layout import VerticalScrollArea, VisibilityWatcher
 
-PANEL_KEYS = ("annotation", "ocr")
 VIDEO_KEEP = 200  # 패널을 열 때 영상 칸에 남겨 두는 폭 — 창이 좁으면 패널이 그만큼 좁게 열림
 PAGE_MARGIN = 10
 OCR_CONTROL_MINIMUM_WIDTH = 140  # 예전 접는 상자 안에서의 최소 폭 그대로
-
-
-class _VisibilityWatcher(QObject):
-    """위젯이 숨겨지거나 다시 보이게 될 때(setVisible) callback()을 부르는 이벤트 필터."""
-
-    def __init__(self, callback, parent):
-        super().__init__(parent)
-        self._callback = callback
-
-    def eventFilter(self, watched, event):
-        if event.type() in (QEvent.ShowToParent, QEvent.HideToParent):
-            try:
-                self._callback()
-            except BaseException:  # 가상 함수 밖으로 예외를 내보내면 PyQt5가 프로세스를 끝냄
-                error_window.report_from_handler("[도구 패널]", "컨트롤을 숨기거나 되돌리며 도구 패널을 맞추다가 오류가 났습니다.")
-        return False
 
 
 class PlayerToolsMixin:
@@ -67,7 +49,8 @@ class PlayerToolsMixin:
         bar = self.transportBar
         bar.annotationButton.clicked.connect(lambda: self.toggle_tool_page("annotation"))
         bar.ocrButton.clicked.connect(lambda: self.toggle_tool_page("ocr"))
-        self._tool_panel_watcher = _VisibilityWatcher(self.apply_tool_panel_state, self)
+        self._tool_panel_watcher = VisibilityWatcher(self.apply_tool_panel_state, self, "[도구 패널]",
+                                                     "컨트롤을 숨기거나 되돌리며 도구 패널을 맞추다가 오류가 났습니다.")
         bar.installEventFilter(self._tool_panel_watcher)  # 재생 줄이 숨거나 되돌아오면 패널도 (모듈 설명)
         return panel
 
@@ -78,7 +61,8 @@ class PlayerToolsMixin:
         layout.setContentsMargins(PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN)
         layout.setSpacing(5)
 
-        mode_label = QLabel('OCR 분석 방식:')
+        mode_label = QLabel()
+        self._ocr_text(mode_label.setText, "ocr.mode.label")
         mode_label.setStyleSheet(OCR_OPTION_LABEL_STYLE)
         self.ocrPatternLabel.setStyleSheet(OCR_OPTION_LABEL_STYLE)
         sections = (

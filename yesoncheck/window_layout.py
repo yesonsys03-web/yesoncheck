@@ -8,6 +8,10 @@
 - InfoRowLayout: 정보 줄 배치. 자리가 있으면 예전 QHBoxLayout + 빈칸과 같은 배치, 모자라면 정해진 순서로 줄임.
 - VerticalScrollArea: 세로로만 스크롤 — 안의 내용이 길어도 창의 최소 높이를 묶지 않음.
 - startup_geometry: 처음 창 크기·위치 (예전처럼 1080×720 이상, 레이아웃이 원하는 크기까지, 화면 작업 영역 안으로).
+- ShrinkButton·ShrinkToolButton(2026-11-16 UI 개편 PR 3): 글자 표(ui_text)의 글을 쓰는 단추. **최소 너비가 언어와 무관**
+  (그 글 키의 모든 언어 글 가운데 가장 좁은 것을 넣은 단추가 바랄 너비)하고, 폭이 모자라면 글을 …로 줄여 그리며
+  (text()는 전체 글 그대로) 그때 자기 툴팁이 없으면 온 글이 툴팁. English 글이 더 길어도 사이드바·창의 최소 너비가
+  커지지 않게 — 안 그러면 언어를 바꾸는 순간 창이 레이아웃의 새 최소 너비까지 저절로 넓어진다.
 
 2026-11-16 UI 개편: 가운데 열이 없어져(주석·OCR은 도구 패널, 작품 고르기는 사이드바) 그 열의 단추 쌍을 놓던
 SteadyTextButton·ButtonPairRow는 지움. 정보 줄은 재생 줄(transport_bar)이 되었고 ElidedLabel·InfoRowLayout을 그대로 씀,
@@ -15,10 +19,16 @@ VerticalScrollArea는 도구 패널의 쪽을 감쌈.
 """
 
 import math
+import sys
 
-from PyQt5.QtCore import QEvent, QMargins, QPoint, QRect, QSize, Qt
+from PyQt5.QtCore import QEvent, QMargins, QObject, QPoint, QRect, QSize, Qt
 from PyQt5.QtGui import QFontMetricsF, QPainter
-from PyQt5.QtWidgets import QFrame, QLabel, QLayout, QScrollArea, QStyle, QStyleOption, QToolTip
+from PyQt5.QtWidgets import (
+    QApplication, QFrame, QLabel, QLayout, QPushButton, QScrollArea, QStyle, QStyleOption, QStyleOptionButton,
+    QStyleOptionToolButton, QStylePainter, QToolButton, QToolTip,
+)
+
+from yesoncheck import error_window, ui_text
 
 # 예전 처음 창: setGeometry(100, 100, 1080, 720)
 DEFAULT_WINDOW_SIZE = QSize(1080, 720)
@@ -74,6 +84,7 @@ class ElidedLabel(QLabel):
         None이면 QLabel처럼 지금 글자의 너비.
     hint_text: hint_width 대신 — 이 글자에 대한 QLabel의 원하는 너비로 고정 (모양이 늘 같은 글자, 예: 시간
         '00:00:00.000 / 00:00:00.000' — 예전과 같은 너비이면서 매 프레임 글자 너비를 다시 재지 않음).
+        글자 여럿(튜플)이면 그 가운데 가장 넓은 것 (언어마다 다른 본보기 — 칸의 너비가 언어를 따르지 않게).
     fit_text: 이 글자를 QLabel 그대로 그리는 너비까지는 빈 공간만 줄임 (InfoRowLayout이 가장 먼저 줄이는 몫).
     shrink_order: InfoRowLayout에서 빈 공간 다음으로 floor_width까지 줄이는 순서 (작을수록 먼저).
     collapse_order: 정하면 모든 라벨이 floor_width가 된 뒤 이 순서에 너비 0까지 (창이 최소 너비 근처일 때만 — 그래서
@@ -146,7 +157,8 @@ class ElidedLabel(QLabel):
             if self._hint_width is not None:
                 fixed = max(self._hint_width, fit or 0, floor)
             elif self._hint_text is not None:
-                fixed = max(self._qlabel_width(self._hint_text, margins, margin), floor)
+                samples = (self._hint_text,) if isinstance(self._hint_text, str) else self._hint_text
+                fixed = max(max(self._qlabel_width(sample, margins, margin) for sample in samples), floor)
             # 한 줄 라벨의 높이는 글자와 상관없음 (QLabel은 글자가 바뀔 때마다 다시 잼 — 그 계산을 건너뜀)
             height = super().sizeHint().height()
             self._widths = (left, right, floor, fit, fixed, height, metrics_f)
@@ -518,3 +530,185 @@ class InfoRowLayout(QLayout):
             x -= widths[i]
             items[i].setGeometry(QRect(x, area.top(), widths[i], area.height()))
             x -= spacing
+
+
+class VisibilityWatcher(QObject):
+    """위젯이 숨겨지거나 다시 보이게 될 때(setVisible — ShowToParent·HideToParent) callback()을 부르는 이벤트 필터. 부른 쪽이 참조를
+    쥘 것(parent). callback의 예외는 밖으로 내보내지 않음(PyQt5 가상 함수 — qFatal): log_prefix·context로 기록 + 오류 창."""
+
+    def __init__(self, callback, parent, log_prefix, context):
+        super().__init__(parent)
+        self._callback = callback
+        self._log_prefix = log_prefix
+        self._context = context
+
+    def eventFilter(self, watched, event):
+        if event.type() in (QEvent.ShowToParent, QEvent.HideToParent):
+            try:
+                self._callback()
+            except BaseException:  # 가상 함수 밖으로 예외를 내보내면 PyQt5가 프로세스를 끝냄
+                error_window.report_from_handler(self._log_prefix, self._context)
+        return False
+
+
+SHRINK_LOG_PREFIX = "[단추]"
+_shrink_failure_shown = False  # 이 프로세스에서 줄여 그리는 단추의 실패를 창으로 알렸음 — 처음 한 번만 (_report_shrink_failure)
+
+
+def _report_shrink_failure(context):
+    """ShrinkButton·ShrinkToolButton의 가상 함수(그리기·툴팁)의 except 블록에서: 이 프로세스에서 처음 한 번은 트레이스백 + 오류 창
+    (error_window.report_from_handler), 그 뒤로는 단추가 달라도 기록(stderr) 한 줄씩 — 그리기는 자주 불려 같은 실패가 창을
+    쌓지 않게(리뷰 M-2; slider_preview의 호버 필터와 같은 규칙). 예외를 내보내지 않음 (PyQt5 가상 함수 — qFatal)."""
+    global _shrink_failure_shown
+    if not _shrink_failure_shown:
+        _shrink_failure_shown = True
+        error_window.report_from_handler(SHRINK_LOG_PREFIX, context)
+        return
+    exc = sys.exc_info()[1]
+    print(f"{SHRINK_LOG_PREFIX} {context} (되풀이 — 트레이스백·오류 창은 처음 한 번만): {type(exc).__name__}: {exc}",
+          file=sys.stderr, flush=True)
+
+
+_CHROME_PROBE ="M" * 40  # 테두리·여백을 잴 때 넣어 보는 긴 글 — 스타일의 '단추 최소 너비'(Fusion 80px 등)에 걸리지 않게
+
+
+class _ShrinkText:
+    """ShrinkButton·ShrinkToolButton이 함께 쓰는 부분: 글 키, 언어와 무관한 최소 너비, 줄여 그릴 글, 줄였을 때의 툴팁.
+
+    바라는 너비(sizeHint)는 Qt의 것 그대로 — 글이 다 들어가는 폭에서는 보통 단추와 같은 크기·같은 그림이다.
+    최소 너비 = 후보 글마다 '그 글을 넣은 단추가 바랄 너비'(`_hint_width` — 하위 클래스가 Qt의 sizeHint와 같은 계산으로
+    스타일에 물음) 가운데 가장 좁은 것. 후보는 `set_text_key`가 받은 키들의 모든 언어 글. 글 폭의 차이를 빼는 식으로 재지
+    않는다 — 스타일에 단추 최소 너비가 있으면 짧은 글의 바라는 너비는 그 바닥이라 뺄셈이 맞지 않는다."""
+
+    def _init_shrink(self):
+        self._shrink_candidates = ()
+
+    def set_text_key(self, key, also=()):
+        """글을 글자 표의 key(지금 언어)로 넣는다. 최소 너비는 key와 also(같은 단추가 다른 상태에서 보이는 글의 키)의
+        모든 언어 글 가운데 가장 좁은 것 — 언어를 바꾸거나 상태가 바뀌어도 그대로."""
+        self._shrink_candidates = tuple(text for name in (key, *also) for text in ui_text.TEXTS[name].values())
+        self.setText(ui_text.text(key))
+        self.updateGeometry()
+
+    def _text_width(self, text):
+        return self.fontMetrics().size(Qt.TextShowMnemonic, text).width()
+
+    def _hint_width(self, text):
+        """text를 넣은 이 단추가 바랄 너비 — 하위 클래스가 Qt의 sizeHint와 같은 계산으로 (글을 실제로 바꾸지 않고)."""
+        raise NotImplementedError
+
+    def _shrink_minimum(self, hint):
+        if not self._shrink_candidates:
+            return hint
+        narrowest = min(self._hint_width(text) for text in self._shrink_candidates)
+        return QSize(min(hint.width(), narrowest), hint.height())
+
+    def drawn_text(self):
+        """지금 폭에 그려지는 글 — 다 들어가면 text() 그대로, 모자라면 …로 줄인 것."""
+        text = self.text()
+        if self.width() >= self._hint_width(text):
+            return text
+        chrome = self._hint_width(_CHROME_PROBE) - self._text_width(_CHROME_PROBE)  # 테두리·여백(·메뉴 표시)
+        return self.fontMetrics().elidedText(text, Qt.ElideRight, max(0, self.width() - chrome))
+
+    def event(self, event):
+        """글이 줄어 그려지는 동안, 자기 툴팁이 없는 단추는 온 글을 툴팁으로 보인다 (자기 툴팁이 있으면 Qt가 그것을)."""
+        try:
+            if event.type() == QEvent.ToolTip and not self.toolTip() and self.drawn_text() != self.text():
+                QToolTip.showText(event.globalPos(), self.text(), self)
+                return True
+        except BaseException:  # 가상 함수 — 예외를 내보내지 않음 (기록 + 오류 창)
+            _report_shrink_failure("단추의 툴팁을 보이다가 오류가 났습니다.")
+        return super().event(event)
+
+
+class ShrinkButton(_ShrinkText, QPushButton):
+    """글자 표의 글을 쓰는 QPushButton — 최소 너비가 언어와 무관하고, 좁으면 글을 …로 줄여 그린다 (모듈 설명)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._init_shrink()
+
+    def _hint_width(self, text):  # QPushButton::sizeHint (Qt 5.15)와 같은 계산
+        self.ensurePolished()
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        option.text = text
+        width = height = 0
+        if not self.icon().isNull():
+            width += option.iconSize.width() + 4
+            height = max(height, option.iconSize.height())
+        size = self.fontMetrics().size(Qt.TextShowMnemonic, text or "XXXX")
+        if text or not width:
+            width += size.width()
+        if text or not height:
+            height = max(height, size.height())
+        option.rect.setSize(QSize(width, height))
+        if self.menu() is not None:
+            width += self.style().pixelMetric(QStyle.PM_MenuButtonIndicator, option, self)
+        wanted = self.style().sizeFromContents(QStyle.CT_PushButton, option, QSize(width, height), self)
+        return wanted.expandedTo(QApplication.globalStrut()).width()
+
+    def minimumSizeHint(self):
+        return self._shrink_minimum(self.sizeHint())
+
+    def paintEvent(self, event):
+        try:
+            drawn = self.drawn_text()
+            if drawn == self.text():
+                super().paintEvent(event)
+                return
+            option = QStyleOptionButton()
+            self.initStyleOption(option)
+            option.text = drawn
+            QStylePainter(self).drawControl(QStyle.CE_PushButton, option)
+        except BaseException:  # 가상 함수 — 예외를 내보내지 않음 (기록 + 오류 창)
+            _report_shrink_failure("단추의 글을 그리다가 오류가 났습니다.")
+
+
+class ShrinkToolButton(_ShrinkText, QToolButton):
+    """같은 규칙의 QToolButton (메뉴가 달린 단추 — 사이드바의 북마크)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._init_shrink()
+
+    def _hint_width(self, text):  # QToolButton::sizeHint (Qt 5.15)와 같은 계산
+        self.ensurePolished()
+        option = QStyleOptionToolButton()
+        self.initStyleOption(option)
+        option.text = text
+        metrics = self.fontMetrics()
+        width = height = 0
+        if option.toolButtonStyle != Qt.ToolButtonTextOnly:
+            width, height = option.iconSize.width(), option.iconSize.height()
+        if option.toolButtonStyle != Qt.ToolButtonIconOnly:
+            size = metrics.size(Qt.TextShowMnemonic, text)
+            text_width = size.width() + metrics.horizontalAdvance(" ") * 2
+            if option.toolButtonStyle == Qt.ToolButtonTextUnderIcon:
+                width, height = max(width, text_width), height + 4 + size.height()
+            elif option.toolButtonStyle == Qt.ToolButtonTextBesideIcon:
+                width, height = width + 4 + text_width, max(height, size.height())
+            else:
+                width, height = text_width, size.height()
+        option.rect.setSize(QSize(width, height))
+        if self.popupMode() == QToolButton.MenuButtonPopup:
+            width += self.style().pixelMetric(QStyle.PM_MenuButtonIndicator, option, self)
+        wanted = self.style().sizeFromContents(QStyle.CT_ToolButton, option, QSize(width, height), self)
+        return wanted.expandedTo(QApplication.globalStrut()).width()
+
+    def minimumSizeHint(self):
+        return self._shrink_minimum(self.sizeHint())
+
+    def paintEvent(self, event):
+        try:
+            drawn = self.drawn_text()
+            if drawn == self.text():
+                super().paintEvent(event)
+                return
+            option = QStyleOptionToolButton()
+            self.initStyleOption(option)
+            option.text = drawn
+            QStylePainter(self).drawComplexControl(QStyle.CC_ToolButton, option)
+        except BaseException:  # 가상 함수 — 예외를 내보내지 않음 (기록 + 오류 창)
+            _report_shrink_failure("단추의 글을 그리다가 오류가 났습니다.")

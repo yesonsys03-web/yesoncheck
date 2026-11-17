@@ -25,12 +25,14 @@ from tests.test_player_hover_thumbs import (  # noqa: F401 (픽스처 — 이 �
 from tests.test_sequence_capture import make_seq
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 from yesoncheck import app, downscale_filter, hover_strip, windows_display
-from yesoncheck.hover_strip import LOG_PREFIX, MENU_TEXT
-from yesoncheck.player_hover_thumbs import HOVER_TIP
+from yesoncheck.hover_strip import LOG_PREFIX
 
 SET_OFF_LOG = f"{LOG_PREFIX} 설정: 끔 (Settings 메뉴)"
 SET_ON_LOG = f"{LOG_PREFIX} 설정: 켬 (Settings 메뉴)"
 SAVE_FAILED_HEAD = "설정을 저장하지 못해 바꾸지 않았습니다.\n"
+# 한국어 화면의 메뉴 글·툴팁 (글자 표 settings.hover_thumbs·settings.hover_thumbs.tip — 시험은 한국어로 돎)
+MENU_TEXT = "슬라이더 썸네일"
+HOVER_TIP = "슬라이더 위에 커서를 올리면 그 프레임의 작은 그림을 보여 줍니다 — 이 창은 바로, 이미 열린 다른 창은 다음에 켤 때부터"
 STARTUP_NOTE = f"이 세션은 슬라이더 썸네일을 끕니다 — Settings → {MENU_TEXT}에서 다시 켤 수 있습니다"
 # 깨진 JSON이면 메뉴도 그 파일을 덮지 않아(저장 실패 창) 'Settings에서 다시 켤 수 있음'이 거짓 — 고치거나 지우라고 안내
 BROKEN_FILE_NOTE = f"이 세션은 슬라이더 썸네일을 끕니다.\n설정 파일을 고치거나 지운 뒤 다시 켜면 켜집니다 — Settings → {MENU_TEXT}은 파일을 덮지 않습니다"
@@ -102,8 +104,8 @@ def test_menu_item_follows_the_display_menu_on_windows(new_player, dialogs, tmp_
     monkeypatch.setattr(sys, "platform", "win32")
     player = new_player(make_config(str(tmp_path), {}))
     texts = [a.text() for a in settings_menu(player).actions()]
-    assert texts.index(MENU_TEXT) == texts.index(windows_display.MENU_TEXT) + 2
-    assert texts[texts.index(windows_display.MENU_TEXT) + 1] == downscale_filter.MENU_TEXT
+    assert texts.index(MENU_TEXT) == texts.index("화면 그리기 (Windows)") + 2
+    assert texts[texts.index("화면 그리기 (Windows)") + 1] == "축소 필터 (Windows)"
     assert texts.count(MENU_TEXT) == 1
 
 

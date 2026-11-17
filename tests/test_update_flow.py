@@ -639,7 +639,7 @@ def test_github_failure_does_not_switch_to_nas(make_offer_player, nas_dir, insta
     [text] = dialogs.criticals
     assert "GitHub" in text and url in text and "404" in text
     assert downloads.calls == [url]  # NAS의 1.1.1로 바꿔 받지 않음
-    assert player.update_banner.full_text() == "⬆ 새 버전 1.1.2이 나왔습니다 · 지금 1.1.0"
+    assert player.update_banner.full_text() == "⬆ 새 버전 1.1.2가 나왔습니다 · 지금 1.1.0"
     http_server.serve("/download/v1.1.2/YesonCheck_Setup_1.1.2.exe", INSTALLER)
     player.update_banner.update_button.click()
     wait_until(lambda: fake_helpers.called)
@@ -1726,3 +1726,32 @@ def test_launch_with_corrupt_record_starts_and_leaves_it_to_startup_result(qapp,
         fh.write("{깨진")
     assert app_module.launch(["yesoncheck"]) == 0
     assert dialogs.messages == [] and len(launched) == 1
+
+
+# ---------------------------------------------------------------- 실패 창의 조사·단추 이름 (2026-11-17 — 리뷰)
+
+def test_startup_failed_picks_the_particles_for_the_versions(tmp_state_dir, player_with_build, dialogs):
+    """버전의 끝 숫자로 조사를 고름 — 예전 글은 늘 '로'·'이(가)' (1.1.10로 업데이트하지 못했습니다)."""
+    write_pending(Pending("1.1.10", "1.1.2", "windows", now()))
+    p = player_with_build("1.1.2")
+    p.handle_update_startup(None)
+    [box] = dialogs.boxes
+    assert "1.1.10으로 업데이트하지 못했습니다 — 지금 버전 1.1.2가 그대로 켜졌습니다." in box.text
+    assert "켜짐: 1.1.10으로 업데이트하지 못해 1.1.2가 켜짐" in update_log()
+
+
+def test_download_failure_dialog_picks_the_particle_and_quotes_the_button_on_screen(player_with_build, dialogs,
+                                                                                    monkeypatch):
+    from types import SimpleNamespace
+
+    from yesoncheck import ui_text
+
+    p = player_with_build("1.1.0")
+    monkeypatch.setattr(p, "_restore_update_offer", lambda run: None)
+    run = SimpleNamespace(version="1.1.10", current="1.1.0", source="NAS", location="/nas/x")
+    p._show_update_failure(run, "이유")
+    ui_text.set_language("en")
+    p._show_update_failure(run, "이유")
+    first, second = (box.text for box in dialogs.boxes)
+    assert "1.1.10으로 업데이트하지 못했습니다." in first and "다시 '업데이트'를 누르면" in first
+    assert "다시 'Update' 단추를 누르면" in second

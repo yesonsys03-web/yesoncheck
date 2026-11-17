@@ -9,10 +9,8 @@ from dataclasses import dataclass
 
 from PyQt5.QtCore import Qt
 
-LOADING_TITLE_SUFFIX = " — 공유 설정 불러오는 중…"  # 불러오는 동안 창 제목: build_info.title_base() 뒤에 붙임
+# 창 제목의 꼬리(불러오는 중·오류)와 작품·시즌·job 콤보의 안내 항목은 글자 표(ui_text — title.*·picker.*)에서 읽음(언어를 따름)
 LOADING_NOTICE = "공유 설정을 불러오는 중입니다. 잠시 뒤 다시 시도하세요."
-LOADING_WORK_ITEM = "공유 설정 불러오는 중…"  # 불러오는 동안 작품 목록의 첫 항목 ("작품선택" 대신)
-WORK_PLACEHOLDER = "작품선택"
 NO_SEASON_WORKS = ("The_Johnsons", "TJS_Animatic")  # 시즌이 없는 작품: 작품 폴더 바로 아래가 job (작품 → job)
 THUMBNAIL_SAVE_FAILED = "썸네일 저장 실패"  # 썸네일 파일을 쓰지 못함 (창 제목)
 THUMBNAIL_FOLDER_PROBLEM = "썸네일 폴더 문제"  # 썸네일 폴더를 만들지 못함 등 (창 제목)

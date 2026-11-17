@@ -63,7 +63,7 @@ from dataclasses import dataclass, field
 from PyQt5.QtCore import QThread, QTimer, pyqtSignal
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
-from yesoncheck import build_info, instance_link, instances, timing_log, update_install, updates
+from yesoncheck import build_info, instance_link, instances, timing_log, ui_text, update_install, updates
 from yesoncheck.player_base import EXIT_WAIT_S, VideoPlayerBase, release_worker
 
 CHECK_TITLE = "업데이트 확인"
@@ -77,11 +77,12 @@ UPDATE_FAILED_TITLE = "업데이트 실패"
 CANNOT_UPDATE_TITLE = "업데이트할 수 없음"
 BUSY_TITLE = "업데이트"
 BUSY_QUESTION = "진행 중인 작업({jobs})을 멈추고 업데이트할까요?"
-UPDATED_MESSAGE = "{version}로 업데이트했습니다"
-DOWNLOAD_TEXT = "{version} 받는 중 ({source})… {done} / {total} MB"
-STAGING_TEXT = "준비 중…"
-CANCELLING_TEXT = "취소하는 중…"
-HELPER_STARTING_TEXT = "업데이트 도우미를 시작하는 중…"
+# 알림 띠에 보이는 글 — ui_text.Message: 값은 한국어 글(기록 줄·비교), 띠에는 지금 언어로 보임(글자 표 update.*)
+STAGING_TEXT = ui_text.Message("update.staging")  # "준비 중…"
+CANCELLING_TEXT = ui_text.Message("update.cancelling")  # "취소하는 중…"
+HELPER_STARTING_TEXT = ui_text.Message("update.helper")  # "업데이트 도우미를 시작하는 중…"
+# 받기 스레드가 진행 신호에 싣는 단계 — 띠의 글은 받는 쪽(GUI 스레드의 _on_update_progress)이 지금 언어로 만듦
+STAGE_DOWNLOAD, STAGE_STAGING = "download", "staging"
 # 도우미가 시작 기록 없이 끝났거나 시간이 지남 → 앱을 끝내지 않은 이유 (_helper_start_failed)
 HELPER_BLOCKED_NOTE = "앱을 끝내면 다시 켜 줄 것이 없어 끝내지 않았습니다 (보안 정책·백신이 도우미를 막았을 수 있음)."
 DETAILS_HINT = "전체 기록은 아래 'Show Details…' 단추를 누르면 보입니다."
@@ -100,8 +101,8 @@ NO_RESPONSE = "응답 없음"
 OTHER_USER_MESSAGE = "다른 사용자({user})가 YesonCheck를 쓰고 있어 업데이트할 수 없습니다"
 UPDATE_STOPPED_TITLE = "업데이트 멈춤"
 UPDATE_STOPPED = "업데이트를 멈췄습니다 — 이 창이 닫히지 않았습니다: {windows}"
-CHECKING_OTHERS_TEXT = "다른 창 확인 중…"
-CLOSING_OTHERS_TEXT = "다른 창을 닫는 중…"
+CHECKING_OTHERS_TEXT = ui_text.Message("update.checking")  # "다른 창 확인 중…"
+CLOSING_OTHERS_TEXT = ui_text.Message("update.closing")  # "다른 창을 닫는 중…"
 UPDATE_JOB_LABEL = "업데이트 받기"  # 다른 창의 업데이트가 묻는 이 창의 작업 (이 창의 업데이트가 진행 중)
 # 다른 창 하나에 상태를 묻거나 닫기를 요청하는 한도. Windows는 파이프 연결이 이보다 최대 약 5초 더 걸릴 수 있음
 # (WaitNamedPipe) — 뒤 스레드에서 차례로 하므로 창은 멈추지 않음
@@ -159,8 +160,20 @@ class UpdateCheck(QThread):
 
 
 def download_text(version, source, done, total):
-    """받는 중인 띠의 글: "1.1.1 받는 중 (NAS)… 120.0 / 730.0 MB"."""
-    return DOWNLOAD_TEXT.format(version=version, source=source, done=f"{done / 1e6:,.1f}", total=f"{total / 1e6:,.1f}")
+    """받는 중인 띠의 글: "1.1.1 받는 중 (NAS)… 120.0 / 730.0 MB" (ui_text.Message — 띠에는 지금 언어로)."""
+    return ui_text.Message("update.download", version=version, source=source, done=f"{done / 1e6:,.1f}",
+                           total=f"{total / 1e6:,.1f}")
+
+
+def repr_button(name):
+    """딸린 창 글이 띠의 단추 이름을 인용하는 모양: '업데이트' (따옴표째 — with_particle에 넘김)."""
+    return f"'{name}'"
+
+
+def updated_message(version):
+    """다시 켜진 앱이 띠와 기록에 남기는 글: "1.1.1로 업데이트했습니다"·"1.10.0으로 업데이트했습니다" (ui_text.Message — 기록은
+    한국어, 띠는 지금 언어; 조사는 버전의 끝 숫자로)."""
+    return ui_text.Message("update.updated", **ui_text.version_values(version))
 
 
 def remove_prepared(path):
@@ -297,7 +310,7 @@ class UpdateDownload(QThread):
         path = update_install.download(self._location, self._entry, self._dest_dir,
                                        lambda done, _total: self._report(done), self._cancel.is_set)
         if self._app_path is not None:
-            self.progress.emit(0, 0, STAGING_TEXT)
+            self.progress.emit(0, 0, STAGE_STAGING)
             staged = update_install.stage_mac(path, self._app_path, self._version)
             os.remove(path)  # 새 앱을 꺼낸 dmg는 더 쓰지 않음
             path = staged
@@ -308,7 +321,7 @@ class UpdateDownload(QThread):
 
     def _report(self, done):
         total = self._entry.size
-        self.progress.emit(done, total, download_text(self._version, self._source, done, total))
+        self.progress.emit(done, total, STAGE_DOWNLOAD)
 
     def _forget(self):
         self.wait()  # finished는 스레드가 끝나기 직전에 옴 → 완전히 끝날 때까지 (곧 끝남)
@@ -727,8 +740,11 @@ class PlayerUpdateMixin:
         lines.append("")
         offer = result.offer
         if offer is not None:
-            lines.append(f"새 버전 {offer.manifest.version}이 있습니다 ({offer.result.source}에서 받음). "
-                         "창 위 알림 띠에서 '업데이트'를 누르세요.")
+            # 창의 글은 한국어 그대로, 인용하는 띠의 단추 이름은 지금 화면의 글(글자 표 — 언어를 따름)
+            version = offer.manifest.version
+            button = ui_text.with_particle(repr_button(ui_text.text('update.update')), "를", noun="단추")
+            lines.append(f"새 버전 {version}{ui_text.particle(version, '이/가')} 있습니다 ({offer.result.source}에서 받음). "
+                         f"창 위 알림 띠에서 {button} 누르세요.")
         elif all(r.manifest is not None for r in result.results):
             lines.append("지금 버전이 최신입니다.")
         else:
@@ -1109,12 +1125,18 @@ class PlayerUpdateMixin:
         run.download.cancel()
         self.update_banner.show_progress(0, 0, CANCELLING_TEXT)
 
-    def _on_update_progress(self, done, total, text):
-        """(GUI 스레드) 받기·준비 진행을 띠에. 취소를 누른 뒤에는 "취소하는 중…" 그대로."""
+    def _on_update_progress(self, done, total, stage):
+        """(GUI 스레드) 받기·준비 진행을 띠에. 취소를 누른 뒤에는 "취소하는 중…" 그대로. 받기 스레드는 단계(STAGE_DOWNLOAD·
+        STAGE_STAGING)만 알리고 띠의 글은 여기서 지금 언어로 만든다."""
         run = self._update_run
         if run is None or run.download.is_cancelled():
             return
+        text = STAGING_TEXT if stage == STAGE_STAGING else download_text(run.version, run.source, done, total)
         self.update_banner.show_progress(done, total, text)
+
+    def retranslate_update_banner(self):
+        """알림 띠의 단추와 보이던 글을 지금 언어로 (언어가 바뀐 뒤 — PlayerLanguageMixin.RETRANSLATORS)."""
+        self.update_banner.retranslate()
 
     def _end_update_download(self):
         """받기가 끝남 → 그 업데이트(_UpdateRun), 창을 닫은 뒤면 None. 결과를 받는 세 슬롯이 맨 먼저 부름 — GUI 스레드가
@@ -1318,8 +1340,9 @@ class PlayerUpdateMixin:
         self._restore_update_offer(run)
         show_details_box(
             self, UPDATE_FAILED_TITLE,
-            f"{run.version}로 업데이트하지 못했습니다.\n\n{_summary(text)}\n\n출처: {run.source}\n위치: {run.location}\n\n"
-            f"지금 버전({run.current})은 그대로입니다. 다시 '업데이트'를 누르면 처음부터 다시 받습니다.\n\n{DETAILS_HINT}",
+            f"{run.version}{ui_text.particle(run.version, '으로/로')} 업데이트하지 못했습니다.\n\n{_summary(text)}\n\n출처: {run.source}\n위치: {run.location}\n\n"
+            f"지금 버전({run.current})은 그대로입니다. 다시 "
+            f"{ui_text.with_particle(repr_button(ui_text.text('update.update')), '를', noun='단추')} 누르면 처음부터 다시 받습니다.\n\n{DETAILS_HINT}",
             text,
         )
 
@@ -1391,7 +1414,7 @@ class PlayerUpdateMixin:
             return
         kind, pending = result
         if kind == "ok":
-            message = UPDATED_MESSAGE.format(version=pending.target)
+            message = updated_message(pending.target)
             _log_update(f"켜짐: {message} (전 버전 {pending.previous})")
             self.update_banner.show_message(message)
             remove_downloads()
@@ -1399,10 +1422,12 @@ class PlayerUpdateMixin:
         # 도우미가 기록을 쓰기 전에 실패했으면(PowerShell·bash가 스크립트를 시작하지 못함 등) 그 이유는 도우미 출력에만 있음
         tail, extra = _update_log_report(pending)
         # 기록에도 — 도우미 출력 파일은 다음 업데이트에서 새로 쓰므로 그 내용이 남는 곳은 기록뿐
-        _log_update(f"켜짐: {pending.target}로 업데이트하지 못해 {pending.previous}이(가) 켜짐 — 실패 창{extra}")
+        target = f"{pending.target}{ui_text.particle(pending.target, '으로/로')}"
+        previous = f"{pending.previous}{ui_text.particle(pending.previous, '이/가')}"
+        _log_update(f"켜짐: {target} 업데이트하지 못해 {previous} 켜짐 — 실패 창{extra}")
         show_details_box(
             self, UPDATE_FAILED_TITLE,
-            f"{pending.target}로 업데이트하지 못했습니다 — 지금 버전 {pending.previous}이(가) 그대로 켜졌습니다.\n\n"
+            f"{target} 업데이트하지 못했습니다 — 지금 버전 {previous} 그대로 켜졌습니다.\n\n"
             f"업데이트 기록: {update_install.log_path()} ({pending.started}부터)\n\n{DETAILS_HINT}",
             f"업데이트 기록 ({update_install.log_path()}, {pending.started}부터):\n{tail}{extra}",
         )

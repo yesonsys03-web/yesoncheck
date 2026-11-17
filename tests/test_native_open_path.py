@@ -31,9 +31,12 @@ from yesoncheck import mac_native_source, movie_pipe_source, player_playback
 from yesoncheck.frame_handles import native_surface_of
 from yesoncheck.gl_video_item import VIDEO_ITEM_ENV
 from yesoncheck.mac_native_gate import native_ineligible_reason
-from yesoncheck.mac_native_source import NATIVE_ESCAPE_HINT, NativeCaptureError
+from yesoncheck.mac_native_source import NativeCaptureError
 from yesoncheck.movie_pipe_source import FFmpegPipeCapture, PipeCaptureError, maybe_pipe_capture, probe_movie
 from yesoncheck.video_widget import VIEWPORT_ENV
+
+NATIVE_ESCAPE_HINT = ("탈출구(네이티브 재생을 끄고 ffmpeg 파이프로 엶): Settings → 재생 디코더 (Mac) → ffmpeg (예전 방식) — "
+                      "또는 환경 변수 YESONCHECK_MAC_NATIVE=off (그 실행만)")  # 한국어 화면의 글 — native_escape_hint()
 
 ENV = "YESONCHECK_MOVIE_SOURCE"
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

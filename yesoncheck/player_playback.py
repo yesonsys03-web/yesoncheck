@@ -405,10 +405,7 @@ class PlayerPlaybackMixin:
                 self.filename_b = file_path
                 self.cap_b = cap
 
-            if self.filename_a and self.filename_b:
-                self.filenameLabel.setText(f"A: {os.path.basename(self.filename_a)}, B: {os.path.basename(self.filename_b)}")
-            elif self.filename_a:
-                self.filenameLabel.setText(f"A: {os.path.basename(self.filename_a)}")
+            self.show_file_names()
 
             self.videoWidget.initial_fit = True
             self.labelPlaybackFPS.setText('재생: 대기')
@@ -506,7 +503,7 @@ class PlayerPlaybackMixin:
         - 원하면 ffprobe 한 번(probe_for_open — 못 읽으면 파이프와 같은 규칙: auto는 기록 뒤 None이라 cv2, pipe는 PipeCaptureError)으로 네이티브
           게이트를 보고 그 probe를 파이프 판정에 그대로 넘김(ffprobe를 두 번 돌리지 않음). 양성이면 네이티브 캡처(기록 줄은 open_native_capture가
           남김). 못 열면(NativeCaptureError — PyObjC 없음도 생성자가 이것으로 감쌈) 스택 트레이스·기록 한 줄·오류 창(끝 줄은 탈출구 안내
-          NATIVE_ESCAPE_HINT)으로 알린 뒤 파이프로 계속(스펙 §5.3 — 조용한 폴백이 아니라 알린 뒤 이어감). 음성이면 사유 한 줄
+          native_escape_hint())으로 알린 뒤 파이프로 계속(스펙 §5.3 — 조용한 폴백이 아니라 알린 뒤 이어감). 음성이면 사유 한 줄
           `[재생] 네이티브(VideoToolbox): 아님 — <사유>: <이름>` 뒤 파이프.
         PipeCaptureError(pipe 모드의 ffprobe 실패·게이트 불통과, 파이프를 열지 못함)는 그대로 올라가 _open_movie_capture의 파이프 오류 창으로.
         그 밖의 예외(ToolNotFoundError·코드 버그)도 잡지 않음."""
@@ -531,7 +528,7 @@ class PlayerPlaybackMixin:
                 print(f"{mac_native_source.NATIVE_LOG_PREFIX} 열지 못해 ffmpeg 파이프로 계속: {name}")
                 QMessageBox.critical(self, "영상을 열 수 없음(네이티브)",
                                      f"VideoToolbox(네이티브)로 영상을 열지 못해 ffmpeg 파이프로 계속합니다: {file_path}\n"
-                                     f"이유: {type(e).__name__}: {e}\n\n{details}\n{mac_native_source.NATIVE_ESCAPE_HINT}")
+                                     f"이유: {type(e).__name__}: {e}\n\n{details}\n{mac_native_source.native_escape_hint()}")
         return maybe_pipe_capture(file_path, full_cache=True, probe=probe)
 
     def _open_sequence_capture(self, file_path):
@@ -589,7 +586,18 @@ class PlayerPlaybackMixin:
             self.frame_b = None
         if cap is not None:
             cap.release()
-        self.filenameLabel.setText(f"A: {os.path.basename(self.filename_a)}" if self.filename_a else "")
+        self.show_file_names()
+
+    def show_file_names(self):
+        """재생 줄의 파일 이름: 'A: a.mov' — B는 화면에 보일 때(와이프가 켜진 동안)만 ', B: b.mov'를 붙임 (사용자 결정 2026-11-17 —
+        예전에는 B를 열면 와이프를 꺼도 B 이름이 남았음). 연 A가 없으면 빈 글. 영상을 열고 닫을 때·와이프를 켜고 끌 때 부름."""
+        if not self.filename_a:
+            self.filenameLabel.setText("")
+            return
+        text = f"A: {os.path.basename(self.filename_a)}"
+        if self.filename_b and self.videoWidget.wipeEnabled:
+            text += f", B: {os.path.basename(self.filename_b)}"
+        self.filenameLabel.setText(text)
 
     def _drop_audio_media(self):
         """소리 재생기가 연 영상을 멈추고 놓음 (멈추기만 하면 재생 버튼이 옛 영상의 소리를 다시 냄).
@@ -2563,6 +2571,7 @@ class PlayerPlaybackMixin:
     def toggle_wipe_effect(self, state):
         enabled = state == Qt.Checked
         self.videoWidget.toggleWipeEffect(enabled)
+        self.show_file_names()  # B 이름은 와이프가 켜진 동안만
         self.wipeXButton.setEnabled(enabled)
         self.wipeYButton.setEnabled(enabled)
         if not enabled:

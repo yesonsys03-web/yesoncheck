@@ -637,3 +637,101 @@ def test_theme_recolours_the_toggle_icons(bar, qapp):
         expected = transport_icons.icon(kind, QColor("#333333")).pixmap(18, 18).toImage().convertToFormat(QImage.Format_ARGB32)
         assert icon_pixels(button) == bytes(expected.bits().asarray(expected.byteCount())), kind
     bar.apply_theme("dark")
+
+
+# ---------------------------------------------------------------- 언어 (UI 개편 PR 3)
+
+@pytest.mark.parametrize("raw, ko, en", [
+    ("재생: 24 FPS · 실제 23.8", "24 fps · 실제 23.8", "24 fps · real 23.8"),
+    ("재생: 23.976 FPS", "23.976 fps", "23.976 fps"),
+    ("재생: 0 FPS", "0 fps", "0 fps"),
+    ("재생: 대기", "대기", "idle"),
+    ("재생: 정지", "정지", "stopped"),
+    ("재생: 일시정지", "일시정지", "paused"),
+    ("알 수 없는 꼴", "알 수 없는 꼴", "알 수 없는 꼴"),
+    ("재생: 모르는 상태", "모르는 상태", "모르는 상태"),
+])
+def test_fps_cell_text_by_language(raw, ko, en):
+    """재생 코드가 넣는 규약 글(한글 — 번역하지 않음)에서 fps 칸에 보일 글을 지금 언어로. 모르는 꼴은 받은 글 그대로."""
+    assert shown_fps(raw) == ko
+    ui_text.set_language("en")
+    assert shown_fps(raw) == en
+
+
+def test_fps_state_is_redrawn_when_the_language_changes(bar):
+    """멈춤·정지·대기 글은 재생 코드가 다시 보내지 않음 — 막대가 받은 규약 글을 기억했다가 다시 그림."""
+    slot = TextSlot("", bar.show_fps)  # 플레이어가 꽂는 것과 같은 어댑터
+    slot.setText("재생: 일시정지")
+    assert bar.fpsLabel.text() == "일시정지"
+    ui_text.set_language("en")
+    bar.retranslate()
+    assert bar.fpsLabel.text() == "paused" and slot.text() == "재생: 일시정지"  # 규약 글은 그대로
+    ui_text.set_language("ko")
+    bar.retranslate()
+    assert bar.fpsLabel.text() == "일시정지"
+
+
+def test_retranslate_before_any_fps_text_leaves_the_cell_empty(bar):
+    bar.retranslate()
+    assert bar.fpsLabel.text() == ""
+
+
+def test_fps_cell_width_does_not_depend_on_language_and_fits_both(bar, qapp):
+    """fps 칸의 원하는 너비는 두 언어의 본보기 가운데 넓은 쪽 — 언어를 바꿔도 같고, 어느 언어의 가장 긴 글도 줄지 않음."""
+    set_width(bar, bar.sizeHint().width() + 200, qapp)
+    korean = bar.fpsLabel.sizeHint().width()
+    for code, longest in (("ko", "23.976 fps · 실제 23.9"), ("en", "23.976 fps · real 23.9")):
+        switch_language(bar, qapp, code)
+        bar.show_fps("재생: 23.976 FPS · 실제 23.9")
+        qapp.processEvents()
+        assert bar.fpsLabel.sizeHint().width() == korean, code
+        assert bar.fpsLabel.text() == bar.fpsLabel.displayed_text() == longest, code
+
+
+def switch_language(bar, qapp, code):
+    """막대의 언어를 바꾸고 배치가 가라앉을 때까지 — 토글 묶음 → 오른쪽 구역 → 막대로 레이아웃 요청이 한 단계씩 올라감."""
+    ui_text.set_language(code)
+    bar.retranslate()
+    for _ in range(3):
+        qapp.processEvents()
+
+
+def language_spots(bar, qapp, code):
+    switch_language(bar, qapp, code)
+    return spots(bar)
+
+
+def test_minimum_width_does_not_depend_on_language(bar, qapp):
+    korean = bar.minimumSizeHint().width()
+    switch_language(bar, qapp, "en")
+    assert bar.minimumSizeHint().width() == korean
+
+
+def test_buttons_and_frame_field_stay_put_across_languages_until_the_toggle_texts_fit(bar, qapp):
+    """단추 여섯·프레임 칸의 자리: 토글의 글자가 다 들어가지 않는 폭(가장 좁은 언어의 원하는 너비 이하)에서는 두 언어에서 같음 —
+    언어마다 다른 것은 토글의 글자 폭뿐이고 그 글자는 가장 먼저 빠짐. 아주 넓어 단추가 한가운데 놓일 때도 단추 여섯은 같음
+    (프레임 칸은 오른쪽 구역의 첫 칸이라 그때는 토글 글자 폭의 차이만큼 다름 — 아래 시험)."""
+    wanted = {}
+    for code in ("ko", "en"):
+        switch_language(bar, qapp, code)
+        wanted[code] = bar.sizeHint().width()
+    for width in (min(wanted.values()), min(wanted.values()) - 150, bar.minimumSizeHint().width() + 60, bar.minimumSizeHint().width()):
+        set_width(bar, width, qapp)
+        assert language_spots(bar, qapp, "ko") == language_spots(bar, qapp, "en"), width
+    set_width(bar, 3 * max(wanted.values()), qapp)  # 한가운데
+    korean, english = language_spots(bar, qapp, "ko"), language_spots(bar, qapp, "en")
+    assert korean[:6] == english[:6]
+    assert korean[0][0] == (bar.width() - (korean[5][0] + korean[5][2] - korean[0][0])) // 2  # 단추 묶음이 막대 한가운데
+
+
+def test_between_languages_only_the_toggle_texts_move_the_buttons(bar, qapp):
+    """토글의 글자가 다 보이는 폭에서 두 언어의 자리 차이 = 토글 묶음의 원하는 너비 차이 (그 밖의 칸은 언어와 무관한 너비)."""
+    hints = {}
+    for code in ("ko", "en"):
+        switch_language(bar, qapp, code)
+        hints[code] = (bar.sizeHint().width(), bar.toolGroup.sizeHint().width())
+    assert hints["ko"][0] - hints["en"][0] == hints["ko"][1] - hints["en"][1]
+    set_width(bar, max(hints["ko"][0], hints["en"][0]) + 10, qapp)  # 두 언어 모두 글자까지 보임, 단추는 오른쪽 구역 앞
+    korean, english = language_spots(bar, qapp, "ko"), language_spots(bar, qapp, "en")
+    shift = hints["en"][1] - hints["ko"][1]
+    assert [(k[0] - e[0], k[1] - e[1], k[2] - e[2], k[3] - e[3]) for k, e in zip(korean, english)] == [(shift, 0, 0, 0)] * len(korean)

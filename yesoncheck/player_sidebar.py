@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
 )
 
-from yesoncheck import paths, video_list
+from yesoncheck import paths, ui_text, video_list
 # PlayerSidebarMixin의 부모 믹스인 (북마크, 선택 재생, 공유 설정·작품 경로, 목록 다시 읽기, Seq 탭, 썸네일)
 from yesoncheck.sidebar_all import SidebarAllMixin
 from yesoncheck.sidebar_bookmarks import SidebarBookmarksMixin
@@ -228,34 +228,34 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
 
     def _build_sidebar_menu(self, menu, index):
         """Mov 항목 메뉴의 동작들 (index는 Mov 목록의 줄 — All 탭도 선택을 비춘 뒤 같은 동작을 씀)."""
-        open_video_a_action = menu.addAction("비디오 A 열기")
+        open_video_a_action = menu.addAction(ui_text.text("side_menu.open_a"))
         open_video_a_action.triggered.connect(lambda: self.open_video_a(index))
-        open_video_b_action = menu.addAction("비디오 B 열기")
+        open_video_b_action = menu.addAction(ui_text.text("side_menu.open_b"))
         open_video_b_action.triggered.connect(lambda: self.open_video_b(index))
 
         # 구분선 추가
         menu.addSeparator()
 
-        merge_videos_action = menu.addAction("애니매틱 하나로 합치기")
+        merge_videos_action = menu.addAction(ui_text.text("side_menu.merge"))
         merge_videos_action.triggered.connect(self.merge_videos)
 
         # 구분선 추가
         menu.addSeparator()
 
-        copy_file_action = menu.addAction("파일 복사")
+        copy_file_action = menu.addAction(ui_text.text("side_menu.copy"))
         copy_file_action.triggered.connect(self.copy_selected_files)  # copy_selected_files 메서드 호출
 
         # 구분선 추가
         menu.addSeparator()
 
         # 썸네일 재생성 메뉴 추가
-        regenerate_thumbnail_action = menu.addAction("썸네일 재생성")
+        regenerate_thumbnail_action = menu.addAction(ui_text.text("side_menu.thumbnails"))
         regenerate_thumbnail_action.triggered.connect(lambda: self.regenerate_selected_thumbnails())
 
         # 구분선 추가
         menu.addSeparator()
 
-        video_info_action = menu.addAction("미디어 정보")
+        video_info_action = menu.addAction(ui_text.text("side_menu.info"))
         video_info_action.triggered.connect(lambda: self.show_video_info(index))
 
     def copy_selected_files(self):
@@ -285,7 +285,7 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         selected_work = self.workComboBox.currentText()
         self._work_path_problems_shown = set()
         self.seasonComboBox.clear()
-        self.seasonComboBox.addItem("시즌선택")
+        self.seasonComboBox.addItem(ui_text.text("picker.season"))
 
         try:
             # JSON에서 작품 경로 가져오기
@@ -299,7 +299,7 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
                 season_list = []  # 시즌 목록 없음
                 # 시즌 선택 없이 바로 job 목록 가져오기
                 self.jobComboBox.clear()
-                self.jobComboBox.addItem("job선택")
+                self.jobComboBox.addItem(ui_text.text("picker.job"))
                 try:
                     if os.path.isdir(path):
                         job_list = [
@@ -321,7 +321,7 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
                 season_list = []  # 시즌 목록 없음
                 # 시즌 선택 없이 바로 job 목록 가져오기
                 self.jobComboBox.clear()
-                self.jobComboBox.addItem("job선택")
+                self.jobComboBox.addItem(ui_text.text("picker.job"))
                 try:
                     if os.path.isdir(path):
                         job_list = [
@@ -388,7 +388,7 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         # The_Johnsons, TJS_Animatic는 시즌이 없으므로 시즌 선택 없이도 job 목록 가져오기
         if selected_work == "The_Johnsons":
             self.jobComboBox.clear()
-            self.jobComboBox.addItem("job선택")
+            self.jobComboBox.addItem(ui_text.text("picker.job"))
             path = base_path
             try:
                 if os.path.isdir(path):
@@ -410,7 +410,7 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         
         if selected_work == "TJS_Animatic":
             self.jobComboBox.clear()
-            self.jobComboBox.addItem("job선택")
+            self.jobComboBox.addItem(ui_text.text("picker.job"))
             path = base_path
             try:
                 if os.path.isdir(path):
@@ -433,7 +433,7 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         # '시즌선택'으로 돌리면 'job선택'만. 예전에는 '시즌선택'이 아닌 글자를 시즌으로 여겨, 시즌 목록을 비울 때(clear가 빈
         # 글자로 보냄) 작품 폴더의 하위 폴더를 job으로 넣고 이어서 온 '시즌선택'에서는 그 목록을 그대로 두었음
         self.jobComboBox.clear()
-        self.jobComboBox.addItem("job선택")
+        self.jobComboBox.addItem(ui_text.text("picker.job"))
         if self._picked(self.seasonComboBox):
             try:
                 # JSON에서 가져온 기본 경로와 시즌을 결합
@@ -529,7 +529,9 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
             self.open_file('A', selected_items[0].toolTip())
 
     def _job_selection(self):
-        return (self.workComboBox.currentText(), self.seasonComboBox.currentText(), self.jobComboBox.currentText())
+        """(작품, 시즌, job) — '읽은 job'의 표지로 견줌. 고르지 않은 칸은 안내 글이 아니라 None(안내 글은 언어를 따름)."""
+        return tuple(combo.currentText() if self._picked(combo) else None
+                     for combo in (self.workComboBox, self.seasonComboBox, self.jobComboBox))
 
     @staticmethod
     def _picked(combo):

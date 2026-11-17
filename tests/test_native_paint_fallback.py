@@ -34,6 +34,7 @@ from tests.native_fakes import (  # noqa: F401 (픽스처 — new_player는 nati
 from tests.test_decoder_menu import checked, forbid_save, paint_on_raster, read_text, write_prefs
 from tests.test_decoder_swap import fake_probe
 from tests.test_gl_video_item import FakeCGL, FakeGLPainter, gl_contexts, paint_gl, recording_gl  # noqa: F401 (픽스처 둘)
+from yesoncheck import ui_text
 from yesoncheck import app, error_window, gl_bindings, gl_surface, gl_video_item, mac_native_gate, mac_prefs, player_base, \
     player_playback
 from yesoncheck.frame_handles import native_surface_of
@@ -196,7 +197,7 @@ def test_rgb_paint_failure_keeps_old_behaviour(fake_native_player, auto, fake_gl
     assert (kind, title) == ("critical", error_window.TITLE) and first_line(text) == OLD_FIRST_LINE
     assert text.endswith(f"\n\n{MENU_HINT}\n{ENV_HINT}")
     assert SWITCH_LOG not in capsys.readouterr().out
-    assert checked(player) == ["videotoolbox"] and player.decoder_actions["videotoolbox"].toolTip() == player_base.DECODER_TIP
+    assert checked(player) == ["videotoolbox"] and player.decoder_actions["videotoolbox"].toolTip() == ui_text.text("settings.decoder.tip")
 
 
 def test_native_paint_failure_off_mac_changes_nothing(auto, player_with_fake_native, fake_gl, dialogs, monkeypatch, capsys, qapp):
@@ -242,7 +243,7 @@ def test_menu_reflects_the_runtime_switch(fake_native_player, auto, fake_gl, pro
     assert checked(player) == ["ffmpeg"]
     tip = player.decoder_actions["ffmpeg"].toolTip()
     assert tip == RUNTIME_SOURCE and "이 창만" in tip
-    assert player.decoder_actions["videotoolbox"].toolTip() == player_base.DECODER_TIP
+    assert player.decoder_actions["videotoolbox"].toolTip() == ui_text.text("settings.decoder.tip")
     assert all(action.isEnabled() for action in player.decoder_actions.values())
     assert read_text(path) == text
     app.load_playback_decoder()  # 다음에 켜는 창의 시작 읽기
@@ -384,7 +385,7 @@ def test_choosing_ffmpeg_in_a_window_stuck_on_a_native_frame_swaps_again(stuck, 
     [new_cap] = opened
     assert isinstance(new_cap, cv2.VideoCapture) and player.cap_a is new_cap
     assert item._failed is False and not item.has_native_side() and item.failure_count == 1
-    assert checked(player) == ["ffmpeg"] and player.decoder_actions["ffmpeg"].toolTip() == player_base.DECODER_TIP
+    assert checked(player) == ["ffmpeg"] and player.decoder_actions["ffmpeg"].toolTip() == ui_text.text("settings.decoder.tip")
     out = capsys.readouterr().out
     assert out.count(RETRY_LOG + "\n") == 1 and "캡처를 다시 열지 않음" not in out
     assert dialogs.messages == []
@@ -419,7 +420,7 @@ def test_choosing_ffmpeg_in_a_window_latched_on_an_rgb_picture_swaps_again_and_r
     [new_cap] = opened
     assert isinstance(new_cap, cv2.VideoCapture) and player.cap_a is new_cap
     assert item.latched is False and not item.has_native_side()
-    assert checked(player) == ["ffmpeg"] and player.decoder_actions["ffmpeg"].toolTip() == player_base.DECODER_TIP
+    assert checked(player) == ["ffmpeg"] and player.decoder_actions["ffmpeg"].toolTip() == ui_text.text("settings.decoder.tip")
     out = capsys.readouterr().out
     assert out.count(RETRY_LOG + "\n") == 1 and "캡처를 다시 열지 않음" not in out
     assert dialogs.messages == []

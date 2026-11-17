@@ -18,10 +18,9 @@
 
 from PyQt5 import sip
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QPushButton
-
 from yesoncheck import ui_text
 from yesoncheck.transport_bar import PlayStateSlot, TextSlot, TransportBar
+from yesoncheck.window_layout import ShrinkButton
 
 
 class PlayerTransportMixin:
@@ -61,12 +60,17 @@ class PlayerTransportMixin:
         bar.frameField.frameEntered.connect(self.go_to_frame_number)
         bar.frameField.editingEnded.connect(self.setFocus)  # 창이 포커스를 되찾아 Space·← → 같은 단축키가 다시 먹게
 
-        self.endPlaylistButton = QPushButton(ui_text.text("playlist.end"))
+        self.endPlaylistButton = ShrinkButton()  # 최소 너비가 언어와 무관 — 나타날 때 사이드바를 넓히지 않게
         self.endPlaylistButton.setObjectName("playlistEndButton")  # 색·모양은 두 테마 시트의 #playlistEndButton
-        self.endPlaylistButton.setToolTip(ui_text.text("playlist.end.tip"))
+        self.retranslate_playlist_end()
         self.endPlaylistButton.setFocusPolicy(Qt.NoFocus)
         self.endPlaylistButton.clicked.connect(self.end_playlist)
         self.endPlaylistButton.hide()  # 선택 재생 중에만 보임 (is_playlist_playing의 setter)
+
+    def retranslate_playlist_end(self):
+        """'이어 재생 끝내기' 단추의 글자·툴팁을 글자 표에서 다시 읽음 (만든 직후와 언어가 바뀐 뒤)."""
+        self.endPlaylistButton.set_text_key("playlist.end")
+        self.endPlaylistButton.setToolTip(ui_text.text("playlist.end.tip"))
 
     # --- 선택 재생 상태 ↔ '끝내기' 단추 ---
     @property

@@ -11,13 +11,13 @@ Mac의 재생 디코더 메뉴와 달리 파일 읽기 실패 때 설정을 지�
 
 import os
 
-from yesoncheck import mac_prefs
+from yesoncheck import mac_prefs, ui_text
 
 PREF_KEY = "display_renderer"
 RENDERERS = ("cpu", "gpu")
 DEFAULT_RENDERER = "cpu"
-MENU_TEXT = "화면 그리기 (Windows)"
-ACTION_TEXTS = {"cpu": "CPU (기본)", "gpu": "GPU"}
+MENU_KEY = "settings.display"  # 글자 표(ui_text)의 키 — 화면의 글은 ui_text.text(MENU_KEY) (언어를 따름)
+ACTION_KEYS = {"cpu": "settings.display.cpu", "gpu": "settings.display.gpu"}
 MIN_GL_VERSION = (2, 0)
 SOFTWARE_RENDERER_WORDS = ("llvmpipe", "softpipe", "swiftshader", "microsoft basic render", "gdi generic")
 
@@ -67,4 +67,6 @@ def gl_problem(info):
 
 def fallback_text(problem) -> str:
     """GPU를 골랐는데 쓸 수 없을 때 창에 보일 글."""
-    return f"GPU 화면 그리기를 쓸 수 없어 CPU로 계속합니다.\n{problem}\n\nSettings → {MENU_TEXT} → {ACTION_TEXTS['cpu']}를 고르면 이 알림이 뜨지 않습니다."
+    return (f"GPU 화면 그리기를 쓸 수 없어 CPU로 계속합니다.\n{problem}\n\n"
+            f"Settings → {ui_text.text(MENU_KEY)} → {ui_text.with_particle(ui_text.text(ACTION_KEYS['cpu']), '를')} "
+            "고르면 이 알림이 뜨지 않습니다.")

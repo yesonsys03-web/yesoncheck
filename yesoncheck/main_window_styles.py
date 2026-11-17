@@ -720,18 +720,7 @@ QSlider::add-page:horizontal {
 OCR_OPTION_LABEL_STYLE = "padding: 2px;"
 
 
-# 사이드바 버튼: bookmarkButton
-
-
-# 사이드바 버튼: bookmarkListButton과 refreshListButton (둘이 같은 글자)
-
-
-# 사이드바 버튼: workPathButton
-
-
-# 사이드바 버튼: listModeButton
-
-
+# (사이드바의 색 단추 시트 다섯은 2026-11-16 UI 개편에서 없앰 — 작은 단추의 색·모양은 두 테마 시트의 #sidebarTool 규칙)
 # 주석 모드 버튼: annotationModeButton — 켜짐만 빨강(비디오 위 '주석 모드' 배지와 같은 계열),
 # 꺼진 모양·hover는 테마 시트 그대로 (위젯 시트는 적은 규칙만 덮음)
 ANNOTATION_MODE_BUTTON_STYLE = """
@@ -742,9 +731,6 @@ QPushButton:checked {
     font-weight: bold;
 }
 """
-
-
-# 사이드바 버튼: thumbnailModeButton
 
 
 # positionScroll의 마지막 시트

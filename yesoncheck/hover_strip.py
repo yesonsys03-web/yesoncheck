@@ -5,7 +5,7 @@
 튀고 스트림·링이 깨짐). 그래서 쉴 때 ffmpeg가 파일 전체를 작게 줄여 RAM에 '띠'로 깔아 두고(hover_strip_builder), 호버는 꺼내 보이기만 한다.
 이 모듈은 그 띠의 크기·장수를 정하고(StripPlan), 만든 그림을 담고(HoverStrip), 만들지 말아야 할 파일을 가르고(skip_reason), 기능을 켜고 끄는
 선택을 prefs.json에 두는(read_enabled·save_enabled) 규칙만 가진다 — 프로세스·스레드·화면은 다른 모듈의 몫이라 Qt 없이 시험한다. 이 기능의
-글 상수(메뉴 글 MENU_TEXT·기록 머리 LOG_PREFIX·설정 창 제목 SETTINGS_TITLE)도 여기 한 곳에 둔다 — Qt 없는 모듈이라 app·믹스인·화면 쪽이 모두
+글 상수(메뉴 글의 글자 표 키 MENU_KEY·기록 머리 LOG_PREFIX·설정 창 제목 SETTINGS_TITLE)도 여기 한 곳에 둔다 — Qt 없는 모듈이라 app·믹스인·화면 쪽이 모두
 순환 없이 가져다 씀.
 
 크기 (스펙 §5.2): 그림은 THUMB_WIDTH(320) × THUMB_WIDTH 상자 안에 맞춘다 — THUMB_WIDTH는 이름과 달리 '긴 변의 길이'다. 가로로 긴 영상(W ≥ H)은 폭 320에
@@ -55,7 +55,8 @@ INTER_CODEC_FULL_THREADS_MAX_PIXELS = 1920 * 1080  # 이 이하이고 코덱이 
 LONG_GOP_FULL_THREADS_CODECS = frozenset({"h264"})  # 허용 목록 — 1080p 재생 게이트를 잰 코덱만 (양성 증거로만 켬, Ruling 26)
 ALL_INTRA_CODECS = frozenset({"prores", "dnxhd", "mjpeg", "rawvideo"})  # 모든 장이 키프레임인 코덱 — 거친 띠 건너뜀(hover_keyframes)
 PREF_KEY = "slider_thumbnails"
-MENU_TEXT = "슬라이더 썸네일"
+MENU_KEY = "settings.hover_thumbs"  # 글자 표(ui_text)의 키 — 화면의 글은 ui_text.text(MENU_KEY) (언어를 따름)
+TIP_KEY = "settings.hover_thumbs.tip"
 LOG_PREFIX = "[슬라이더 썸네일]"
 SETTINGS_TITLE = "슬라이더 썸네일 설정"  # 설정 창 제목 하나 — 시작 때 읽기 실패(app.load_slider_thumbnails)·메뉴의 저장 실패(player_hover_thumbs)
 

@@ -18,6 +18,7 @@ from PyQt5.QtCore import (
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtMultimedia import QMediaPlayer
 from PyQt5.QtWidgets import (
+    QAction,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -42,7 +43,7 @@ from PyQt5.QtWidgets import (
 from yesoncheck.video_widget import VIEWPORT_ENV, CustomVideoWidget
 from yesoncheck import bookmarks, build_info, default_app, downscale_filter, error_window, external_tools, file_associations, \
     instance_link, instances, mac_native_gate, mac_prefs, manual_open, media_player_log, paths, timing_log, tool_panel, \
-    user_files, video_list, windows_display
+    ui_text, user_files, video_list, windows_display
 from yesoncheck import sidebar_sort  # 사이드바 정렬 기준의 기본값 (SidebarSortMixin)
 from yesoncheck.movie_pipe_source import movie_source_mode
 from yesoncheck.user_files import UserFileError
@@ -53,6 +54,7 @@ from yesoncheck.main_window_styles import (
     POSITION_SCROLL_STYLE,
 )
 from yesoncheck.player_hover_thumbs import PlayerHoverThumbsMixin
+from yesoncheck.player_language import PlayerLanguageMixin
 from yesoncheck.player_menus import PlayerMenusMixin
 from yesoncheck.player_ocr import PlayerOcrMixin
 from yesoncheck.player_overlay import PlayerOverlayMixin
@@ -72,15 +74,16 @@ from yesoncheck.worker_lifecycle import EXIT_WAIT_S, _RELEASED_WORKERS, release_
 # 달랐음 — 사용자 결정 "처음에 소리를 50으로": 소리를 표시(50)에 맞춤 (그 전보다 처음 소리가 작음)
 START_VOLUME = 50
 
-# Settings → '재생 디코더 (Mac)' (스펙 2026-11-04 §5.4) — 항목 차례는 mac_native_gate.DECODERS
-DECODER_MENU_TEXT = "재생 디코더 (Mac)"
+# Settings → '재생 디코더 (Mac)' (스펙 2026-11-04 §5.4) — 항목 차례는 mac_native_gate.DECODERS.
+# 화면의 글·툴팁은 글자 표(ui_text)에서 읽음(언어를 따름 — 2026-11-16 UI 개편 PR 3): 여기에는 그 키만.
+DECODER_MENU_KEY = "settings.decoder"
+DECODER_ACTION_KEYS = {"videotoolbox": "settings.decoder.videotoolbox", "ffmpeg": "settings.decoder.ffmpeg"}
+# 체크된 디코더의 툴팁에 보이는 출처: mac_native_gate의 출처 글(한글 — 기록·비교용, 그대로 둠) → 보일 때의 글자 표 키
+DECODER_SOURCE_KEYS = {mac_native_gate.SOURCE_FALLBACK: "settings.decoder.source.fallback",
+                       mac_native_gate.SOURCE_GL_FALLBACK: "settings.decoder.source.gl_fallback"}
 DISPLAY_TITLE = "화면 그리기 설정"  # Settings → 화면 그리기 (Windows) — windows_display
-DISPLAY_TIP = "이 PC의 설정 파일(prefs.json)에 저장합니다 — 다음에 여는 창부터 적용됩니다"
-DECODER_ACTION_TEXTS = {"videotoolbox": "VideoToolbox (기본)", "ffmpeg": "ffmpeg (예전 방식)"}
 DECODER_SAVE_TITLE = "재생 디코더 설정"  # 저장 실패 창 제목 (app.load_playback_decoder의 읽기 실패 창과 같은 제목)
-DECODER_TIP = "이 창은 바로 바꾸고 이 Mac의 설정 파일(prefs.json)에 저장합니다 — 이미 열린 다른 창은 다음에 켤 때부터 따릅니다"
 DECODER_ENV_SOURCE_PREFIX = "환경 변수"  # mac_native_gate.effective_decoder가 환경 변수(YESONCHECK_MAC_NATIVE=on|off)가 덮을 때 돌려주는 출처의 머리
-DECODER_CV2_TIP = "YESONCHECK_MOVIE_SOURCE=cv2가 모든 빠른 디코더를 끕니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다"
 GL_FALLBACK_LOG = "[표시] GL 텍스처 스트리밍 실패 — 이 창을 ffmpeg 방식으로 바꿉니다"  # 네이티브 그리기 실패 폴백의 기록 줄 (스펙 2026-11-04 §5.8)
 KEEP_LATCH_LOG = "[표시] 네이티브 프레임이 아직 남아 걸쇠를 풀지 않음 — 다시 그리면 또 실패하므로 영상 영역은 비워 둠"
 DECODER_RETRY_LOG = "[재생] 이 창은 그리기가 멈춰 있어(걸쇠) ffmpeg로 캡처를 다시 바꿔 끼우고 걸쇠를 정리함"  # 메뉴에서 이미 유효한 ffmpeg를 다시 고름 (Ruling 11, 최종 리뷰 F1)
@@ -112,7 +115,8 @@ def korean_date(day):
     return f"{day.year}년 {day.month:02d}월 {day.day:02d}일"
 
 
-class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsMixin, PlayerMenusMixin, PlayerOcrMixin, PlayerOverlayMixin, QMainWindow):
+class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsMixin, PlayerMenusMixin, PlayerLanguageMixin, PlayerOcrMixin,
+                      PlayerOverlayMixin, QMainWindow):
     # 창을 닫을 때 실행 중인 공유 설정 불러오기를 기다리는 최대 시간 (그 뒤에는 로그만 남기고 닫음)
     SHARED_CONFIG_CLOSE_WAIT_MS = 5000
     # 창을 닫을 때 실행 중인 분석·내보내기·병합을 기다리는 최대 시간 (그 뒤에는 끝날 때까지 붙잡아 둠)
@@ -301,6 +305,8 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         
         # 사이드바 폭 관리 변수
         self.default_sidebar_width = None  # 기본 사이드바 폭 (나중에 설정)
+        self._sidebar_start_pending = None  # 언어를 바꿀 때 사이드바가 숨어 있었으면 옛 언어의 처음 폭 — 다시 보일 때 견줌 (sidebar_controls)
+        self._watch_sidebar_visibility()
 
         # OCR / ROI 상태
         self.ocr_roi = None
@@ -377,21 +383,27 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
             self.workComboBox.addItem(work_name)
         self._update_shared_config_title()
         self.seasonComboBox = WidePopupComboBox()
-        self.seasonComboBox.addItem("시즌선택")
+        self.seasonComboBox.addItem(ui_text.text("picker.season"))
         self.jobComboBox = WidePopupComboBox()
-        self.jobComboBox.addItem("job선택")
+        self.jobComboBox.addItem(ui_text.text("picker.job"))
 
-        self.ocrSelectRoiButton = QPushButton('OCR ROI 지정')
+        # OCR 쪽(도구 패널)의 위젯 — 화면 글자는 글자 표(ui_text)에서: _ocr_text가 넣고 적어 두면 언어가 바뀔 때
+        # retranslate_ocr_page가 다시 넣음 (PlayerOcrMixin). ROI 단추의 툴팁은 방식·영상에 따라 바뀜(_sync_ocr_roi_tooltip)
+        self._ocr_texts = []
+        self.ocrSelectRoiButton = QPushButton()
+        self._ocr_text(self.ocrSelectRoiButton.setText, "ocr.roi.select")
         self.ocrSelectRoiButton.setCheckable(True)
         self.ocrSelectRoiButton.toggled.connect(self.toggle_ocr_roi_selection)
-        self.ocrSelectRoiButton.setToolTip('영상에서 OCR 분석에 사용할 영역을 드래그하여 지정합니다.')
+        self.ocrSelectRoiButton.setToolTip(ui_text.text("ocr.roi.select.tip"))
 
-        self.ocrClearRoiButton = QPushButton('ROI 초기화')
+        self.ocrClearRoiButton = QPushButton()
+        self._ocr_text(self.ocrClearRoiButton.setText, "ocr.roi.clear")
         self.ocrClearRoiButton.clicked.connect(self.clear_ocr_roi)
         self.ocrClearRoiButton.setEnabled(False)
 
-        self.ocrTrackingCheckBox = QCheckBox('ROI 트래킹 활성화')
-        self.ocrTrackingCheckBox.setToolTip('활성화하면 지정한 ROI 영역이 동영상에서 이동하는 텍스트를 자동으로 추적합니다.')
+        self.ocrTrackingCheckBox = QCheckBox()
+        self._ocr_text(self.ocrTrackingCheckBox.setText, "ocr.roi.tracking")
+        self._ocr_text(self.ocrTrackingCheckBox.setToolTip, "ocr.roi.tracking.tip")
         self.ocrTrackingCheckBox.setEnabled(False)
 
         # OCR 분석 방식 선택
@@ -399,70 +411,56 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         self.ocrModeComboBox.addItem('Titmouse', 'titmouse')
         self.ocrModeComboBox.addItem('King', 'king')
         self.ocrModeComboBox.addItem('Bento', 'bento')
-        self.ocrModeComboBox.addItem('All (사용자 패턴)', 'all')
-        self.ocrModeComboBox.addItem('애니매틱 (Auto Cut)', 'animatic')
-        ocr_mode_tooltip = (
-            '이미지에 따라 분석 정확도가 다를 수 있으므로 적합한 방식을 선택하세요.\n'
-            '- Titmouse: 기본 OCR 설정\n'
-            '- King: 빨간색 텍스트 인식 최적화\n'
-            '- Bento: 작은 텍스트 및 특수 패턴 인식 최적화 (예: Seq 02A_S09 - Panel 6)\n'
-            '- All: 사용자 정의 패턴으로 텍스트 인식 (#=영문, W=숫자, 예: "### WW#_#WW - #### W")\n'
-            '- 애니매틱: PySceneDetect를 사용한 자동 컷 감지 (ROI 불필요)'
-        )
+        # 고유 이름 셋(위)은 두 언어에서 같고, 나머지 항목의 글은 글자 표에서 (player_ocr.OCR_MODE_TEXT_KEYS — 값은 itemData)
+        self.ocrModeComboBox.addItem(ui_text.text("ocr.mode.all"), 'all')
+        self.ocrModeComboBox.addItem(ui_text.text("ocr.mode.animatic"), 'animatic')
         # 애니매틱2(TransNetV2)는 선택적 의존성 — 설치되지 않은 빌드/환경에서는 목록에 보이지 않음
         # (선택해도 분석이 되지 않는 개발자용 pip 안내 오류를 사용자가 보지 않도록)
         if _transnetv2_available():
-            self.ocrModeComboBox.addItem('애니매틱2 (TransNetV2)', 'animatic2')
-            ocr_mode_tooltip += (
-                '\n- 애니매틱2: TransNetV2(딥러닝)를 사용한 컷 감지 (디졸브/페이드 감지 향상, ROI 불필요)'
-            )
+            self.ocrModeComboBox.addItem(ui_text.text("ocr.mode.animatic2"), 'animatic2')
         else:
             # 조용히 숨기지 않음: 왜 없는지(TensorFlow·가중치·CPU AVX) 시작 로그에 남김
             timing_log.startup(f"애니매틱2(TransNetV2) 항목 숨김 — 이 빌드/환경에 없는 것: {_transnetv2_missing()}")
-        self.ocrModeComboBox.setToolTip(ocr_mode_tooltip)
+        self.ocrModeComboBox.setToolTip(self._ocr_mode_tooltip())  # 방식마다 한 줄 — 애니매틱2 줄은 그 항목이 있을 때만
         self.ocrModeComboBox.currentIndexChanged.connect(self.on_ocr_mode_changed)
         
         # All 모드용 패턴 입력 필드
-        self.ocrPatternLabel = QLabel('패턴:')
+        self.ocrPatternLabel = QLabel()
+        self._ocr_text(self.ocrPatternLabel.setText, "ocr.pattern.label")
         self.ocrPatternLineEdit = QLineEdit()
-        self.ocrPatternLineEdit.setPlaceholderText('예: ### WW#_#WW - #### W (#=영문, W=숫자)')
-        self.ocrPatternLineEdit.setToolTip(
-            'All 모드에서 사용할 텍스트 패턴을 입력하세요.\n'
-            '- # = 영문 (A-Z, a-z)\n'
-            '- W = 숫자 (0-9)\n'
-            '- _ = 언더바\n'
-            '- - = 하이픈\n'
-            '- 공백 = 공백\n'
-            '예시:\n'
-            '- "seq 04A_S05 - Panel 1" → "### WW#_#WW - #### W"\n'
-            '- "MS101_B010" → "##WWW_#WWW"'
-        )
+        self._ocr_text(self.ocrPatternLineEdit.setPlaceholderText, "ocr.pattern.placeholder")
+        self._ocr_text(self.ocrPatternLineEdit.setToolTip, "ocr.pattern.tip")
         self.ocrPatternLabel.setVisible(False)
         self.ocrPatternLineEdit.setVisible(False)
 
-        self.ocrAnalyzeButton = QPushButton('OCR 구간 추출')
+        self.ocrAnalyzeButton = QPushButton()
+        self._ocr_text(self.ocrAnalyzeButton.setText, "ocr.analyze")
         self.ocrAnalyzeButton.clicked.connect(self.run_ocr_analysis)
         self.ocrAnalyzeButton.setEnabled(False)
         
-        self.ocrAnalyzeRangeButton = QPushButton('선택 구간 분석')
+        self.ocrAnalyzeRangeButton = QPushButton()
+        self._ocr_text(self.ocrAnalyzeRangeButton.setText, "ocr.analyze_range")
         self.ocrAnalyzeRangeButton.clicked.connect(self.run_ocr_analysis_range)
         self.ocrAnalyzeRangeButton.setEnabled(False)
-        self.ocrAnalyzeRangeButton.setToolTip('지정한 프레임 범위만 OCR 분석합니다. 결과는 기존 분석 결과에 병합됩니다.')
+        self._ocr_text(self.ocrAnalyzeRangeButton.setToolTip, "ocr.analyze_range.tip")
         
-        self.ocrReopenResultButton = QPushButton('OCR 오픈')
+        self.ocrReopenResultButton = QPushButton()
+        self._ocr_text(self.ocrReopenResultButton.setText, "ocr.reopen")
         self.ocrReopenResultButton.clicked.connect(self.reopen_ocr_result)
         self.ocrReopenResultButton.setEnabled(False)
-        self.ocrReopenResultButton.setToolTip('이전에 분석한 OCR 결과를 다시 엽니다 (분석한 내용과 수정한 내용이 모두 표시됩니다)')
+        self._ocr_text(self.ocrReopenResultButton.setToolTip, "ocr.reopen.tip")
         
-        self.ocrSaveResultButton = QPushButton('OCR 저장')
+        self.ocrSaveResultButton = QPushButton()
+        self._ocr_text(self.ocrSaveResultButton.setText, "ocr.save")
         self.ocrSaveResultButton.clicked.connect(self.save_ocr_result)
         self.ocrSaveResultButton.setEnabled(False)
-        self.ocrSaveResultButton.setToolTip('현재 OCR 분석 결과를 파일로 저장합니다')
+        self._ocr_text(self.ocrSaveResultButton.setToolTip, "ocr.save.tip")
         
-        self.ocrLoadResultButton = QPushButton('OCR 로드')
+        self.ocrLoadResultButton = QPushButton()
+        self._ocr_text(self.ocrLoadResultButton.setText, "ocr.load")
         self.ocrLoadResultButton.clicked.connect(self.load_ocr_result)
         self.ocrLoadResultButton.setEnabled(True)
-        self.ocrLoadResultButton.setToolTip('저장된 OCR 분석 결과를 불러옵니다')
+        self._ocr_text(self.ocrLoadResultButton.setToolTip, "ocr.load.tip")
 
 # ocrStatusLabel 삭제됨 - 로그는 OCR 분석 팝업창에 표시
         self.fullscreenButton = QPushButton('Full screen')
@@ -589,7 +587,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         sidebarLayout.addWidget(self._build_thumbnail_progress_bar())
         sidebarLayout.addWidget(self._build_playlist_button())
         sidebarLayout.addWidget(self.endPlaylistButton)  # 선택 재생 중에만 보임 — 예전 Stop 단추가 하던 '선택 재생 끝내기'
-        self.retranslate_sidebar_controls()
+        self.retranslate_sidebar_controls()  # 단추 묶음의 글 — 나머지 사이드바 글은 만들 때 글자 표에서 읽음 (retranslate_sidebar)
         sidebarContainer = QWidget()
         sidebarContainer.setLayout(sidebarLayout); sidebarContainer.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
@@ -917,14 +915,19 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
 
     def apply_startup_geometry(self):
         """처음 창 크기·위치와 열 너비: max(1080×720, 레이아웃이 원하는 크기)를 화면 작업 영역 안으로, 사이드바는
-        예전 처음 너비(200 — 최소 너비가 더 크면 최소 너비), 나머지는 영상 칸(도구 패널은 닫힌 채 시작)."""
+        예전 처음 너비(200 — 최소 너비가 더 크면 최소 너비, 지금 언어의 단추 글이 더 넓으면 그 폭: sidebar_start_width),
+        나머지는 영상 칸(도구 패널은 닫힌 채 시작)."""
         self._measure_polished_layout()
         rect = startup_geometry(self.sizeHint(), self.minimumSizeHint(),
                                 QApplication.primaryScreen().availableGeometry())
         self.setGeometry(rect)
         splitter = self.mainSplitter
         sidebar = splitter.widget(0)
-        side = max(200, sidebar.minimumSizeHint().width(), sidebar.minimumWidth())
+        side = self.sidebar_start_width()
+        if side + splitter.handleWidth() + splitter.widget(1).minimumSizeHint().width() > rect.width():
+            # 처음 창에 그만큼의 자리가 없으면 예전 규칙 — QSplitter는 요청한 폭을 기억했다가 창이 넓어지면 되찾으므로
+            # 자리가 없을 때 요청하면 나중에 영상 칸의 몫을 가져감
+            side = max(200, sidebar.minimumSizeHint().width(), sidebar.minimumWidth())
         splitter.setSizes([side, max(0, rect.width() - side), 0])
         # 초기 창 크기 저장 (앱 처음 실행 시) — 동영상 전용 전체화면을 끝내면 이 크기로 돌아옴
         self.initial_geometry = self.geometry()
@@ -1014,17 +1017,20 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         # File · View · Playback · Compare · Tools (player_menus — 항목은 지금의 처리기, 단축키는 글자로만)
         self._add_main_menus(menubar)
 
-        # Settings 메뉴
+        # Settings 메뉴 — 항목의 글·툴팁은 글자 표(ui_text)에서: _menu_text가 넣고 (항목, 글 키, 툴팁 키)를 적어 두면
+        # 언어가 바뀔 때 retranslate_settings_menus가 다시 읽음. 메뉴 제목 &Settings·&Help는 두 언어에서 같음
+        self._settings_texts = []
         settings_menu = menubar.addMenu('&Settings')
         
         # 재생 디코더 서브메뉴 (Mac만 — VideoToolbox는 macOS에만 있음; Windows·Linux 메뉴는 그대로). 라디오의 체크는 맞춤 함수(_sync_decoder_menu)가 정함
         self.decoder_action_group = []  # 항목 차례(mac_native_gate.DECODERS) — Mac이 아니면 빈 채
         self.decoder_actions = {}  # 디코더 이름 → 항목
         if sys.platform == "darwin":
-            decoder_menu = settings_menu.addMenu(DECODER_MENU_TEXT)
+            decoder_menu = settings_menu.addMenu("")
+            self._menu_text(decoder_menu.menuAction(), DECODER_MENU_KEY)
             decoder_menu.setToolTipsVisible(True)  # 비활성 사유·출처를 항목 툴팁으로 알림
             for name in mac_native_gate.DECODERS:
-                action = decoder_menu.addAction(DECODER_ACTION_TEXTS[name])
+                action = self._menu_text(decoder_menu.addAction(""), DECODER_ACTION_KEYS[name])
                 action.setCheckable(True)
                 action.triggered.connect(lambda checked, decoder=name: self.set_playback_decoder(decoder))
                 self.decoder_action_group.append(action)
@@ -1035,34 +1041,62 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         self._add_hover_thumbs_menu(settings_menu)  # 슬라이더 썸네일 켜기/끄기 (PlayerHoverThumbsMixin)
 
         # 공유 설정 폴더 변경 (Windows: PC마다 고름)
+        self.shared_config_action = None
         if paths.IS_WINDOWS:
-            shared_config_action = settings_menu.addAction('공유 설정 폴더 변경...')
-            shared_config_action.triggered.connect(lambda: self.choose_shared_config_dir())
+            self._add_shared_config_action(settings_menu)
+
+        # 언어 (Language) — 한국어·English (PlayerLanguageMixin): Settings의 맨 끝, 구분선 아래
+        self._add_language_menu(settings_menu)
 
         # Help 메뉴
         help_menu = menubar.addMenu('&Help')
         
         # Help 액션
-        help_action = help_menu.addAction('사용법')
+        help_action = self._menu_text(help_menu.addAction(""), "help.manual")
         help_action.setShortcut('F1')
         help_action.triggered.connect(self.show_help)
         
         # 업데이트 확인 (NAS·GitHub — 결과 창을 언제나 보임, PlayerUpdateMixin)
-        update_check_action = help_menu.addAction('업데이트 확인…')
+        update_check_action = self._menu_text(help_menu.addAction(""), "help.update_check")
         update_check_action.triggered.connect(lambda: self.start_update_check(manual=True))
 
         # (Mac) .mov·.mp4를 더블클릭하면 YesonCheck로 — 묻지 않고 기본 앱으로 정함 (default_app, 처음 켤 때 묻기와 같은 일)
         if default_app.IS_MAC:
-            default_app_action = help_menu.addAction(default_app.MENU_TEXT)
+            default_app_action = self._menu_text(help_menu.addAction(""), default_app.MENU_KEY)
             default_app_action.triggered.connect(lambda: default_app.set_default_from_menu(self))
         # (Windows) 기본 앱은 앱이 바꿀 수 없음(Windows 10·11) → Windows 기본 앱 설정 화면의 YesonCheck 항목을 엶 (file_associations)
         if file_associations.IS_WINDOWS:
-            default_apps_settings_action = help_menu.addAction(file_associations.MENU_TEXT)
+            default_apps_settings_action = self._menu_text(help_menu.addAction(""), file_associations.MENU_KEY)
             default_apps_settings_action.triggered.connect(lambda: file_associations.open_default_apps_settings())
 
         # About 액션
-        about_action = help_menu.addAction('정보')
+        about_action = self._menu_text(help_menu.addAction(""), "help.about")
         about_action.triggered.connect(self.show_about)
+
+    def _menu_text(self, action, text_key, tip_key=None):
+        """Settings·Help의 항목 하나에 글(과 툴팁)을 글자 표에서 넣고, 언어가 바뀌면 다시 읽게 적어 둔다. 항목을 돌려줌.
+        NoRole: Mac이 English 글('About'·'… settings…')을 보고 항목을 앱 메뉴로 옮기지 않게."""
+        action.setMenuRole(QAction.NoRole)
+        action.setText(ui_text.text(text_key))
+        if tip_key is not None:
+            action.setToolTip(ui_text.text(tip_key))
+        self._settings_texts.append((action, text_key, tip_key))
+        return action
+
+    def _add_shared_config_action(self, settings_menu):
+        """(Windows) Settings → 공유 설정 폴더 변경... — PC마다 고름. create_menu_bar가 Windows에서만 부름."""
+        self.shared_config_action = self._menu_text(settings_menu.addAction(""), "settings.shared_config")
+        self.shared_config_action.triggered.connect(lambda: self.choose_shared_config_dir())
+
+    def retranslate_settings_menus(self):
+        """Settings·Help의 항목 글·툴팁을 글자 표에서 다시 읽음 (언어가 바뀐 뒤 — PlayerLanguageMixin.RETRANSLATORS).
+        상태에 따라 바뀌는 툴팁(디코더·화면 그리기)과 '지금 이 창' 줄은 맞춤 함수가 다시 넣음. 메뉴 제목과 언어 메뉴는 그대로."""
+        for action, text_key, tip_key in self._settings_texts:
+            action.setText(ui_text.text(text_key))
+            if tip_key is not None:
+                action.setToolTip(ui_text.text(tip_key))
+        self._sync_decoder_menu()
+        self._sync_display_menu()
     
     def set_playback_decoder(self, name: str) -> None:
         """(Mac) Settings → 재생 디코더 (Mac)에서 고른 디코더(mac_native_gate.DECODERS — videotoolbox·ffmpeg)를 이 Mac의 설정 파일에 저장하고 이 창에 바로 적용
@@ -1106,7 +1140,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
             print(f"[재생] 디코더 설정을 저장하지 못해 바꾸지 않음: {name} — {mac_prefs.prefs_path()}", flush=True)
             traceback.print_exc()
             QMessageBox.critical(self, DECODER_SAVE_TITLE,
-                                 f"재생 디코더 설정({DECODER_ACTION_TEXTS[name]})을 설정 파일에 저장하지 못해 바꾸지 않았습니다 — 지금 디코더 그대로입니다.\n"
+                                 f"재생 디코더 설정({ui_text.text(DECODER_ACTION_KEYS[name])})을 설정 파일에 저장하지 못해 바꾸지 않았습니다 — 지금 디코더 그대로입니다.\n"
                                  f"설정 파일: {mac_prefs.prefs_path()}\n이유: {type(e).__name__}: {e}\n\n{details}")
             self._sync_decoder_menu()
             return
@@ -1190,15 +1224,17 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         self.display_status_action = None
         if sys.platform != "win32":
             return
-        menu = settings_menu.addMenu(windows_display.MENU_TEXT)
+        menu = settings_menu.addMenu("")
+        self._menu_text(menu.menuAction(), windows_display.MENU_KEY)
         menu.setToolTipsVisible(True)
         for name in windows_display.RENDERERS:
-            action = menu.addAction(windows_display.ACTION_TEXTS[name])
+            action = self._menu_text(menu.addAction(""), windows_display.ACTION_KEYS[name])
             action.setCheckable(True)
             action.triggered.connect(lambda checked, renderer=name: self.set_display_renderer(renderer))
             self.display_actions[name] = action
         menu.addSeparator()
         self.display_status_action = menu.addAction("")
+        self.display_status_action.setMenuRole(QAction.NoRole)
         self.display_status_action.setEnabled(False)
         self._sync_display_menu()
         menu.aboutToShow.connect(self._sync_display_menu)  # 메뉴는 영상 화면(videoWidget)보다 먼저 만들어지므로 '지금 이 창'은 열 때 맞춤
@@ -1211,20 +1247,21 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         forced = os.environ.get(VIEWPORT_ENV)
         if forced:
             chosen, enabled = ("gpu" if forced == "gl" else "cpu"), False
-            tip = f"{VIEWPORT_ENV}={forced}가 우선합니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다"
+            tip = ui_text.text("settings.display.env_tip", name=VIEWPORT_ENV, value=forced)
         else:
             try:  # 창마다 프로세스 — 다른 창이 고쳤을 수 있으니 파일을 다시 읽음. 깨졌으면 기록만 남기고 지금 값으로 (시작·저장 때 창으로 알림)
                 windows_display.set_preferred(windows_display.read())
             except (user_files.UserFileError, ValueError):
                 traceback.print_exc()
-            chosen, enabled, tip = windows_display.preferred(), True, DISPLAY_TIP
+            chosen, enabled, tip = windows_display.preferred(), True, ui_text.text("settings.display.tip")
         for name, action in self.display_actions.items():
             action.setChecked(name == chosen)
             action.setEnabled(enabled)
             action.setToolTip(tip)
         widget = getattr(self, "videoWidget", None)  # 창을 만드는 중이면 아직 없음
         if widget is not None:
-            self.display_status_action.setText(f"지금 이 창: {'GPU' if widget.display_path() == 'gl' else 'CPU'}")
+            self.display_status_action.setText(
+                ui_text.text("settings.display.status", renderer="GPU" if widget.display_path() == "gl" else "CPU"))
 
     def set_display_renderer(self, name):
         """(Windows) 메뉴에서 고른 화면 그리기를 이 PC의 설정 파일에 저장. 뷰포트는 창을 만들 때 정하므로 다음에 여는 창부터 적용 — 지금 창은 그대로. 저장 실패는 창으로 알리고 바꾸지 않음
@@ -1242,7 +1279,8 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         windows_display.set_preferred(name)
         print(f"[뷰포트] 화면 그리기 설정: {name} (Settings 메뉴)", flush=True)
         self._sync_display_menu()
-        QMessageBox.information(self, DISPLAY_TITLE, f"{windows_display.ACTION_TEXTS[name]}로 저장했습니다. 다음에 여는 창부터 적용됩니다.\n{self.display_status_action.text()}")
+        chosen = ui_text.with_particle(ui_text.text(windows_display.ACTION_KEYS[name]), "로", noun="설정")
+        QMessageBox.information(self, DISPLAY_TITLE, f"{chosen} 저장했습니다. 다음에 여는 창부터 적용됩니다.\n{self.display_status_action.text()}")
 
     def _add_downscale_menu(self, settings_menu):
         """(Windows) Settings → 축소 필터 — Linear(기본)·고품질(면적 평균) 라디오. 다른 플랫폼은 메뉴 없음(늘 Linear — 사용자 지시 'Mac은 수정하지 않아도 됨').
@@ -1250,12 +1288,12 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         self.downscale_actions = {}
         if sys.platform != "win32":
             return
-        menu = settings_menu.addMenu(downscale_filter.MENU_TEXT)
+        menu = settings_menu.addMenu("")
+        self._menu_text(menu.menuAction(), downscale_filter.MENU_KEY)
         menu.setToolTipsVisible(True)
         for name in downscale_filter.FILTERS:
-            action = menu.addAction(downscale_filter.ACTION_TEXTS[name])
+            action = self._menu_text(menu.addAction(""), downscale_filter.ACTION_KEYS[name], downscale_filter.TIP_KEYS[name])
             action.setCheckable(True)
-            action.setToolTip(downscale_filter.TIPS[name])
             action.triggered.connect(lambda checked, chosen=name: self.set_downscale_filter(chosen))
             self.downscale_actions[name] = action
         self._sync_downscale_menu()
@@ -1291,22 +1329,26 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
     def _sync_decoder_menu(self):
         """(Mac) Settings → 재생 디코더 (Mac)의 체크·활성·툴팁을 지금 유효한 디코더(mac_native_gate.effective_decoder)에 맞춤 — 메뉴를 만들 때, 고른 뒤(저장
         실패면 되돌림), 디코더 캐시를 바꾼 다른 길(네이티브 그리기 실패 폴백) 뒤에 부름. 메뉴가 없으면(macOS가 아님) 할 일이 없음.
-        - YESONCHECK_MOVIE_SOURCE=cv2(킬 스위치 — 네이티브·파이프 모두 끔): 두 항목 비활성 + DECODER_CV2_TIP (환경 변수보다 먼저 — cv2가 둘 다 덮음)
-        - 환경 변수 YESONCHECK_MAC_NATIVE=on|off가 설정을 덮음(출처가 "환경 변수"로 시작): 그 값으로 체크, 두 항목 비활성 + "<출처>이|가 우선합니다 — …"(on이·off가)
-        - 출처가 prefs.json·기본값: 두 항목 활성 + DECODER_TIP(다른 창은 다음에 켤 때 — 스펙 §5.2)
-        - 그 밖의 출처(prefs.json을 읽지 못해 이 세션만 ffmpeg — SOURCE_FALLBACK 등): 활성, 체크된 항목의 툴팁이 그 출처 글."""
+        - YESONCHECK_MOVIE_SOURCE=cv2(킬 스위치 — 네이티브·파이프 모두 끔): 두 항목 비활성 + 글자 표의 settings.decoder.cv2_tip (환경 변수보다 먼저 — cv2가 둘 다 덮음)
+        - 환경 변수 YESONCHECK_MAC_NATIVE=on|off가 설정을 덮음(출처가 "환경 변수"로 시작): 그 값으로 체크, 두 항목 비활성 + settings.decoder.env_tip.on|off
+          (한국어 "<출처>이|가 우선합니다 — …" — on이·off가)
+        - 출처가 prefs.json·기본값: 두 항목 활성 + settings.decoder.tip(다른 창은 다음에 켤 때 — 스펙 §5.2)
+        - 그 밖의 출처(prefs.json을 읽지 못해 이 세션만 ffmpeg — SOURCE_FALLBACK 등): 활성, 체크된 항목의 툴팁이 그 출처의 글
+          (DECODER_SOURCE_KEYS — 지금 언어로; 표에 없는 출처는 출처 글 그대로).
+        글은 모두 글자 표에서 — 언어가 바뀌면 retranslate_settings_menus가 이 함수를 다시 부름."""
         if not self.decoder_actions:
             return
         decoder, source = mac_native_gate.effective_decoder()
         if movie_source_mode() == "cv2":
-            enabled, tips = False, dict.fromkeys(self.decoder_actions, DECODER_CV2_TIP)
+            enabled, tips = False, dict.fromkeys(self.decoder_actions, ui_text.text("settings.decoder.cv2_tip"))
         elif source.startswith(DECODER_ENV_SOURCE_PREFIX):
-            josa = "이" if source.endswith("=on") else "가"  # 받침 따라: on(온)이 · off(오프)가
-            enabled, tips = False, dict.fromkeys(self.decoder_actions, f"{source}{josa} 우선합니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다")
+            value = "on" if source.endswith("=on") else "off"  # 값마다 글이 따로 — 한국어는 받침 따라 on(온)이 · off(오프)가
+            enabled, tips = False, dict.fromkeys(self.decoder_actions, ui_text.text(f"settings.decoder.env_tip.{value}"))
         else:
-            enabled, tips = True, dict.fromkeys(self.decoder_actions, DECODER_TIP)
+            enabled, tips = True, dict.fromkeys(self.decoder_actions, ui_text.text("settings.decoder.tip"))
             if source not in (mac_native_gate.SOURCE_PREFS, mac_native_gate.SOURCE_DEFAULT):
-                tips[decoder] = source
+                key = DECODER_SOURCE_KEYS.get(source)
+                tips[decoder] = ui_text.text(key) if key is not None else source
         for name, action in self.decoder_actions.items():
             action.setChecked(name == decoder)
             action.setEnabled(enabled)

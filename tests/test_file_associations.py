@@ -21,7 +21,7 @@ from tests.conftest import ROOT
 from tests.test_fast_startup import wait_until
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 from yesoncheck import app as app_module  # sys.frozen을 바꾸기 전에 (불러올 때 frozen이면 _MEIPASS를 찾음)
-from yesoncheck import default_app, file_associations
+from yesoncheck import default_app, file_associations, ui_text
 
 EXE = r"C:\Program Files\Yeson Check\YesonCheck_Autocut.exe"  # 공백이 든 설치 경로
 ISS_PATH = os.path.join(ROOT, "installer", "yesoncheck.iss")
@@ -136,7 +136,7 @@ def test_entries_quote_exe_and_percent1():
     assert file_associations.EXTENSIONS == (".mov", ".mp4")
     # 설정 화면 링크의 registeredAppUser = RegisteredApplications의 값 이름
     assert file_associations.SETTINGS_URI == "ms-settings:defaultapps?registeredAppUser=YesonCheck"
-    assert file_associations.MENU_TEXT == "동영상 기본 앱 설정 열기…"
+    assert ui_text.text(file_associations.MENU_KEY) == "동영상 기본 앱 설정 열기…"
     # 모든 키는 HKCU 아래 경로 (HKLM·HKCR 없음 — 관리자 권한 없이), 값은 모두 글자
     for key, name, value in entries:
         assert key.startswith("Software\\") and not key.endswith("\\") and "/" not in key
@@ -325,11 +325,11 @@ def test_help_menu_opens_settings_on_windows(new_player, dialogs, tmp_path, monk
     player = new_player(make_config(str(tmp_path), {}))
     [help_menu] = [action.menu() for action in player.menuBar().actions() if action.text() == "&Help"]
     texts = [action.text() for action in help_menu.actions()]
-    assert (file_associations.MENU_TEXT in texts) is is_windows
-    assert (default_app.MENU_TEXT in texts) is (not is_windows)
+    assert (ui_text.text(file_associations.MENU_KEY) in texts) is is_windows
+    assert (ui_text.text(default_app.MENU_KEY) in texts) is (not is_windows)
     if not is_windows:
         return
-    [action] = [action for action in help_menu.actions() if action.text() == file_associations.MENU_TEXT]
+    [action] = [action for action in help_menu.actions() if action.text() == ui_text.text(file_associations.MENU_KEY)]
     action.trigger()
     assert opened == ["ms-settings:defaultapps?registeredAppUser=YesonCheck"]
     assert dialogs.messages == []

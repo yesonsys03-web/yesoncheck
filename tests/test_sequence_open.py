@@ -95,6 +95,8 @@ def test_open_seq_as_b(player, tmp_path):
 
     assert isinstance(player.cap_a, ImageSequenceCapture) and isinstance(player.cap_b, ImageSequenceCapture)
     assert player.filename_b == virtual(b)
+    assert player.filenameLabel.text() == "A: tk1.seq"  # B 이름은 와이프가 켜진 동안만 (2026-11-17)
+    player.wipeCheckBox.setChecked(True)
     assert player.filenameLabel.text() == "A: tk1.seq, B: tk2.seq"
 
 

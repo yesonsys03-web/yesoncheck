@@ -15,7 +15,7 @@ from PyQt5.QtCore import QPointF, QRectF, Qt
 from PyQt5.QtGui import QPainter, QTransform
 from PyQt5.QtWidgets import QGraphicsPixmapItem
 
-from yesoncheck import downscale_filter, error_window
+from yesoncheck import downscale_filter, error_window, ui_text
 
 LOG_PREFIX = "[표시]"
 
@@ -44,7 +44,8 @@ class AreaScaledPixmapItem(QGraphicsPixmapItem):
                 self._failed = True
                 error_window.report_from_handler(
                     LOG_PREFIX,
-                    f"영상을 면적 평균으로 줄여 그리다 실패했습니다(Settings → {downscale_filter.MENU_TEXT} → {downscale_filter.ACTION_TEXTS['area']}) — "
+                    f"영상을 면적 평균으로 줄여 그리다 실패했습니다(Settings → {ui_text.text(downscale_filter.MENU_KEY)} → "
+                    f"{ui_text.text(downscale_filter.ACTION_KEYS['area'])}) — "
                     "이 창은 다시 켤 때까지 예전 방식(Linear)으로 그립니다")
         super().paint(painter, option, widget)
 

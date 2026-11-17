@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import QApplication, QMenu, QMessageBox
 
 from tests.conftest import write_test_video
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
-from yesoncheck import app, gl_bindings, gl_video_item, user_files, video_widget, windows_display
+from yesoncheck import app, gl_bindings, gl_video_item, ui_text, user_files, video_widget, windows_display
 from yesoncheck.player_playback import _MeasureRun, measurement_line
 from yesoncheck.video_widget import CustomVideoWidget, viewport_mode
 
@@ -147,7 +147,7 @@ def test_unusable_gl_falls_back_to_cpu_and_tells_why(qapp, gpu_on_windows, monke
     widget = CustomVideoWidget()
     assert widget.video_item_stream is False
     assert widget.display_path() == "raster"
-    assert "ANGLE" in widget.viewport_fallback_reason and windows_display.MENU_TEXT in widget.viewport_fallback_reason
+    assert "ANGLE" in widget.viewport_fallback_reason and ui_text.text(windows_display.MENU_KEY) in widget.viewport_fallback_reason
     assert "raster로 계속" in capsys.readouterr().out
 
 
@@ -260,7 +260,7 @@ def test_context_info_refuses_a_null_renderer(monkeypatch):
 
 def test_paint_failure_points_to_the_menu_on_windows():
     """GL 그리기가 실패하면 영상 영역이 비므로 창이 되돌리는 길을 알려야 함."""
-    assert windows_display.MENU_TEXT in gl_video_item.failure_menu_hint("win32")
+    assert ui_text.text(windows_display.MENU_KEY) in gl_video_item.failure_menu_hint("win32")
     assert "재생 디코더" in gl_video_item.failure_menu_hint("darwin")
     assert gl_video_item.failure_menu_hint("linux") == ""
 
@@ -311,6 +311,18 @@ def test_choosing_gpu_saves_and_says_when_it_applies(menu_player, local_app_data
     assert player.display_actions["gpu"].isChecked() and not player.display_actions["cpu"].isChecked()
     assert "다음에 여는 창" in notes[-1]
     assert player.display_status_action.text() == "지금 이 창: CPU"  # 이 창은 그대로 — 뷰포트는 창을 만들 때 정함
+
+
+def test_saved_notice_names_the_choice_with_a_particle_in_both_languages(menu_player):
+    """'GPU로 저장했습니다' — English 화면이면 이름 뒤에 '설정'을 붙여 'GPU 설정으로 저장했습니다' (영어 낱말 뒤 조사를 고르지 않음 — 리뷰 M-8)."""
+    from yesoncheck import ui_text
+
+    player, notes = menu_player
+    player.display_actions["gpu"].trigger()
+    assert notes[-1].startswith("GPU로 저장했습니다.")
+    ui_text.set_language("en")
+    player.display_actions["cpu"].trigger()
+    assert notes[-1].startswith("CPU (default) 설정으로 저장했습니다.")
 
 
 def test_choosing_after_another_window_saved_writes_the_file(menu_player, local_app_data):

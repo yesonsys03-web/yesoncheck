@@ -129,7 +129,8 @@ def run_child(tmp_path, scenario):
     env.update(QT_QPA_PLATFORM="offscreen", HOME=str(home), USERPROFILE=str(home),
                LOCALAPPDATA=str(home / "AppData" / "Local"), YESONCHECK_CONFIG_DIR=str(config),
                YESONCHECK_INSTANCES_DIR=str(instances), PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1",
-               PYTHONUNBUFFERED="1")  # 죽어도 그때까지의 기록이 남게 (파이프로 받는 stdout은 모아 씀)
+               PYTHONUNBUFFERED="1",  # 죽어도 그때까지의 기록이 남게 (파이프로 받는 stdout은 모아 씀)
+               YESONCHECK_LANGUAGE="ko")  # 화면 언어를 기계의 OS 언어에 맡기지 않음
     done = subprocess.run([sys.executable, str(script), ROOT, scenario], cwd=ROOT, env=env, capture_output=True,
                           timeout=120)
     out = done.stdout.decode("utf-8", "replace")

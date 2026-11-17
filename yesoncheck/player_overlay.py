@@ -27,7 +27,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from yesoncheck import user_files
+from yesoncheck import ui_text, user_files
 from yesoncheck.main_window_styles import (
     OVERLAY_CURRENT_FRAME_LABEL_STYLE,
     OVERLAY_FILE_NAME_LABEL_STYLE,
@@ -74,6 +74,11 @@ class PlayerOverlayMixin:
         
         print(f"오버레이 컨트롤러를 하단 중앙으로 재배치: ({x}, {y})")
 
+    def retranslate_overlay_controls(self):
+        """V 모드 오버레이 컨트롤의 글을 지금 언어로 (언어가 바뀐 뒤 — PlayerLanguageMixin.RETRANSLATORS). 글은 안내 라벨 하나 —
+        나머지는 기호(▶·⏸)·숫자·파일 이름이고 'No File'은 두 언어에서 같음."""
+        self.overlayHelpLabel.setText(ui_text.text("overlay.help"))
+
     def create_overlay_controls(self):
         """오버레이 컨트롤을 생성합니다."""
         self.overlayFrame = QFrame(self)
@@ -91,7 +96,7 @@ class PlayerOverlayMixin:
         self.resize_overlay.raise_()
         
         # 도움말 라벨 추가
-        self.overlayHelpLabel = QLabel('드래그로 이동, 테두리로 크기조절, Ctrl+휠로 확대/축소, Ctrl+O로 리셋', self.overlayFrame)
+        self.overlayHelpLabel = QLabel(ui_text.text("overlay.help"), self.overlayFrame)
         self.overlayHelpLabel.setStyleSheet(OVERLAY_HELP_LABEL_STYLE)
         self.overlayHelpLabel.setAlignment(Qt.AlignCenter)
         self.overlayHelpLabel.setVisible(False)  # 초기에는 숨김

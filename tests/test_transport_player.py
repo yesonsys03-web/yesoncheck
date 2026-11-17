@@ -454,3 +454,21 @@ def test_theme_switch_recolours_the_bar_icons(player):
     assert first_icon() == drawn("#333333")
     player.set_dark_theme()
     assert first_icon() == drawn("#d0d0d0")
+
+
+# ---------------------------------------------------------------- 파일 이름: B는 와이프가 켜진 동안만 (사용자 보고 2026-11-17)
+
+def test_file_name_shows_b_only_while_the_wipe_is_on(player, tmp_path):
+    """와이프를 끈 뒤에도 'A: …, B: …'가 남던 것 — 화면에 B가 보일 때(와이프가 켜진 동안)만 B 이름 (사용자 결정 2026-11-17)."""
+    assert player.open_file("A", clip(tmp_path, "a.mp4")) and player.open_file("B", clip(tmp_path, "b.mp4"))
+    assert player.filenameLabel.text() == "A: a.mp4"  # B를 열기만 함 — 와이프는 꺼져 있음
+    player.wipeCheckBox.setChecked(True)
+    assert player.filenameLabel.text() == "A: a.mp4, B: b.mp4"
+    player.wipeCheckBox.setChecked(False)
+    assert player.filenameLabel.text() == "A: a.mp4"
+    player.wipeCheckBox.setChecked(True)
+    assert player.filenameLabel.text() == "A: a.mp4, B: b.mp4"
+    assert player.open_file("B", clip(tmp_path, "c.mp4"))  # 와이프가 켜진 채 B를 바꿈
+    assert player.filenameLabel.text() == "A: a.mp4, B: c.mp4"
+    player._release_side("B")
+    assert player.filenameLabel.text() == "A: a.mp4"
