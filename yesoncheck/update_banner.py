@@ -113,8 +113,8 @@ class UpdateBanner(QFrame):
         self._draw_text()
 
     def show_offer(self, new: str, current: str) -> None:
-        """새 버전 알림: "⬆ 새 버전 {new}이 나왔습니다 · 지금 {current}" + [바뀐 점] [업데이트] [나중에]."""
-        self._show("offer", ui_text.Message("update.offer", new=new, current=current),
+        """새 버전 알림: "⬆ 새 버전 1.9.4가 나왔습니다 · 지금 1.9.3" + [바뀐 점] [업데이트] [나중에] (조사는 버전의 끝 숫자로)."""
+        self._show("offer", ui_text.Message("update.offer", current=current, **ui_text.version_values(new, name="new")),
                    (self.notes_button, self.update_button, self.later_button))
 
     def show_progress(self, done: int, total: int, text: str, cancellable: bool = True) -> None:

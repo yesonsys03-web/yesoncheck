@@ -166,3 +166,75 @@ def test_module_has_no_qt():
     code = "import sys; from yesoncheck import ui_text; print(any(name.startswith('PyQt5') for name in sys.modules))"
     done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert done.stdout.strip() == "False"
+
+
+# ---------------------------------------------------------------- 조사 (리뷰 M-8 — 2026-11-17)
+
+@pytest.mark.parametrize("word, pair, expected", [
+    ("항목", "을/를", "을"), ("메뉴", "을/를", "를"), ("썸네일", "은/는", "은"), ("필터", "은/는", "는"),
+    ("설정", "으로/로", "으로"), ("썸네일", "으로/로", "로"), ("메뉴", "으로/로", "로"), ("항목", "이/가", "이"),
+    ("단추", "과/와", "와"),
+])
+def test_particle_follows_the_final_syllable(word, pair, expected):
+    assert ui_text.particle(word, pair) == expected
+
+
+@pytest.mark.parametrize("version, ga, ro", [
+    ("1.10.0", "이", "으로"), ("1.9.1", "이", "로"), ("1.9.2", "가", "로"), ("1.9.3", "이", "으로"),
+    ("1.9.4", "가", "로"), ("1.9.5", "가", "로"), ("1.9.6", "이", "으로"), ("1.9.7", "이", "로"),
+    ("1.9.8", "이", "로"), ("9.9.9", "가", "로"),
+])
+def test_particle_after_a_version_reads_the_last_digit(version, ga, ro):
+    """숫자는 읽는 소리로: 0 영·1 일·2 이·3 삼·4 사·5 오·6 육·7 칠·8 팔·9 구 (ㄹ 받침 뒤는 '로')."""
+    assert ui_text.particle(version, "이/가") == ga
+    assert ui_text.particle(version, "으로/로") == ro
+
+
+def test_particle_after_an_unreadable_ending_writes_both_forms():
+    assert ui_text.particle("Update", "을/를") == "을(를)"
+    assert ui_text.particle("Mac)", "으로/로") == "(으)로"
+
+
+def test_particle_rejects_an_unknown_pair():
+    with pytest.raises(ValueError):
+        ui_text.particle("항목", "에서")
+
+
+def test_name_with_particle_keeps_the_korean_text_and_adds_a_noun_in_english():
+    """딸린 창(한글 문장)이 화면 이름을 인용할 때: 한국어 화면이면 예전 글 그대로, English 화면이면 이름 뒤에 한국어 명사를 붙여
+    그 명사의 조사로 — 영어 낱말의 받침은 읽기 따라 달라 고를 수 없음."""
+    assert ui_text.with_particle("슬라이더 썸네일", "을") == "슬라이더 썸네일을"
+    assert ui_text.with_particle("ffmpeg (예전 방식)", " 으로") == "ffmpeg (예전 방식) 으로"
+    ui_text.set_language("en")
+    assert ui_text.with_particle("Slider thumbnails", "을") == "Slider thumbnails 항목을"
+    assert ui_text.with_particle("Slider thumbnails", "은") == "Slider thumbnails 항목은"
+    assert ui_text.with_particle("ffmpeg (legacy)", " 으로") == "ffmpeg (legacy) 항목으로"
+    assert ui_text.with_particle("CPU (default)", "를") == "CPU (default) 항목을"
+    assert ui_text.with_particle("CPU (default)", "로", noun="설정") == "CPU (default) 설정으로"
+    assert ui_text.with_particle("'Update'", "를", noun="단추") == "'Update' 단추를"
+
+
+def test_update_texts_pick_the_particle_for_the_version():
+    """알림 띠: '1.10.0으로 업데이트했습니다'·'새 버전 1.9.4가 나왔습니다' (예전 글은 늘 '로'·'이'였음)."""
+    assert ui_text.version_values("1.10.0") == {"version": "1.10.0", "ga": "이", "ro": "으로"}
+    assert ui_text.version_values("1.9.4", name="new") == {"new": "1.9.4", "ga": "가", "ro": "로"}
+    assert ui_text.text("update.updated", **ui_text.version_values("1.10.0")) == "1.10.0으로 업데이트했습니다"
+    assert ui_text.text("update.updated", **ui_text.version_values("1.9.4")) == "1.9.4로 업데이트했습니다"
+    offer = ui_text.text("update.offer", current="1.9.3", **ui_text.version_values("1.9.4", name="new"))
+    assert offer == "⬆ 새 버전 1.9.4가 나왔습니다 · 지금 1.9.3"
+
+
+# ---------------------------------------------------------------- Message 복사 (리뷰 M-3)
+
+def test_message_survives_copy_deepcopy_and_pickle():
+    import copy
+    import pickle
+
+    message = ui_text.Message("update.updated", **ui_text.version_values("1.9.4"))
+    for again in (copy.copy(message), copy.deepcopy(message), pickle.loads(pickle.dumps(message))):
+        assert isinstance(again, ui_text.Message)
+        assert again == message == "1.9.4로 업데이트했습니다"
+        assert again.key == message.key and again.values == message.values
+        ui_text.set_language("en")
+        assert again.shown() == "Updated to 1.9.4"
+        ui_text.set_language("ko")

@@ -313,6 +313,18 @@ def test_choosing_gpu_saves_and_says_when_it_applies(menu_player, local_app_data
     assert player.display_status_action.text() == "지금 이 창: CPU"  # 이 창은 그대로 — 뷰포트는 창을 만들 때 정함
 
 
+def test_saved_notice_names_the_choice_with_a_particle_in_both_languages(menu_player):
+    """'GPU로 저장했습니다' — English 화면이면 이름 뒤에 '설정'을 붙여 'GPU 설정으로 저장했습니다' (영어 낱말 뒤 조사를 고르지 않음 — 리뷰 M-8)."""
+    from yesoncheck import ui_text
+
+    player, notes = menu_player
+    player.display_actions["gpu"].trigger()
+    assert notes[-1].startswith("GPU로 저장했습니다.")
+    ui_text.set_language("en")
+    player.display_actions["cpu"].trigger()
+    assert notes[-1].startswith("CPU (default) 설정으로 저장했습니다.")
+
+
 def test_choosing_after_another_window_saved_writes_the_file(menu_player, local_app_data):
     """창마다 프로세스 — 다른 창이 GPU를 저장한 뒤 이 창에서 CPU를 고르면 저장돼야 함. 이 창의 캐시(cpu)만 보면 아무 일도 안 해 다음 창이 GPU로 열림."""
     player, notes = menu_player

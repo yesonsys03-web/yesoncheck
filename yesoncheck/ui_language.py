@@ -36,7 +36,7 @@ _source = SOURCE_OS
 
 def _checked(code, where):
     if code not in ui_text.LANGUAGES:
-        raise ValueError(f"{where}는 {' 또는 '.join(ui_text.LANGUAGES)}여야 합니다: {code!r}")
+        raise ValueError(f"{where}는 {' 또는 '.join(ui_text.LANGUAGES)} 중 하나여야 합니다: {code!r}")
     return code
 
 
@@ -64,7 +64,8 @@ def save(code, path=None):
 def from_locale(names):
     """OS의 화면 언어 목록(앞이 먼저 — 예 ['ko-KR', 'en-US'])에서: 첫 언어가 한국어면 "ko", 아니면(비어도) "en"."""
     first = names[0] if names else ""
-    return "ko" if first.lower().startswith("ko") else "en"
+    language = first.replace("_", "-").split("-")[0].lower()  # 언어 부분만 — 'kok'(콘칸어)는 한국어가 아님 (리뷰 M-6)
+    return "ko" if language == "ko" else "en"
 
 
 def set_source(text):

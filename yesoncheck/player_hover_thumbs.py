@@ -247,7 +247,8 @@ class PlayerHoverThumbsMixin:
     def _hover_fail(self, text: str) -> None:
         """틱 정지 + 알림: 기록(stderr)은 매번, 오류 창은 파일마다 한 번 (이미 띄운 파일이면 기록만). 이미 채운 장은 그대로 보임."""
         self._hover_timer.stop()
-        message = f"띠를 만들지 못했습니다 — {self._hover_path}\n{text}\n\nSettings → {ui_text.text(hover_strip.MENU_KEY)}을 끄면 만들지 않습니다"
+        menu = ui_text.with_particle(ui_text.text(hover_strip.MENU_KEY), "을")
+        message = f"띠를 만들지 못했습니다 — {self._hover_path}\n{text}\n\nSettings → {menu} 끄면 만들지 않습니다"
         if self._hover_path in self._hover_failed_for:
             print(f"{LOG_PREFIX} {message}", file=sys.stderr, flush=True)
             return

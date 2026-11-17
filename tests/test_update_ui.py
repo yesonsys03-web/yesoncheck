@@ -147,7 +147,7 @@ def test_later_hides_until_bigger_version(player_with_build, fake_check, dialogs
     fake_check.results = [found("NAS", "1.1.1"), found("GitHub", "1.1.2")]
     check_now(player)  # 더 큰 번호 → 다시 보임
     assert player.update_banner.isVisible()
-    assert player.update_banner.full_text() == "⬆ 새 버전 1.1.2이 나왔습니다 · 지금 1.1.0"
+    assert player.update_banner.full_text() == "⬆ 새 버전 1.1.2가 나왔습니다 · 지금 1.1.0"
     assert player.update_offer.result.source == "GitHub"
     assert dialogs.messages == []
 
@@ -279,7 +279,16 @@ def test_manual_check_quotes_the_update_button_as_it_is_on_screen(player_with_bu
     assert "창 위 알림 띠에서 '업데이트'를 누르세요." in dialogs.messages[-1][2]
     ui_text.set_language("en")
     check_now(player, manual=True)
-    assert "'Update'" in dialogs.messages[-1][2]
+    # 영어 이름 뒤에는 조사를 고를 수 없어 한국어 명사를 붙임 ('Update'를 → 'Update' 단추를 — 리뷰 M-8)
+    assert "창 위 알림 띠에서 'Update' 단추를 누르세요." in dialogs.messages[-1][2]
+
+
+@pytest.mark.parametrize("version, text", [("1.1.1", "새 버전 1.1.1이 있습니다"), ("1.1.2", "새 버전 1.1.2가 있습니다"),
+                                           ("1.10.0", "새 버전 1.10.0이 있습니다")])
+def test_manual_check_picks_the_particle_for_the_version(player_with_build, fake_check, dialogs, version, text):
+    player = player_with_build("1.1.0", [found("NAS", version), expected("GitHub", GITHUB_UNREACHABLE)])
+    check_now(player, manual=True)
+    assert text in dialogs.messages[-1][2]
 
 
 def test_manual_check_shows_expected_problems(player_with_build, fake_check, dialogs):
@@ -417,7 +426,7 @@ def test_banner_does_not_widen_window(player_with_build):
     banner.show_offer(long_version, "1.1.0")
     _settle()
     assert player.minimumSizeHint().width() <= before
-    full = f"⬆ 새 버전 {long_version}이 나왔습니다 · 지금 1.1.0"
+    full = f"⬆ 새 버전 {long_version}가 나왔습니다 · 지금 1.1.0"  # 끝 숫자 9(구) → 가
     assert banner.full_text() == full and banner.text_label.toolTip() == full
     player.resize(player.minimumSizeHint())
     _settle()

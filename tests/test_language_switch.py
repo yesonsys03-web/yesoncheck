@@ -576,6 +576,86 @@ def test_notices_quote_the_menu_name_that_is_on_screen():
     assert "Settings → Display rendering (Windows) → CPU (default)" in windows_display.fallback_text("x")
 
 
+def test_notices_in_english_put_a_korean_noun_before_the_particle():
+    """한글 문장 안의 English 이름 뒤에는 조사를 고를 수 없음('Slider thumbnails을') — 이름 뒤에 한국어 명사를 붙여 그 명사의
+    조사로 (리뷰 M-8). 한국어 화면의 글은 그대로 (위 시험)."""
+    ui_text.set_language("en")
+    assert gl_video_item.decoder_menu_hint() == (
+        "Settings → Playback decoder (Mac) → ffmpeg (legacy) 항목으로 바꾸면 예전 방식으로 재생합니다")
+    assert gl_video_item.failure_menu_hint("win32") == (
+        "Settings → Display rendering (Windows) → CPU (default) 항목을 고르고 앱을 다시 켜면 CPU로 그립니다")
+    assert windows_display.fallback_text("x").endswith(
+        "Settings → Display rendering (Windows) → CPU (default) 항목을 고르면 이 알림이 뜨지 않습니다.")
+
+
+def test_hover_failure_notice_in_english_puts_a_noun_before_the_particle(player, monkeypatch):
+    from yesoncheck import error_window
+
+    shown = []
+    monkeypatch.setattr(error_window, "show_error", lambda prefix, text: shown.append(text))
+    player._hover_path = "/a/clip.mov"
+    player._hover_fail("x")
+    ui_text.set_language("en")
+    player._hover_path = "/a/other.mov"
+    player._hover_fail("x")
+    assert shown[0].endswith("Settings → 슬라이더 썸네일을 끄면 만들지 않습니다")
+    assert shown[1].endswith("Settings → Slider thumbnails 항목을 끄면 만들지 않습니다")
+
+
+@pytest.fixture
+def startup_warnings(monkeypatch):
+    texts = []
+    monkeypatch.setattr(app_module.QMessageBox, "warning", lambda _parent, _title, text: texts.append(text))
+    return texts
+
+
+@pytest.mark.parametrize("code, ending", [
+    ("ko", "Settings → 슬라이더 썸네일은 파일을 덮지 않습니다"),
+    ("en", "Settings → Slider thumbnails 항목은 파일을 덮지 않습니다"),
+])
+def test_startup_warning_for_broken_thumbnail_setting_quotes_the_menu(startup_warnings, monkeypatch, code, ending):
+    from yesoncheck import user_files
+
+    def broken():
+        raise user_files.UserFileError("깨진 설정 파일")
+
+    monkeypatch.setattr(hover_strip, "read_enabled", broken)
+    monkeypatch.setattr(hover_strip, "_enabled", True)
+    ui_text.set_language(code)
+    app_module.load_slider_thumbnails()
+    assert startup_warnings[-1].endswith(ending)
+
+
+@pytest.mark.parametrize("code, ending", [
+    ("ko", "Settings → 축소 필터 (Windows)는 파일을 덮지 않습니다"),  # 예전 글은 '필터 (Windows)은'
+    ("en", "Settings → Downscale filter (Windows) 항목은 파일을 덮지 않습니다"),
+])
+def test_startup_warning_for_broken_downscale_setting_quotes_the_menu(startup_warnings, monkeypatch, code, ending):
+    from yesoncheck import downscale_filter, user_files
+
+    def broken():
+        raise user_files.UserFileError("깨진 설정 파일")
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(downscale_filter, "read", broken)
+    monkeypatch.setattr(downscale_filter, "_preferred", downscale_filter.DEFAULT_FILTER)
+    ui_text.set_language(code)
+    app_module.load_downscale_filter()
+    assert startup_warnings[-1].endswith(ending)
+
+
+def test_startup_warning_for_broken_language_setting_quotes_the_menu(startup_warnings, monkeypatch):
+    """언어 메뉴의 이름은 두 언어에서 같은 글('언어 (Language)') — 조사는 '언어'에 맞춰 '는' (예전 글은 '은')."""
+    from yesoncheck import user_files
+
+    def broken():
+        raise user_files.UserFileError("깨진 설정 파일")
+
+    monkeypatch.setattr(ui_language, "read", broken)
+    app_module.load_language()
+    assert startup_warnings[-1].endswith("Settings → 언어 (Language)는 파일을 덮지 않습니다")
+
+
 def test_launch_reads_the_language_before_the_other_settings(qapp, monkeypatch):
     """시작 때의 설정 경고 창(재생 디코더·화면 그리기 …)이 메뉴 이름을 화면의 언어로 인용하려면 언어를 가장 먼저 읽어야 함."""
     order = []
@@ -996,7 +1076,7 @@ def test_english_banner_and_overlay_have_no_hangul(shown, tmp_path):
 
 
 @pytest.mark.parametrize("shape, korean, english", [
-    ("offer", "⬆ 새 버전 9.9.9이 나왔습니다 · 지금 1.0.0", "⬆ Version 9.9.9 is available · now 1.0.0"),
+    ("offer", "⬆ 새 버전 9.9.9가 나왔습니다 · 지금 1.0.0", "⬆ Version 9.9.9 is available · now 1.0.0"),
     ("download", "9.9.9 받는 중 (NAS)… 1.0 / 2.0 MB", "Downloading 9.9.9 (NAS)… 1.0 / 2.0 MB"),
     ("staging", "준비 중…", "Preparing…"),
     ("checking", "다른 창 확인 중…", "Checking other windows…"),
@@ -1114,3 +1194,137 @@ def test_playback_tick_does_the_same_work_in_both_languages(shown, tmp_path, mon
     assert work["ko"] == work["en"]
     per_tick = len(work["ko"]) / 3
     assert 0 < per_tick <= 6, work["ko"]  # 틱마다: 주석 상태 줄 한 번 + 주석 목록의 항목 글 정도
+
+
+# ---------------------------------------------------------------- 줄여 그리는 단추의 실패 알림은 한 번만 (리뷰 M-2)
+
+def test_shrink_button_failures_show_one_window_then_log_a_line_each(qapp, monkeypatch, capsys):
+    """그리기·툴팁은 자주 불림 — 같은 실패가 오류 창을 쌓지 않게: 이 프로세스에서 처음 한 번만 창(트레이스백), 그 뒤로는
+    단추가 달라도 기록 한 줄씩 (슬라이더 호버 필터와 같은 규칙)."""
+    from PyQt5.QtCore import QEvent, QPoint
+    from PyQt5.QtGui import QHelpEvent, QPaintEvent
+    from yesoncheck import window_layout
+
+    monkeypatch.setattr(window_layout, "_shrink_failure_shown", False)
+    windows = []
+    monkeypatch.setattr(window_layout.error_window, "report_from_handler", lambda prefix, context: windows.append(context))
+
+    def broken():
+        raise RuntimeError("그리기 시험")
+
+    first, second = window_layout.ShrinkButton(), window_layout.ShrinkToolButton()
+    for button in (first, second):
+        button.set_text_key("sidebar.open_folder")
+        monkeypatch.setattr(button, "drawn_text", broken)
+    first.paintEvent(QPaintEvent(first.rect()))
+    first.paintEvent(QPaintEvent(first.rect()))
+    second.paintEvent(QPaintEvent(second.rect()))
+    spot = QPoint(3, 3)
+    QApplication.sendEvent(second, QHelpEvent(QEvent.ToolTip, spot, second.mapToGlobal(spot)))
+    assert windows == ["단추의 글을 그리다가 오류가 났습니다."]
+    lines = [line for line in capsys.readouterr().err.splitlines() if line.startswith(window_layout.SHRINK_LOG_PREFIX)]
+    assert len(lines) == 3 and all("RuntimeError: 그리기 시험" in line for line in lines)
+    assert "툴팁" in lines[-1]
+
+
+# ---------------------------------------------------------------- 숨은·썸네일 사이드바에서 언어를 바꿀 때 (리뷰 M-5)
+
+def settle():
+    for _ in range(3):
+        QApplication.processEvents()
+
+
+def needs_different_start_widths(player):
+    """두 언어의 처음 폭이 같은 글꼴(글꼴 없는 Windows CI 등)에서는 아래 시험이 아무것도 가리지 못함 — 건너뜀 (리뷰 m-2)."""
+    korean = player.sidebar_start_width()
+    ui_text.set_language("en")
+    player.retranslate_ui()
+    english = player.sidebar_start_width()
+    ui_text.set_language("ko")
+    player.retranslate_ui()
+    settle()
+    if english == korean:
+        pytest.skip("이 글꼴에서는 두 언어의 사이드바 처음 폭이 같음")
+
+
+def test_language_changed_while_the_controls_are_hidden_moves_the_sidebar_when_they_return(shown):
+    """V 모드(사이드바가 숨음)에서 언어를 바꾸면 그때는 폭을 알 수 없음 — 되돌아올 때 옛 언어의 처음 폭 그대로면 새 언어의 처음 폭으로."""
+    needs_different_start_widths(shown)
+    korean = shown.mainSplitter.sizes()
+    shown.toggle_controls()
+    settle()
+    shown.set_ui_language("en")
+    shown.toggle_controls()
+    settle()
+    english = shown.mainSplitter.sizes()
+    assert english[0] == shown.sidebar_start_width() and cut_texts(shown) == []
+    assert sum(english) == sum(korean) and english[2] == korean[2]
+    shown.toggle_controls()
+    settle()
+    shown.set_ui_language("ko")
+    shown.toggle_controls()
+    settle()
+    assert shown.mainSplitter.sizes() == korean
+
+
+def test_language_changed_and_changed_back_while_hidden_keeps_the_width(shown):
+    """숨은 동안 바꿨다 되돌리면 폭은 그대로. (언어가 둘뿐이라 '처음 언어의 폭으로 견줌'과 '나중 언어의 폭으로 견줌'을 이 시험이
+    가르지는 못함 — 리뷰 m-2; 결과가 같으므로 동작으로는 같음)"""
+    needs_different_start_widths(shown)
+    korean = shown.mainSplitter.sizes()
+    shown.toggle_controls()
+    settle()
+    shown.set_ui_language("en")
+    shown.set_ui_language("ko")
+    shown.toggle_controls()
+    settle()
+    assert shown.mainSplitter.sizes() == korean
+
+
+def test_hand_set_width_is_kept_when_the_language_changes_while_hidden(shown):
+    needs_different_start_widths(shown)
+    sizes = shown.mainSplitter.sizes()
+    shown.mainSplitter.setSizes([sizes[0] + 31, sizes[1] - 31, sizes[2]])
+    by_hand = shown.mainSplitter.sizes()
+    shown.toggle_controls()
+    settle()
+    shown.set_ui_language("en")
+    shown.toggle_controls()
+    settle()
+    assert shown.mainSplitter.sizes() == by_hand
+
+
+def test_language_changed_in_thumbnail_mode_sets_the_list_width_to_come_back_to(shown):
+    """썸네일 모드에서 바꾸면 썸네일 폭은 그대로 두고, 목록 모드로 돌아올 폭을 새 언어의 처음 폭으로 (되돌리면 돌아옴)."""
+    QTest.qWait(250)  # 켠 뒤 200ms에 기본 목록 폭을 적음 (initialize_sidebar_width)
+    needs_different_start_widths(shown)
+    korean = shown.mainSplitter.sizes()
+    shown.switch_to_thumbnail_mode()
+    settle()
+    thumbnails = shown.mainSplitter.sizes()
+    shown.set_ui_language("en")
+    settle()
+    assert shown.mainSplitter.sizes() == thumbnails
+    shown.switch_to_list_mode()
+    settle()
+    assert shown.mainSplitter.sizes()[0] == shown.sidebar_start_width() and cut_texts(shown) == []
+    shown.switch_to_thumbnail_mode()
+    settle()
+    shown.set_ui_language("ko")
+    shown.switch_to_list_mode()
+    settle()
+    assert shown.mainSplitter.sizes() == korean
+
+
+def test_list_width_other_than_the_start_width_is_kept_when_the_language_changes_in_thumbnail_mode(shown):
+    """썸네일 모드에서 돌아올 목록 폭(default_sidebar_width — 켤 때 한 번 적힘)이 처음 폭이 아니면 언어를 바꿔도 그대로."""
+    QTest.qWait(250)
+    needs_different_start_widths(shown)
+    start = shown.mainSplitter.sizes()[0]
+    shown.default_sidebar_width += 31  # 처음 폭이 아닌 목록 폭 (켠 직후에 손으로 맞춘 것처럼)
+    shown.switch_to_thumbnail_mode()
+    settle()
+    shown.set_ui_language("en")
+    shown.switch_to_list_mode()
+    settle()
+    assert shown.mainSplitter.sizes()[0] == start + 31

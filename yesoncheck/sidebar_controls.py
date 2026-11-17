@@ -27,11 +27,12 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QMenu, QProgressBar, QSizePolicy, QToolButton, QVBoxLayout,
                              QWidget)
 
-from yesoncheck import ui_text, work_picker
+from yesoncheck import error_window, ui_text, work_picker
 from yesoncheck.user_files import UserFileError
-from yesoncheck.window_layout import ShrinkButton, ShrinkToolButton
+from yesoncheck.window_layout import ShrinkButton, ShrinkToolButton, VisibilityWatcher
 
 LOG_PREFIX = "[작품 고르기]"
+SIDEBAR_LOG_PREFIX = "[사이드바]"
 SIDEBAR_TOOL = "sidebarTool"  # 작은 단추의 objectName — 색은 두 테마 시트의 #sidebarTool 규칙
 COMBO_MINIMUM_CHARS = 6  # 콤보의 최소 너비(글자 수) — 긴 작품·job 이름이 사이드바(창)의 최소 너비를 늘리지 않게
 THUMBNAIL_BAR_LINGER_MS = 1500  # 썸네일을 다 만든 뒤 진행 막대(끝난 글자)를 보여 두는 시간
@@ -250,7 +251,8 @@ class SidebarControlsMixin:
     # 예전 처음 폭(200)에 작은 단추 셋의 글이 다 들어가지 않는다(이 Mac: Open … · Book… · Refr…). 그래서 '처음 폭'을 언어마다:
     # max(200, 최소 너비, 지금 언어의 단추 줄이 다 보이는 폭). 켤 때 그 폭으로 시작하고(player_base.apply_startup_geometry),
     # 언어를 바꿀 때 사이드바가 옛 언어의 처음 폭 그대로면 새 언어의 처음 폭으로 옮긴다(player_language.set_ui_language) —
-    # 되돌리면 돌아온다. 손으로 맞춘 폭·썸네일 모드의 폭·숨은 사이드바는 건드리지 않는다(그때 줄어 그려지는 글은 툴팁으로).
+    # 되돌리면 돌아온다 — 썸네일 모드면 목록으로 돌아올 폭을, 숨어 있으면(V 모드) 다시 보일 때(follow_sidebar_start_width).
+    # 손으로 맞춘 폭은 건드리지 않는다(그때 줄어 그려지는 글은 툴팁으로).
     def sidebar_buttons_wanted_width(self):
         """사이드바의 단추 줄(작은 단추 셋 · 목록|썸네일 · 선택 재생)이 지금 언어의 글을 줄이지 않고 보이는 사이드바 칸 너비."""
         rows = ((self.openFolderButton, self.bookmarkMenuButton, self.refreshListButton),
@@ -265,11 +267,48 @@ class SidebarControlsMixin:
         return max(SIDEBAR_START_WIDTH, side.minimumSizeHint().width(), side.minimumWidth(),
                    self.sidebar_buttons_wanted_width())
 
-    def sidebar_at_start_width(self):
-        """사이드바가 (보이고, 목록 모드이고) 지금 언어의 처음 폭 그대로인가 — 손으로 맞춘 폭이 아닌가."""
+    def follow_sidebar_start_width(self, old_start):
+        """언어를 바꾼 뒤(글자를 다시 그린 뒤): 사이드바가 옛 언어의 처음 폭(old_start — 바꾸기 전에 잰 sidebar_start_width) 그대로였으면
+        새 언어의 처음 폭으로 — 손으로 맞춘 폭은 그대로. 보이는 목록 모드면 바로, 썸네일 모드면 목록 모드로 돌아올 폭(default_sidebar_width)을,
+        숨어 있으면(V 모드·영상만 전체 화면 — 숨은 칸의 폭은 읽을 수 없음) 다시 보일 때 견줌(_sidebar_start_pending, 리뷰 M-5).
+        숨은 동안 두 번 바꾸면 처음 언어의 폭으로 견줌."""
         side = self.mainSplitter.widget(0)
-        return (side.isVisible() and not self.is_thumbnail_mode
-                and self.mainSplitter.sizes()[0] == self.sidebar_start_width())
+        if side.isHidden():
+            if self._sidebar_start_pending is None:
+                self._sidebar_start_pending = old_start
+            return
+        self._sidebar_start_pending = None
+        if not side.isVisible():
+            return  # 창이 아직 보이지 않음 — 처음 폭은 창을 보일 때 정함 (apply_startup_geometry)
+        if self.is_thumbnail_mode:
+            page = self.sidebar_tabs.currentWidget()
+            list_column = self.default_sidebar_width + self.mainSplitter.sizes()[0] - page.width()  # _resize_sidebar_column과 같은 셈
+            if list_column == old_start:
+                self.default_sidebar_width += self.sidebar_start_width() - old_start
+            return
+        if self.mainSplitter.sizes()[0] == old_start:
+            self.move_sidebar_to_start_width()
+
+    def _watch_sidebar_visibility(self):
+        """(창을 만들 때) 사이드바 칸이 다시 보이면 언어를 바꾼 동안 미뤄 둔 폭 맞추기를 함 — 보이게 된 순간에는 스플리터가 아직 그 칸의
+        폭을 0으로 알려 Qt 루프에서 (실측: 다시 보인 뒤 첫 0ms 타이머에서 폭이 맞음)."""
+        self._sidebar_visibility_watcher = VisibilityWatcher(
+            self._sidebar_visibility_changed, self, SIDEBAR_LOG_PREFIX, "사이드바가 다시 보일 때 폭을 맞추다가 오류가 났습니다.")
+        self.mainSplitter.widget(0).installEventFilter(self._sidebar_visibility_watcher)
+
+    def _sidebar_visibility_changed(self):
+        if self._sidebar_start_pending is not None and not self.mainSplitter.widget(0).isHidden():
+            QTimer.singleShot(0, self._settle_pending_sidebar_width)
+
+    def _settle_pending_sidebar_width(self):
+        try:
+            old_start = self._sidebar_start_pending
+            if old_start is None:
+                return
+            self._sidebar_start_pending = None
+            self.follow_sidebar_start_width(old_start)
+        except BaseException:  # Qt 루프의 타이머 — 밖으로 내보내지 않음 (기록 + 오류 창)
+            error_window.report_from_handler(SIDEBAR_LOG_PREFIX, "사이드바가 다시 보일 때 폭을 맞추다가 오류가 났습니다.")
 
     def move_sidebar_to_start_width(self):
         """사이드바 칸을 지금 언어의 처음 폭으로 — 차이는 영상 칸에서 가져오거나 돌려줌(창·도구 패널은 그대로). 영상 칸이 최소

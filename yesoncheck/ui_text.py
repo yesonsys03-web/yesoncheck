@@ -270,7 +270,7 @@ TEXTS = {
     "overlay.help": {"ko": "드래그로 이동, 테두리로 크기조절, Ctrl+휠로 확대/축소, Ctrl+O로 리셋",
                      "en": "Drag to move, drag the border to resize, Ctrl+wheel to zoom, Ctrl+O to reset"},
     # 업데이트 알림 띠 (창 맨 위) — 글과 단추. 기록 줄에는 한국어 글이 그대로 남음 (Message)
-    "update.offer": {"ko": "⬆ 새 버전 {new}이 나왔습니다 · 지금 {current}", "en": "⬆ Version {new} is available · now {current}"},
+    "update.offer": {"ko": "⬆ 새 버전 {new}{ga} 나왔습니다 · 지금 {current}", "en": "⬆ Version {new} is available · now {current}"},
     "update.download": {"ko": "{version} 받는 중 ({source})… {done} / {total} MB",
                         "en": "Downloading {version} ({source})… {done} / {total} MB"},
     "update.staging": {"ko": "준비 중…", "en": "Preparing…"},
@@ -278,7 +278,7 @@ TEXTS = {
     "update.helper": {"ko": "업데이트 도우미를 시작하는 중…", "en": "Starting the update helper…"},
     "update.checking": {"ko": "다른 창 확인 중…", "en": "Checking other windows…"},
     "update.closing": {"ko": "다른 창을 닫는 중…", "en": "Closing other windows…"},
-    "update.updated": {"ko": "{version}로 업데이트했습니다", "en": "Updated to {version}"},
+    "update.updated": {"ko": "{version}{ro} 업데이트했습니다", "en": "Updated to {version}"},
     "update.notes": {"ko": "바뀐 점", "en": "What's new"},
     "update.update": {"ko": "업데이트", "en": "Update"},
     "update.later": {"ko": "나중에", "en": "Later"},
@@ -431,10 +431,68 @@ class Message(str):
     def shown(self):
         return text(self.key, **self.values)
 
+    def __reduce__(self):  # copy·deepcopy·pickle — str의 기본은 한국어 글 하나로 다시 만들려다 KeyError (리뷰 M-3)
+        return (_rebuild_message, (self.key, self.values))
+
+
+def _rebuild_message(key, values):
+    return Message(key, **values)
+
 
 def shown(value):
     """화면에 보일 글: Message면 지금 언어로 만든 글, 그냥 글자면 받은 그대로."""
     return value.shown() if isinstance(value, Message) else value
+
+
+# ---------------------------------------------------------------- 한국어 조사
+# 화면 언어와 무관하게 한글 문장으로 남는 글(딸린 창·알림 띠의 한국어 글)이 바뀌는 낱말(버전 번호·지금 화면의 메뉴 이름)에
+# 조사를 붙일 때. 글자 표의 한국어 글에 `{ga}`·`{ro}`처럼 조사 자리를 두고 부르는 쪽이 채운다(version_values).
+PARTICLE_PAIRS = ("이/가", "을/를", "은/는", "과/와", "으로/로")  # 받침 있을 때/없을 때
+_PAIR_OF = {part: pair for pair in PARTICLE_PAIRS for part in pair.split("/")}
+_DIGIT_FINAL = {"0": "ㅇ", "1": "ㄹ", "2": "", "3": "ㅁ", "4": "", "5": "", "6": "ㄱ", "7": "ㄹ", "8": "ㄹ", "9": ""}  # 영 일 이 삼 …
+
+
+def _final(word):
+    """끝 글자의 받침 — 없으면 "", ㄹ이면 "ㄹ", 그 밖의 받침이면 "있음", 읽는 소리를 모르면(영문·기호) None. 숫자는 읽는 소리로."""
+    last = str(word).rstrip()[-1:]  # 버전은 updates.Version일 수도 — 글로 보이는 모양으로
+    if "가" <= last <= "힣":
+        index = (ord(last) - ord("가")) % 28
+        return "" if index == 0 else ("ㄹ" if index == 8 else "있음")
+    if last in _DIGIT_FINAL:
+        final = _DIGIT_FINAL[last]
+        return final if final in ("", "ㄹ") else "있음"
+    return None
+
+
+def particle(word, pair):
+    """word 뒤에 붙일 조사 — pair는 PARTICLE_PAIRS의 하나("이/가" 등). 끝 글자가 한글이면 받침으로, 숫자면 읽는 소리로(1.10.0 →
+    '이'·'으로', 1.9.4 → '가'·'로'), ㄹ 받침 뒤의 으로/로는 '로'. 읽는 소리를 모르면(영문·기호) 두 꼴을 함께('을(를)'·'(으)로')."""
+    if pair not in PARTICLE_PAIRS:
+        raise ValueError(f"모르는 조사 짝: {pair!r} (쓸 수 있는 값: {', '.join(PARTICLE_PAIRS)})")
+    with_final, without_final = pair.split("/")
+    final = _final(word)
+    if final is None:
+        return "(으)로" if pair == "으로/로" else f"{with_final}({without_final})"
+    if final == "" or (final == "ㄹ" and pair == "으로/로"):
+        return without_final
+    return with_final
+
+
+def version_values(version, name="version"):
+    """버전 번호를 넣는 글의 값 — {name: 버전, "ga": 이/가, "ro": 으로/로} (글자 표의 한국어 글이 `{ga}`·`{ro}`를 씀)."""
+    return {name: version, "ga": particle(version, "이/가"), "ro": particle(version, "으로/로")}
+
+
+def with_particle(name, korean_particle, noun="항목"):
+    """한글 문장이 지금 화면의 이름(메뉴·단추)을 인용할 때의 '이름 + 조사'. 한국어 화면이면 name + korean_particle(예전 글 그대로 —
+    이름이 정해져 있어 조사도 정해져 있음), English 화면이면 이름 뒤에 한국어 명사를 붙여 그 명사의 조사로('Slider thumbnails
+    항목을') — 영어 낱말의 받침은 읽기에 따라 달라 고를 수 없음 (리뷰 M-8). korean_particle 앞의 공백은 한국어 글에만 남는다."""
+    pair = _PAIR_OF.get(korean_particle.strip())
+    if pair is None:
+        raise ValueError(f"모르는 조사: {korean_particle!r}")
+    if _language == DEFAULT_LANGUAGE:
+        return name + korean_particle
+    return f"{name} {noun}{particle(noun, pair)}"
 
 
 def missing():

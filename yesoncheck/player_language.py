@@ -82,13 +82,12 @@ class PlayerLanguageMixin:
                                  f"언어 설정을 저장하지 못했습니다 — 언어를 바꾸지 않았습니다.\n\n{exc}")
             self._sync_language_menu()
             return
-        at_start_width = self.sidebar_at_start_width()  # 옛 언어의 처음 폭 그대로인가 — 글자를 바꾸기 전에 봄
+        old_start = self.sidebar_start_width()  # 옛 언어의 처음 폭 — 글자를 바꾸기 전에 잼
         ui_text.set_language(code)
         ui_language.set_source(ui_language.SOURCE_MENU)
         print(f"{ui_language.LOG_PREFIX} 설정: {ui_language.NAMES[code]} ({ui_language.SOURCE_MENU})", flush=True)
         self.retranslate_ui()
-        if at_start_width:  # 손으로 맞춘 폭이 아니면 새 언어의 처음 폭으로(단추 글이 다 보이게) — sidebar_controls
-            self.move_sidebar_to_start_width()
+        self.follow_sidebar_start_width(old_start)  # 손으로 맞춘 폭이 아니면 새 언어의 처음 폭으로(단추 글이 다 보이게) — sidebar_controls
 
     def retranslate_ui(self):
         """글자 표의 지금 언어로 이 창의 글자를 모두 다시 그린다 (언어를 바꾼 뒤)."""

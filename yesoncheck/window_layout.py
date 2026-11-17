@@ -19,8 +19,9 @@ VerticalScrollArea는 도구 패널의 쪽을 감쌈.
 """
 
 import math
+import sys
 
-from PyQt5.QtCore import QEvent, QMargins, QPoint, QRect, QSize, Qt
+from PyQt5.QtCore import QEvent, QMargins, QObject, QPoint, QRect, QSize, Qt
 from PyQt5.QtGui import QFontMetricsF, QPainter
 from PyQt5.QtWidgets import (
     QApplication, QFrame, QLabel, QLayout, QPushButton, QScrollArea, QStyle, QStyleOption, QStyleOptionButton,
@@ -531,8 +532,44 @@ class InfoRowLayout(QLayout):
             x -= spacing
 
 
+class VisibilityWatcher(QObject):
+    """위젯이 숨겨지거나 다시 보이게 될 때(setVisible — ShowToParent·HideToParent) callback()을 부르는 이벤트 필터. 부른 쪽이 참조를
+    쥘 것(parent). callback의 예외는 밖으로 내보내지 않음(PyQt5 가상 함수 — qFatal): log_prefix·context로 기록 + 오류 창."""
+
+    def __init__(self, callback, parent, log_prefix, context):
+        super().__init__(parent)
+        self._callback = callback
+        self._log_prefix = log_prefix
+        self._context = context
+
+    def eventFilter(self, watched, event):
+        if event.type() in (QEvent.ShowToParent, QEvent.HideToParent):
+            try:
+                self._callback()
+            except BaseException:  # 가상 함수 밖으로 예외를 내보내면 PyQt5가 프로세스를 끝냄
+                error_window.report_from_handler(self._log_prefix, self._context)
+        return False
+
+
 SHRINK_LOG_PREFIX = "[단추]"
-_CHROME_PROBE = "M" * 40  # 테두리·여백을 잴 때 넣어 보는 긴 글 — 스타일의 '단추 최소 너비'(Fusion 80px 등)에 걸리지 않게
+_shrink_failure_shown = False  # 이 프로세스에서 줄여 그리는 단추의 실패를 창으로 알렸음 — 처음 한 번만 (_report_shrink_failure)
+
+
+def _report_shrink_failure(context):
+    """ShrinkButton·ShrinkToolButton의 가상 함수(그리기·툴팁)의 except 블록에서: 이 프로세스에서 처음 한 번은 트레이스백 + 오류 창
+    (error_window.report_from_handler), 그 뒤로는 단추가 달라도 기록(stderr) 한 줄씩 — 그리기는 자주 불려 같은 실패가 창을
+    쌓지 않게(리뷰 M-2; slider_preview의 호버 필터와 같은 규칙). 예외를 내보내지 않음 (PyQt5 가상 함수 — qFatal)."""
+    global _shrink_failure_shown
+    if not _shrink_failure_shown:
+        _shrink_failure_shown = True
+        error_window.report_from_handler(SHRINK_LOG_PREFIX, context)
+        return
+    exc = sys.exc_info()[1]
+    print(f"{SHRINK_LOG_PREFIX} {context} (되풀이 — 트레이스백·오류 창은 처음 한 번만): {type(exc).__name__}: {exc}",
+          file=sys.stderr, flush=True)
+
+
+_CHROME_PROBE ="M" * 40  # 테두리·여백을 잴 때 넣어 보는 긴 글 — 스타일의 '단추 최소 너비'(Fusion 80px 등)에 걸리지 않게
 
 
 class _ShrinkText:
@@ -581,7 +618,7 @@ class _ShrinkText:
                 QToolTip.showText(event.globalPos(), self.text(), self)
                 return True
         except BaseException:  # 가상 함수 — 예외를 내보내지 않음 (기록 + 오류 창)
-            error_window.report_from_handler(SHRINK_LOG_PREFIX, "단추의 툴팁을 보이다가 오류가 났습니다.")
+            _report_shrink_failure("단추의 툴팁을 보이다가 오류가 났습니다.")
         return super().event(event)
 
 
@@ -626,7 +663,7 @@ class ShrinkButton(_ShrinkText, QPushButton):
             option.text = drawn
             QStylePainter(self).drawControl(QStyle.CE_PushButton, option)
         except BaseException:  # 가상 함수 — 예외를 내보내지 않음 (기록 + 오류 창)
-            error_window.report_from_handler(SHRINK_LOG_PREFIX, "단추의 글을 그리다가 오류가 났습니다.")
+            _report_shrink_failure("단추의 글을 그리다가 오류가 났습니다.")
 
 
 class ShrinkToolButton(_ShrinkText, QToolButton):
@@ -674,4 +711,4 @@ class ShrinkToolButton(_ShrinkText, QToolButton):
             option.text = drawn
             QStylePainter(self).drawComplexControl(QStyle.CC_ToolButton, option)
         except BaseException:  # 가상 함수 — 예외를 내보내지 않음 (기록 + 오류 창)
-            error_window.report_from_handler(SHRINK_LOG_PREFIX, "단추의 글을 그리다가 오류가 났습니다.")
+            _report_shrink_failure("단추의 글을 그리다가 오류가 났습니다.")

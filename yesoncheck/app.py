@@ -264,7 +264,7 @@ def load_slider_thumbnails():
         traceback.print_exc()
         hover_strip.set_enabled(False)
         if isinstance(exc, user_files.UserFileError):
-            note = (f"이 세션은 슬라이더 썸네일을 끕니다.\n설정 파일을 고치거나 지운 뒤 다시 켜면 켜집니다 — Settings → {ui_text.text(hover_strip.MENU_KEY)}은 "
+            note = (f"이 세션은 슬라이더 썸네일을 끕니다.\n설정 파일을 고치거나 지운 뒤 다시 켜면 켜집니다 — Settings → {ui_text.with_particle(ui_text.text(hover_strip.MENU_KEY), '은')} "
                     "파일을 덮지 않습니다")
         else:
             note = f"이 세션은 슬라이더 썸네일을 끕니다 — Settings → {ui_text.text(hover_strip.MENU_KEY)}에서 다시 켤 수 있습니다"
@@ -293,7 +293,7 @@ def load_language():
             traceback.print_exc()
             code, source = "ko", ui_language.SOURCE_FALLBACK
             if isinstance(exc, user_files.UserFileError):
-                note = (f"이 세션은 한국어로 보입니다.\n설정 파일을 고치거나 지운 뒤 다시 켜면 설정을 읽습니다 — Settings → {ui_language.MENU_TEXT}은 "
+                note = (f"이 세션은 한국어로 보입니다.\n설정 파일을 고치거나 지운 뒤 다시 켜면 설정을 읽습니다 — Settings → {ui_language.MENU_TEXT}는 "
                         "파일을 덮지 않습니다")
             else:
                 note = f"이 세션은 한국어로 보입니다 — Settings → {ui_language.MENU_TEXT}에서 다시 고를 수 있습니다"
@@ -317,7 +317,7 @@ def load_downscale_filter():
         traceback.print_exc()
         downscale_filter.set_preferred(downscale_filter.DEFAULT_FILTER)
         if isinstance(exc, user_files.UserFileError):
-            note = (f"이 세션은 Linear로 그립니다.\n설정 파일을 고치거나 지운 뒤 다시 켜면 설정을 읽습니다 — Settings → {ui_text.text(downscale_filter.MENU_KEY)}은 "
+            note = (f"이 세션은 Linear로 그립니다.\n설정 파일을 고치거나 지운 뒤 다시 켜면 설정을 읽습니다 — Settings → {ui_text.with_particle(ui_text.text(downscale_filter.MENU_KEY), '는')} "
                     "파일을 덮지 않습니다")
         else:
             note = f"이 세션은 Linear로 그립니다 — Settings → {ui_text.text(downscale_filter.MENU_KEY)}에서 다시 고를 수 있습니다"
@@ -471,10 +471,10 @@ def launch(argv=None):
     movie_pipe_source.frame_cache_mode()  # 프레임 캐시 토글(YESONCHECK_FRAME_CACHE)도 같은 이유로 시작 때 검증
     gl_video_item.video_item_mode(os.environ)  # 영상 아이템 토글(YESONCHECK_VIDEO_ITEM)의 나쁜 값도 같은 이유로 여기서
     video_list.job_scan_threads()  # job 목록 스레드 수(YESONCHECK_JOB_SCAN_THREADS)의 나쁜 값도 — job을 고를 때 뒤늦게 알게 되지 않게
-    # (Mac) 재생 디코더 설정(prefs.json)도 시작 때 한 번 읽어 게이트의 캐시에 — native_wanted는 그 캐시만 봄 (깨졌으면 알리고 이 세션은 ffmpeg)
     # 화면 언어(한국어·English) — 창(모든 화면 글자)을 만들기 전에, 그리고 아래 설정들보다 먼저: 그 설정을 읽지 못했을 때의
     # 경고 창이 메뉴 이름을 화면의 언어로 인용함
     load_language()
+    # (Mac) 재생 디코더 설정(prefs.json)도 시작 때 한 번 읽어 게이트의 캐시에 — native_wanted는 그 캐시만 봄 (깨졌으면 알리고 이 세션은 ffmpeg)
     load_playback_decoder()
     load_display_renderer()  # (Windows) 화면 그리기 설정 — 창(뷰포트)을 만들기 전에
     load_slider_thumbnails()  # 슬라이더 썸네일 켬/끔 — 창(Settings 메뉴 체크)을 만들기 전에

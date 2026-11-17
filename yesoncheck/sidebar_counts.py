@@ -77,8 +77,11 @@ def kind_version_text(stems):
         members = versions[kind]
         text = f"{kind or ui_text.text('count.base')} {len(members)}"
         if any(members):
-            inner = _breakdown(version or ui_text.text("count.no_version") for version in members)
-            text += " (" + " · ".join(f"{name} {count}" for name, count in inner) + ")"
+            # 차례는 한국어 이름으로 정함('없음'은 같은 수의 버전 뒤) — 화면 글(none)로 정하면 언어마다 차례가 달라짐 (리뷰 M-7)
+            no_version = ui_text.korean("count.no_version")
+            inner = _breakdown(version or no_version for version in members)
+            text += " (" + " · ".join(f"{ui_text.text('count.no_version') if name == no_version else name} {count}"
+                                      for name, count in inner) + ")"
         parts.append(text)
     return " · ".join(parts)
 

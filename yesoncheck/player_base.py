@@ -305,6 +305,8 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         
         # 사이드바 폭 관리 변수
         self.default_sidebar_width = None  # 기본 사이드바 폭 (나중에 설정)
+        self._sidebar_start_pending = None  # 언어를 바꿀 때 사이드바가 숨어 있었으면 옛 언어의 처음 폭 — 다시 보일 때 견줌 (sidebar_controls)
+        self._watch_sidebar_visibility()
 
         # OCR / ROI 상태
         self.ocr_roi = None
@@ -1277,7 +1279,8 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         windows_display.set_preferred(name)
         print(f"[뷰포트] 화면 그리기 설정: {name} (Settings 메뉴)", flush=True)
         self._sync_display_menu()
-        QMessageBox.information(self, DISPLAY_TITLE, f"{ui_text.text(windows_display.ACTION_KEYS[name])}로 저장했습니다. 다음에 여는 창부터 적용됩니다.\n{self.display_status_action.text()}")
+        chosen = ui_text.with_particle(ui_text.text(windows_display.ACTION_KEYS[name]), "로", noun="설정")
+        QMessageBox.information(self, DISPLAY_TITLE, f"{chosen} 저장했습니다. 다음에 여는 창부터 적용됩니다.\n{self.display_status_action.text()}")
 
     def _add_downscale_menu(self, settings_menu):
         """(Windows) Settings → 축소 필터 — Linear(기본)·고품질(면적 평균) 라디오. 다른 플랫폼은 메뉴 없음(늘 Linear — 사용자 지시 'Mac은 수정하지 않아도 됨').

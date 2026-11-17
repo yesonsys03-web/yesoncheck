@@ -200,3 +200,17 @@ def test_system_ui_languages_is_a_list_of_names(qapp):
 def test_conftest_pins_korean():
     assert os.environ["YESONCHECK_LANGUAGE"] == "ko"
     assert ui_text.language() == "ko" and ui_language.source() == ui_language.SOURCE_ENV
+
+
+def test_from_locale_reads_the_whole_language_subtag():
+    """'ko'로 시작하는 다른 언어(콘칸어 kok)는 한국어가 아님 — 언어 부분이 정확히 ko일 때만 (리뷰 M-6)."""
+    assert ui_language.from_locale(["kok-IN"]) == "en"
+    assert ui_language.from_locale(["kok"]) == "en"
+    assert ui_language.from_locale(["ko-Kore-KR"]) == "ko"
+    assert ui_language.from_locale(["ko_KR"]) == "ko"
+
+
+def test_bad_value_message_names_both_languages_without_a_particle_after_them():
+    with pytest.raises(ValueError) as caught:
+        ui_language._checked("jp", "prefs.json의 ui_language")
+    assert "ko 또는 en 중 하나여야 합니다" in str(caught.value)

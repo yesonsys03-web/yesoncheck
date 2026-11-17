@@ -165,9 +165,15 @@ def download_text(version, source, done, total):
                            total=f"{total / 1e6:,.1f}")
 
 
+def repr_button(name):
+    """딸린 창 글이 띠의 단추 이름을 인용하는 모양: '업데이트' (따옴표째 — with_particle에 넘김)."""
+    return f"'{name}'"
+
+
 def updated_message(version):
-    """다시 켜진 앱이 띠와 기록에 남기는 글: "1.1.1로 업데이트했습니다" (ui_text.Message — 기록은 한국어, 띠는 지금 언어)."""
-    return ui_text.Message("update.updated", version=version)
+    """다시 켜진 앱이 띠와 기록에 남기는 글: "1.1.1로 업데이트했습니다"·"1.10.0으로 업데이트했습니다" (ui_text.Message — 기록은
+    한국어, 띠는 지금 언어; 조사는 버전의 끝 숫자로)."""
+    return ui_text.Message("update.updated", **ui_text.version_values(version))
 
 
 def remove_prepared(path):
@@ -735,8 +741,10 @@ class PlayerUpdateMixin:
         offer = result.offer
         if offer is not None:
             # 창의 글은 한국어 그대로, 인용하는 띠의 단추 이름은 지금 화면의 글(글자 표 — 언어를 따름)
-            lines.append(f"새 버전 {offer.manifest.version}이 있습니다 ({offer.result.source}에서 받음). "
-                         f"창 위 알림 띠에서 '{ui_text.text('update.update')}'를 누르세요.")
+            version = offer.manifest.version
+            button = ui_text.with_particle(repr_button(ui_text.text('update.update')), "를", noun="단추")
+            lines.append(f"새 버전 {version}{ui_text.particle(version, '이/가')} 있습니다 ({offer.result.source}에서 받음). "
+                         f"창 위 알림 띠에서 {button} 누르세요.")
         elif all(r.manifest is not None for r in result.results):
             lines.append("지금 버전이 최신입니다.")
         else:
@@ -1332,8 +1340,9 @@ class PlayerUpdateMixin:
         self._restore_update_offer(run)
         show_details_box(
             self, UPDATE_FAILED_TITLE,
-            f"{run.version}로 업데이트하지 못했습니다.\n\n{_summary(text)}\n\n출처: {run.source}\n위치: {run.location}\n\n"
-            f"지금 버전({run.current})은 그대로입니다. 다시 '업데이트'를 누르면 처음부터 다시 받습니다.\n\n{DETAILS_HINT}",
+            f"{run.version}{ui_text.particle(run.version, '으로/로')} 업데이트하지 못했습니다.\n\n{_summary(text)}\n\n출처: {run.source}\n위치: {run.location}\n\n"
+            f"지금 버전({run.current})은 그대로입니다. 다시 "
+            f"{ui_text.with_particle(repr_button(ui_text.text('update.update')), '를', noun='단추')} 누르면 처음부터 다시 받습니다.\n\n{DETAILS_HINT}",
             text,
         )
 
@@ -1413,10 +1422,12 @@ class PlayerUpdateMixin:
         # 도우미가 기록을 쓰기 전에 실패했으면(PowerShell·bash가 스크립트를 시작하지 못함 등) 그 이유는 도우미 출력에만 있음
         tail, extra = _update_log_report(pending)
         # 기록에도 — 도우미 출력 파일은 다음 업데이트에서 새로 쓰므로 그 내용이 남는 곳은 기록뿐
-        _log_update(f"켜짐: {pending.target}로 업데이트하지 못해 {pending.previous}이(가) 켜짐 — 실패 창{extra}")
+        target = f"{pending.target}{ui_text.particle(pending.target, '으로/로')}"
+        previous = f"{pending.previous}{ui_text.particle(pending.previous, '이/가')}"
+        _log_update(f"켜짐: {target} 업데이트하지 못해 {previous} 켜짐 — 실패 창{extra}")
         show_details_box(
             self, UPDATE_FAILED_TITLE,
-            f"{pending.target}로 업데이트하지 못했습니다 — 지금 버전 {pending.previous}이(가) 그대로 켜졌습니다.\n\n"
+            f"{target} 업데이트하지 못했습니다 — 지금 버전 {previous} 그대로 켜졌습니다.\n\n"
             f"업데이트 기록: {update_install.log_path()} ({pending.started}부터)\n\n{DETAILS_HINT}",
             f"업데이트 기록 ({update_install.log_path()}, {pending.started}부터):\n{tail}{extra}",
         )

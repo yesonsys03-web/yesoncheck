@@ -68,4 +68,5 @@ def gl_problem(info):
 def fallback_text(problem) -> str:
     """GPU를 골랐는데 쓸 수 없을 때 창에 보일 글."""
     return (f"GPU 화면 그리기를 쓸 수 없어 CPU로 계속합니다.\n{problem}\n\n"
-            f"Settings → {ui_text.text(MENU_KEY)} → {ui_text.text(ACTION_KEYS['cpu'])}를 고르면 이 알림이 뜨지 않습니다.")
+            f"Settings → {ui_text.text(MENU_KEY)} → {ui_text.with_particle(ui_text.text(ACTION_KEYS['cpu']), '를')} "
+            "고르면 이 알림이 뜨지 않습니다.")

@@ -91,7 +91,8 @@ LOG_PREFIX = "[표시]"
 def decoder_menu_hint():
     """(Mac) 실패 창의 킬 스위치 안내 앞에 붙는 줄 — player_base의 Settings 메뉴 '재생 디코더 (Mac)'가 그 걸쇠를 풂 (스펙 2026-11-04
     §5.4 ④). 문장은 한글 그대로이고 메뉴 이름은 지금 화면의 글(글자 표 — 언어를 따름)."""
-    return (f"Settings → {ui_text.text('settings.decoder')} → {ui_text.text('settings.decoder.ffmpeg')} 으로 바꾸면 "
+    return (f"Settings → {ui_text.text('settings.decoder')} → "
+            f"{ui_text.with_particle(ui_text.text('settings.decoder.ffmpeg'), ' 으로')} 바꾸면 "
             "예전 방식으로 재생합니다")
 
 
@@ -100,8 +101,8 @@ def failure_menu_hint(platform_name):
     if platform_name == "darwin":
         return decoder_menu_hint()
     if platform_name == "win32":
-        return (f"Settings → {ui_text.text(windows_display.MENU_KEY)} → {ui_text.text(windows_display.ACTION_KEYS['cpu'])}를 "
-                "고르고 앱을 다시 켜면 CPU로 그립니다")
+        cpu = ui_text.with_particle(ui_text.text(windows_display.ACTION_KEYS['cpu']), '를')
+        return f"Settings → {ui_text.text(windows_display.MENU_KEY)} → {cpu} 고르고 앱을 다시 켜면 CPU로 그립니다"
     return ""
 
 
