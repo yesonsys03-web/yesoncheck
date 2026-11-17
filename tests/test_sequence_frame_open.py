@@ -209,6 +209,8 @@ def test_open_frame_as_b_opens_the_whole_sequence(player, tmp_path):
     assert isinstance(player.cap_b, ImageSequenceCapture)
     assert player.filename_b == virtual(b)
     assert int(player.cap_b.get(7)) == 7  # CAP_PROP_FRAME_COUNT: 5~11
+    assert player.filenameLabel.text() == "A: tk1.seq"  # B 이름은 와이프가 켜진 동안만 (2026-11-17)
+    player.wipeCheckBox.setChecked(True)
     assert player.filenameLabel.text() == "A: tk1.seq, B: tk2.seq"
 
 

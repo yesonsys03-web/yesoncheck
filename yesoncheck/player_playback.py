@@ -405,10 +405,7 @@ class PlayerPlaybackMixin:
                 self.filename_b = file_path
                 self.cap_b = cap
 
-            if self.filename_a and self.filename_b:
-                self.filenameLabel.setText(f"A: {os.path.basename(self.filename_a)}, B: {os.path.basename(self.filename_b)}")
-            elif self.filename_a:
-                self.filenameLabel.setText(f"A: {os.path.basename(self.filename_a)}")
+            self.show_file_names()
 
             self.videoWidget.initial_fit = True
             self.labelPlaybackFPS.setText('재생: 대기')
@@ -589,7 +586,18 @@ class PlayerPlaybackMixin:
             self.frame_b = None
         if cap is not None:
             cap.release()
-        self.filenameLabel.setText(f"A: {os.path.basename(self.filename_a)}" if self.filename_a else "")
+        self.show_file_names()
+
+    def show_file_names(self):
+        """재생 줄의 파일 이름: 'A: a.mov' — B는 화면에 보일 때(와이프가 켜진 동안)만 ', B: b.mov'를 붙임 (사용자 결정 2026-11-17 —
+        예전에는 B를 열면 와이프를 꺼도 B 이름이 남았음). 연 A가 없으면 빈 글. 영상을 열고 닫을 때·와이프를 켜고 끌 때 부름."""
+        if not self.filename_a:
+            self.filenameLabel.setText("")
+            return
+        text = f"A: {os.path.basename(self.filename_a)}"
+        if self.filename_b and self.videoWidget.wipeEnabled:
+            text += f", B: {os.path.basename(self.filename_b)}"
+        self.filenameLabel.setText(text)
 
     def _drop_audio_media(self):
         """소리 재생기가 연 영상을 멈추고 놓음 (멈추기만 하면 재생 버튼이 옛 영상의 소리를 다시 냄).
@@ -2563,6 +2571,7 @@ class PlayerPlaybackMixin:
     def toggle_wipe_effect(self, state):
         enabled = state == Qt.Checked
         self.videoWidget.toggleWipeEffect(enabled)
+        self.show_file_names()  # B 이름은 와이프가 켜진 동안만
         self.wipeXButton.setEnabled(enabled)
         self.wipeYButton.setEnabled(enabled)
         if not enabled:
