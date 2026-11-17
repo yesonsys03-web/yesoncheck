@@ -130,7 +130,7 @@ def manual_written(folder):
     path = manual_open.write(folder)
     size = os.path.getsize(path)
     assert size > 0, path
-    return {"path": path, "bytes": size, "images": len(manual_html.image_names())}
+    return {"path": path, "bytes": size, "images": len(manual_html.image_names()) * len(manual_html.IMAGE_LANGUAGES)}
 
 
 def prores_pipe_open(workdir):

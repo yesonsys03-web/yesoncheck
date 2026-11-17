@@ -9,12 +9,15 @@
 
 글 안의 표시는 **원문에서** 왼쪽부터 토큰으로 나눠 조각마다 escape함(escape한 글에 정규식을 걸면 `{<}`가 두 번 escape되고
 코드 안의 `**`가 굵게로 바뀜): `` `코드` `` 안은 글자 그대로, `**굵게**` 안은 다시 나눔, `[[쪽/닻|글]]`의 글과 `{키}`는 글자 그대로.
+`{{키}}`는 **화면 글자 표시** — 글자 표(`ui_text`)의 그 언어 글을 굵게(메뉴의 단축 표시 `&`는 뺌; 모르는 키·값 자리가 든 글은
+만들 때 ValueError). 매뉴얼이 메인 창의 이름을 손으로 적지 않게 — 화면 글자를 고치면 두 언어의 매뉴얼이 따라감(업데이트 내역은 보지 않음).
 쪽 안의 절 주소는 id와 같은 `#쪽--닻` — 스크립트가 꺼져 있어도 그 자리로 감.
 
 **두 언어**(`manual_languages.LANGUAGES` — 한글·영문): 한 파일에 언어마다의 목차와 쪽들을 함께 넣고 목차 위의 단추로 전환.
 고른 언어는 브라우저에 기억하고(localStorage), 처음에는 브라우저 언어가 한국어면 한글·아니면 영문. 주소(`#쪽--닻`)는 언어와
-무관 — 전환해도 보던 쪽에 머묾. 첫째 언어(한글)가 기준: 요소 id에 앞말이 없고(둘째부터는 `en:쪽--닻`) 그림을 품음 —
-그림은 한 번만 넣고 다른 언어의 `<img data-img=이름>`은 스크립트가 같은 그림을 가리키게 함(파일 크기가 두 배가 되지 않게).
+무관 — 전환해도 보던 쪽에 머묾. 첫째 언어(한글)가 기준: 요소 id에 앞말이 없고(둘째부터는 `en:쪽--닻`) 그림을 품음.
+그림은 언어마다 제 화면으로 찍은 것(`load_image(이름, 언어 코드)` — manual_images/<코드>/)을 넣되, 기준 언어의 그림과 바이트까지
+같으면(딸린 창만 찍은 그림) 한 번만 넣고 다른 언어의 `<img data-img=이름>`은 스크립트가 그 그림을 가리키게 함(파일이 덜 커지게).
 스크립트가 꺼진 브라우저에서는 한글만 보임.
 """
 import base64
@@ -23,20 +26,22 @@ import json
 import re
 import struct
 
-from yesoncheck import manual_content
+from yesoncheck import manual_content, ui_text
 from yesoncheck.manual_languages import KOREAN, LANGUAGES
 
 IMAGE_SCALE = 2  # 스크린샷을 찍은 배율 (tools/make_manual_screenshots.SCALE) — 보일 크기 = 픽셀 / 배율
 NARROW_IMAGE = 430  # 이보다 좁은 그림은 설명을 옆에 둠
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+IMAGE_LANGUAGES = tuple(language.code for language in LANGUAGES)  # 그림 폴더 manual_images/<코드>/ — spec·smoke·시험이 함께 씀
 CURRENT_BADGE = KOREAN.ui["current"]
 CALLOUT_LABELS = KOREAN.ui["callouts"]
 
 _CODE = r"`(?P<code>[^`]+)`"
 _LINK = r"\[\[(?P<page>[a-z_]+)(?:/(?P<anchor>[a-z0-9_.]+))?(?:\|(?P<label>[^\]]+))?\]\]"
 _BOLD = r"\*\*(?P<bold>.+?)\*\*"
+_UI = r"\{\{(?P<ui>[a-z0-9_.]+)\}\}"  # 화면 글자 표시 — 글자 표(ui_text)의 키 (_KEY보다 앞: {{a.b}} 안의 {a.b}를 키로 잡지 않게)
 _KEY = r"\{(?P<key>[^{}]+)\}"
-TOKEN_RE = re.compile("|".join((_CODE, _LINK, _BOLD, _KEY)))
+TOKEN_RE = re.compile("|".join((_CODE, _LINK, _BOLD, _UI, _KEY)))
 TOKEN_NO_KEYS_RE = re.compile("|".join((_CODE, _LINK, _BOLD)))  # 업데이트 내역: {}를 키로 보지 않음
 KEY_SPLIT_RE = re.compile(r"\+(?=.)")  # "Shift+F" → Shift, F — 끝의 +("Ctrl++")는 더하기 키로 남김
 HANGUL_KEY_RE = re.compile(r"^(.+?) \((.)\)$")  # "F (ㄹ)" → 키와 한글 자판의 같은 키
@@ -49,6 +54,11 @@ def png_size(data, name):
     return struct.unpack(">II", data[16:24])
 
 
+def _without_mnemonic(text):
+    """Qt 단축 표시를 뺀 화면 글자 — '&File' → 'File', '&&'는 글자 '&' 하나."""
+    return "&".join(part.replace("&", "") for part in text.split("&&"))
+
+
 def target(page, anchor=None):
     """쪽(과 그 안의 절)의 주소 = 그 요소의 id — `쪽` 또는 `쪽--닻`."""
     return page if anchor is None else f"{page}--{anchor}"
@@ -57,8 +67,10 @@ def target(page, anchor=None):
 class _Builder:
     """한 언어의 목차와 쪽들. primary(기준 언어)는 id에 앞말이 없고 그림을 품음."""
 
-    def __init__(self, load_image, version_text, current_version, language=KOREAN, primary=True):
+    def __init__(self, load_image, version_text, current_version, language=KOREAN, primary=True, primary_images=None):
         self.load_image = load_image
+        # 기준 언어가 넣은 그림의 바이트 (이름 → 바이트) — 다른 언어의 그림이 같은 바이트면 다시 넣지 않고 이름으로 가리킴
+        self.primary_images = {} if primary_images is None else primary_images
         self.version_text = version_text
         self.current_version = current_version
         self.language = language
@@ -103,10 +115,21 @@ class _Builder:
                 out.append(self._link(match))
             elif match.group("bold") is not None:
                 out.append(f"<strong>{self.inline(match.group('bold'), keys)}</strong>")
+            elif match.groupdict().get("ui") is not None:
+                out.append(f'<strong class="ui">{html.escape(self.ui_text(match.group("ui")), quote=False)}</strong>')
             else:
                 out.append(self.key(match.group("key")))
         out.append(self._plain(text[at:], text))
         return "".join(out)
+
+    def ui_text(self, key):
+        """화면 글자 표시 {{키}}의 글 — 이 언어의 화면 글자(글자 표), 단축 표시 &는 뺌. 모르는 키·값 자리가 든 글은 ValueError."""
+        if key not in ui_text.TEXTS:
+            raise ValueError(f"모르는 화면 글자 키: {key}")
+        text = ui_text.TEXTS[key][self.language.code]
+        if "{" in text:
+            raise ValueError(f"값이 필요한 화면 글자는 매뉴얼에 쓸 수 없음: {key}")
+        return _without_mnemonic(text)
 
     @staticmethod
     def _plain(piece, whole):
@@ -147,6 +170,8 @@ class _Builder:
                 out.append(match.group("label") or self.titles.get(match.group("page"), ""))
             elif match.group("bold") is not None:
                 out.append(self.text_only(match.group("bold")))
+            elif match.group("ui") is not None:
+                out.append(self.ui_text(match.group("ui")))
             else:
                 out.append(match.group("code") or match.group("key"))
         out.append(text[at:])
@@ -159,17 +184,19 @@ class _Builder:
     # ---- 블록
 
     def figure(self, name, caption, legend):
-        data = self.load_image(name)
+        data = self.load_image(name, self.language.code)
         width, height = png_size(data, name)
         shown_w, shown_h = round(width / IMAGE_SCALE), round(height / IMAGE_SCALE)
         self.images_used.append(name)
         name_attr = html.escape(name, quote=True)
+        embedded = f'src="data:image/png;base64,{base64.b64encode(data).decode("ascii")}" '
         if self.primary:
-            source = f'src="data:image/png;base64,{base64.b64encode(data).decode("ascii")}" '
-            mark = f' data-img="{name_attr}"'
-        else:  # 스크립트가 기준 언어의 같은 그림을 가리키게 함
-            source = f'data-img="{name_attr}" '
-            mark = ""
+            self.primary_images[name] = data
+            source, mark = embedded, f' data-img="{name_attr}"'
+        elif self.primary_images.get(name) == data:  # 기준 언어와 같은 그림 — 스크립트가 그 그림을 가리키게 함
+            source, mark = f'data-img="{name_attr}" ', ""
+        else:  # 이 언어의 화면으로 찍은 그림 — 이름 표(data-img)는 기준 언어의 것이라 표시를 달지 않음
+            source, mark = embedded, ""
         classes = ["fig"]
         if legend:
             classes.append("beside" if shown_w <= NARROW_IMAGE else "below")  # 좁은 그림은 설명을 옆에, 넓은 그림은 아래에
@@ -287,10 +314,11 @@ def _in_language(tag, builder, inner, classes=""):
 
 
 def build(load_image, version_text=None, current_version=None, languages=None):
-    """매뉴얼 HTML — 두 언어(한글·영문)가 함께 들어 있고 목차 위의 단추로 전환. `load_image(이름)` → 그 그림(PNG)의 바이트.
+    """매뉴얼 HTML — 두 언어(한글·영문)가 함께 들어 있고 목차 위의 단추로 전환. `load_image(이름, 언어 코드)` → 그 언어의 그림(PNG) 바이트.
     `version_text`는 목차 위에 보일 지금 앱의 버전 글(없으면 표시하지 않음), `current_version`("1.9.0")이 '업데이트 내역'에
     있으면 그 버전에 '지금 버전' 표시. `languages`는 넣을 언어들(기본 `LANGUAGES` 전부 — 첫째가 기준; 하나면 전환 단추 없음)."""
-    builders = [_Builder(load_image, version_text, current_version, language, primary=index == 0)
+    primary_images = {}  # 첫 빌더가 채움 — 뒤 빌더는 같은 바이트의 그림을 다시 넣지 않음 (빌더는 차례대로 글을 만듦)
+    builders = [_Builder(load_image, version_text, current_version, language, primary=index == 0, primary_images=primary_images)
                 for index, language in enumerate(LANGUAGES if languages is None else languages)]
     first = builders[0].language
     brands = "".join(_in_language("div", builder, builder.brand()) for builder in builders)

@@ -175,6 +175,15 @@ def test_parity_check_names_what_differs(other, word):
     assert problems and any(word in problem for problem in problems), problems
 
 
+def test_parity_check_compares_screen_text_markup():
+    """화면 글자 표시 {{키}}는 두 언어에서 같아야 함 — 그 안의 {sidebar.refresh}를 키 표시로 세지 않음."""
+    base = content([one((("p", "글 {{sidebar.refresh}}"),))])
+    assert manual_languages.content_problems(base, content([one((("p", "Text {{sidebar.refresh}}"),))])) == []
+    problems = manual_languages.content_problems(base, content([one((("p", "Text **Refresh**"),))]))
+    assert any("화면 글자 표시가 다름" in problem for problem in problems), problems
+    assert not any("키 표시" in problem for problem in problems), problems
+
+
 def notes(*releases):
     return SimpleNamespace(RELEASES=tuple(releases))
 
@@ -250,8 +259,9 @@ def test_ids_are_unique_and_addresses_are_shared(document):
     assert {f"en:{value}" for value in targets} <= english_ids
 
 
-def test_pictures_are_embedded_once(document):
-    """그림은 기준 언어(한글) 쪽에만 들어가고 영문 쪽은 이름으로 가리킴 — 파일 크기가 두 배가 되지 않게."""
+def test_pictures_with_the_same_bytes_are_embedded_once(document):
+    """두 언어의 그림이 바이트까지 같으면(이 픽스처의 그림은 모두 같음) 기준 언어(한글) 쪽에만 들어가고 영문 쪽은 이름으로
+    가리킴 — 파일 크기가 두 배가 되지 않게. (다른 그림이면 영문 쪽에 제 그림 — test_manual_html)"""
     korean, english = language_part(document, "div", "ko"), language_part(document, "div", "en")
     figures = sum(1 for page in manual_content.PAGES for block in page.blocks if block[0] == "fig")
     assert document.count('src="data:image/png;base64,') == korean.count('src="data:image/png;base64,') == figures

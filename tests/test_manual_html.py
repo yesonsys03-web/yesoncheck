@@ -24,8 +24,26 @@ def tiny_png(width=4, height=2):
             + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
 
 
-def fake_image(name):
+def fake_image(name, language="ko"):
     return tiny_png()
+
+
+def coloured_png(width, height, value):
+    """value로 칠한 PNG — 바이트가 값마다 다름 (두 언어의 그림이 같은지·다른지를 보는 시험용)."""
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    rows = b"".join(b"\x00" + bytes((value, value, value)) * width for _ in range(height))
+    return (manual_html.PNG_MAGIC + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+def language_part(document, tag, code):
+    """그 언어의 목차(nav) 또는 쪽들(div.doc) 부분 (test_manual_languages.language_part와 같은 자르기 — 그 모듈이 이 모듈을 불러 순환이 되므로 여기에도)."""
+    classes = "l doc" if tag == "div" else "l"
+    start = document.index(f'<{tag} class="{classes}" lang="{code}">')
+    others = [document.find(f'<{tag} class="{classes}" lang="', start + 1), document.find("</aside>" if tag == "nav" else '<div class="pager">')]
+    return document[start:min(position for position in others if position > start)]
 
 
 def build_korean(load_image=fake_image, **kwargs):
@@ -144,26 +162,102 @@ def test_version_text_is_optional_and_escaped():
 # ---------------------------------------------------------------- 저장소의 그림
 
 
-def test_every_manual_image_is_in_the_repo_and_none_is_left_over():
-    """글이 쓰는 그림이 모두 있고(빌드의 spec·앱이 읽음), 안 쓰는 그림이 폴더에 남아 있지 않음."""
-    on_disk = {name[:-4] for name in os.listdir(IMAGES) if name.endswith(".png")}
-    assert set(manual_html.image_names()) == on_disk
-    assert [name for name in os.listdir(IMAGES) if not name.endswith(".png")] == []
+def test_every_manual_image_is_in_the_repo_for_both_languages_and_none_is_left_over():
+    """글이 쓰는 그림이 언어마다 모두 있고(빌드의 spec·앱이 읽음), 안 쓰는 그림이 남아 있지 않음 — 그림은 언어 폴더(ko·en)에만."""
+    assert manual_html.IMAGE_LANGUAGES == ("ko", "en")
+    for code in manual_html.IMAGE_LANGUAGES:
+        folder = os.path.join(IMAGES, code)
+        assert {name[:-4] for name in os.listdir(folder) if name.endswith(".png")} == set(manual_html.image_names()), code
+        assert [name for name in os.listdir(folder) if not name.endswith(".png")] == [], code
+    assert sorted(os.listdir(IMAGES)) == sorted(manual_html.IMAGE_LANGUAGES)  # 폴더 바로 아래에 그림이 남지 않음
 
 
 def test_manual_images_are_png_at_the_capture_scale():
-    for name in manual_html.image_names():
-        width, height = manual_html.png_size(manual_open.load_image(name, IMAGES), name)
-        assert width % manual_html.IMAGE_SCALE == 0 and height % manual_html.IMAGE_SCALE == 0, (name, width, height)
-        assert width >= 200 and height >= 100, (name, width, height)
+    for code in manual_html.IMAGE_LANGUAGES:
+        for name in manual_html.image_names():
+            width, height = manual_html.png_size(manual_open.load_image(name, code, folder=IMAGES), name)
+            assert width % manual_html.IMAGE_SCALE == 0 and height % manual_html.IMAGE_SCALE == 0, (code, name, width, height)
+            assert width >= 200 and height >= 100, (code, name, width, height)
 
 
 def test_real_manual_builds_from_the_repo_images():
-    text = manual_html.build(lambda name: manual_open.load_image(name, IMAGES))
+    text = manual_html.build(lambda name, code: manual_open.load_image(name, code, folder=IMAGES))
     assert len(text) > 1_000_000  # 그림이 들어감
     first = manual_html.image_names()[0]
-    encoded = base64.b64encode(manual_open.load_image(first, IMAGES)).decode("ascii")
-    assert encoded in text
+    for code in manual_html.IMAGE_LANGUAGES:
+        encoded = base64.b64encode(manual_open.load_image(first, code, folder=IMAGES)).decode("ascii")
+        assert encoded in text, code
+
+
+def test_each_language_gets_its_own_picture_and_identical_bytes_go_in_once(monkeypatch):
+    """English 화면으로 찍은 그림은 영문 쪽에 제 그림으로 — 두 언어의 그림이 바이트까지 같으면(딸린 창만 찍은 그림) 한 번만 넣고
+    영문 쪽은 이름으로 가리킴 (파일이 덜 커지게)."""
+    from yesoncheck import manual_content_en
+
+    monkeypatch.setattr(manual_content, "PAGES", (page([("fig", "shot", "그림", ()), ("fig", "same", "같은 그림", ())]),))
+    monkeypatch.setattr(manual_content_en, "PAGES", (page([("fig", "shot", "Picture", ()), ("fig", "same", "Same", ())],
+                                                          group=manual_content_en.GROUPS[0]),))
+    pictures = {("shot", "ko"): coloured_png(400, 200, 1), ("shot", "en"): coloured_png(400, 200, 2),
+                ("same", "ko"): coloured_png(400, 200, 3), ("same", "en"): coloured_png(400, 200, 3)}
+    loaded = []
+
+    def load(name, language):
+        loaded.append((name, language))
+        return pictures[(name, language)]
+
+    document = manual_html.build(load)
+    assert sorted(loaded) == sorted(pictures)
+    korean, english = language_part(document, "div", "ko"), language_part(document, "div", "en")
+    assert korean.count("data:image/png;base64,") == 2
+    assert english.count("data:image/png;base64,") == 1
+    assert base64.b64encode(pictures[("shot", "en")]).decode("ascii") in english  # shot은 English 그림 그대로
+    assert english.count('<img data-img="same"') == 1  # same은 한국어 그림을 가리킴
+    assert 'data-img="shot"' not in english  # 제 그림을 넣은 것은 이름 표를 덮지 않음
+
+
+# ---------------------------------------------------------------- 화면 글자 표시 {{키}}
+
+@pytest.mark.parametrize("source, korean, english", [
+    ("{{sidebar.open_folder}}", '<strong class="ui">폴더 열기</strong>', '<strong class="ui">Open folder</strong>'),
+    ("{{menu.file}} 메뉴", '<strong class="ui">File</strong> 메뉴', '<strong class="ui">File</strong> 메뉴'),  # &File의 & 지움
+    ("{{transport.wipe}}", '<strong class="ui">A|B 와이프</strong>', '<strong class="ui">A|B Wipe</strong>'),
+])
+def test_ui_text_markup_shows_the_screen_text_of_each_language(monkeypatch, source, korean, english):
+    from yesoncheck import manual_content_en
+
+    monkeypatch.setattr(manual_content, "PAGES", (page([("p", source)]),))
+    monkeypatch.setattr(manual_content_en, "PAGES", (page([("p", source)], group=manual_content_en.GROUPS[0]),))
+    document = manual_html.build(fake_image)
+    assert f"<p>{korean}</p>" in language_part(document, "div", "ko")
+    assert f"<p>{english}</p>" in language_part(document, "div", "en")
+
+
+def test_ui_text_mnemonic_ampersands_are_removed_but_a_doubled_one_stays():
+    assert manual_html._without_mnemonic("&File") == "File"
+    assert manual_html._without_mnemonic("A && B") == "A & B"
+    assert manual_html._without_mnemonic("&&File &x") == "&File x"
+
+
+@pytest.mark.parametrize("source, message", [
+    ("{{sidebar.nope}}", "모르는 화면 글자 키: sidebar.nope"),
+    ("{{open_with.app}}", "값이 필요한 화면 글자는 매뉴얼에 쓸 수 없음: open_with.app"),  # 글에 {app}
+])
+def test_ui_text_markup_with_an_unknown_key_or_a_value_slot_fails_the_build(one_page, source, message):
+    with pytest.raises(ValueError, match=re.escape(message)):
+        one_page([("p", source)])
+
+
+def test_ui_text_markup_is_plain_text_in_alt_and_not_a_key(one_page):
+    """그림의 alt는 화면 글자 그대로(굵게 없이), 표시 안의 {a.b}가 키 표시로 잘못 나뉘지 않음."""
+    text = one_page([("fig", "shot", "{{sidebar.refresh}} 단추", ()), ("p", "{{sidebar.refresh}}")])
+    assert 'alt="새로고침 단추"' in text
+    assert "<kbd>" not in text
+
+
+def test_release_notes_do_not_read_ui_text_markup(monkeypatch):
+    releases = (release_notes.Release("9.9.9", None, "요약 {{sidebar.refresh}}", (("", ("항목",)),)),)
+    monkeypatch.setattr(release_notes, "RELEASES", releases)
+    assert "요약 {{sidebar.refresh}}" in build_korean(fake_image)
 
 
 def test_screenshot_tool_makes_exactly_the_images_the_manual_uses():
@@ -305,7 +399,7 @@ def test_figure_size_legend_and_layout(monkeypatch):
     ]),))
     loaded = []
 
-    def load(name):
+    def load(name, language="ko"):
         loaded.append(name)
         return tiny_png(*sizes[name])
 
@@ -319,7 +413,7 @@ def test_figure_size_legend_and_layout(monkeypatch):
 
 
 def test_missing_image_error_is_not_swallowed(monkeypatch):
-    def missing(name):
+    def missing(name, language="ko"):
         raise FileNotFoundError(name)
 
     monkeypatch.setattr(manual_content, "PAGES", (page([("fig", "nowhere", "그림", ())]),))
@@ -330,7 +424,7 @@ def test_missing_image_error_is_not_swallowed(monkeypatch):
 def test_not_a_png_is_rejected(monkeypatch):
     monkeypatch.setattr(manual_content, "PAGES", (page([("fig", "x", "그림", ())]),))
     with pytest.raises(ValueError, match="PNG가 아닌"):
-        build_korean(lambda name: b"GIF89a" + b"\x00" * 40)
+        build_korean(lambda name, language="ko": b"GIF89a" + b"\x00" * 40)
 
 
 def test_release_notes_do_not_turn_braces_into_keys(monkeypatch):

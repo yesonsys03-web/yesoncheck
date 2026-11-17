@@ -73,18 +73,20 @@ for _name in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):
         raise SystemExit(f"[spec] {_name}가 없습니다: {_path}")
     license_datas.append((_path, '.'))
 
-# 사용법 매뉴얼(Help → 사용법)의 그림: yesoncheck/manual_images/*.png를 앱의 manual_images/에 넣음 — yesoncheck/manual_open.py가
-# sys._MEIPASS/manual_images에서 읽어 HTML에 넣음. 매뉴얼 글이 쓰는 그림이 하나라도 없으면 여기서 멈춤 (F1을 눌러서야 드러나지 않게).
+# 사용법 매뉴얼(Help → 사용법)의 그림: 언어마다(yesoncheck/manual_images/<ko|en>/*.png) 앱의 manual_images/<언어>/에 넣음 —
+# yesoncheck/manual_open.py가 sys._MEIPASS/manual_images/<언어>에서 읽어 HTML에 넣음. 매뉴얼 글이 쓰는 그림이 어느 언어에서든
+# 하나라도 없으면 여기서 멈춤 (English 화면에서 F1을 눌러서야 드러나지 않게).
 MANUAL_IMAGES_DIR = os.path.join(project_root, 'yesoncheck', 'manual_images')
 sys.path.insert(0, project_root)
 from yesoncheck import manual_html as _manual_html
 sys.path.pop(0)
 manual_datas = []
-for _name in _manual_html.image_names():
-    _path = os.path.join(MANUAL_IMAGES_DIR, _name + '.png')
-    if not os.path.isfile(_path):
-        raise SystemExit(f"[spec] 사용법 매뉴얼의 그림이 없습니다: {_path} (tools/make_manual_screenshots.py)")
-    manual_datas.append((_path, 'manual_images'))
+for _code in _manual_html.IMAGE_LANGUAGES:
+    for _name in _manual_html.image_names():
+        _path = os.path.join(MANUAL_IMAGES_DIR, _code, _name + '.png')
+        if not os.path.isfile(_path):
+            raise SystemExit(f"[spec] 사용법 매뉴얼의 그림이 없습니다: {_path} (tools/make_manual_screenshots.py)")
+        manual_datas.append((_path, os.path.join('manual_images', _code)))
 print(f"[spec] 사용법 매뉴얼 그림: {len(manual_datas)}개 ({MANUAL_IMAGES_DIR})")
 
 # 빌드 정보(버전·커밋·빌드 시각·플랫폼): tools/write_build_info.py가 PyInstaller 앞에 만든 build/build_info.json을

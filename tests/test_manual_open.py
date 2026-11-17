@@ -23,10 +23,18 @@ def test_images_dir_is_the_bundle_folder_in_a_built_app(monkeypatch, tmp_path):
 
 
 def test_load_image_reads_bytes_and_does_not_invent_a_missing_one(tmp_path):
-    (tmp_path / "shot.png").write_bytes(b"png bytes")
-    assert manual_open.load_image("shot", str(tmp_path)) == b"png bytes"
+    """그림은 언어 폴더에서: <폴더>/<언어>/<이름>.png (언어 기본 ko) — 그 언어의 그림이 없으면 다른 언어로 대신하지 않음."""
+    (tmp_path / "ko").mkdir()
+    (tmp_path / "en").mkdir()
+    (tmp_path / "ko" / "shot.png").write_bytes(b"korean png")
+    (tmp_path / "en" / "shot.png").write_bytes(b"english png")
+    (tmp_path / "ko" / "only.png").write_bytes(b"korean only")
+    assert manual_open.load_image("shot", folder=str(tmp_path)) == b"korean png"
+    assert manual_open.load_image("shot", "en", folder=str(tmp_path)) == b"english png"
     with pytest.raises(FileNotFoundError):
-        manual_open.load_image("nowhere", str(tmp_path))
+        manual_open.load_image("nowhere", folder=str(tmp_path))
+    with pytest.raises(FileNotFoundError):
+        manual_open.load_image("only", "en", folder=str(tmp_path))
 
 
 def test_output_dir_per_platform(monkeypatch, tmp_path):
@@ -236,7 +244,7 @@ def test_smoke_step_writes_the_manual_with_all_images(tmp_path):
     detail = smoke_test.manual_written(str(tmp_path / "manual"))
     assert detail["path"] == os.path.join(str(tmp_path / "manual"), manual_open.FILE_NAME)
     assert detail["bytes"] == os.path.getsize(detail["path"]) > 1_000_000
-    assert detail["images"] == len(manual_html.image_names())
+    assert detail["images"] == len(manual_html.image_names()) * 2  # 한국어·English 화면의 그림
 
 
 def test_smoke_step_fails_when_the_bundle_lacks_an_image(tmp_path, monkeypatch):
@@ -254,11 +262,13 @@ def test_smoke_runs_the_manual_step():
 
 
 def test_spec_bundles_exactly_the_manual_images():
-    """spec이 매뉴얼이 쓰는 그림을 앱의 manual_images/에 넣고, 하나라도 없으면 빌드를 멈춤."""
+    """spec이 매뉴얼이 쓰는 그림을 언어마다 앱의 manual_images/<언어>/에 넣고, 어느 언어든 하나라도 없으면 빌드를 멈춤."""
     with open(os.path.join(ROOT, "YesonCheck_Autocut.spec"), encoding="utf-8") as fh:
         text = fh.read()
+    assert "for _code in _manual_html.IMAGE_LANGUAGES:" in text
     assert "for _name in _manual_html.image_names():" in text
-    assert "manual_datas.append((_path, 'manual_images'))" in text
+    assert "_path = os.path.join(MANUAL_IMAGES_DIR, _code, _name + '.png')" in text
+    assert "manual_datas.append((_path, os.path.join('manual_images', _code)))" in text
     assert "raise SystemExit(f\"[spec] 사용법 매뉴얼의 그림이 없습니다" in text
     assert "+ manual_datas +" in text
     assert manual_open.IMAGES_FOLDER == "manual_images"
