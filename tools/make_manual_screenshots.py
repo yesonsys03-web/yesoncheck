@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """사용법 매뉴얼(Help → 사용법)의 스크린샷 만들기 — 개발 도구 (앱에 들어가지 않음).
 
-사용: ~/coding/p310_tf/bin/python tools/make_manual_screenshots.py [--out yesoncheck/manual_images] [--shot 이름 ...]
+사용: ~/coding/p310_tf/bin/python tools/make_manual_screenshots.py [--out yesoncheck/manual_images] [--language ko|en ...] [--shot 이름 ...]
 
-- 진짜 VideoPlayer를 화면 없이(offscreen, 2배 배율) 띄워 정해진 상태를 만들고 widget.grab()으로 찍음. 샷마다 자식 프로세스
-  하나(앞 샷의 상태가 뒤 샷에 섞이지 않게). 화면이 바뀌면(단추·메뉴·모양) 이 도구를 다시 돌려 그림을 새로 만듦.
+- 진짜 VideoPlayer를 화면 없이(offscreen, 2배 배율) 띄워 정해진 상태를 만들고 widget.grab()으로 찍음. 샷마다·언어마다 자식
+  프로세스 하나(앞 샷의 상태가 뒤 샷에 섞이지 않게). 화면이 바뀌면(단추·메뉴·모양) 이 도구를 다시 돌려 그림을 새로 만듦.
+- **두 언어**(UI 개편 PR 4): 한국어·English 화면으로 각각 찍어 `<out>/<언어>/<샷>.png` — 화면 언어는 자식의 환경 변수
+  YESONCHECK_LANGUAGE로 정함(기계의 OS 언어에 기대지 않음). 위젯은 **이름(속성)으로만** 찾음 — 화면 글자로 찾으면 English에서
+  못 찾음. 번호 표지의 자리도 위젯의 자리에서 계산(고정 픽셀 오프셋을 쓰면 영문 글자 폭에서 어긋남).
 - **그림에 실제 작품이 들어가지 않게**: HOME·공유 설정·창 기록을 샷마다 임시 폴더로 격리(ci/screenshot_check.py와 같은 환경 —
   북마크·작품 경로·NAS를 읽지 않음)하고, 영상은 tools/manual_media.py가 직접 그린 합성 그림만 씀(저장소가 공개).
 - 번호 표지는 위젯 자리에서 계산해 그림 위에 그림 — 번호의 뜻은 yesoncheck/manual_content.py의 그림 설명과 짝(번호를 바꾸면
@@ -36,11 +39,15 @@ SCALE = 2  # 2배로 찍음 (레티나에서 또렷하게) — 그림의 논리 
 WINDOW = (1360, 880)
 BADGE_COLOR = "#ff2d6f"
 BADGE_RADIUS = 12
+BAND_GAP = 10  # anchor "bo": 위젯 아래 끝과 표지 사이
 GUTTER_COLOR = "#232323"  # 어두운 테마의 창 배경 (main_window_styles)
 GUTTER = 40
 WORK_PREFIX = "yc_manual_"  # 작업 폴더 /tmp/yc_manual_…
 MEDIA_LINK = "/tmp/MyShow"  # 창에 보이는 경로(미디어 정보·주석 저장 자리)가 임시 폴더 이름 없이 /tmp/MyShow/… 가 되게 거는 링크
 SHOT_TIMEOUT_S = 300
+LANGUAGES = ("ko", "en")  # 매뉴얼의 두 언어 (manual_html.IMAGE_LANGUAGES와 같음 — 시험이 지킴)
+# 주석 샷에 그려 넣는 글자 주석 — 사용자가 친 글이라 그 언어로 (English 그림에 한글 주석이 보이지 않게)
+ANNOTATION_TEXTS = {"ko": "지붕 색 확인", "en": "Check roof color"}
 
 Callout = namedtuple("Callout", "number rect anchor outline", defaults=("l", False))
 
@@ -69,20 +76,6 @@ def ancestor(widget, cls):
     return parent
 
 
-def button(window, text):
-    from PyQt5.QtWidgets import QAbstractButton
-
-    found = [b for b in window.findChildren(QAbstractButton) if b.text() == text and b.isVisibleTo(window)]
-    sc.require(len(found) == 1, f"단추 {text!r}가 하나가 아님: {len(found)}")
-    return found[0]
-
-
-def box(window, title):
-    found = [b for b in sc.collapsible_boxes(window) if title in b.toggle_button.text()]
-    sc.require(len(found) == 1, f"접는 상자 {title!r}가 하나가 아님: {len(found)}")
-    return found[0]
-
-
 def logical_size(image):
     ratio = image.devicePixelRatio()
     return image.width() / ratio, image.height() / ratio
@@ -96,6 +89,9 @@ def anchor_point(rect, anchor):
         "b": (rect.center().x(), rect.bottom()), "br": (rect.right(), rect.bottom()),
         "lo": (rect.left() - BADGE_RADIUS - 3, rect.center().y()),  # 왼쪽 바깥
         "ro": (rect.right() + BADGE_RADIUS + 4, rect.center().y()),  # 오른쪽 바깥
+        "li": (rect.left() + BADGE_RADIUS + 6, rect.center().y()),  # 왼쪽 안 (가운데 높이)
+        "tli": (rect.left() + BADGE_RADIUS + 6, rect.top() + BADGE_RADIUS + 6),  # 왼쪽 위 안
+        "bo": (rect.center().x(), rect.bottom() + BADGE_RADIUS + BAND_GAP),  # 아래 바깥 — 아래 띠(band)에, 위젯까지 선
     }
     return points[anchor]
 
@@ -127,6 +123,9 @@ def draw_callouts(image, callouts, gutter=0):
             painter.drawLine(QPointF(x, y), QPointF(callout.rect.left() + 3, y))
         else:
             x, y = anchor_point(QRectF(callout.rect), callout.anchor)
+            if callout.anchor == "bo":  # 아래 띠의 표지에서 위젯 아래 끝까지 선
+                painter.setPen(QPen(QColor(BADGE_COLOR), 1.5))
+                painter.drawLine(QPointF(x, callout.rect.bottom() + 2), QPointF(x, y - BADGE_RADIUS))
         x = min(max(x, BADGE_RADIUS + 2), width - BADGE_RADIUS - 2)
         y = min(max(y, BADGE_RADIUS + 2), height - BADGE_RADIUS - 2)
         painter.setPen(QPen(QColor("white"), 2))
@@ -181,6 +180,21 @@ def crop(image, rect, pad=12):
     return cut, (left, top)
 
 
+def add_band(image, band):
+    """아래에 번호 표지를 둘 빈 띠(창 배경색)를 붙임 — 줄이 좁아 표지를 위젯 위에 얹으면 가리는 그림(재생 줄)."""
+    from PyQt5.QtCore import QPointF
+    from PyQt5.QtGui import QColor, QImage, QPainter
+
+    ratio = image.devicePixelRatio()
+    tall = QImage(image.width(), image.height() + int(band * ratio), QImage.Format_ARGB32_Premultiplied)
+    tall.setDevicePixelRatio(ratio)
+    tall.fill(QColor(GUTTER_COLOR))
+    painter = QPainter(tall)
+    painter.drawImage(QPointF(0, 0), image)
+    painter.end()
+    return tall
+
+
 def add_gutter(image, gutter):
     """왼쪽에 번호 표지를 둘 빈 여백(창 배경색)을 붙임."""
     from PyQt5.QtCore import QPointF
@@ -196,18 +210,11 @@ def add_gutter(image, gutter):
     return wide
 
 
-def left_inset(rect, dx):
-    """넓은 단추의 글자를 가리지 않게: 왼쪽 끝에서 dx만큼 들어온 자리의 작은 사각형 (anchor "c"와 함께)."""
-    from PyQt5.QtCore import QRect
-
-    return QRect(rect.left() + dx - 1, rect.center().y() - 1, 2, 2)
-
-
 @contextlib.contextmanager
 def real_screen_size():
     """창을 만드는 동안 화면 작업 영역을 실제 모니터 크기로 알림. 화면 없는 화면은 800×600(2배 배율이면 논리 400×300)이라
     처음 창이 최소 크기로 뜨는데, 가운데 열의 처음 폭은 처음 창에 자리가 있을 때만 단추 쌍이 한 줄에 들어가는 폭으로 넓어짐
-    (player_base.apply_startup_geometry) — 그대로 찍으면 사용자가 실제로 보는 것보다 가운데 열이 좁게 나옴."""
+    (player_base.apply_startup_geometry) — 그대로 찍으면 사용자가 실제로 보는 것과 다른 배치로 나옴(사이드바의 처음 폭 등)."""
     from PyQt5.QtCore import QRect
     from PyQt5.QtWidgets import QApplication
 
@@ -231,10 +238,11 @@ def real_screen_size():
 class Stage:
     """샷 함수에 건네는 도구: 합성 영상 경로, 창 만들기, 정착한 그림 찍기, 저장."""
 
-    def __init__(self, app, work, out):
+    def __init__(self, app, work, out, language):
         self.app = app
         self.work = work
-        self.out = out
+        self.out = out  # <out>/<언어>/
+        self.language = language
         self.cleanups = []
         self.saved = []
 
@@ -247,12 +255,17 @@ class Stage:
     def player(self, size=WINDOW):
         from yesoncheck.main_window import VideoPlayer
 
+        from yesoncheck import ui_text
+
         with real_screen_size():
             player = VideoPlayer()
         player.resize(*size)
         player.show()
         self.cleanups.append(player.close)
         self.pump()
+        # 이 샷의 언어로 만든 창인지 (Review Focus — English 그림에 한국어 메인 창 글자가 남지 않게)
+        sc.require(ui_text.language() == self.language, f"화면 언어가 {ui_text.language()} (기대 {self.language})")
+        sc.require(player.menuBar().actions()[0].text() == ui_text.text("menu.file"), "메뉴 막대의 첫 메뉴가 이 언어의 File이 아님")
         return player
 
     def open_job(self, player, row=0, frame=18):
@@ -270,13 +283,15 @@ class Stage:
         image, _info = sc.settle(self.app, widget)
         return image
 
-    def save(self, name, image, callouts=(), crop_to=None, pad=12, gutter=0):
+    def save(self, name, image, callouts=(), crop_to=None, pad=12, gutter=0, band=0):
         left = top = 0
         if crop_to is not None:
             image, (left, top) = crop(image, crop_to, pad)
         if gutter:
             image = add_gutter(image, gutter)
             left -= gutter
+        if band:
+            image = add_band(image, band)
         draw_callouts(image, [c._replace(rect=c.rect.translated(-int(left), -int(top))) for c in callouts], gutter)
         path = os.path.join(self.out, f"{name}.png")
         sc.require(image.save(path, "PNG"), f"PNG를 저장하지 못함: {path}")
@@ -333,22 +348,24 @@ class Stage:
 
 
 def sidebar_column(player):
-    """사이드바 열 전체 (맨 위 단추부터 개수 줄까지)."""
-    return union(player, button(player, "Select Folder"), player.sidebar_tabs, player.sidebar_count_label)
+    """사이드바 열 전체 (스플리터의 왼쪽 칸 — 작품 묶음부터 선택 재생 단추까지)."""
+    return widget_rect(player, player.mainSplitter.widget(0))
 
 
-def middle_panel(player):
-    from PyQt5.QtWidgets import QScrollArea
+def sidebar_crop(player, pad=6):
+    """사이드바만 잘라 낼 자리 — 위는 칸의 위 끝에서(잘라 낼 때의 여백 pad만큼 내려서: 메뉴 막대의 글자 밑줄이 들어오지 않게)."""
+    return sidebar_column(player).adjusted(0, pad, 0, 0)
 
-    return ancestor(button(player, "Open Video A"), QScrollArea)
 
-
-def info_row(player):
-    return union(player, player.filenameLabel, player.timeLabel)
+def menu_action(player, title):
+    """메뉴 막대에서 제목이 title인 메뉴의 항목 (제목은 두 언어에서 같은 영어 — '&Settings'·'&Help'·글자 표의 menu.*)."""
+    found = [action for action in player.menuBar().actions() if action.menu() is not None and action.text() == title]
+    sc.require(len(found) == 1, f"메뉴 {title!r}가 하나가 아님: {len(found)}")
+    return found[0]
 
 
 def menu_titles_rect(player):
-    """메뉴 줄에서 글자가 있는 부분만 (Settings·Help)."""
+    """메뉴 줄에서 글자가 있는 부분만 (File … Help)."""
     bar = player.menuBar()
     rect = bar.actionGeometry(bar.actions()[0])
     for action in bar.actions()[1:]:
@@ -378,35 +395,40 @@ def point_rect(point, half=1):
 def shot_overview(st):
     player = st.player()
     st.open_job(player)
+    player.show_tool_panel("annotation")
+    st.pump()
     image = st.grab(player)
     st.save("overview", image, [
         Callout(1, menu_titles_rect(player), "ro", False),
-        Callout(2, sidebar_column(player), "tl", True),
-        Callout(3, widget_rect(player, middle_panel(player)), "tl", True),
-        Callout(4, widget_rect(player, player.videoWidget), "tl", True),
-        Callout(5, info_row(player), "tl", True),
-        Callout(6, widget_rect(player, player.positionScroll), "tl", True),
-        Callout(7, union(player, player.playPauseButton, button(player, "Stop")), "tl", True),
+        Callout(2, sidebar_column(player), "li", True),  # 위쪽은 메뉴 막대의 글자와 겹침 — 칸 안쪽에
+        Callout(3, widget_rect(player, player.videoWidget), "tli", True),
+        Callout(4, widget_rect(player, player.toolPanel), "li", True),
+        Callout(5, widget_rect(player, player.positionScroll), "tl", True),
+        Callout(6, widget_rect(player, player.transportBar), "tl", True),
     ])
 
 
 def shot_sidebar(st):
+    from yesoncheck import work_picker
+
+    work_picker.remember_seen()  # 작품 묶음을 보임 — 작품 목록은 비어 있어 콤보에는 안내 항목만 (실제 작품 이름이 그림에 들어가지 않게)
     player = st.player()
+    sc.require(player.workPickerGroup.isVisible(), "작품 묶음이 보이지 않음")
     st.open_job(player)
     image = st.grab(player)
     from PyQt5.QtCore import QRect
 
     rows = widget_rect(player, player.sidebar)
     st.save("sidebar", image, [
-        Callout(1, widget_rect(player, button(player, "Select Folder")), "g"),
-        Callout(2, widget_rect(player, button(player, "Add Bookmark")), "g"),
-        Callout(3, widget_rect(player, button(player, "Bookmarks")), "g"),
-        Callout(4, widget_rect(player, button(player, "작품 경로 관리")), "g"),
-        Callout(5, union(player, player.listModeButton, player.refreshListButton), "g"),
-        Callout(6, widget_rect(player, player.sidebar_tabs.tabBar()), "g"),
-        Callout(7, QRect(rows.left(), rows.top(), rows.width(), 110), "g"),
-        Callout(8, widget_rect(player, player.sidebar_count_label), "g"),
-    ], crop_to=sidebar_column(player), pad=6, gutter=GUTTER)
+        Callout(1, widget_rect(player, player.workPickerGroup), "g"),
+        # 한 줄의 단추 셋은 표지 하나 — 여백(gutter)의 표지는 줄마다 하나라 셋을 따로 달면 겹침
+        Callout(2, union(player, player.openFolderButton, player.refreshListButton), "g"),
+        Callout(3, union(player, player.listModeButton, player.thumbnailModeButton), "g"),
+        Callout(4, union(player, player.sidebar_tabs.tabBar(), player.sidebar_sort_button), "g"),
+        Callout(5, QRect(rows.left(), rows.top(), rows.width(), 110), "g"),
+        Callout(6, widget_rect(player, player.sidebar_count_label), "g"),
+        Callout(7, widget_rect(player, player.playlistButton), "g"),
+    ], crop_to=sidebar_crop(player), pad=6, gutter=GUTTER)
 
 
 def shot_thumbnails(st):
@@ -414,7 +436,7 @@ def shot_thumbnails(st):
     st.open_job(player)
     player.switch_to_thumbnail_mode()
     image = st.grab(player)
-    st.save("thumbnails", image, crop_to=sidebar_column(player), pad=6)
+    st.save("thumbnails", image, crop_to=sidebar_crop(player), pad=6)
 
 
 def shot_mov_menu(st):
@@ -436,41 +458,59 @@ def shot_mov_menu(st):
     from PyQt5.QtCore import QRect
 
     width, height = logical_size(menu)
-    st.save("mov_menu", image, crop_to=sidebar_column(player).united(QRect(at.x(), at.y(), int(width) + 14, int(height))), pad=6)
+    st.save("mov_menu", image, crop_to=sidebar_crop(player).united(QRect(at.x(), at.y(), int(width) + 14, int(height))), pad=6)
 
 
-def shot_controls(st):
+def shot_menus(st):
+    """메뉴 막대의 Playback 메뉴를 펼친 그림 (메뉴마다의 항목은 매뉴얼의 표)."""
+    from yesoncheck import ui_text
+
+    menu_shot(st, "menus", ui_text.text("menu.playback"))
+
+
+def shot_context_menu(st):
+    """영상 영역 우클릭 메뉴 — 메뉴 막대의 메뉴 전부가 하위 메뉴로."""
+    from PyQt5.QtCore import QPoint, QRect
+    from PyQt5.QtGui import QCursor
+
     player = st.player()
     st.open_job(player)
     image = st.grab(player)
-    st.save("controls", image, [
-        Callout(1, union(player, button(player, "Open Video A"), button(player, "Open Video B")), "g"),
-        Callout(2, union(player, box(player, "ROI 설정"), box(player, "결과 관리")), "g"),
-        Callout(3, widget_rect(player, box(player, "수정 사항 주석")), "g"),
-        Callout(4, widget_rect(player, player.loopCheckBox), "g"),
-        Callout(5, widget_rect(player, player.volumeSlider), "g"),
-        Callout(6, widget_rect(player, player.frameRateComboBox), "g"),
-        Callout(7, union(player, player.wipeCheckBox, player.wipeYButton), "g"),
-        Callout(8, union(player, player.playSelectedButton, player.playSelectedPauseButton), "g"),
-        Callout(9, union(player, player.workComboBox, player.jobComboBox), "g"),
-    ], crop_to=widget_rect(player, middle_panel(player)), pad=0, gutter=GUTTER)
+    view = player.videoWidget
+    click = QPoint(int(view.viewport().width() * 0.42), int(view.viewport().height() * 0.38))
+    QCursor.setPos(view.viewport().mapToGlobal(click))
+    menu, _pos = st.capture_menu(lambda: player.show_video_context_menu(click))
+    at = view.viewport().mapTo(player, click)
+    paste(image, menu, at.x(), at.y())
+    draw_cursor(image, at.x() - 2, at.y() - 2)
+    width, height = logical_size(menu)
+    st.save("context_menu", image, crop_to=QRect(at.x() - 260, at.y() - 120, int(width) + 300, int(height) + 150), pad=0)
 
 
 def shot_playbar(st):
+    from PyQt5.QtCore import QRect
+
     player = st.player()
     st.open_job(player)
     image = st.grab(player)
-    stop = button(player, "Stop")
+    bar = player.transportBar
+    slider = widget_rect(player, player.positionScroll)
+    row = widget_rect(player, bar)
+
+    def column(rect):  # 위젯의 가로 자리 + 재생 줄의 세로 자리 — 표지가 모두 같은 높이에
+        return QRect(rect.left(), row.top(), rect.width(), row.height())
+
     st.save("playbar", image, [
-        Callout(1, widget_rect(player, player.filenameLabel), "t"),
-        Callout(2, widget_rect(player, player.labelFrameCount), "t"),
-        Callout(3, widget_rect(player, player.labelTotalFrames), "t"),
-        Callout(4, widget_rect(player, player.labelPlaybackFPS), "t"),
-        Callout(5, widget_rect(player, player.timeLabel), "t"),
-        Callout(6, left_inset(widget_rect(player, player.positionScroll), int(WINDOW[0] * 0.8)), "c"),
-        Callout(7, left_inset(widget_rect(player, player.playPauseButton), 560), "c"),
-        Callout(8, left_inset(widget_rect(player, stop), 560), "c"),
-    ], crop_to=info_row(player).united(widget_rect(player, stop)), pad=16)
+        Callout(1, column(widget_rect(player, bar.filenameLabel)), "bo"),  # 줄이 좁아 위에 얹으면 단추를 가림 — 아래 띠에
+        Callout(2, column(union(player, bar.firstButton, bar.lastButton)), "bo"),
+        Callout(3, column(widget_rect(player, bar.loopButton)), "bo"),
+        Callout(4, column(union(player, bar.frameField, bar.totalLabel)), "bo"),
+        Callout(5, column(widget_rect(player, bar.timeLabel)), "bo"),
+        Callout(6, column(widget_rect(player, bar.fpsLabel)), "bo"),
+        Callout(7, column(widget_rect(player, bar.toolGroup)), "bo"),
+        Callout(8, column(union(player, bar.volumeIcon, bar.volumeSlider)), "bo"),
+        Callout(9, QRect(slider.left() + slider.width() // 3, slider.top(), 2, slider.height()), "c"),
+    ], crop_to=slider.united(widget_rect(player, bar)), pad=16, band=2 * BADGE_RADIUS + 2 * BAND_GAP)
 
 
 def shot_hover(st):
@@ -528,8 +568,8 @@ def shot_wipe(st):
 
     middle = QPoint(top.x(), (top.y() + bottom.y()) // 2)
     st.save("wipe", image, [
-        Callout(1, widget_rect(player, player.wipeCheckBox), "lo"),
-        Callout(2, union(player, player.wipeXButton, player.wipeYButton), "lo"),
+        Callout(1, widget_rect(player, player.transportBar.wipeButton), "t"),
+        Callout(2, union(player, player.transportBar.wipeXButton, player.transportBar.wipeYButton), "t"),
         Callout(3, point_rect(middle), "c"),
         Callout(4, widget_rect(player, player.filenameLabel), "t"),
     ])
@@ -562,7 +602,7 @@ def shot_all_tab(st):
     player.sidebar_tabs.setCurrentIndex(2)
     st.pump(0.5)
     image = st.grab(player)
-    st.save("all_tab", image, crop_to=sidebar_column(player), pad=6)
+    st.save("all_tab", image, crop_to=sidebar_crop(player), pad=6)
 
 
 def shot_seq_menu(st):
@@ -584,23 +624,17 @@ def shot_seq_menu(st):
     paste(image, menu, at.x(), at.y())
     draw_cursor(image, at.x() - 2, at.y() - 2)
     width, height = logical_size(menu)
-    st.save("seq_menu", image, crop_to=sidebar_column(player).united(QRect(at.x(), at.y(), int(width) + 14, int(height))), pad=6)
+    st.save("seq_menu", image, crop_to=sidebar_crop(player).united(QRect(at.x(), at.y(), int(width) + 14, int(height))), pad=6)
 
 
 ANNOTATION_FRAME = 10  # 주석을 더하면 그 주석의 시작 프레임으로 가므로 처음부터 이 장에 맞춤
 
 
 def annotation_player(st):
-    """주석 칸을 펼치고 주석 셋(타원·글자·화살표)을 그린 창. 가운데 열은 스플리터로 넓힘(기본 폭에서는 칸 오른쪽이 잘림)."""
-    from PyQt5.QtCore import Qt
-    from PyQt5.QtWidgets import QSplitter
-
-    player = st.player((WINDOW[0], 1260))  # 주석 칸(최대 300px)이 다 펼쳐지는 높이
-    main = [sp for sp in player.findChildren(QSplitter) if sp.orientation() == Qt.Horizontal and sp.count() == 3]
-    sc.require(len(main) == 1, f"가로 스플리터가 하나가 아님: {len(main)}")
-    main[0].setSizes([200, 300, WINDOW[0] - 500])
+    """도구 패널의 주석 쪽을 열고 주석 셋(타원·글자·화살표)을 그린 창."""
+    player = st.player()
     st.open_job(player, row=0, frame=ANNOTATION_FRAME)
-    sc.expand(box(player, "수정 사항 주석"))
+    player.show_tool_panel("annotation")
     player.annotationModeButton.setChecked(True)
     sc.require(player.annotationModeButton.isChecked(), "주석 모드가 켜지지 않음")
     player.annotationRangeStartSpin.setValue(ANNOTATION_FRAME)
@@ -612,7 +646,7 @@ def annotation_player(st):
     start, end = player._get_annotation_range_0based()
     player.annotation_store.add(player.get_current_frame_index(), {
         "type": "text", "norm_x1": 0.47, "norm_y1": 0.27, "norm_x2": 0.47, "norm_y2": 0.27,
-        "text": "지붕 색 확인", "color": "#ffcc00", "font_size": player.annotationFontSizeSpin.value(),
+        "text": ANNOTATION_TEXTS[st.language], "color": "#ffcc00", "font_size": player.annotationFontSizeSpin.value(),
     }, start_frame=start, end_frame=end)
     player.on_annotation_shape_finished(
         {"type": "arrow", "norm_x1": 0.585, "norm_y1": 0.37, "norm_x2": 0.685, "norm_y2": 0.475, "color": "#ffcc00"})
@@ -642,8 +676,11 @@ def shot_annotation(st):
         sc.require(rect.height() > 12, f"표지 {number}의 위젯이 칸 안에 보이지 않음")
         return Callout(number, rect, "lo")
 
-    badges = [w for w in player.videoWidget.findChildren(QLabel) if w.text() == "주석 모드" and w.isVisible()]
-    sc.require(len(badges) == 1, f"'주석 모드' 배지가 하나가 아님: {len(badges)}")
+    from yesoncheck import ui_text
+
+    badge_text = ui_text.text("badge.annotation")
+    badges = [w for w in player.videoWidget.findChildren(QLabel) if w.text() == badge_text and w.isVisible()]
+    sc.require(len(badges) == 1, f"{badge_text!r} 배지가 하나가 아님: {len(badges)}")
     mark = video_point(player, 0.585, 0.37)  # 화살표의 시작 점(노란 점이 보이는 주석) 옆
     st.save("annotation", image, [
         seen(1, player.annotationModeButton),
@@ -672,7 +709,7 @@ def shot_annotation_export(st):
         seen(1, player.annotationDeleteButton, player.annotationClearFrameButton),
         seen(2, player.annotationExportDirButton),
         seen(3, player.annotationExportButton),
-    ], crop_to=widget_rect(player, box(player, "수정 사항 주석")), pad=4, gutter=GUTTER)
+    ], crop_to=widget_rect(player, player.toolPanel), pad=4, gutter=GUTTER)
 
 
 def shot_ocr(st):
@@ -681,8 +718,7 @@ def shot_ocr(st):
     player = st.player()
     sc.require(player.open_file("A", st.media("ANIMATIC", manual_media.ANIMATIC_NAME)), "애니매틱을 열지 못함")
     player.seek_to_frame(70)
-    for title in ("ROI 설정", "OCR 분석", "결과 관리"):
-        sc.expand(box(player, title))
+    player.show_tool_panel("ocr")
     x1, y1, x2, y2 = manual_media.slate_box(manual_media.SLATES[2])
     roi = ((x1 - 10) / manual_media.WIDTH, (y1 - 10) / manual_media.HEIGHT,
            (x2 - x1 + 20) / manual_media.WIDTH, (y2 - y1 + 20) / manual_media.HEIGHT)
@@ -796,14 +832,14 @@ def shot_media_info(st):
     st.save("media_info", image)
 
 
-def menu_shot(st, name, menu_index):
+def menu_shot(st, name, title):
     from PyQt5.QtCore import QPoint, QRect
 
     player = st.player()
     st.open_job(player)
     image = st.grab(player)
     bar = player.menuBar()
-    action = bar.actions()[menu_index]
+    action = menu_action(player, title)
     title = bar.actionGeometry(action)
     menu = action.menu()
     menu.popup(bar.mapToGlobal(QPoint(title.left(), title.bottom() + 1)))
@@ -817,11 +853,11 @@ def menu_shot(st, name, menu_index):
 
 
 def shot_settings_menu(st):
-    menu_shot(st, "settings_menu", 0)
+    menu_shot(st, "settings_menu", "&Settings")
 
 
 def shot_help_menu(st):
-    menu_shot(st, "help_menu", 1)
+    menu_shot(st, "help_menu", "&Help")
 
 
 def shot_update_banner(st):
@@ -829,7 +865,7 @@ def shot_update_banner(st):
 
     player = st.player()
     st.open_job(player)
-    player.update_banner.show_offer("1.9.0", "1.8.1")
+    player.update_banner.show_offer("1.10.0", "1.9.4")
     st.pump()
     image = st.grab(player)
     banner = widget_rect(player, player.update_banner)
@@ -867,7 +903,8 @@ SHOTS = {
     "sidebar": shot_sidebar,
     "thumbnails": shot_thumbnails,
     "mov_menu": shot_mov_menu,
-    "controls": shot_controls,
+    "menus": shot_menus,
+    "context_menu": shot_context_menu,
     "playbar": shot_playbar,
     "hover": shot_hover,
     "wipe": shot_wipe,
@@ -904,7 +941,7 @@ def child_main(args):
 def run_shot(args):
     work = os.path.abspath(args.work)
     sys.path.insert(0, ROOT)
-    sc.check_isolated_environment(work)
+    sc.check_isolated_environment(work, args.child_language)
     sc.require(os.environ.get("QT_SCALE_FACTOR") == str(SCALE), "QT_SCALE_FACTOR가 정해지지 않음")
     sc.require(os.path.realpath(MEDIA_LINK) == os.path.realpath(os.path.join(work, "MyShow")),
                f"{MEDIA_LINK}가 이 샷의 합성 영상 폴더를 가리키지 않음: {os.path.realpath(MEDIA_LINK)}")
@@ -917,8 +954,11 @@ def run_shot(args):
 
     sc.require(os.path.realpath(yesoncheck.__file__).startswith(os.path.realpath(ROOT) + os.sep),
                f"다른 곳의 yesoncheck를 불러옴: {yesoncheck.__file__}")
+    from yesoncheck import app as app_module
+
+    app_module.load_language()  # 앱이 켤 때처럼 화면 언어를 정함 — YESONCHECK_LANGUAGE(부모가 이 샷의 언어로)
     dialogs = sc.install_dialog_guards()
-    stage = Stage(app, work, os.path.abspath(args.out))
+    stage = Stage(app, work, os.path.join(os.path.abspath(args.out), args.child_language), args.child_language)
     SHOTS[args.child](stage)
     bad = [d for d in dialogs if d["kind"] in ("critical", "warning")]
     sc.require(not bad, f"샷 중에 경고·오류 창이 뜸: {bad}")
@@ -950,6 +990,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="사용법 매뉴얼 스크린샷 만들기")
     parser.add_argument("--out", default=os.path.join(ROOT, "yesoncheck", "manual_images"))
     parser.add_argument("--shot", action="append", choices=sorted(SHOTS), help="이 샷만 (여러 번 줄 수 있음, 기본: 전부)")
+    parser.add_argument("--language", action="append", choices=LANGUAGES, help="이 화면 언어만 (여러 번 줄 수 있음, 기본: 둘 다)")
+    parser.add_argument("--child-language", choices=LANGUAGES, help=argparse.SUPPRESS)
     parser.add_argument("--child", choices=sorted(SHOTS), help=argparse.SUPPRESS)
     parser.add_argument("--work", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -958,7 +1000,9 @@ def main(argv=None):
         return 0
 
     out = os.path.abspath(args.out)
-    os.makedirs(out, exist_ok=True)
+    languages = args.language or list(LANGUAGES)
+    for code in languages:
+        os.makedirs(os.path.join(out, code), exist_ok=True)
     names = args.shot or list(SHOTS)
     if sys.platform == "win32":
         raise SystemExit("이 도구는 Mac·Linux에서만 돕니다 (/tmp와 심볼릭 링크를 씀 — 그림은 Mac에서 찍어 저장소에 넣음)")
@@ -971,23 +1015,25 @@ def main(argv=None):
         started = time.monotonic()
         manual_media.make_media(media_root, sc.ffmpeg_path(ROOT))
         print(f"합성 영상 {time.monotonic() - started:.1f}초", flush=True)
-        for name in names:
-            work = os.path.join(base, name)
-            prepare_work(work, media_root)
-            if own_link(MEDIA_LINK):
-                os.remove(MEDIA_LINK)
-            os.symlink(os.path.join(work, "MyShow"), MEDIA_LINK)
-            env = sc.child_environment(work, ROOT)
-            env["QT_SCALE_FACTOR"] = str(SCALE)
-            started = time.monotonic()
-            proc = subprocess.run([sys.executable, SCRIPT, "--child", name, "--work", work, "--out", out],
-                                  env=env, capture_output=True, text=True, timeout=SHOT_TIMEOUT_S)
-            saved = [line for line in proc.stdout.splitlines() if line.startswith("saved ")]
-            if proc.returncode != 0 or not saved:
-                failed.append(name)
-                print(f"[실패] {name} (종료 코드 {proc.returncode})\n{sc.tail(proc.stdout + proc.stderr, 30)}", flush=True)
-                continue
-            print(f"{name}: {saved[-1][6:]} {time.monotonic() - started:.1f}초", flush=True)
+        for code in languages:
+            for name in names:
+                work = os.path.join(base, f"{code}_{name}")
+                prepare_work(work, media_root)
+                if own_link(MEDIA_LINK):
+                    os.remove(MEDIA_LINK)
+                os.symlink(os.path.join(work, "MyShow"), MEDIA_LINK)
+                env = sc.child_environment(work, ROOT)
+                env["QT_SCALE_FACTOR"] = str(SCALE)
+                env["YESONCHECK_LANGUAGE"] = code  # 이 샷의 화면 언어 (child_environment는 ko로 고정해 둠)
+                started = time.monotonic()
+                proc = subprocess.run([sys.executable, SCRIPT, "--child", name, "--child-language", code, "--work", work, "--out", out],
+                                      env=env, capture_output=True, text=True, timeout=SHOT_TIMEOUT_S)
+                saved = [line for line in proc.stdout.splitlines() if line.startswith("saved ")]
+                if proc.returncode != 0 or not saved:
+                    failed.append(f"{code}/{name}")
+                    print(f"[실패] {code}/{name} (종료 코드 {proc.returncode})\n{sc.tail(proc.stdout + proc.stderr, 30)}", flush=True)
+                    continue
+                print(f"{code}/{name}: {saved[-1][6:]} {time.monotonic() - started:.1f}초", flush=True)
     finally:
         if own_link(MEDIA_LINK):
             os.remove(MEDIA_LINK)
@@ -995,7 +1041,7 @@ def main(argv=None):
     if failed:
         print(f"실패한 샷: {failed}")
         return 1
-    print(f"스크린샷 {len(names)}개 샷 → {out}")
+    print(f"스크린샷 {len(names)}개 샷 × {len(languages)}개 언어 → {out}")
     return 0
 
 

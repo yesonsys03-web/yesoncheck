@@ -423,3 +423,20 @@ def test_normalizer_hides_values_that_change_every_run(tool):
     normalize = tool.normalizer("/tmp/yc_work")
     assert normalize("ws://127.0.0.1:50321/?token=AbC_123-x 끝") == "ws://127.0.0.1:<PORT>/?token=<TOKEN> 끝"
     assert normalize(["/tmp/yc_work/home", {"k": "/tmp/yc_work/media/a.mp4"}, 3]) == ["<TMP>/home", {"k": "<TMP>/media/a.mp4"}, 3]
+
+
+def test_isolated_environment_check_takes_the_expected_language(tool, tmp_path, monkeypatch):
+    """매뉴얼 그림 도구는 English 화면으로도 찍음 — 기대하는 화면 언어를 인자로(기본 ko: 이 도구의 장면들은 그대로 한국어)."""
+    work = str(tmp_path)
+    home = os.path.join(work, "home")
+    os.makedirs(home)
+    for key, value in {"QT_QPA_PLATFORM": "offscreen", "HOME": home, "USERPROFILE": home,
+                       "YESONCHECK_CONFIG_DIR": os.path.join(work, "share", ".yesoncheck"),
+                       "YESONCHECK_INSTANCES_DIR": os.path.join(work, "instances")}.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("YESONCHECK_LANGUAGE", "en")
+    tool.check_isolated_environment(work, "en")
+    with pytest.raises(RuntimeError, match="YESONCHECK_LANGUAGE"):
+        tool.check_isolated_environment(work)  # 기본은 ko
+    monkeypatch.setenv("YESONCHECK_LANGUAGE", "ko")
+    tool.check_isolated_environment(work)

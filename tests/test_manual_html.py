@@ -269,6 +269,7 @@ def test_screenshot_tool_makes_exactly_the_images_the_manual_uses():
         sys.path.remove(os.path.join(ROOT, "tools"))
     assert set(make_manual_screenshots.SHOTS) == set(manual_html.image_names())
     assert make_manual_screenshots.SCALE == manual_html.IMAGE_SCALE
+    assert make_manual_screenshots.LANGUAGES == manual_html.IMAGE_LANGUAGES  # 그림 두 벌 — 매뉴얼의 두 언어
 
 
 def test_legend_numbers_do_not_exceed_what_fits_a_badge():

@@ -412,15 +412,16 @@ def dump_widget(widget, normalize):
     return node
 
 
-def check_isolated_environment(work):
-    """부모가 정한 격리 환경이 그대로인지 확인 (사용자의 홈·공유 설정을 읽고 있으면 바로 실패)."""
+def check_isolated_environment(work, language="ko"):
+    """부모가 정한 격리 환경이 그대로인지 확인 (사용자의 홈·공유 설정을 읽고 있으면 바로 실패). language: 기대하는 화면 언어
+    (이 도구의 장면들은 ko — 매뉴얼 그림 도구는 English 화면으로도 찍음)."""
     expected = {
         "QT_QPA_PLATFORM": "offscreen",
         "HOME": os.path.join(work, "home"),
         "USERPROFILE": os.path.join(work, "home"),
         "YESONCHECK_CONFIG_DIR": os.path.join(work, "share", ".yesoncheck"),
         "YESONCHECK_INSTANCES_DIR": os.path.join(work, "instances"),
-        "YESONCHECK_LANGUAGE": "ko",  # 화면 언어를 기계의 OS 언어에 맡기지 않음 — 장면의 글자가 기계마다 같게
+        "YESONCHECK_LANGUAGE": language,  # 화면 언어를 기계의 OS 언어에 맡기지 않음 — 장면의 글자가 기계마다 같게
     }
     for key, value in expected.items():
         require(os.environ.get(key) == value, f"격리 환경 변수가 다름: {key}={os.environ.get(key)!r} (기대 {value!r})")

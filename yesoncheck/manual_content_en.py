@@ -28,18 +28,20 @@ PAGES = (
          "and splitting animatics with OCR or cut detection are all done in one window.",
          (
              ("h", "Screen layout", "screen"),
-             ("fig", "overview", "Main window", (
-                 "**Menus** — Settings and Help (manual, updates, version info). On Mac they are in the menu bar at the top of the "
-                 "screen. → [[settings]]",
-                 "**Sidebar** — folder and bookmark buttons and the video list (Mov, Seq and All tabs). → [[sidebar]]",
-                 "**Middle control panel** — opening videos, OCR, revision annotations, wipe, Play Selected playback and choosing a "
-                 "show. Press {N} to hide it.",
+             ("fig", "overview", "Main window (with the annotation panel open)", (
+                 "**Menus** — {{menu.file}}, {{menu.view}}, {{menu.playback}}, {{menu.compare}}, {{menu.tools}}, Settings and Help. "
+                 "On Mac they are in the menu bar at the top of the screen. → [[start/menus|Menus]]",
+                 "**Sidebar** — choosing a show, the folder and bookmark buttons, the video list (Mov, Seq and All tabs) and the "
+                 "button for playing selected videos. → [[sidebar]]",
                  "**Video area** — where the video is shown. Use the mouse wheel to step one frame at a time; when zoomed in, drag "
-                 "to pan. → [[view]]",
-                 "**Info row** — file name, current frame, total frames, playback FPS and time. → [[playback]]",
+                 "to pan. Right-click it for all the menus. → [[view]]",
+                 "**Tool panel** — {{panel.annotation}} and {{panel.ocr}}. Open and close it with {{transport.annotate}} or "
+                 "{{transport.ocr}} on the playback bar, or with {N}.",
                  "**Time slider** — click or drag to move; hover the mouse over it to preview the picture at that position.",
-                 "**Play · Stop** — play/pause ({Space}) and stop.",
+                 "**Playback bar** — file name, playback buttons, frame number, time, fps, wipe and panel toggles, volume. → [[playback]]",
              )),
+             ("h", "Menus", "menus"),
+             ("fig", "menus", "The Playback menu opened", ()),
              ("h", "Opening videos", "open"),
              ("table", ("How", "Result"), (
                  ("Drop files onto the window",
@@ -134,17 +136,20 @@ PAGES = (
     Page("playback", "Playback and navigation", "Viewing & playback",
          "Play, step one frame at a time, and find the scene you want with the slider.",
          (
-             ("fig", "playbar", "Info row and playback controls", (
-                 "**File name** — the file open in A. If B is open too, both are shown.",
-                 "**Current** — the current frame number (starting from 1).",
-                 "**Total** — the total number of frames and the length in feet and frames (16 frames = 1 foot; `3F 00f` means "
-                 "3 feet 0 frames).",
-                 "**Playback FPS** — during playback, the speed actually achieved is shown as well, as in `재생: 24 FPS · 실제 23.8` "
-                 "(재생 = playback, 실제 = actual).",
+             ("fig", "playbar", "Playback bar and time slider", (
+                 "**File name** — the file open in A. While the wipe is on, B's name is shown as well.",
+                 "**Playback buttons** — go to start ({Home}) · step back one frame ({←}) · play/pause ({Space}) · step forward one "
+                 "frame ({→}) · go to end ({End}).",
+                 "{{transport.loop}} — after reaching the end, starts again from the beginning.",
+                 "**Frame number** — the current frame (starting from 1) / the total number of frames and the length in feet and "
+                 "frames (16 frames = 1 foot; `3F 00f` means 3 feet 0 frames). Click the box, type a number and press {Enter} to "
+                 "go to that frame.",
                  "**Time** — current time / total length.",
+                 "**fps** — the frame rate of the video. During playback, the speed actually achieved (`real`) is shown as well.",
+                 "**Toggles** — {{transport.wipe}}, {{transport.wipe.x}}, {{transport.wipe.y}}, {{transport.annotate}}, "
+                 "{{transport.ocr}}. → [[compare]]",
+                 "**Volume** — sound volume. In a narrow window only the icon remains.",
                  "**Time slider** — click to go to that position; drag to scrub through quickly.",
-                 "**Play** — play / pause ({Space}).",
-                 "**Stop** — stops and returns to the first frame.",
              )),
              ("h", "Playback", "play"),
              ("keys", (
@@ -202,6 +207,8 @@ PAGES = (
     Page("view", "Viewing", "Viewing & playback",
          "Zooming, full screen, hiding the controls, themes, and the file name / frame number display.",
          (
+             ("h", "Right-click menu", "context"),
+             ("fig", "context_menu", "Right-clicking the video area", ()),
              ("h", "Zoom in · zoom out · pan", "zoom"),
              ("keys", (
                  (("+", "=", "2"), "Zoom in — around the position of the mouse cursor"),
@@ -241,11 +248,11 @@ PAGES = (
          "Overlay two videos in one view and compare them by moving a dividing line — between takes, or before and after a fix.",
          (
              ("fig", "wipe", "Comparing A (sketch) and B (colored) with a vertical wipe", (
-                 "**Enable Wipe Effect** — turns the wipe on.",
-                 "**X-Axis Wipe · Y-Axis Wipe** — split left and right with a vertical line / split top and bottom with a "
-                 "horizontal line. Both can be on at the same time.",
+                 "{{transport.wipe}} — turns the wipe on ({W}).",
+                 "{{transport.wipe.x}} · {{transport.wipe.y}} — split left and right with a vertical line / split top and bottom "
+                 "with a horizontal line. Both can be on at the same time.",
                  "**Wipe line** — drag it to move it. A is to the left of (above) the line and B is to the right of (below) it.",
-                 "**File name** — the names of A and B are shown together.",
+                 "**File name** — while the wipe is on, the names of A and B are shown together.",
              )),
              ("h", "Steps", "steps"),
              ("steps", (
@@ -272,16 +279,17 @@ PAGES = (
          "The list of videos and sequences to review. Open and select items here, and do various tasks from the right-click menu.",
          (
              ("fig", "sidebar", "Sidebar", (
-                 "**Select Folder** — choose a folder and put the videos and sequences in it into the list.",
-                 "**Add Bookmark** — adds a folder to the bookmarks.",
-                 "**Bookmarks** — opens the bookmark manager window ({P}). → [[library/bookmarks|Bookmarks]]",
-                 "**작품 경로 관리** (Manage show paths) — registers the locations of the show folders (for administrators — "
-                 "password required; a feature specific to Yeson's in-house workflow).",
-                 "**List · Thumb · 새로고침** (Refresh) — change how the list looks, and read the list again ({F5}).",
-                 "**Mov · Seq · All tabs** — videos / image sequences / both. The `↕` next to the All tab is the **정렬** (Sort) "
-                 "button. → [[sidebar/sort|Sorting]]",
+                 "{{sidebar.works}} — choose show → season → job to put that job's videos into the list (shown only on PCs that "
+                 "have loaded the shows). → [[library/works|Shows]]",
+                 "{{sidebar.open_folder}} · {{sidebar.bookmarks}} ▾ · {{sidebar.refresh}} — choose a folder and put the videos and "
+                 "sequences in it into the list ({I}) / {{sidebar.bookmark.add}} · {{sidebar.bookmark.manage}} "
+                 "([[library/bookmarks|Bookmarks]]) / read the list again ({F5}).",
+                 "{{sidebar.mode.list}} · {{sidebar.mode.thumb}} — change how the list looks.",
+                 "**Mov · Seq · All tabs** — videos / image sequences / both. The `↕` next to the All tab is the **Sort** button. "
+                 "→ [[sidebar/sort|Sorting]]",
                  "**List** — click an item to open it in A. Selected items are orange.",
                  "**Count line** — the number of items in the tab you are viewing.",
+                 "{{playlist.play}} — plays the selected videos one after another. → [[playback/playlist|Playing selected videos]]",
              )),
              ("h", "Tabs", "tabs"),
              ("table", None, (
@@ -384,19 +392,6 @@ PAGES = (
          "Three ways to load the videos to review — choosing from a show, opening a folder, and bookmarks.",
          (
              ("h", "Show → season → job", "works"),
-             ("fig", "controls", "Middle control panel", (
-                 "**Open Video A · Open Video B** — choose a file and open it.",
-                 "**▶ ROI 설정 · ▶ OCR 분석 · ▶ 결과 관리** (ROI settings · OCR analysis · Result management) — click to expand. "
-                 "→ [[ocr]]",
-                 "**▶ 수정 사항 주석** (Revision annotations) → [[annotations]]",
-                 "**Loop Play** — loop playback.",
-                 "**Volume** — sound volume.",
-                 "**FPS** — the frame rate of the open video.",
-                 "**Enable Wipe Effect · X/Y-Axis Wipe** → [[compare]]",
-                 "**Play Selected · Selected Play** → [[playback/playlist|Play Selected playback]]",
-                 "**작품선택 · 시즌선택 · job선택** (Select show · Select season · Select job) — choose in order from the top. "
-                 "A feature specific to Yeson's in-house workflow.",
-             )),
              ("note", "Choosing **show → season → job** and **작품 경로 관리** (Manage show paths) are features specific to Yeson's "
                       "in-house workflow — they are tailored to Yeson's show folder structure and shared settings. Open any other "
                       "folder with **Opening a folder** or **Bookmarks** below."),
