@@ -7,7 +7,7 @@ entry for entry (no Qt). The deploy notes (GitHub Release, update banner) still 
 from yesoncheck.release_notes import Release
 
 RELEASES = (
-    Release("2.0.0", None,
+    Release("2.0.0", "2026-11-17",
             "A redesigned window — the playback controls sit in one row under the slider, the middle column is replaced by "
             "annotation and OCR panels you open when you need them, there are new menus, and you can choose the screen "
             "language (Korean / English). Annotation, bookmark and settings files keep the same format, so it works side "
