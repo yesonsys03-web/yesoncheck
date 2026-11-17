@@ -7,7 +7,8 @@ import sys
 import time
 import traceback
 
-from PyQt5.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal, pyqtSlot
+from PyQt5 import sip
+from PyQt5.QtCore import QLocale, QObject, Qt, QThread, QTimer, pyqtSignal, pyqtSlot
 from PyQt5.QtGui import QFont, QGuiApplication, QPixmap
 from PyQt5.QtWidgets import QApplication, QLabel, QMessageBox, QSplashScreen
 
@@ -17,8 +18,8 @@ if __package__ in (None, ""):
     from yesoncheck.main_window import VideoPlayer  # type: ignore  # pylint: disable=import-error
     from yesoncheck import (  # type: ignore  # pylint: disable=import-error
         build_info, default_app, downscale_filter, error_window, file_associations, gl_video_item, hover_strip, launch_args, mac_app_events,
-        mac_mounts, mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, qt_messages, timing_log, update_install,
-        user_files, video_list, windows_display,
+        mac_mounts, mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, qt_messages, timing_log, ui_language, ui_text,
+        update_install, user_files, video_list, windows_display,
     )
     from yesoncheck.player_base import EXIT_WAIT_S, wait_for_released_workers  # type: ignore  # pylint: disable=import-error
     from yesoncheck.player_update import BOX_TITLE_PROPERTY  # type: ignore  # pylint: disable=import-error
@@ -26,8 +27,8 @@ else:
     from .main_window import VideoPlayer
     from . import (
         build_info, default_app, downscale_filter, error_window, file_associations, gl_video_item, hover_strip, launch_args, mac_app_events,
-        mac_mounts, mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, qt_messages, timing_log, update_install,
-        user_files, video_list, windows_display,
+        mac_mounts, mac_native_gate, mac_prefs, movie_pipe_source, new_window, paths, qt_messages, timing_log, ui_language, ui_text,
+        update_install, user_files, video_list, windows_display,
     )
     from .player_base import EXIT_WAIT_S, wait_for_released_workers
     from .player_update import BOX_TITLE_PROPERTY
@@ -202,7 +203,11 @@ def load_mount_map():
 
 
 PLAYBACK_DECODER_TITLE = "재생 디코더 설정"
-PLAYBACK_DECODER_FALLBACK_NOTE = "이 세션은 예전 방식(ffmpeg)으로 재생합니다 — Settings → 재생 디코더 (Mac)에서 바꿀 수 있습니다"
+
+
+def playback_decoder_fallback_note():
+    """재생 디코더 설정을 읽지 못했을 때의 창 끝 글 — 메뉴 이름은 지금 화면의 글(글자 표)."""
+    return f"이 세션은 예전 방식(ffmpeg)으로 재생합니다 — Settings → {ui_text.text('settings.decoder')}에서 바꿀 수 있습니다"
 
 
 def load_playback_decoder():
@@ -225,7 +230,7 @@ def load_playback_decoder():
         )
     except (user_files.UserFileError, ValueError) as exc:
         traceback.print_exc()
-        QMessageBox.warning(None, PLAYBACK_DECODER_TITLE, f"{exc}\n\n{PLAYBACK_DECODER_FALLBACK_NOTE}")
+        QMessageBox.warning(None, PLAYBACK_DECODER_TITLE, f"{exc}\n\n{playback_decoder_fallback_note()}")
         mac_native_gate.set_preferred_decoder("ffmpeg", source=mac_native_gate.SOURCE_FALLBACK)
     decoder, source = mac_native_gate.effective_decoder()
     print(f"[재생] 디코더: {decoder} ({source})", flush=True)
@@ -244,7 +249,7 @@ def load_display_renderer():
     except (user_files.UserFileError, ValueError) as exc:
         traceback.print_exc()
         windows_display.set_preferred(windows_display.DEFAULT_RENDERER)
-        QMessageBox.warning(None, DISPLAY_RENDERER_TITLE, f"{exc}\n\n이 세션은 CPU로 그립니다 — Settings → {windows_display.MENU_TEXT}에서 바꿀 수 있습니다")
+        QMessageBox.warning(None, DISPLAY_RENDERER_TITLE, f"{exc}\n\n이 세션은 CPU로 그립니다 — Settings → {ui_text.text(windows_display.MENU_KEY)}에서 바꿀 수 있습니다")
     print(f"[뷰포트] 화면 그리기 설정: {windows_display.preferred()}", flush=True)  # '[표시]'는 GL 그리기 줄 전용 (CLAUDE.md)
 
 
@@ -259,12 +264,45 @@ def load_slider_thumbnails():
         traceback.print_exc()
         hover_strip.set_enabled(False)
         if isinstance(exc, user_files.UserFileError):
-            note = (f"이 세션은 슬라이더 썸네일을 끕니다.\n설정 파일을 고치거나 지운 뒤 다시 켜면 켜집니다 — Settings → {hover_strip.MENU_TEXT}은 "
+            note = (f"이 세션은 슬라이더 썸네일을 끕니다.\n설정 파일을 고치거나 지운 뒤 다시 켜면 켜집니다 — Settings → {ui_text.with_particle(ui_text.text(hover_strip.MENU_KEY), '은')} "
                     "파일을 덮지 않습니다")
         else:
-            note = f"이 세션은 슬라이더 썸네일을 끕니다 — Settings → {hover_strip.MENU_TEXT}에서 다시 켤 수 있습니다"
+            note = f"이 세션은 슬라이더 썸네일을 끕니다 — Settings → {ui_text.text(hover_strip.MENU_KEY)}에서 다시 켤 수 있습니다"
         QMessageBox.warning(None, hover_strip.SETTINGS_TITLE, f"{exc}\n\n{note}")
     print(f"{hover_strip.LOG_PREFIX} 설정: {'켬' if hover_strip.enabled() else '끔'}", flush=True)
+
+
+def system_ui_languages():
+    """OS의 화면 언어 목록 (앞이 먼저 — 예 ['ko-KR', 'en-US']). 지역(날짜·숫자 형식)이 아니라 화면 언어를 봄:
+    영문 macOS를 한국 지역으로 쓰면 QLocale.system().name()은 en_KR이고 이 목록의 첫 항목은 en-KR."""
+    return list(QLocale.system().uiLanguages())
+
+
+def load_language():
+    """화면 언어(한국어·English)를 시작 때 한 번 정해 글자 표(ui_text)에 둠 — 창을 만들기 전에. 모든 플랫폼.
+    우선순위: 환경 변수 YESONCHECK_LANGUAGE(나쁜 값은 ValueError — 다른 토글처럼 시작 때 크게) > prefs.json의 ui_language >
+    OS의 화면 언어(첫 언어가 한국어면 한국어, 아니면 English). 깨진 파일·모르는 값은 OS 언어로 넘기지 않고 트레이스백·창을 보인 뒤
+    이 세션만 한국어(SOURCE_FALLBACK) — 파일은 건드리지 않는다. 창의 끝 글은 둘: 모르는 값은 메뉴에서 고르면 고쳐 쓰고, 깨진 JSON은 메뉴도 덮지 않음."""
+    code = ui_language.env_language()
+    source = ui_language.SOURCE_ENV
+    if code is None:
+        try:
+            code = ui_language.read()
+            source = ui_language.SOURCE_PREFS
+        except (user_files.UserFileError, ValueError) as exc:
+            traceback.print_exc()
+            code, source = "ko", ui_language.SOURCE_FALLBACK
+            if isinstance(exc, user_files.UserFileError):
+                note = (f"이 세션은 한국어로 보입니다.\n설정 파일을 고치거나 지운 뒤 다시 켜면 설정을 읽습니다 — Settings → {ui_language.MENU_TEXT}는 "
+                        "파일을 덮지 않습니다")
+            else:
+                note = f"이 세션은 한국어로 보입니다 — Settings → {ui_language.MENU_TEXT}에서 다시 고를 수 있습니다"
+            QMessageBox.warning(None, ui_language.SETTINGS_TITLE, f"{exc}\n\n{note}")
+        if code is None:
+            code, source = ui_language.from_locale(system_ui_languages()), ui_language.SOURCE_OS
+    ui_text.set_language(code)
+    ui_language.set_source(source)
+    print(f"{ui_language.LOG_PREFIX} 설정: {ui_language.NAMES[code]} ({source})", flush=True)
 
 
 def load_downscale_filter():
@@ -279,10 +317,10 @@ def load_downscale_filter():
         traceback.print_exc()
         downscale_filter.set_preferred(downscale_filter.DEFAULT_FILTER)
         if isinstance(exc, user_files.UserFileError):
-            note = (f"이 세션은 Linear로 그립니다.\n설정 파일을 고치거나 지운 뒤 다시 켜면 설정을 읽습니다 — Settings → {downscale_filter.MENU_TEXT}은 "
+            note = (f"이 세션은 Linear로 그립니다.\n설정 파일을 고치거나 지운 뒤 다시 켜면 설정을 읽습니다 — Settings → {ui_text.with_particle(ui_text.text(downscale_filter.MENU_KEY), '는')} "
                     "파일을 덮지 않습니다")
         else:
-            note = f"이 세션은 Linear로 그립니다 — Settings → {downscale_filter.MENU_TEXT}에서 다시 고를 수 있습니다"
+            note = f"이 세션은 Linear로 그립니다 — Settings → {ui_text.text(downscale_filter.MENU_KEY)}에서 다시 고를 수 있습니다"
         QMessageBox.warning(None, downscale_filter.SETTINGS_TITLE, f"{exc}\n\n{note}")
     print(f"{downscale_filter.LOG_PREFIX} 설정: {downscale_filter.preferred()}", flush=True)
 
@@ -374,6 +412,22 @@ def finish_released_workers(timeout_s):
     os._exit(0)
 
 
+def release_windows_before_app(app, router, windows):
+    """exec_()가 끝난 뒤, launch가 돌아가기 전에: 앱 전체 이벤트 필터(router — Mac만 걸려 있음)를 떼고 창들을 바로 지움.
+
+    launch가 돌아가면 지역 변수 app(QApplication의 파이썬 래퍼)이 풀리고, PyQt는 그때 살아 있는 래퍼를 모두 돌며
+    (sipVisitWrappers) 파이썬이 가진 부모 없는 QObject를 지운다(dealloc_QApplication). 창이 그 안에서 지워지면 자식 수백 개의
+    소멸 이벤트가 파이썬 이벤트 필터를 부르는데(Mac의 앱 전체 필터는 약 300번), 그렇게 불린 판에서만 간헐 세그폴트가 났음
+    (스택 dealloc_QApplication → sip_api_visit_wrappers → cleanup_qobject → sip_api_get_address — 2026-11-16 실측; 파이썬
+    호출이 만드는 새 래퍼가 돌고 있는 표를 건드리는 것으로 추정). 그래서 그 일을 여기서 — 아무도 래퍼 표를 돌고 있지 않을 때 —
+    먼저 한다: 필터를 떼면 그 뒤의 소멸 이벤트가 파이썬에 오지 않고, 창을 지우면 정리 때 지울 큰 것이 남지 않음.
+    지운 뒤에는 이 창들의 Qt 메서드를 부를 수 없음(RuntimeError) — launch의 맨 끝에서만 부를 것."""
+    app.removeEventFilter(router)  # 걸려 있지 않으면 Qt가 무시함 (Windows)
+    for window in windows:
+        if not sip.isdeleted(window):
+            sip.delete(window)
+
+
 def launch(argv=None):
     """Create and run the QApplication event loop.
 
@@ -417,6 +471,9 @@ def launch(argv=None):
     movie_pipe_source.frame_cache_mode()  # 프레임 캐시 토글(YESONCHECK_FRAME_CACHE)도 같은 이유로 시작 때 검증
     gl_video_item.video_item_mode(os.environ)  # 영상 아이템 토글(YESONCHECK_VIDEO_ITEM)의 나쁜 값도 같은 이유로 여기서
     video_list.job_scan_threads()  # job 목록 스레드 수(YESONCHECK_JOB_SCAN_THREADS)의 나쁜 값도 — job을 고를 때 뒤늦게 알게 되지 않게
+    # 화면 언어(한국어·English) — 창(모든 화면 글자)을 만들기 전에, 그리고 아래 설정들보다 먼저: 그 설정을 읽지 못했을 때의
+    # 경고 창이 메뉴 이름을 화면의 언어로 인용함
+    load_language()
     # (Mac) 재생 디코더 설정(prefs.json)도 시작 때 한 번 읽어 게이트의 캐시에 — native_wanted는 그 캐시만 봄 (깨졌으면 알리고 이 세션은 ffmpeg)
     load_playback_decoder()
     load_display_renderer()  # (Windows) 화면 그리기 설정 — 창(뷰포트)을 만들기 전에
@@ -483,6 +540,8 @@ def launch(argv=None):
         # 창을 닫을 때 끝나지 않아 붙잡아 둔 작업(예: TensorFlow 추론 중인 애니매틱2)을 EXIT_WAIT_S초까지 기다림
         # (넘으면 로그를 남기고 강제 종료 — 실행 중인 QThread가 파이썬 종료 중에 파괴되면 앱이 오류로 죽음)
         finish_released_workers(EXIT_WAIT_S)
+        # QApplication(파이썬 래퍼)이 풀리기 전에 앱 전체 이벤트 필터를 떼고 창을 먼저 지움 — 종료 때의 간헐 세그폴트
+        release_windows_before_app(app, router, (player, splash))
         return code
     return 0
 

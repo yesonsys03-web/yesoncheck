@@ -49,7 +49,7 @@ def stems(names):
 
 def test_modes_and_labels():
     assert sidebar_sort.MODES == ("name", "kind", "version", "time") and sidebar_sort.DEFAULT_MODE == "name"
-    assert [sidebar_sort.LABELS[mode] for mode in sidebar_sort.MODES] == ["이름", "종류", "버전", "시간"]
+    assert [sidebar_sort.label(mode) for mode in sidebar_sort.MODES] == ["이름", "종류", "버전", "시간"]
     assert sidebar_sort.button_text("kind") == "정렬: 종류 ▾"
     assert sidebar_sort.button_texts("kind") == ("정렬: 종류 ▾", "종류 ▾", "↕")  # 탭 줄 폭에 맞춰 긴 것부터
 

@@ -13,7 +13,7 @@
   - 같은 앱 자리의 다른 YesonCheck 창이 열려 있으면(instances.others — 창 기록) 묻지도 기록하지도 않는다: 답하기 전에 여러
     파일·Dock 클릭으로 창을 여러 개 띄워도 질문은 처음 창에만. 그 창에서 단추 없이 닫으면 창 하나만 켜질 때 다시 묻는다.
   - [예] → set_default → 같은 앱 ID의 다른 사본(other_copies)이 있으면 그 경로들과 지우라는 안내(지우지는 않음).
-- Help → MENU_TEXT(Mac만 — Windows 항목은 file_associations): 묻지 않고 같은 일 + 정했다는 창. 소스 실행은 안내만.
+- Help → 동영상 기본 앱으로 정하기…(MENU_KEY — Mac만 — Windows 항목은 file_associations): 묻지 않고 같은 일 + 정했다는 창. 소스 실행은 안내만.
 - dmg 안(/Volumes)·임시 격리 위치(AppTranslocation)에서 켠 앱은 정하지 않고 묻지도 않는다(location_problem): 그 상태에서는
   응용 프로그램 폴더의 진짜 사본이 '다른 사본'으로 보여 지우라고 안내하게 되고, 정해 봐야 dmg를 빼면 소용이 없다.
 - 오류: 예상된 실패 — DefaultAppError(LaunchServices의 상태 코드, 정한 뒤 다시 읽은 값이 다름, 앱의 Info.plist), prefs.json의
@@ -74,7 +74,7 @@ LOG_PREFIX = "[기본 앱]"  # 기록 줄의 머리 (_log·오류 창 — error_
 ASK_TEXT = "동영상(.mov·.mp4)을 더블클릭하면 YesonCheck로 열까요?"
 YES_BUTTON = "예"
 NO_BUTTON = "아니요"
-MENU_TEXT = "동영상 기본 앱으로 정하기…"
+MENU_KEY = "help.default_app"  # 글자 표(ui_text)의 키 — Help 메뉴 항목 "동영상 기본 앱으로 정하기…"
 DONE_TEXT = "동영상(.mov·.mp4)을 더블클릭하면 YesonCheck로 열립니다."
 OTHER_COPIES_TEXT = ("같은 앱 ID의 YesonCheck 사본이 이 Mac에 더 있습니다 — 동영상을 더블클릭하면 macOS가 그중 하나를 열 수 "
                      "있습니다. 쓰지 않는 사본은 지워 주세요 (YesonCheck는 지우지 않습니다):")
@@ -392,7 +392,7 @@ def _ask_at_start(parent):
 
 
 def set_default_from_menu(parent) -> None:
-    """Help → MENU_TEXT: 묻지 않고 이 앱을 기본 앱으로 → 정했다는 창(다른 사본이 있으면 그 안내도). 소스 실행·dmg 안·격리
+    """Help → 동영상 기본 앱으로 정하기…: 묻지 않고 이 앱을 기본 앱으로 → 정했다는 창(다른 사본이 있으면 그 안내도). 소스 실행·dmg 안·격리
     위치면 안내만. 오류는 모두 창으로."""
     try:
         if not getattr(sys, "frozen", False):

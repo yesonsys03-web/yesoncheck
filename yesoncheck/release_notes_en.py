@@ -7,6 +7,48 @@ entry for entry (no Qt). The deploy notes (GitHub Release, update banner) still 
 from yesoncheck.release_notes import Release
 
 RELEASES = (
+    Release("2.0.0", "2026-11-17",
+            "A redesigned window — the playback controls sit in one row under the slider, the middle column is replaced by "
+            "annotation and OCR panels you open when you need them, there are new menus, and you can choose the screen "
+            "language (Korean / English). Annotation, bookmark and settings files keep the same format, so it works side "
+            "by side with PCs still on 1.9.x.",
+            (
+                ("Playback bar — the controls in one row", (
+                    "The playback controls are gathered in one row under the slider — the go to start, step back, play, step "
+                    "forward, go to end and loop buttons are always in the same place. Home and End go to the start and end.",
+                    "Type a number in the frame number box and press Enter to go to that frame.",
+                    "The FPS box in the middle column is gone — choosing a value there did nothing, and the video's fps is shown "
+                    "in the playback bar.",
+                )),
+                ("Tool panel, sidebar and menus instead of the middle column", (
+                    "The middle column is gone and the video is that much wider. Annotations and OCR are now panels you open with "
+                    "the `Annotate` and `OCR` buttons at the right of the playback bar (or the N key) — closing a panel keeps "
+                    "annotation mode and the values you entered.",
+                    "Turn on the wipe with the `A|B Wipe`, `X` and `Y` buttons in the playback bar.",
+                    "Choosing show, season and job moved to the top of the sidebar. Play selected videos in a row with the one "
+                    "`Play selected in a row` button under the list (the Enter key still works); while it plays, an `End "
+                    "playlist` button appears below it. Meanwhile the go-to-start button stops and rewinds only the current video (the playlist does not end).",
+                    "New menus: File, View, Playback, Compare and Tools — opening video A or B is in File, managing show paths "
+                    "is in Tools. Right-clicking the video also shows all the menus.",
+                    "New shortcuts: O open video A · I open a folder · L loop playback · W turn on the wipe. The N key now opens "
+                    "and closes the annotation/OCR panel (before, it hid the middle column).",
+                )),
+                ("Screen language — Korean / English (new)", (
+                    "Choose Korean or English in Settings → 언어 (Language). The choice applies to that window at once; other "
+                    "windows that are already open follow it the next time they start.",
+                    "At first the app follows the OS language, so a PC whose OS is not Korean shows English — you can switch to "
+                    "Korean in the same menu.",
+                    "Secondary windows (OCR review, show path management and so on) and error messages are still in Korean.",
+                    "The user manual matches the new window too — the English manual uses the names and pictures of the English "
+                    "screen.",
+                )),
+                ("Fixes", (
+                    "B's file name appears next to A's in the playback bar only while the wipe is on (before, it stayed after "
+                    "you turned the wipe off).",
+                    "The volume is 50 when the app starts (before, the slider showed 50 but the sound played at 100).",
+                    "Fixed a rare crash when closing the app.",
+                )),
+            )),
     Release("1.9.4", "2026-11-13",
             "The manual now has an English version — switch between 한국어 and English with the buttons above the table of "
             "contents.",

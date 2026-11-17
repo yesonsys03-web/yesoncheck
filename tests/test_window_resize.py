@@ -8,6 +8,8 @@
 고치는 방법: 가운데 열을 세로 스크롤 영역(QScrollArea)에 넣고, 정보 줄 라벨은 글꼴로 정한 최소 너비 + 고정된 원하는
 너비(숫자가 바뀌어도 흔들리지 않게)로, 좁아지면 정해진 순서로 줄이고 넘치는 글자는 …로 줄여 그림.
 처음 창 크기는 예전처럼 1080×720 이상·레이아웃이 원하는 크기까지(화면 작업 영역 안으로) — 줄일 수만 있게 됨.
+2026-11-16 UI 개편 PR 2: 가운데 열은 없어지고 그 내용(주석·OCR)은 뷰어 오른쪽 도구 패널의 두 쪽이 됨 — 쪽마다 세로
+스크롤 영역이라 패널이 낮아도 창의 최소 높이를 묶지 않음(같은 뜻을 패널로 봄).
 
 글꼴은 플랫폼·테마마다 다르다 (Windows CI의 글자는 Mac보다 훨씬 넓고, 밝은 테마(T 키)에서는 정보 줄 라벨이 16pt).
 그래서 픽셀 숫자가 아니라 목표(900×600)와 '글자가 다 보임'으로 확인하고, 실패하면 _layout_report로 원인을 남긴다.
@@ -19,15 +21,21 @@ import os
 import pytest
 from PyQt5.QtCore import QEvent, QPoint, QRect, QSize, Qt
 from PyQt5.QtGui import QHelpEvent
-from PyQt5.QtWidgets import QApplication, QLabel, QScrollArea, QSplitter, QToolTip, QWidget
+from PyQt5.QtWidgets import QApplication, QLabel, QPushButton, QScrollArea, QSplitter, QToolTip, QWidget
 
 from tests.conftest import write_test_video
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 
 TARGET = QSize(900, 600)
 LONG_NAME = "HH99_sc012_layout_retake_v003_final_check_for_director_review.mov"
-DESIGNED_WIDTHS = {"labelFrameCount": 200, "labelTotalFrames": 200, "labelPlaybackFPS": 150}  # 예전 고정 너비
-INFO_LABELS = ["filenameLabel", "labelFrameCount", "labelTotalFrames", "labelPlaybackFPS", "timeLabel"]
+# 2026-11-16: 정보 줄은 재생 줄(transport_bar)로 옮겨짐 — 라벨은 재생 줄의 것(이 이름들), 지금 프레임은 프레임 칸(frameField).
+# 재생 코드가 글자를 넣는 옛 이름(player.labelFrameCount·labelTotalFrames·labelPlaybackFPS)은 어댑터라 너비가 없음.
+FIXED_WIDTH_LABELS = ["totalLabel", "fpsLabel", "timeLabel"]  # 원하는 너비가 본보기 글자로 고정 (숫자가 바뀌어도 그대로)
+INFO_LABELS = ["filenameLabel", "totalLabel", "fpsLabel", "timeLabel"]
+
+
+def _label(player, name):
+    return getattr(player.transportBar, name)
 
 
 def _settle():
@@ -45,12 +53,13 @@ def player(new_player, dialogs, tmp_path):
 
 @pytest.fixture
 def large_screen(monkeypatch):
-    """화면 작업 영역이 1920×1040인 것처럼 (offscreen 화면은 800×600)."""
+    """화면 작업 영역이 2560×1400인 것처럼 (offscreen 화면은 800×600). 레이아웃이 원하는 너비보다 넉넉해야 함 — 재생 줄이
+    토글의 글자·fps 칸까지 원하는 너비는 글꼴이 넓은 환경(글꼴 없는 CI·그 흉내)에서 1,900px을 넘음(2026-11-16 전에는 1920×1040)."""
     real_screen = QApplication.primaryScreen()
 
     class LargeScreen:
         def availableGeometry(self):
-            return QRect(0, 0, 1920, 1040)
+            return QRect(0, 0, 2560, 1400)
 
         def __getattr__(self, name):
             return getattr(real_screen, name)
@@ -72,9 +81,9 @@ def _big_numbers(player):
     _settle()
 
 
-def _middle_scroll_area(player):
-    """가운데 열(영상 열기·OCR 버튼이 있는 열)을 감싼 QScrollArea — 없으면 None."""
-    widget = player.ocrAnalyzeButton.parentWidget()
+def _page_scroll_area(widget):
+    """도구 패널의 쪽(주석·OCR)을 감싼 QScrollArea — widget은 그 쪽 안의 위젯. 없으면 None."""
+    widget = widget.parentWidget()
     while widget is not None and not isinstance(widget, QScrollArea):
         widget = widget.parentWidget()
     return widget
@@ -108,8 +117,10 @@ def _layout_report(player):
         pane = splitter.widget(i)
         lines.append(f"  pane {i} {type(pane).__name__} min={max(pane.minimumSizeHint().width(), pane.minimumWidth())} "
                      f"width={pane.width()} widest={_widest(pane, player)}")
-    for name in INFO_LABELS:
-        label = getattr(player, name)
+    bar = player.transportBar
+    lines.append(f"transport bar width={bar.width()} min={bar.minimumSizeHint().width()} hint={bar.sizeHint().width()}")
+    for name in INFO_LABELS + ["frameField"]:
+        label = _label(player, name)
         font = label.font()
         shown = label.displayed_text() if hasattr(label, "displayed_text") else label.text()
         lines.append(f"  {name}: width={label.width()} min={label.minimumSizeHint().width()} "
@@ -142,37 +153,56 @@ def test_resize_to_target_is_honored(player, tmp_path):
 
 
 def test_frame_numbers_never_elide_at_minimum_width(player, tmp_path):
-    """창이 최소 너비여도 Current는 숫자까지 다, Total은 적어도 'Total: 12345'까지 보임 (뒤의 '(…F …f)'는 줄 수 있음)."""
+    """창이 최소 너비여도 지금 프레임은 숫자까지 다, 전체는 적어도 '/ 12345'까지 보임 (뒤의 '(…F …f)'는 줄 수 있음)."""
     _open_video(player, tmp_path, LONG_NAME)
     _big_numbers(player)
     player.resize(player.minimumSizeHint())
     _settle()
     report = _layout_report(player)
-    assert player.labelFrameCount.displayed_text() == "Current: 12345", report
-    assert player.labelTotalFrames.displayed_text().startswith("Total: 12345"), report
+    bar = player.transportBar
+    assert bar.frameField.text() == "12345" and bar.frameField.width() == bar.frameField.sizeHint().width(), report
+    assert bar.totalLabel.displayed_text().startswith("/ 12345"), report
+    assert bar.frameField.isVisible() and bar.totalLabel.isVisible(), report
     for name in INFO_LABELS:
-        assert getattr(player, name).isVisible(), name  # 줄어들어도 사라지지 않음
+        assert _label(player, name).isVisibleTo(player), name  # 접혀도(너비 0) 사라지지 않음 — 창을 넓히면 다시 보임
+    for button in (bar.firstButton, bar.prevButton, bar.playButton, bar.nextButton, bar.lastButton, bar.loopButton):
+        left = button.mapTo(player, button.rect().topLeft()).x()
+        assert button.width() == 30 and 0 <= left and left + 30 <= player.width(), report  # 재생 단추도 온전히
 
 
-def test_middle_column_is_in_vertical_scroll_area(player):
-    area = _middle_scroll_area(player)
-    assert area is not None, "가운데 열이 QScrollArea 안에 없음"
-    assert isinstance(area.parentWidget(), QSplitter)  # 메인 스플리터의 한 칸
+@pytest.mark.parametrize("page,last", [("annotation", "annotationStatusLabel"), ("ocr", "ocrLoadResultButton")])
+def test_tool_panel_pages_are_in_vertical_scroll_areas(player, page, last):
+    """도구 패널의 쪽은 세로 스크롤 영역 안 — 창이 낮아도 맨 아래 위젯까지 스크롤로 닿음(가려지지만 사라지지 않음),
+    가로로는 잘리지 않음. 패널은 V 키·영상만 전체 화면에서 재생 줄을 따라 숨음 (test_tool_panel_player)."""
+    bottom = getattr(player, last)
+    area = _page_scroll_area(bottom)
+    assert area is not None, "쪽이 QScrollArea 안에 없음"
+    assert player.toolPanel.isAncestorOf(area) and isinstance(player.toolPanel.parentWidget(), QSplitter)
     assert area.horizontalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
-    assert area in player.control_widgets  # V 키·동영상 전용 전체화면에서 열 전체가 숨겨지도록
 
-    player.resize(TARGET)
+    player.show_tool_panel(page)
+    player.resize(max(TARGET.width(), player.minimumSizeHint().width()), player.minimumSizeHint().height())
     _settle()
-    # 창이 낮아도 기능은 그대로: 맨 아래 작품 선택 콤보까지 스크롤로 닿을 수 있음 (가려지지만 사라지지 않음)
-    assert area.verticalScrollBar().maximum() > 0
-    assert player.jobComboBox.isVisibleTo(player)
-    area.ensureWidgetVisible(player.jobComboBox)
-    _settle()
-    top_left = player.jobComboBox.mapTo(area.viewport(), player.jobComboBox.rect().topLeft())
-    assert area.viewport().rect().contains(top_left)
+    if area.verticalScrollBar().maximum() > 0:  # 가장 낮은 창에서 쪽이 다 안 들어감 → 스크롤로 닿음
+        assert bottom.isVisibleTo(player)
+        area.ensureWidgetVisible(bottom)
+        _settle()
+        top_left = bottom.mapTo(area.viewport(), bottom.rect().topLeft())
+        assert area.viewport().rect().contains(top_left)
+    else:
+        assert bottom.mapTo(area.viewport(), bottom.rect().bottomLeft()).y() <= area.viewport().height()
     # 세로 스크롤바가 생겨도 내용이 오른쪽에서 잘리지 않음 (가로 스크롤 없음)
     assert area.widget().width() <= area.viewport().width()
     assert area.widget().width() >= area.widget().minimumSizeHint().width()
+
+
+def test_annotation_page_scrolls_in_the_lowest_window(player):
+    """주석 쪽은 가장 낮은 창에서 스크롤됨 — 쪽의 내용이 창의 최소 높이를 묶지 않는다는 증거."""
+    area = _page_scroll_area(player.annotationStatusLabel)
+    player.show_tool_panel("annotation")
+    player.resize(max(TARGET.width(), player.minimumSizeHint().width()), player.minimumSizeHint().height())
+    _settle()
+    assert area.verticalScrollBar().maximum() > 0, _layout_report(player)
 
 
 def _tooltip_shown_for(label):
@@ -189,8 +219,9 @@ def _tooltip_shown_for(label):
 
 
 def _assert_collapse_order(player, report):
-    """칸을 접는 순서: 재생 FPS → 파일 이름 → 시간 (뒤의 것이 접혔으면 앞의 것도 접혀 있어야 함)."""
-    widths = [player.labelPlaybackFPS.width(), player.filenameLabel.width(), player.timeLabel.width()]
+    """칸을 접는 순서: 파일 이름(왼쪽 구역 — 오른쪽 구역이 줄기 전에 먼저) → fps → 시간 (뒤의 것이 접혔으면 앞의 것도)."""
+    bar = player.transportBar
+    widths = [bar.filenameLabel.width(), bar.fpsLabel.width(), bar.timeLabel.width()]
     for later in range(1, 3):
         if widths[later] == 0:
             assert all(width == 0 for width in widths[:later]), (widths, report)
@@ -202,34 +233,35 @@ def test_info_labels_readable_at_target(player, tmp_path):
     player.resize(TARGET)
     _settle()
     report = _layout_report(player)
+    bar = player.transportBar
     assert player.size() == TARGET, report
-    assert player.labelFrameCount.displayed_text() == player.labelFrameCount.text(), report
-    assert player.labelTotalFrames.displayed_text().startswith("Total: 48"), report
+    assert bar.frameField.text() == "1" and player.labelFrameCount.text() == "Current: 1", report
+    assert bar.totalLabel.displayed_text().startswith("/ 48"), report
     _assert_collapse_order(player, report)
-    time = player.timeLabel
+    time = bar.timeLabel
     if time.width() >= time.floor_width():  # 시간은 접히기 전까지 '00:00:00.000 /'을 지킴
         assert time.displayed_text().startswith("00:00:00.000 /"), report
     for name in INFO_LABELS:
-        label = getattr(player, name)
+        label = _label(player, name)
         assert label.isVisibleTo(player), name  # 접혀도(너비 0) 사라지지 않음 — 창을 넓히면 다시 보임
         if label.width() > 0 and label.displayed_text() != label.text():  # 줄여 그려지면 전체 글자는 툴팁으로
             assert _tooltip_shown_for(label) == label.text(), (name, report)
 
 
 def test_tooltips_only_when_elided(player, tmp_path):
-    """Total·재생 FPS·시간: 줄여 그려질 때만 전체 글자를 툴팁으로. 다 보이면 툴팁 없음."""
+    """전체·fps·시간: 줄여 그려질 때만 전체 글자를 툴팁으로. 다 보이면 툴팁 없음."""
     _open_video(player, tmp_path, "sc012.mov")
     player.resize(player.sizeHint().expandedTo(QSize(1400, 800)))
     _settle()
-    for name in ["labelTotalFrames", "labelPlaybackFPS", "timeLabel"]:
-        label = getattr(player, name)
+    for name in FIXED_WIDTH_LABELS:
+        label = _label(player, name)
         assert label.displayed_text() == label.text(), _layout_report(player)
         assert _tooltip_shown_for(label) == "", name
     player.labelTotalFrames.setText("Total A: 12345 (771F 09f), B: 12345 (771F 09f)")  # 와이프 모드의 긴 글자
     player.resize(player.minimumSizeHint())
     _settle()
-    for name in ["labelTotalFrames", "labelPlaybackFPS", "timeLabel"]:
-        label = getattr(player, name)
+    for name in FIXED_WIDTH_LABELS:
+        label = _label(player, name)
         assert label.displayed_text() != label.text(), (name, _layout_report(player))
         assert _tooltip_shown_for(label) == label.text(), name
 
@@ -246,34 +278,38 @@ def test_long_file_name_is_elided_instead_of_widening(player, tmp_path):
     report = _layout_report(player)
     assert player.size() == TARGET, report
     label = player.filenameLabel
+    assert label is player.transportBar.filenameLabel
     assert label.text() == f"A: {LONG_NAME}"  # 전체 이름은 그대로 (복사·툴팁용)
     if label.width() >= label.floor_width():  # 이 플랫폼 글꼴로 줄인 파일 이름이 들어갈 자리가 있음
         shown = label.displayed_text()
         assert shown != label.text() and "…" in shown, (shown, report)  # 가운데를 줄임
         assert shown.startswith("A: H") and shown.endswith(".mov"), (shown, report)
-    else:  # 자리가 없으면 그보다 먼저 재생 FPS 칸이 접혀 있어야 함
-        assert player.labelPlaybackFPS.width() == 0, report
+    else:  # 자리가 없으면 파일 이름 칸은 통째로 접힘 (재생 단추·프레임 숫자에 자리를 내줌)
+        assert label.width() == 0, report
     _assert_collapse_order(player, report)
     assert _tooltip_shown_for(label) == label.text()
 
 
 def test_info_labels_get_designed_widths_when_there_is_room(player, tmp_path):
-    """자리가 있으면 예전처럼: 숫자 라벨은 원하는 너비(예전 200·200·150 이상 — 글자가 그보다 넓은 글꼴이면 글자 너비)로,
+    """자리가 있으면: 전체·fps·시간은 본보기 글자로 정한 고정 너비로, 프레임 칸은 숫자 여섯 자리 너비로 —
     숫자가 바뀌어도 너비가 그대로이고 모든 글자가 다 보임."""
     _open_video(player, tmp_path, "sc012.mov")
     player.resize(player.sizeHint().expandedTo(QSize(1400, 800)))
     _settle()
     report = _layout_report(player)
-    for name, designed in DESIGNED_WIDTHS.items():
-        label = getattr(player, name)
-        assert label.width() == label.sizeHint().width() >= designed, (name, report)
+    for name in FIXED_WIDTH_LABELS:
+        label = _label(player, name)
+        assert label.width() == label.sizeHint().width() > 0, (name, report)
     for name in INFO_LABELS:
-        label = getattr(player, name)
+        label = _label(player, name)
         assert label.displayed_text() == label.text(), (name, report)
-    width = player.labelFrameCount.width()
+    field = player.transportBar.frameField
+    widths = [field.width()] + [_label(player, name).width() for name in FIXED_WIDTH_LABELS]
     player.labelFrameCount.setText("Current: 99999")
+    player.labelTotalFrames.setText("Total: 99999 (999F 15f)")
     _settle()
-    assert player.labelFrameCount.width() == width
+    assert [field.width()] + [_label(player, name).width() for name in FIXED_WIDTH_LABELS] == widths
+    assert field.text() == "99999" and player.transportBar.totalLabel.displayed_text() == "/ 99999 (999F 15f)"
 
 
 def test_shrink_order_of_info_row():
@@ -335,18 +371,62 @@ def test_shrink_order_of_info_row():
 
 
 def test_real_info_labels_follow_the_shrink_order(player):
-    """실제 정보 줄 라벨의 단계가 위 순서대로인지 (글꼴과 상관없는 설정 확인)."""
-    stages = {name: dict(getattr(player, name).shrink_stages()) for name in INFO_LABELS}
+    """재생 줄 라벨의 단계가 위 순서대로인지 (글꼴과 상관없는 설정 확인)."""
+    stages = {name: dict(_label(player, name).shrink_stages()) for name in INFO_LABELS}
     soft = {name: min(order for order, floor in stages[name].items() if floor > 0) for name in INFO_LABELS}
-    assert soft["filenameLabel"] < soft["labelPlaybackFPS"] < soft["timeLabel"] < soft["labelTotalFrames"]
-    assert soft["labelFrameCount"] == soft["labelTotalFrames"]
+    assert soft["filenameLabel"] < soft["fpsLabel"] < soft["timeLabel"] < soft["totalLabel"]
     collapse = {name: order for name in INFO_LABELS for order, floor in stages[name].items() if floor == 0}
-    assert set(collapse) == {"labelPlaybackFPS", "filenameLabel", "timeLabel"}  # 숫자 라벨은 접히지 않음
-    assert collapse["labelPlaybackFPS"] < collapse["filenameLabel"] < collapse["timeLabel"]
+    assert set(collapse) == {"fpsLabel", "filenameLabel", "timeLabel"}  # 전체(숫자)는 접히지 않음
+    assert collapse["fpsLabel"] < collapse["filenameLabel"] < collapse["timeLabel"]
     assert min(collapse.values()) > max(soft.values())  # 접기는 모든 최소 너비 다음
-    for name in ("labelFrameCount", "labelTotalFrames"):
-        label = getattr(player, name)
-        assert label.minimumSizeHint().width() == label.floor_width() > 0
+    bar = player.transportBar
+    assert bar.totalLabel.minimumSizeHint().width() == bar.totalLabel.floor_width() > 0
+    assert bar.frameField.minimumSizeHint().width() == bar.frameField.sizeHint().width() > 0  # 프레임 칸은 줄지 않음
+    assert bar.volumeSlider.shrink_order > max(collapse.values())  # 볼륨 슬라이더는 라벨들 다음에
+    # 도구 토글: 글자는 무엇보다 먼저(음수 — 라벨의 빈 공간보다도), 통째로 사라지는 것은 볼륨 슬라이더 다음
+    tool_stages = bar.toolGroup.shrink_stages()
+    assert [floor for _order, floor in tool_stages] == [bar.toolGroup.compact_width(), 0]
+    assert tool_stages[0][0] < 0 and tool_stages[1][0] > bar.volumeSlider.shrink_order
+    assert 0 < bar.toolGroup.compact_width() < bar.toolGroup.sizeHint().width()
+    assert bar.toolGroup.minimumSizeHint().width() == 0
+
+
+def test_negative_stages_shrink_before_the_slack_of_the_labels():
+    """순서가 음수인 단계는 숫자 라벨의 빈 공간보다도 먼저 줄임 (재생 줄의 도구 토글 글자)."""
+    from yesoncheck.window_layout import InfoRowLayout
+
+    class Box(QWidget):
+        def __init__(self, hint, comfortable, stages):
+            super().__init__()
+            self._hint, self._comfortable, self._stages = hint, comfortable, stages
+
+        def sizeHint(self):
+            return QSize(self._hint, 30)
+
+        def minimumSizeHint(self):
+            return QSize(0, 30)
+
+        def comfortable_width(self):
+            return self._comfortable
+
+        def shrink_stages(self):
+            return self._stages
+
+    row = QWidget()
+    layout = InfoRowLayout(row)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(0)
+    label = Box(200, 150, [(2, 40), (6, 0)])  # 빈 공간 50
+    tools = Box(300, 300, [(-1, 100), (11, 0)])
+    for box in (label, tools):
+        layout.addWidget(box)
+    assert layout.widths_for(500) == [200, 300]
+    assert layout.widths_for(400) == [200, 200]  # 토글의 글자 몫부터 — 라벨의 빈 공간은 그대로
+    assert layout.widths_for(300) == [200, 100]
+    assert layout.widths_for(270) == [170, 100]  # 그다음 라벨의 빈 공간
+    assert layout.widths_for(140) == [40, 100]  # 라벨의 단계
+    assert layout.widths_for(100) == [0, 100]  # 라벨 접기
+    assert layout.widths_for(30) == [0, 30]  # 맨 나중에 토글
 
 
 def test_collapse_stage_comes_last():
@@ -384,8 +464,8 @@ def test_collapse_stage_comes_last():
 
 
 def test_light_theme_does_not_elide_at_normal_size(player, tmp_path):
-    """밝은 테마(T 키)에서는 정보 줄 라벨이 더 큰 글꼴(16pt)이 됨 → 그 글꼴의 원하는 너비로 다시 재고, 창이 원하는
-    크기면 글자를 줄이지 않음 (예전에 1px 넘친다고 '…'로 바꾸던 문제 포함)."""
+    """밝은 테마(T 키)로 바꿔도 재생 줄 라벨은 그 테마의 글꼴로 다시 재고, 창이 원하는 크기면 글자를 줄이지 않음
+    (예전에 1px 넘친다고 '…'로 바꾸던 문제 포함)."""
     _open_video(player, tmp_path, "sc012.mov")
     player.toggle_theme()
     _settle()
@@ -393,12 +473,12 @@ def test_light_theme_does_not_elide_at_normal_size(player, tmp_path):
     _settle()
     report = _layout_report(player)
     for name in INFO_LABELS:
-        label = getattr(player, name)
+        label = _label(player, name)
         assert label.displayed_text() == label.text(), (name, report)
     player.toggle_theme()  # 어두운 테마로 돌아와도 그대로
     _settle()
     for name in INFO_LABELS:
-        label = getattr(player, name)
+        label = _label(player, name)
         assert label.displayed_text() == label.text(), (name, _layout_report(player))
 
 
@@ -513,8 +593,8 @@ def test_startup_geometry_fits_small_screen():
 
 
 def test_startup_size_on_large_screen_is_the_polished_layout_size(new_player, dialogs, tmp_path, large_screen):
-    """화면이 충분하면 처음 창 = max(1080×720, 스타일·글꼴이 적용된 레이아웃의 원하는 크기): 가운데 열이 스크롤 없이
-    다 보이고 정보 줄 라벨이 원하는 너비 (Windows에서는 스타일 적용 전 크기로 재서 9px 낮았음)."""
+    """화면이 충분하면 처음 창 = max(1080×720, 스타일·글꼴이 적용된 레이아웃의 원하는 크기): 재생 줄의 라벨이
+    원하는 너비 (Windows에서는 스타일 적용 전 크기로 재서 9px 낮았음)."""
     player = new_player(make_config(str(tmp_path), {}))
     startup = player.size()
     assert startup.width() >= 1080 and startup.height() >= 720, startup
@@ -524,12 +604,12 @@ def test_startup_size_on_large_screen_is_the_polished_layout_size(new_player, di
     assert player.size() == startup, report
     assert player.size() == player.sizeHint().expandedTo(QSize(1080, 720)), report
     assert player.initial_geometry == player.geometry()  # 동영상 전용 전체화면을 끝내면 이 크기로 돌아옴
-    assert _middle_scroll_area(player).verticalScrollBar().maximum() == 0, report
-    for name, designed in DESIGNED_WIDTHS.items():
-        label = getattr(player, name)
-        assert label.width() == label.sizeHint().width() >= designed, (name, report)
+    for name in FIXED_WIDTH_LABELS:
+        label = _label(player, name)
+        assert label.width() == label.sizeHint().width() > 0, (name, report)
     splitter = _main_splitter(player)
-    assert splitter.sizes()[0] >= 200 and splitter.sizes()[1] >= 220, report  # 예전 처음 열 너비 (setSizes 200·220)
+    side, video, panel = splitter.sizes()
+    assert side >= 200 and panel == 0 and video > side, report  # 사이드바는 예전 처음 너비, 나머지는 영상 칸 (도구 패널은 닫힌 채)
 
 
 def test_startup_size_on_offscreen_screen(new_player, dialogs, tmp_path):

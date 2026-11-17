@@ -95,6 +95,8 @@ def test_open_seq_as_b(player, tmp_path):
 
     assert isinstance(player.cap_a, ImageSequenceCapture) and isinstance(player.cap_b, ImageSequenceCapture)
     assert player.filename_b == virtual(b)
+    assert player.filenameLabel.text() == "A: tk1.seq"  # B 이름은 와이프가 켜진 동안만 (2026-11-17)
+    player.wipeCheckBox.setChecked(True)
     assert player.filenameLabel.text() == "A: tk1.seq, B: tk2.seq"
 
 
@@ -140,23 +142,26 @@ def test_open_seq_never_creates_media_player(player, tmp_path, monkeypatch):
     assert player.findChildren(QMediaPlayer) == []
 
 
-def test_fps_combo_shows_paired_mov_fps(player, tmp_path):
+def test_sequence_shows_the_paired_mov_fps(player, tmp_path):
+    """2026-11-16 전에는 가운데 열의 FPS 콤보에 적힌 값으로 봤음(콤보는 없앰 — 값을 읽는 코드가 없었음). 이제 재생이 쓰는
+    캡처의 fps와, 그 값을 보이는 재생 줄의 fps 글로."""
     folder = tmp_path / "paired"
     identity = seq_in(tmp_path, "paired")
     make_movie(str(folder / "tk1.mov"), fps=25)
-    assert player.frameRateComboBox.currentText() == "24"
 
     assert player.open_file("A", identity)
 
-    assert player.frameRateComboBox.currentText() == "25"
+    assert player.cap_a.get(cv2.CAP_PROP_FPS) == 25
+    player.update_playback_fps()
+    assert player.labelPlaybackFPS.text() == "재생: 25 FPS" and player.transportBar.fpsLabel.text() == "25 fps"
 
 
-def test_fps_combo_falls_back_to_24_without_paired_mov(player, tmp_path):
-    player.frameRateComboBox.setCurrentText("30")
-
+def test_sequence_falls_back_to_24_fps_without_paired_mov(player, tmp_path):
     assert player.open_file("A", seq_in(tmp_path, "unpaired"))
 
-    assert player.frameRateComboBox.currentText() == "24"
+    assert player.cap_a.get(cv2.CAP_PROP_FPS) == 24
+    player.update_playback_fps()
+    assert player.labelPlaybackFPS.text() == "재생: 24 FPS" and player.transportBar.fpsLabel.text() == "24 fps"
 
 
 # ---------------------------------------------------------------- 혼합 차단

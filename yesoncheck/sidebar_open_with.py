@@ -27,23 +27,19 @@ import traceback
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QFileDialog, QMessageBox
 
-from yesoncheck import error_window, open_with, sequence_source
+from yesoncheck import error_window, open_with, sequence_source, ui_text
 from yesoncheck.sidebar_items import ALL_KIND_ROLE
 from yesoncheck.user_files import UserFileError
 
 LOG_PREFIX = "[다른 앱으로 열기]"
-OTHER_APPS_TEXT = "다른 앱으로 열기"
-REGISTER_TEXT = "앱 등록…"
-REMOVE_TEXT = "앱 지우기"
-NO_APPS_TEXT = "(등록한 앱 없음)"
-PREFS_PROBLEM_TEXT = "설정 파일을 읽지 못했습니다"
+# 메뉴의 글은 글자 표(ui_text — open_with.*)에서. 딸린 창(물음·파일 고르기)의 제목은 그 메뉴 이름을 지금 화면의 글로 인용
 OPEN_CONFIRM_COUNT = 20  # 이보다 많이 열면 먼저 물음
 APP_PICK_FILTERS = {"darwin": "앱 (*.app)", "win32": "프로그램 (*.exe)"}
 FAILURES = (OSError, RuntimeError, ValueError, UserFileError, TimeoutError)  # UserFileError는 OSError가 아님 — 따로 적음
 
 
 def _with_count(text, count):
-    return f"{text} ({count}개)" if count > 1 else text
+    return ui_text.text("open_with.count", text=text, count=count) if count > 1 else text
 
 
 def _first_frame_name(seq):
@@ -87,14 +83,14 @@ class SidebarOpenWithMixin:
         menu.addSeparator()
         menu.setToolTipsVisible(True)
         if open_with.quicktime_available(platform):
-            action = menu.addAction(_with_count(f"{open_with.QUICKTIME_LABEL}로 열기", len(movies)))
+            action = menu.addAction(_with_count(ui_text.text("open_with.app", app=open_with.QUICKTIME_LABEL), len(movies)))
             action.triggered.connect(lambda: self._open_entries_with(None, movies))
             if not movies:
                 action.setEnabled(False)
-                action.setToolTip("고른 것이 시퀀스뿐입니다 — 등록한 앱으로 여세요")
+                action.setToolTip(ui_text.text("open_with.only_sequences.tip"))
             elif len(movies) < len(entries):
-                action.setToolTip("시퀀스는 넘기지 않습니다 (영상만)")
-        submenu = menu.addMenu(_with_count(OTHER_APPS_TEXT, len(entries)))
+                action.setToolTip(ui_text.text("open_with.movies_only.tip"))
+        submenu = menu.addMenu(_with_count(ui_text.text("open_with.menu"), len(entries)))
         submenu.setToolTipsVisible(True)
         self._fill_open_with_menu(submenu, entries, platform)
 
@@ -102,25 +98,25 @@ class SidebarOpenWithMixin:
         try:
             apps = open_with.registered_apps(platform)
         except FAILURES as exc:
-            print(f"{LOG_PREFIX} {PREFS_PROBLEM_TEXT}: {open_with.prefs_path(platform)}\n{traceback.format_exc()}",
-                  file=sys.stderr, flush=True)
-            problem = submenu.addAction(PREFS_PROBLEM_TEXT)
+            print(f"{LOG_PREFIX} {ui_text.korean('open_with.prefs_problem')}: {open_with.prefs_path(platform)}\n"
+                  f"{traceback.format_exc()}", file=sys.stderr, flush=True)
+            problem = submenu.addAction(ui_text.text("open_with.prefs_problem"))
             problem.setEnabled(False)
             problem.setToolTip(f"{type(exc).__name__}: {exc}")
             apps = None
         if apps == []:
-            submenu.addAction(NO_APPS_TEXT).setEnabled(False)
+            submenu.addAction(ui_text.text("open_with.no_apps")).setEnabled(False)
         for app in apps or []:
             label = open_with.app_label(app)
             missing = open_with.app_missing(app, platform)
-            action = submenu.addAction(f"{label} (찾을 수 없음)" if missing else label)
+            action = submenu.addAction(ui_text.text("open_with.missing", app=label) if missing else label)
             action.setToolTip(app)
             action.setEnabled(not missing)
             action.triggered.connect(lambda _checked=False, app=app: self._open_entries_with(app, entries))
         submenu.addSeparator()
-        submenu.addAction(REGISTER_TEXT).triggered.connect(lambda: self._register_open_with_app(platform))
+        submenu.addAction(ui_text.text("open_with.register")).triggered.connect(lambda: self._register_open_with_app(platform))
         if apps:
-            remove = submenu.addMenu(REMOVE_TEXT)
+            remove = submenu.addMenu(ui_text.text("open_with.remove"))
             remove.setToolTipsVisible(True)
             for app in apps:
                 action = remove.addAction(open_with.app_label(app))
@@ -150,7 +146,7 @@ class SidebarOpenWithMixin:
             error_window.show_error(LOG_PREFIX, f"{label}(으)로 열지 않았습니다 — 지금 없는 파일이 있습니다 ({len(missing)}개):\n{listed}")
             return
         if len(files) > OPEN_CONFIRM_COUNT:
-            answer = QMessageBox.question(self, OTHER_APPS_TEXT, f"파일 {len(files)}개를 {label}(으)로 엽니다. 계속할까요?",
+            answer = QMessageBox.question(self, ui_text.text("open_with.menu"), f"파일 {len(files)}개를 {label}(으)로 엽니다. 계속할까요?",
                                           QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if answer != QMessageBox.Yes:
                 return
@@ -170,7 +166,7 @@ class SidebarOpenWithMixin:
 
     def _register_open_with_app(self, platform):
         start = "/Applications" if platform == "darwin" else os.environ.get("ProgramFiles", "")
-        app, _filter = QFileDialog.getOpenFileName(self, f"{OTHER_APPS_TEXT} — 앱 고르기", start, APP_PICK_FILTERS[platform])
+        app, _filter = QFileDialog.getOpenFileName(self, f"{ui_text.text('open_with.menu')} — 앱 고르기", start, APP_PICK_FILTERS[platform])
         if not app:
             return
         app = os.path.normpath(app)

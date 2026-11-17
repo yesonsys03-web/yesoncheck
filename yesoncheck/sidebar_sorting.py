@@ -112,9 +112,8 @@ class SidebarSortMixin:
         menu.setToolTipsVisible(True)
         self.sidebar_sort_actions = {}
         for mode in sidebar_sort.MODES:
-            action = menu.addAction(sidebar_sort.LABELS[mode])
+            action = menu.addAction("")  # 글·툴팁은 _sync_sidebar_sort_button이 지금 언어로 넣음
             action.setCheckable(True)
-            action.setToolTip(sidebar_sort.TIPS[mode])
             action.triggered.connect(lambda checked, chosen=mode: self.set_sidebar_sort(chosen))
             self.sidebar_sort_actions[mode] = action
         button.setMenu(menu)
@@ -130,9 +129,12 @@ class SidebarSortMixin:
         self._sync_sidebar_sort_button()
 
     def _sync_sidebar_sort_button(self):
-        """단추의 글·툴팁·메뉴 체크를 지금 기준에 맞춤. 툴팁 첫 줄은 늘 긴 글(`정렬: 종류 ▾`) — 좁아서 단추에 `↕`만 보여도 기준을 알 수 있게."""
-        self.sidebar_sort_button.setToolTip(f"{sidebar_sort.button_text(self.sidebar_sort_mode)}\n{sidebar_sort.BUTTON_TIP}")
+        """단추의 글·툴팁, 메뉴 항목의 글·툴팁·체크를 지금 기준과 지금 언어에 맞춤(기준을 바꾼 뒤·언어를 바꾼 뒤). 툴팁 첫 줄은 늘 긴 글
+        (`정렬: 종류 ▾`) — 좁아서 단추에 `↕`만 보여도 기준을 알 수 있게."""
+        self.sidebar_sort_button.setToolTip(f"{sidebar_sort.button_text(self.sidebar_sort_mode)}\n{sidebar_sort.button_tip()}")
         for mode, action in self.sidebar_sort_actions.items():
+            action.setText(sidebar_sort.label(mode))
+            action.setToolTip(sidebar_sort.tip(mode))
             action.setChecked(mode == self.sidebar_sort_mode)
         self._fit_sidebar_sort_button()
 
@@ -195,7 +197,7 @@ class SidebarSortMixin:
         # (순위가 이미 있으면 줄은 이름 순서가 아님 — 다른 기준으로 정렬해 뒀거나, 이름으로 되돌리기가 아직 미뤄진 채: 적어 둔 순위를 그대로 씀)
         self.sidebar_sort_mode = mode
         self._sync_sidebar_sort_button()
-        print(f"{SORT_LOG_PREFIX} 사이드바: {sidebar_sort.LABELS[mode]}", flush=True)
+        print(f"{SORT_LOG_PREFIX} 사이드바: {sidebar_sort.log_label(mode)}", flush=True)
         self._sidebar_seq_resort_pending = True  # Seq·All 목록도 다시 — 목록을 쓰는 중이면 Mov 줄 옮기기와 함께 끝난 뒤에 (_apply_sidebar_sort)
         self._apply_sidebar_sort(show_current=True)
 

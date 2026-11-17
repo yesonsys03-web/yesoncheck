@@ -13,11 +13,11 @@ import re
 
 import pytest
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QComboBox, QDialog, QLabel, QListWidgetItem, QPushButton, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import (QComboBox, QDialog, QLabel, QListWidgetItem, QPushButton, QScrollArea, QVBoxLayout,
+                             QWidget)
 
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 from yesoncheck.main_window_styles import DARK_STYLESHEET, LIGHT_STYLESHEET
-from yesoncheck.player_timeline import CollapsibleBox
 
 # 색만 정하는 속성 — 테마마다 달라도 됨
 COLOR_PROPERTIES = {"background", "background-color", "color", "selection-background-color", "selection-color"}
@@ -51,9 +51,9 @@ def test_theme_sheets_differ_only_in_colours():
 
 # ---------------------------------------------------------------- 창
 
-@pytest.fixture
-def player(new_player, dialogs, tmp_path, qapp):  # noqa: F811
-    window = new_player(make_config(str(tmp_path), {}))
+@pytest.fixture(params=["annotation", "ocr"])
+def player(request, new_player, dialogs, tmp_path, qapp):  # noqa: F811
+    window = new_player(make_config(str(tmp_path), {"MyShow": str(tmp_path / "MyShow")}))  # 작품 묶음도 보이게
     window.resize(1280, 900)
     window.show()
     for name in [f"SH{n:03d}_TK{1 + n % 3}.mov" for n in range(60)]:  # 스크롤바가 생길 만큼
@@ -61,8 +61,7 @@ def player(new_player, dialogs, tmp_path, qapp):  # noqa: F811
         item.setData(Qt.UserRole, "/shots/" + name)
         item.setToolTip("/shots/" + name)
         window.sidebar.addItem(item)
-    for box in window.findChildren(CollapsibleBox):
-        box.toggle_button.click()  # 접는 상자를 모두 펼침 — 안의 단추·콤보·라벨도 봄
+    window.show_tool_panel(request.param)  # 도구 패널을 엶 — 안의 단추·콤보·라벨도 봄 (주석 쪽·OCR 쪽 따로)
     settle(qapp)
     return window
 
@@ -111,10 +110,20 @@ def sizes(window, qapp):
         return {
             "목록 줄 높이": window.sidebar.visualItemRect(first).height(),
             "목록 스크롤바 굵기": window.sidebar.verticalScrollBar().width(),
-            "가운데 열 스크롤바 굵기": window.middleScrollArea.verticalScrollBar().sizeHint().width(),
+            "도구 패널 스크롤바 굵기": window.toolPanel.findChild(QScrollArea).verticalScrollBar().sizeHint().width(),
+            "도구 패널 폭": window.toolPanel.width(),
+            "도구 패널 제목 글꼴": window.toolPanel.findChild(QLabel, "toolPanelTitle").fontInfo().pixelSize(),
+            "작은 단추 높이": window.openFolderButton.height(),
+            "북마크 단추 높이": window.bookmarkMenuButton.height(),
+            "목록 단추 높이": window.listModeButton.height(),
+            "재생 줄 토글 폭": window.transportBar.wipeButton.width(),
             "메뉴 줄 글꼴": window.menuBar().fontInfo().pixelSize(),
             "목록 글꼴": window.sidebar.fontInfo().pixelSize(),
-            "단추 글꼴": window.playPauseButton.fontInfo().pixelSize(),
+            "단추 글꼴": window.playlistButton.fontInfo().pixelSize(),
+            "선택 재생 단추 높이": window.playlistButton.height(),
+            "재생 줄 프레임 칸 글꼴": window.transportBar.frameField.fontInfo().pixelSize(),
+            "재생 줄 라벨 글꼴": window.transportBar.timeLabel.fontInfo().pixelSize(),
+            "재생 줄 높이": window.transportBar.height(),
             "콤보 글꼴": window.findChild(QComboBox).fontInfo().pixelSize(),
             "개수 줄 글꼴": window.sidebar_count_label.fontInfo().pixelSize(),
             "딸린 창 라벨 글꼴": label.fontInfo().pixelSize(),

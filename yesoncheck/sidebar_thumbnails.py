@@ -42,7 +42,7 @@ from PyQt5.QtWidgets import (
 
 from yesoncheck.workers import ThumbnailLoaderWorker, ThumbnailWorker
 
-from yesoncheck import paths, thumbnails
+from yesoncheck import paths, thumbnails, ui_text
 from yesoncheck.sidebar_items import (
     THUMBNAIL_CONTEXT_ROLE,
     THUMBNAIL_FOLDER_PROBLEM,
@@ -51,6 +51,11 @@ from yesoncheck.sidebar_items import (
     THUMBNAIL_VIDEO_PROBLEM,
     ThumbnailContext,
 )
+
+# 썸네일 반복을 멈춘 까닭 — 기록 줄에는 한글 그대로(_thumbnail_pass_stopped가 돌려주는 글), 진행 막대에는 지금 언어로
+# (STOP_REASON_KEYS: 그 글 → 글자 표의 키). 한글 글은 글자 표의 한국어 글 하나에서 옴
+STOP_REASON_KEYS = {ui_text.korean(key): key for key in ("thumb.stop.closed", "thumb.stop.list_changed", "thumb.stop.list_mode")}
+STOP_CLOSED, STOP_LIST_CHANGED, STOP_LIST_MODE = STOP_REASON_KEYS
 
 
 class SidebarThumbnailsMixin:
@@ -157,7 +162,7 @@ class SidebarThumbnailsMixin:
         sizes = self.mainSplitter.sizes()
         page = self.sidebar_tabs.currentWidget()
         column = sizes[0] + list_width - page.width()
-        sizes[2] = max(0, sizes[2] - (column - sizes[0]))
+        sizes[1] = max(0, sizes[1] - (column - sizes[0]))  # 영상 칸 (스플리터: 사이드바 | 영상 | 도구 패널)
         sizes[0] = column
         self.mainSplitter.setSizes(sizes)
 
@@ -266,11 +271,11 @@ class SidebarThumbnailsMixin:
         """
         generation, thumbnail_mode = state
         if self._sidebar_scan_closed:
-            return "창을 닫음"
+            return STOP_CLOSED
         if self._sidebar_generation != generation:
-            return "목록이 바뀜"
+            return STOP_LIST_CHANGED
         if thumbnail_mode and not self.is_thumbnail_mode:
-            return "목록 모드로 바꿈"
+            return STOP_LIST_MODE
         return None
 
     def _make_thumbnails(self, to_generate, state):
@@ -284,14 +289,15 @@ class SidebarThumbnailsMixin:
         import gc
         total = len(to_generate)
         bar = self.thumbnailProgressBar
+        self._thumbnail_bar_timer.stop()  # 진행 막대는 만드는 동안만 보임 — 앞 반복이 걸어 둔 '숨기기'를 거둠
         if total > 0:
             bar.setMaximum(total)
             bar.setValue(0)
-            bar.setFormat('썸네일 생성 중: %v/%m')
+            bar.setFormat(ui_text.text("thumb.making"))
         else:
             bar.setMaximum(100)
             bar.setValue(100)
-            bar.setFormat('썸네일 모두 디스크에 저장됨')
+            bar.setFormat(ui_text.text("thumb.all_saved"))
         bar.setVisible(True)
         batch_size = 3
         started = 0
@@ -320,11 +326,13 @@ class SidebarThumbnailsMixin:
             gc.collect()
         if stopped:
             print(f"썸네일 만들기를 멈춤 ({stopped}, {done}/{total}개에서)")
-            bar.setFormat(f'썸네일 생성 멈춤 ({stopped})')
+            bar.setFormat(ui_text.text("thumb.stopped", reason=ui_text.text(STOP_REASON_KEYS[stopped])))
+            self._thumbnail_bar_timer.start()  # 끝난 글자를 잠깐 보인 뒤 숨김
             return started, stopped
         if total > 0:
             bar.setValue(total)
-            bar.setFormat('썸네일 생성 완료')
+            bar.setFormat(ui_text.text("thumb.done"))
+        self._thumbnail_bar_timer.start()  # 끝난 글자를 잠깐 보인 뒤 숨김
         return started, None
 
     def cleanup_thumbnail_workers(self):

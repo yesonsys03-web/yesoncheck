@@ -30,8 +30,10 @@ from tests.prores_clips import frame_number, make_numbered_clip, make_numbered_h
 from tests.test_sequence_capture import make_seq
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 from yesoncheck import error_window, external_tools, hover_keyframes, hover_strip, hover_strip_builder, player_hover_thumbs
-from yesoncheck.hover_strip import LOG_PREFIX, MENU_TEXT
+from yesoncheck.hover_strip import LOG_PREFIX
 from yesoncheck.slider_preview import slider_value_at
+
+MENU_TEXT = "슬라이더 썸네일"  # 한국어 화면의 메뉴 글 (글자 표 settings.hover_thumbs — 시험은 한국어로 돎)
 
 CLIP_COUNT = 48
 SECOND_COUNT = 24

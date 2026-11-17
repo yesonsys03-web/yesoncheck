@@ -2,7 +2,7 @@
 
 - Windows 10·11은 앱·설치 파일이 기본 앱을 바꾸지 못하게 한다 → 이 사용자(HKCU — 관리자 권한 없이)에 YesonCheck를 .mov·.mp4를
   여는 앱으로 등록만 하고(association_entries: ProgID YesonCheck.Video, 확장자의 OpenWithProgids, Applications\\<exe>\\
-  SupportedTypes, Capabilities + RegisteredApplications), 기본 앱은 사용자가 한 번 "항상"으로 고른다. Help → MENU_TEXT가 Windows
+  SupportedTypes, Capabilities + RegisteredApplications), 기본 앱은 사용자가 한 번 "항상"으로 고른다. Help → 동영상 기본 앱 설정 열기…(MENU_KEY)가 Windows
   기본 앱 설정 화면을 연다(open_default_apps_settings — Windows 11(2023-04 업데이트 이후)은 YesonCheck 항목으로 바로, 그 전·
   Windows 10은 기본 앱 화면).
 - 등록하는 곳은 둘이고 내용이 같다(tests/test_file_associations.py가 비교):
@@ -43,7 +43,7 @@ REGISTERED_APPLICATIONS_KEY = r"Software\RegisteredApplications"
 OWNED_KEYS = (rf"Software\Classes\{PROG_ID}", rf"Software\Classes\Applications\{EXE_NAME}", r"Software\YesonCheck")
 
 SETTINGS_URI = f"ms-settings:defaultapps?registeredAppUser={REGISTERED_APP}"
-MENU_TEXT = "동영상 기본 앱 설정 열기…"
+MENU_KEY = "help.default_apps_settings"  # 글자 표(ui_text)의 키 — Help 메뉴 항목 "동영상 기본 앱 설정 열기…"
 LOG_PREFIX = "[파일 연결]"  # 기록 줄의 머리 (_log·오류 창 — error_window)
 REGISTER_FAILED_TEXT = ("동영상(.mov·.mp4)을 여는 앱으로 YesonCheck를 이 계정에 등록하지 못했습니다 — 탐색기의 '연결 프로그램'·"
                         "Windows 기본 앱 설정에 YesonCheck가 보이지 않을 수 있습니다.")
@@ -171,7 +171,7 @@ def register_at_start() -> None:
 
 
 def open_default_apps_settings() -> None:
-    """Help → MENU_TEXT: Windows 기본 앱 설정 화면(SETTINGS_URI — 지원하는 Windows 11은 YesonCheck 항목으로 바로). 열지 못하면
+    """Help → 동영상 기본 앱 설정 열기…: Windows 기본 앱 설정 화면(SETTINGS_URI — 지원하는 Windows 11은 YesonCheck 항목으로 바로). 열지 못하면
     오류 창 (무엇을·왜)."""
     try:
         _open_uri(SETTINGS_URI)

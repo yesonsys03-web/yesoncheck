@@ -16,10 +16,16 @@ from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_
 # — 어두운 쪽은 위젯에 직접 넣던 색 그대로)을 더하고, 밝은 시트는 QMainWindow 규칙을 QWidget 규칙 뒤로 옮김(그 옮김은 글자 수 그대로)
 # 같은 날 뒤이어(tests/test_theme_geometry.py): 밝은 시트를 어두운 시트와 같은 틀로 다시 씀 — 색이 아닌 속성(글꼴 크기·여백·최소 높이·
 # 스크롤바·슬라이더 치수)이 달라 테마를 바꾸면 위젯이 전부 움직였음. 어두운 시트는 그대로
-DARK_SHA256 = "d07dce1e05f40622f83cc2859f1b3aea46d3fcd478ca121ae885cbae8c5cddb8"  # 어두운 시트, 3,519자
-LIGHT_SHA256 = "f746670c9b6831199bbe562636ea9534711d57b007d0f59704350554ea8874b5"  # 밝은 시트, 4,058자
-DARK_LENGTH = 3519
-LIGHT_LENGTH = 4058
+# 2026-11-16 (재생 줄 — tests/test_transport_bar.py·test_transport_player.py): 두 시트에 재생 줄의 색 규칙(`QWidget#transportBar …` —
+# 바탕·단추·프레임 칸·볼륨 슬라이더, 같은 선택자·같은 치수에 색만 다름)을 더함. 그 밖의 규칙은 글자 그대로
+# 같은 날 뒤이어 (가운데 열 없애기 — tests/test_tool_panel_player.py·test_sidebar_layout.py·test_light_theme.py): 재생 줄의 도구 토글
+# (`QToolButton#transportToggle`), 도구 패널(`#toolPanel`·`#toolPanelHeader`·`#toolPanelTitle`·`#toolPanelClose`·`#toolPanelSection`),
+# 사이드바의 작은 단추(`#sidebarTool`)·선택 재생 단추(`#playlistButton`·`#playlistEndButton`)·썸네일 진행 막대(`#thumbnailProgress`)의
+# 규칙을 두 시트에 더하고(중립 색 — 같은 선택자·같은 치수), 접는 상자 머리의 규칙(`QPushButton#collapsibleToggle`)은 지움(상자가 없어짐)
+DARK_SHA256 = "6c10aaa7b944d67f1508cf791a2054d5481d40f6171e37edc15b63d795eaf326"  # 어두운 시트, 7,623자
+LIGHT_SHA256 = "b2076fd255fdf7d6ccd85c9076b709c04230b3c991f340daa3c8d240561f7f71"  # 밝은 시트, 8,159자
+DARK_LENGTH = 7623
+LIGHT_LENGTH = 8159
 
 
 def sha256_of(sheet):

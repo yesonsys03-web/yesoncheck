@@ -173,7 +173,7 @@ def test_sequence_only_folder_fills_seq_list_without_no_video_warning(player, di
     assert seq_labels(player) == ["tk1 (0001–0004, 4프레임)"]
     assert dialogs.warnings == []  # 시퀀스가 있는 폴더에 '영상이 없습니다'를 띄우지 않음
     assert player.sidebar_tabs.currentIndex() == 1  # 볼 것이 Seq 탭에만 있으므로 그 탭을 보여 줌
-    assert not player.playSelectedButton.isEnabled()  # 탭 전환의 부수 효과도 그대로 (Seq 탭에서는 선택 재생 끔)
+    assert not player.playSelectedPauseButton.isEnabled()  # 탭 전환의 부수 효과도 그대로 (Seq 탭에서는 선택 재생 끔)
 
 
 def test_folder_with_videos_keeps_the_current_tab(player, tmp_path):
@@ -181,7 +181,7 @@ def test_folder_with_videos_keeps_the_current_tab(player, tmp_path):
     player.load_videos_from_folder(str(shot(tmp_path)))
 
     assert player.sidebar_tabs.currentIndex() == 0
-    assert player.playSelectedButton.isEnabled()
+    assert player.playSelectedPauseButton.isEnabled()
 
 
 def test_empty_folder_still_warns_no_videos(player, dialogs, tmp_path):
@@ -262,7 +262,7 @@ def test_dropped_sequence_only_folder_shows_seq_tab_without_false_warning(player
     assert seq_labels(player) == ["tk7 (0001–0004, 4프레임)"]
     assert player.sidebar_tabs.currentIndex() == 1
     assert dialogs.warnings == []
-    assert not player.playSelectedButton.isEnabled()  # 탭 전환의 부수 효과도 그대로
+    assert not player.playSelectedPauseButton.isEnabled()  # 탭 전환의 부수 효과도 그대로
     assert player._folder_sequences.get(paths.path_key(str(folder)), []) == []  # 읽어 둔 시퀀스를 썼음 (남지 않음)
 
 
@@ -347,25 +347,14 @@ def test_tab_switch_does_no_io(player, tmp_path, monkeypatch):
 
 
 def test_selected_play_disabled_on_seq_tab(player):
-    assert player.playSelectedButton.isEnabled()
+    """선택 재생 단추(고른 영상 이어 재생 — 2026-11-16부터 단추 하나: 옛 이름 playSelectedPauseButton은 그 어댑터)."""
+    assert player.playSelectedPauseButton.isEnabled()
 
     player.sidebar_tabs.setCurrentIndex(1)
-    assert not player.playSelectedButton.isEnabled()  # 재생목록 기계장치는 mov 경로 전제
+    assert not player.playSelectedPauseButton.isEnabled()  # 재생목록 기계장치는 mov 경로 전제
 
     player.sidebar_tabs.setCurrentIndex(0)
-    assert player.playSelectedButton.isEnabled()
-
-
-def test_both_selected_play_buttons_disabled_on_seq_tab(player):
-    """'Play Selected'뿐 아니라 짝 단추 'Selected Play'도: 눌리면 안 보이는 Mov 목록의 선택으로 재생을 시작하므로."""
-    assert player.playSelectedButton.isEnabled() and player.playSelectedPauseButton.isEnabled()
-
-    player.sidebar_tabs.setCurrentIndex(1)
-    assert not player.playSelectedButton.isEnabled()
-    assert not player.playSelectedPauseButton.isEnabled()
-
-    player.sidebar_tabs.setCurrentIndex(0)  # Mov 탭은 예전 그대로
-    assert player.playSelectedButton.isEnabled() and player.playSelectedPauseButton.isEnabled()
+    assert player.playSelectedPauseButton.isEnabled()
 
 
 def test_selected_pause_button_stays_disabled_after_stop_video_on_seq_tab(player, tmp_path):
@@ -387,7 +376,9 @@ def test_selected_pause_button_stays_usable_while_playlist_plays_on_seq_tab(play
     player.sidebar_tabs.setCurrentIndex(1)
 
     assert player.playSelectedPauseButton.isEnabled()
-    assert not player.playSelectedButton.isEnabled()  # 새 선택 재생을 시작하는 단추는 여전히 꺼짐
+    # 새 선택 재생을 시작하는 길(Playback 메뉴의 '고른 영상 이어 재생')은 여전히 꺼짐
+    player.main_menus["playback"].aboutToShow.emit()
+    assert not player.menu_actions["menu.playback.playlist"].isEnabled()
 
     player.stop_video()  # 선택 재생 끝
     assert not player.is_playlist_playing and not player.playSelectedPauseButton.isEnabled()

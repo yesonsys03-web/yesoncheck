@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-from yesoncheck import hover_strip, mac_prefs, windows_display
+from yesoncheck import hover_strip, mac_prefs, ui_text, windows_display
 from yesoncheck.frame_cache_budget import gb
 from yesoncheck.user_files import UserFileError
 
@@ -272,5 +272,5 @@ def test_enabled_cache():
 
 def test_constants():
     assert (hover_strip.THUMB_WIDTH, hover_strip.MAX_THUMBS, hover_strip.MAX_FILE_BYTES) == (320, 500, 4_000_000_000)
-    assert hover_strip.PREF_KEY == "slider_thumbnails" and hover_strip.MENU_TEXT == "슬라이더 썸네일"
+    assert hover_strip.PREF_KEY == "slider_thumbnails" and ui_text.text(hover_strip.MENU_KEY) == "슬라이더 썸네일"
     assert hover_strip.LOG_PREFIX == "[슬라이더 썸네일]"

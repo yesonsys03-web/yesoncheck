@@ -405,13 +405,9 @@ class PlayerPlaybackMixin:
                 self.filename_b = file_path
                 self.cap_b = cap
 
-            if self.filename_a and self.filename_b:
-                self.filenameLabel.setText(f"A: {os.path.basename(self.filename_a)}, B: {os.path.basename(self.filename_b)}")
-            elif self.filename_a:
-                self.filenameLabel.setText(f"A: {os.path.basename(self.filename_a)}")
+            self.show_file_names()
 
             self.videoWidget.initial_fit = True
-            self.detect_fps()
             self.labelPlaybackFPS.setText('재생: 대기')
             # 스레드 안전성을 위해 QTimer.singleShot 대신 직접 호출
             mark = time.perf_counter()
@@ -507,7 +503,7 @@ class PlayerPlaybackMixin:
         - 원하면 ffprobe 한 번(probe_for_open — 못 읽으면 파이프와 같은 규칙: auto는 기록 뒤 None이라 cv2, pipe는 PipeCaptureError)으로 네이티브
           게이트를 보고 그 probe를 파이프 판정에 그대로 넘김(ffprobe를 두 번 돌리지 않음). 양성이면 네이티브 캡처(기록 줄은 open_native_capture가
           남김). 못 열면(NativeCaptureError — PyObjC 없음도 생성자가 이것으로 감쌈) 스택 트레이스·기록 한 줄·오류 창(끝 줄은 탈출구 안내
-          NATIVE_ESCAPE_HINT)으로 알린 뒤 파이프로 계속(스펙 §5.3 — 조용한 폴백이 아니라 알린 뒤 이어감). 음성이면 사유 한 줄
+          native_escape_hint())으로 알린 뒤 파이프로 계속(스펙 §5.3 — 조용한 폴백이 아니라 알린 뒤 이어감). 음성이면 사유 한 줄
           `[재생] 네이티브(VideoToolbox): 아님 — <사유>: <이름>` 뒤 파이프.
         PipeCaptureError(pipe 모드의 ffprobe 실패·게이트 불통과, 파이프를 열지 못함)는 그대로 올라가 _open_movie_capture의 파이프 오류 창으로.
         그 밖의 예외(ToolNotFoundError·코드 버그)도 잡지 않음."""
@@ -532,7 +528,7 @@ class PlayerPlaybackMixin:
                 print(f"{mac_native_source.NATIVE_LOG_PREFIX} 열지 못해 ffmpeg 파이프로 계속: {name}")
                 QMessageBox.critical(self, "영상을 열 수 없음(네이티브)",
                                      f"VideoToolbox(네이티브)로 영상을 열지 못해 ffmpeg 파이프로 계속합니다: {file_path}\n"
-                                     f"이유: {type(e).__name__}: {e}\n\n{details}\n{mac_native_source.NATIVE_ESCAPE_HINT}")
+                                     f"이유: {type(e).__name__}: {e}\n\n{details}\n{mac_native_source.native_escape_hint()}")
         return maybe_pipe_capture(file_path, full_cache=True, probe=probe)
 
     def _open_sequence_capture(self, file_path):
@@ -590,7 +586,18 @@ class PlayerPlaybackMixin:
             self.frame_b = None
         if cap is not None:
             cap.release()
-        self.filenameLabel.setText(f"A: {os.path.basename(self.filename_a)}" if self.filename_a else "")
+        self.show_file_names()
+
+    def show_file_names(self):
+        """재생 줄의 파일 이름: 'A: a.mov' — B는 화면에 보일 때(와이프가 켜진 동안)만 ', B: b.mov'를 붙임 (사용자 결정 2026-11-17 —
+        예전에는 B를 열면 와이프를 꺼도 B 이름이 남았음). 연 A가 없으면 빈 글. 영상을 열고 닫을 때·와이프를 켜고 끌 때 부름."""
+        if not self.filename_a:
+            self.filenameLabel.setText("")
+            return
+        text = f"A: {os.path.basename(self.filename_a)}"
+        if self.filename_b and self.videoWidget.wipeEnabled:
+            text += f", B: {os.path.basename(self.filename_b)}"
+        self.filenameLabel.setText(text)
 
     def _drop_audio_media(self):
         """소리 재생기가 연 영상을 멈추고 놓음 (멈추기만 하면 재생 버튼이 옛 영상의 소리를 다시 냄).
@@ -710,34 +717,6 @@ class PlayerPlaybackMixin:
                 gpu_frame = cv2.UMat(frame)
                 return cv2.cvtColor(gpu_frame, cv2.COLOR_BGR2RGB).get()
         return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-    def detect_fps(self):
-        if self.cap_a:
-            fps = self.cap_a.get(cv2.CAP_PROP_FPS)
-            if fps > 0:
-                # 일반적인 비표준 FPS 값들 감지 (23.976, 29.97, 59.94 등)
-                # 23.976 감지 (23.98 근사값도 처리)
-                if abs(fps - 23.976) < 0.01:
-                    fps_str = "23.976"
-                # 29.97 감지
-                elif abs(fps - 29.97) < 0.01:
-                    fps_str = "29.97"
-                # 59.94 감지
-                elif abs(fps - 59.94) < 0.01:
-                    fps_str = "59.94"
-                # 정수 FPS인 경우
-                elif fps == int(fps):
-                    fps_str = str(int(fps))
-                # 기타 소수점 FPS는 정확한 값 사용
-                else:
-                    fps_str = f"{fps:.3f}"
-                
-                # 콤보박스에 값이 없으면 추가
-                existing_items = [self.frameRateComboBox.itemText(i) for i in range(self.frameRateComboBox.count())]
-                if fps_str not in existing_items:
-                    self.frameRateComboBox.addItem(fps_str)
-                
-                self.frameRateComboBox.setCurrentText(fps_str)
 
     def display_first_frame(self):
         if self.cap_a:
@@ -2092,33 +2071,14 @@ class PlayerPlaybackMixin:
         
         # V 키 처리 (한글 ㅍ과 영문 V 모두 지원)
         if key == Qt.Key_V or text == 'ㅍ':
-            self.controls_visible = not self.controls_visible
-            print(f"V key pressed (key: {key}, text: '{text}') - controls_visible: {self.controls_visible}")  # 디버깅 출력
-            valid_widgets = self.get_valid_control_widgets()
-            for widget in valid_widgets:
-                try:
-                    widget.setVisible(self.controls_visible)
-                except (RuntimeError, AttributeError):
-                    continue
-            self.apply_middle_panel_state()
-            # 컨트롤이 숨겨지면 오버레이를 표시하고, 컨트롤이 보이면 오버레이를 숨김
-            if hasattr(self, 'overlayFrame'):
-                if not self.controls_visible:
-                    print("Showing overlay controls")  # 디버깅 출력
-                    # 오버레이를 강제로 표시
-                    self.overlayFrame.setVisible(True)
-                    self.overlayFrame.raise_()
-                    self.show_overlay_controls()
-                else:
-                    print("Hiding overlay controls")  # 디버깅 출력
-                    self.hide_overlay_controls()
+            self.toggle_controls()  # 컨트롤 전체 숨기기/되돌리기 + 오버레이 (player_tools — eventFilter의 V와 같은 일)
             QTimer.singleShot(100, self.force_focus)  # V키 후 포커스 복원
             event.accept()
             return
 
-        # N 키 처리 (한글 ㅜ와 영문 N 모두 지원) — 가운데 컨트롤 열 보이기/숨기기
+        # N 키 처리 (한글 ㅜ와 영문 N 모두 지원) — 도구 패널(주석·OCR) 열고 닫기
         if key == Qt.Key_N or text == 'ㅜ':
-            self.toggle_middle_panel()
+            self.toggle_tool_panel()
             QTimer.singleShot(100, self.force_focus)
             event.accept()
             return
@@ -2126,6 +2086,11 @@ class PlayerPlaybackMixin:
         # P 키 처리 (한글 ㅔ와 영문 P 모두 지원) — 북마크 관리 창 (Bookmarks 단추와 같음)
         if key == Qt.Key_P or text == 'ㅔ':
             self.show_bookmarks()
+            event.accept()
+            return
+
+        # 메뉴 항목의 단축키 O·I·L·W (한글 ㅐ·ㅑ·ㅣ·ㅈ) — 영상 A 열기·폴더 열기·반복 재생·와이프 켜기 (player_menus.KEY_SHORTCUTS)
+        if self.run_key_shortcut(event):
             event.accept()
             return
 
@@ -2185,10 +2150,14 @@ class PlayerPlaybackMixin:
             self.prev_frame()
         elif key in [Qt.Key_Period, Qt.Key_Right]: 
             self.next_frame()
-        elif key == Qt.Key_Space: 
+        elif key == Qt.Key_Space:
             self.toggle_play_pause()
-        elif key in [Qt.Key_Plus, Qt.Key_Equal, Qt.Key_2]: 
-            print("Zoom in triggered"); 
+        elif key == Qt.Key_Home:  # 재생 줄의 '처음' 단추와 같음 (player_transport)
+            self.go_to_first()
+        elif key == Qt.Key_End:  # 재생 줄의 '끝' 단추와 같음
+            self.go_to_last()
+        elif key in [Qt.Key_Plus, Qt.Key_Equal, Qt.Key_2]:
+            print("Zoom in triggered");
             # 마우스 커서 위치를 비디오 위젯 좌표로 변환하여 전달
             cursor_pos = self.videoWidget.mapFromGlobal(self.cursor().pos())
             self.videoWidget.zoom_in(cursor_pos)
@@ -2375,7 +2344,6 @@ class PlayerPlaybackMixin:
                 widget.setVisible(self.controls_visible)
             except (RuntimeError, AttributeError):
                 continue
-        self.apply_middle_panel_state()
 
     def wheelEvent(self, event):
         """전역 휠 이벤트 처리 - 사이드바를 제외한 모든 영역에서 프레임 이동"""
@@ -2573,9 +2541,11 @@ class PlayerPlaybackMixin:
         self._media_volume = volume
         if self._media_player is not None:
             self._media_player.setVolume(volume)
-        # 볼륨 퍼센트 레이블 업데이트
-        if hasattr(self, 'volumePercentLabel'):
-            self.volumePercentLabel.setText(f"{volume}%")
+        # 재생 줄의 볼륨 슬라이더(와 그 툴팁의 퍼센트)를 실제 볼륨에 맞춤 — V 모드의 오버레이 볼륨으로 바꿨을 때도.
+        # (슬라이더가 스스로 바뀌어 여기 온 것이면 값이 이미 같아 아무것도 안 함; 2026-11-16 전에는 퍼센트 라벨을 고쳤음)
+        slider = getattr(self, 'volumeSlider', None)
+        if slider is not None and slider.value() != volume:
+            slider.setValue(volume)
 
     def on_fit_to_window_changed(self, is_fit):
         self.is_fit_to_window = is_fit
@@ -2601,6 +2571,7 @@ class PlayerPlaybackMixin:
     def toggle_wipe_effect(self, state):
         enabled = state == Qt.Checked
         self.videoWidget.toggleWipeEffect(enabled)
+        self.show_file_names()  # B 이름은 와이프가 켜진 동안만
         self.wipeXButton.setEnabled(enabled)
         self.wipeYButton.setEnabled(enabled)
         if not enabled:

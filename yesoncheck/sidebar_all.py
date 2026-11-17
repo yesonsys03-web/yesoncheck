@@ -18,7 +18,7 @@ from PyQt5.QtCore import QItemSelection, QItemSelectionModel, Qt, QTimer
 from PyQt5.QtGui import QBrush, QColor
 from PyQt5.QtWidgets import QMenu
 
-from yesoncheck import paths, sidebar_sort
+from yesoncheck import paths, sidebar_sort, ui_text
 from yesoncheck.file_names import natural_key
 from yesoncheck.sidebar_counts import count_text
 from yesoncheck.sidebar_items import ALL_KIND_ROLE
@@ -265,7 +265,7 @@ class SidebarAllMixin:
             self.all_sidebar.clearSelection()
             item.setSelected(True)
         menu = QMenu(self.all_sidebar)
-        menu.addAction("Mov만 모두 선택").triggered.connect(self.select_all_movs)
+        menu.addAction(ui_text.text("side_menu.all.select_movs")).triggered.connect(self.select_all_movs)
         snapshot = None
         if item is not None:
             snapshot = self._snapshot_source_selections()

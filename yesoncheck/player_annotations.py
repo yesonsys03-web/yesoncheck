@@ -12,7 +12,6 @@ from PyQt5.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFileDialog,
-    QFrame,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -22,14 +21,13 @@ from PyQt5.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
-    QScrollArea,
     QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
-from yesoncheck import external_tools, paths, user_files
+from yesoncheck import external_tools, paths, ui_text, user_files
 from yesoncheck.user_files import UserFileError
 from yesoncheck.annotation_export import AnnotationExportWorker
 from yesoncheck.annotation_burn import burn_annotations_on_frame
@@ -52,9 +50,17 @@ from yesoncheck.frame_annotations import (
     is_annotation_storage_writable,
     new_annotation_id,
 )
-from yesoncheck.player_timeline import CollapsibleBox
+from yesoncheck.window_layout import VerticalScrollArea
 
-ANNOTATION_PANEL_MAX_HEIGHT = 300
+ANNOTATION_PAGE_MARGIN = 10
+ANNOTATION_LIST_MINIMUM_HEIGHT = 90  # 패널이 낮아도 주석 목록에 남기는 높이 (그보다 낮으면 쪽이 스크롤)
+# 콤보의 항목: (값 — itemData, 글자 표의 키). 값은 코드가 쓰고(currentData) 글은 언어를 따름
+ANNOTATION_TOOLS = (("text", "annot.tool.text"), ("rect", "annot.tool.rect"), ("ellipse", "annot.tool.ellipse"),
+                    ("line", "annot.tool.line"), ("arrow", "annot.tool.arrow"))
+ANNOTATION_COLORS = (("#ff3333", "annot.color.red"), ("#ffcc00", "annot.color.yellow"), ("#33cc66", "annot.color.green"),
+                     ("#33aaff", "annot.color.sky"), ("#ffffff", "annot.color.white"))
+# 주석 종류 → 상태 글·목록 항목에 보이는 이름의 키 (한국어는 예전부터 보이던 글 — 도형은 내부 이름 그대로)
+ANNOTATION_KIND_KEYS = {kind: f"annot.kind.{kind}" for kind in ("text", "rect", "ellipse", "line", "arrow")}
 
 
 class PlayerAnnotationsMixin:
@@ -78,61 +84,53 @@ class PlayerAnnotationsMixin:
         self.annotation_export_dir = ""
         self._load_annotation_export_settings()
         self.annotation_ui_widgets = []
+        # 화면 글자는 글자 표(ui_text)에서 — 언어가 바뀌면 retranslate_annotation_page가 다시 넣음:
+        self._annotation_texts = []  # 고정된 글·툴팁: (글을 넣는 함수, 글자 표 키) — _annotation_text
+        self._annotation_shown = {}  # 상태에 따라 바뀌는 라벨 → 그 글을 지금 언어로 만드는 함수 — _show_annotation_line
 
-        self.annotationModeButton = QPushButton("주석 모드")
+        self.annotationModeButton = QPushButton()
+        self._annotation_text(self.annotationModeButton.setText, "annot.mode")
         self.annotationModeButton.setCheckable(True)
         self.annotationModeButton.setStyleSheet(ANNOTATION_MODE_BUTTON_STYLE)
-        self.annotationModeButton.setToolTip(
-            "활성화 후 도형을 그리거나 텍스트를 입력합니다.\n"
-            "기존 주석을 클릭하면 자동으로 편집(이동·크기 조절)할 수 있습니다."
-        )
+        self._annotation_text(self.annotationModeButton.setToolTip, "annot.mode.tip")
         self.annotationModeButton.toggled.connect(self.toggle_annotation_mode)
 
-        tool_row = QLabel("도구:")
+        tool_row = self._annotation_label("annot.tool")
         self.annotationToolCombo = QComboBox()
-        self.annotationToolCombo.addItem("텍스트", "text")
-        self.annotationToolCombo.addItem("사각형", "rect")
-        self.annotationToolCombo.addItem("타원", "ellipse")
-        self.annotationToolCombo.addItem("선", "line")
-        self.annotationToolCombo.addItem("화살표", "arrow")
+        for value, key in ANNOTATION_TOOLS:
+            self.annotationToolCombo.addItem(ui_text.text(key), value)
         self.annotationToolCombo.currentIndexChanged.connect(self.on_annotation_tool_changed)
 
-        color_row = QLabel("색상:")
+        color_row = self._annotation_label("annot.color")
         self.annotationColorCombo = QComboBox()
-        for label, value in [
-            ("빨강", "#ff3333"),
-            ("노랑", "#ffcc00"),
-            ("초록", "#33cc66"),
-            ("하늘", "#33aaff"),
-            ("흰색", "#ffffff"),
-        ]:
-            self.annotationColorCombo.addItem(label, value)
+        for value, key in ANNOTATION_COLORS:
+            self.annotationColorCombo.addItem(ui_text.text(key), value)
         self.annotationColorCombo.currentIndexChanged.connect(self.on_annotation_color_changed)
 
         self.annotationFontSizeSpin = QSpinBox()
         self.annotationFontSizeSpin.setRange(MIN_FONT_SIZE, MAX_FONT_SIZE)
         self.annotationFontSizeSpin.setValue(DEFAULT_FONT_SIZE)
         self.annotationFontSizeSpin.setSuffix(" px")
-        self.annotationFontSizeSpin.setToolTip("텍스트 주석 크기 (선택 항목 또는 새 텍스트에 적용)")
+        self._annotation_text(self.annotationFontSizeSpin.setToolTip, "annot.font_size.tip")
         self.annotationFontSizeSpin.valueChanged.connect(self.on_annotation_font_size_changed)
 
         font_size_row = QWidget()
         font_size_layout = QHBoxLayout(font_size_row)
         font_size_layout.setContentsMargins(0, 0, 0, 0)
-        font_size_layout.addWidget(QLabel("텍스트 크기:"))
+        font_size_layout.addWidget(self._annotation_label("annot.font_size"))
         font_size_layout.addWidget(self.annotationFontSizeSpin)
 
         self.annotationStrokeWidthSpin = QSpinBox()
         self.annotationStrokeWidthSpin.setRange(MIN_STROKE_WIDTH, MAX_STROKE_WIDTH)
         self.annotationStrokeWidthSpin.setValue(DEFAULT_STROKE_WIDTH)
         self.annotationStrokeWidthSpin.setSuffix(" px")
-        self.annotationStrokeWidthSpin.setToolTip("도형·선·화살표 굵기 (선택 항목 또는 새 도형에 적용)")
+        self._annotation_text(self.annotationStrokeWidthSpin.setToolTip, "annot.stroke.tip")
         self.annotationStrokeWidthSpin.valueChanged.connect(self.on_annotation_stroke_width_changed)
 
         stroke_row = QWidget()
         stroke_layout = QHBoxLayout(stroke_row)
         stroke_layout.setContentsMargins(0, 0, 0, 0)
-        stroke_layout.addWidget(QLabel("선 굵기:"))
+        stroke_layout.addWidget(self._annotation_label("annot.stroke"))
         stroke_layout.addWidget(self.annotationStrokeWidthSpin)
 
         self._range_controls_updating = False
@@ -142,10 +140,7 @@ class PlayerAnnotationsMixin:
         self.annotationRangeStartSpin.setValue(1)
         self.annotationRangeStartSpin.setKeyboardTracking(False)
         self.annotationRangeStartSpin.setMinimumWidth(72)
-        self.annotationRangeStartSpin.setToolTip(
-            "주석이 보이기 시작하는 프레임 (1부터 시작)\n"
-            "입력 후 Enter 또는 다른 칸을 클릭하세요."
-        )
+        self._annotation_text(self.annotationRangeStartSpin.setToolTip, "annot.range.start.tip")
         self.annotationRangeStartSpin.editingFinished.connect(self.on_annotation_range_committed)
         self.annotationRangeStartSpin.valueChanged.connect(self.on_annotation_range_committed)
 
@@ -155,48 +150,44 @@ class PlayerAnnotationsMixin:
         self.annotationRangeEndSpin.setValue(1)
         self.annotationRangeEndSpin.setKeyboardTracking(False)
         self.annotationRangeEndSpin.setMinimumWidth(72)
-        self.annotationRangeEndSpin.setToolTip(
-            "주석이 보이기 끝나는 프레임 (시작 프레임 이상)\n"
-            "입력 후 Enter 또는 다른 칸을 클릭하세요."
-        )
+        self._annotation_text(self.annotationRangeEndSpin.setToolTip, "annot.range.end.tip")
         self.annotationRangeEndSpin.editingFinished.connect(self.on_annotation_range_committed)
         self.annotationRangeEndSpin.valueChanged.connect(self.on_annotation_range_committed)
 
         range_row = QWidget()
         range_layout = QHBoxLayout(range_row)
         range_layout.setContentsMargins(0, 0, 0, 0)
-        range_layout.addWidget(QLabel("표시 프레임:"))
-        range_layout.addWidget(QLabel("시작"))
+        range_layout.addWidget(self._annotation_label("annot.range"))
+        range_layout.addWidget(self._annotation_label("annot.range.start"))
         range_layout.addWidget(self.annotationRangeStartSpin)
-        range_layout.addWidget(QLabel("~ 끝"))
+        range_layout.addWidget(self._annotation_label("annot.range.end"))
         range_layout.addWidget(self.annotationRangeEndSpin)
 
         self._style_controls_updating = False
 
         self.annotationListWidget = QListWidget()
-        self.annotationListWidget.setMaximumHeight(120)
-        self.annotationListWidget.setToolTip(
-            "전체 주석 목록 · 클릭하면 시작 프레임으로 이동"
-        )
+        self.annotationListWidget.setMinimumHeight(ANNOTATION_LIST_MINIMUM_HEIGHT)
+        self._annotation_text(self.annotationListWidget.setToolTip, "annot.list.tip")
         self.annotationListWidget.itemSelectionChanged.connect(self.on_annotation_selection_changed)
 
-        self.annotationDeleteButton = QPushButton("선택 주석 삭제")
+        self.annotationDeleteButton = QPushButton()
+        self._annotation_text(self.annotationDeleteButton.setText, "annot.delete")
         self.annotationDeleteButton.clicked.connect(self.delete_selected_annotation)
 
-        self.annotationClearFrameButton = QPushButton("현재 프레임에 보이는 주석 전체 삭제")
+        self.annotationClearFrameButton = QPushButton()
+        self._annotation_text(self.annotationClearFrameButton.setText, "annot.clear_frame")
         self.annotationClearFrameButton.clicked.connect(self.clear_current_frame_annotations)
 
-        self.annotationExportButton = QPushButton("주석 포함 영상보내기")
-        self.annotationExportButton.setToolTip(
-            "주석이 픽셀에 박힌 새 영상 파일을 생성합니다.\n"
-            "먼저 아래에서 보내기 저장 폴더를 선택하세요."
-        )
+        self.annotationExportButton = QPushButton()
+        self._annotation_text(self.annotationExportButton.setText, "annot.export")
+        self._annotation_text(self.annotationExportButton.setToolTip, "annot.export.tip")
         self.annotationExportButton.clicked.connect(self.export_annotated_video)
 
-        self.annotationExportDirButton = QPushButton("보내기 저장 폴더 선택")
+        self.annotationExportDirButton = QPushButton()
+        self._annotation_text(self.annotationExportDirButton.setText, "annot.export_dir.choose")
         self.annotationExportDirButton.clicked.connect(self.choose_annotation_export_dir)
 
-        self.annotationExportDirLabel = QLabel("보내기 저장 폴더: 미지정")
+        self.annotationExportDirLabel = QLabel("")
         self.annotationExportDirLabel.setWordWrap(True)
         self.annotationExportDirLabel.setStyleSheet("color: #aaaaaa; font-size: 11px;")
         self._update_annotation_export_dir_label()
@@ -205,8 +196,9 @@ class PlayerAnnotationsMixin:
         self.annotationStorageLabel.setWordWrap(True)
         self.annotationStorageLabel.setStyleSheet("color: #aaaaaa; font-size: 11px;")
 
-        self.annotationStatusLabel = QLabel("주석: 없음 (자동 저장)")
+        self.annotationStatusLabel = QLabel("")
         self.annotationStatusLabel.setWordWrap(True)
+        self._show_annotation_line(self.annotationStatusLabel, lambda: ui_text.text("annot.status.none"))
 
         self.videoWidget.annotationShapeFinished.connect(self.on_annotation_shape_finished)
         self.videoWidget.annotationTextRequested.connect(self.on_annotation_text_requested)
@@ -233,6 +225,45 @@ class PlayerAnnotationsMixin:
             self.annotationStorageLabel,
             self.annotationStatusLabel,
         ]
+
+    # ---------------------------------------------------------------- 화면 글자 (글자 표 — 언어를 따름)
+    def _annotation_text(self, setter, key):
+        """고정된 글·툴팁 하나: 글자 표의 글을 넣고, 언어가 바뀌면 다시 넣게 적어 둠."""
+        setter(ui_text.text(key))
+        self._annotation_texts.append((setter, key))
+
+    def _annotation_label(self, key):
+        """글자 표의 글을 보이는 라벨 (언어가 바뀌면 다시 넣음)."""
+        label = QLabel()
+        self._annotation_text(label.setText, key)
+        return label
+
+    def _show_annotation_line(self, label, make):
+        """상태에 따라 바뀌는 라벨(상태·저장 위치·보내기 폴더)에 make()의 글(지금 언어)을 넣고 make를 기억한다 — 언어가 바뀌면
+        같은 뜻의 글로 다시 그림. '⚠ 저장 실패'처럼 그 일이 다시 일어나야만 다시 만들어지는 글도 그대로 옮겨짐."""
+        self._annotation_shown[label] = make
+        label.setText(make())
+
+    @staticmethod
+    def _annotation_kind(kind):
+        """주석 종류(text·rect·ellipse·line·arrow)의 보이는 이름 — 모르는 종류는 받은 글 그대로."""
+        key = ANNOTATION_KIND_KEYS.get(kind)
+        return ui_text.text(key) if key is not None else str(kind)
+
+    def retranslate_annotation_page(self):
+        """주석 쪽과 뷰어의 '주석 모드' 배지의 글자를 지금 언어로 다시 (언어가 바뀐 뒤 — PlayerLanguageMixin.RETRANSLATORS).
+        콤보는 글만 바꿈 — 고른 번호·값(itemData)은 그대로이고 '고른 것이 바뀜' 신호도 내지 않음. 주석 목록은 다시 만듦(고른 주석 유지)."""
+        for setter, key in self._annotation_texts:
+            setter(ui_text.text(key))
+        for combo, choices in ((self.annotationToolCombo, ANNOTATION_TOOLS), (self.annotationColorCombo, ANNOTATION_COLORS)):
+            blocked = combo.blockSignals(True)
+            for index, (_value, key) in enumerate(choices):
+                combo.setItemText(index, ui_text.text(key))
+            combo.blockSignals(blocked)
+        for label, make in self._annotation_shown.items():
+            label.setText(make())
+        self._update_annotation_list_ui()
+        self.videoWidget.set_annotation_badge_text(ui_text.text("badge.annotation"))
 
     def _load_annotation_export_settings(self):
         """내보내기 저장 폴더 설정을 읽음. 읽지 못하면 미지정 (기록에 스택 트레이스 + 창 한 번, 파일은 그대로)."""
@@ -264,12 +295,11 @@ class PlayerAnnotationsMixin:
                 f"{self.annotation_export_settings_file}\n{type(exc).__name__}: {exc}")
 
     def _update_annotation_export_dir_label(self):
-        if self.annotation_export_dir:
-            self.annotationExportDirLabel.setText(
-                f"보내기 저장 폴더: {self.annotation_export_dir}"
-            )
+        folder = self.annotation_export_dir
+        if folder:
+            self._show_annotation_line(self.annotationExportDirLabel, lambda: ui_text.text("annot.export_dir", folder=folder))
         else:
-            self.annotationExportDirLabel.setText("보내기 저장 폴더: 미지정 (선택 필요)")
+            self._show_annotation_line(self.annotationExportDirLabel, lambda: ui_text.text("annot.export_dir.none"))
 
     def choose_annotation_export_dir(self):
         start_dir = self.annotation_export_dir or (os.path.dirname(self.filename_a) if self.filename_a else "")
@@ -555,28 +585,24 @@ class PlayerAnnotationsMixin:
             self._update_annotation_list_ui(frame_idx)
             self._redraw_frame_with_annotations()
 
-    def build_annotation_group(self):
-        group = CollapsibleBox("▶ 수정 사항 주석")
-        group.toggle_button.setChecked(False)
-        group.content_area.setVisible(False)
-
+    def build_annotation_page(self):
+        """도구 패널의 주석 쪽: 주석 위젯을 위에서 아래로 (예전 '수정 사항 주석' 접는 상자의 내용 그대로 — 위젯을 옮기기만 함).
+        가운데 열용 높이 제한(상자 300px·목록 120px)은 풂: 주석 목록이 패널의 남는 높이를 쓰고, 패널이 낮으면 쪽이 세로로 스크롤."""
         inner = QWidget()
         inner_layout = QVBoxLayout(inner)
-        inner_layout.setContentsMargins(0, 0, 0, 0)
+        inner_layout.setContentsMargins(ANNOTATION_PAGE_MARGIN, ANNOTATION_PAGE_MARGIN, ANNOTATION_PAGE_MARGIN,
+                                        ANNOTATION_PAGE_MARGIN)
         inner_layout.setSpacing(5)
         for widget in self.annotation_ui_widgets:
-            inner_layout.addWidget(widget)
-
-        scroll = QScrollArea()
-        scroll.setWidget(inner)
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setMaximumHeight(ANNOTATION_PANEL_MAX_HEIGHT)
-        scroll.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
-        group.add_widget(scroll)
-        return group
+            inner_layout.addWidget(widget, 1 if widget is self.annotationListWidget else 0)
+        # 경로·파일 이름이 들어가는 줄 바꿈 라벨: 가로 크기 힌트를 무시하게 함 — 줄 바꿈 라벨의 최소 너비는 '끊을 데가 없는 가장
+        # 긴 낱말'이라, 긴 영상 이름·폴더 이름이 쪽 → 패널 → 창의 최소 너비를 늘림(긴 이름의 영상을 여는 순간 패널이 넓어지고 좁은 창은
+        # 저절로 커짐). 쪽의 너비에 맞춰 줄을 바꾸고, 그래도 넘치는 낱말은 오른쪽이 잘림(예전 가운데 열에서도 잘렸음)
+        for label in (self.annotationExportDirLabel, self.annotationStorageLabel, self.annotationStatusLabel):
+            policy = label.sizePolicy()  # 줄 바꿈 라벨의 높이-너비 연동(heightForWidth)은 그대로
+            policy.setHorizontalPolicy(QSizePolicy.Ignored)
+            label.setSizePolicy(policy)
+        return VerticalScrollArea(inner)
 
     def get_current_frame_index(self):
         if not self.cap_a:
@@ -630,14 +656,14 @@ class PlayerAnnotationsMixin:
             return False
         if self._annotation_unreadable_video == self.filename_a:
             # 이 영상의 주석 파일을 열 때 읽지 못했음(창으로 알림) → 읽지 못한 파일을 덮어 지우지 않게 저장하지 않음
-            self.annotationStorageLabel.setText(
-                f"⚠ 주석 저장 안 함 (주석 파일을 읽지 못함): {annotation_file_path(self.filename_a)}"
-            )
+            unreadable = annotation_file_path(self.filename_a)
+            self._show_annotation_line(self.annotationStorageLabel,
+                                       lambda: ui_text.text("annot.storage.unreadable", path=unreadable))
             return False
         if not is_annotation_storage_writable(self.filename_a):
-            self.annotationStorageLabel.setText(
-                f"⚠ 주석 저장 불가 (쓰기 권한 없음): {annotation_storage_dir(self.filename_a)}"
-            )
+            folder = annotation_storage_dir(self.filename_a)
+            self._show_annotation_line(self.annotationStorageLabel,
+                                       lambda: ui_text.text("annot.storage.not_writable", folder=folder))
             return False
         ids_before = self._annotation_ids()
         try:
@@ -645,7 +671,7 @@ class PlayerAnnotationsMixin:
         except paths.PathMapError as exc:
             # (Mac) 주석 파일에 적을 영상 경로를 정하지 못함 (제자리가 아닌 곳에 붙은 공유) → 저장하지 않음. 자동 저장은
             # 주석을 바꿀 때마다 불리므로 창은 (영상, 까닭)마다 한 번
-            self.annotationStorageLabel.setText(f"⚠ 주석 저장 실패: {exc}")
+            self._show_annotation_storage_failure(str(exc))
             self._show_annotation_problem_once(
                 "주석 저장 실패", str(exc),
                 f"주석 파일에 적을 영상 경로를 정하지 못해 주석을 저장하지 않았습니다:\n{self.filename_a}\n\n{exc}",
@@ -654,7 +680,7 @@ class PlayerAnnotationsMixin:
         except AnnotationFileError as exc:
             # 저장하려고 다시 읽는 중에 파일이 깨졌거나 읽을 수 없게 됨 (다른 창·PC가 쓰다 만 파일 등) → 그 파일은 그대로 두고 저장하지 않음
             traceback.print_exc()
-            self.annotationStorageLabel.setText(f"⚠ 주석 저장 실패: {exc}")
+            self._show_annotation_storage_failure(str(exc))
             self._show_annotation_problem_once(
                 "주석 저장 실패", str(exc),
                 f"주석 파일을 읽지 못해 주석을 저장하지 않았습니다 (파일은 그대로 두었습니다):\n{exc}",
@@ -664,7 +690,7 @@ class PlayerAnnotationsMixin:
             # 쓰기 실패(NAS 연결 끊김·권한·디스크 가득 등): 원래 파일은 그대로, 로그에 스택 트레이스, 창은 (영상, 까닭)마다 한 번
             detail = f"{type(exc).__name__}: {exc}"
             traceback.print_exc()
-            self.annotationStorageLabel.setText(f"⚠ 주석 저장 실패: {detail}")
+            self._show_annotation_storage_failure(detail)
             self._show_annotation_problem_once(
                 "주석 저장 실패", detail,
                 f"주석을 저장하지 못했습니다 (원래 파일은 그대로입니다):\n{annotation_file_path(self.filename_a)}\n\n{detail}",
@@ -700,14 +726,17 @@ class PlayerAnnotationsMixin:
                 f"이 폴더에 저장하지 못할 수 있습니다.\n{folder}\n이유: {problem}",
             )
 
+    def _show_annotation_storage_failure(self, detail):
+        """저장 위치 라벨에 '⚠ 주석 저장 실패: <까닭>' (까닭은 예외의 글 그대로)."""
+        self._show_annotation_line(self.annotationStorageLabel, lambda: ui_text.text("annot.storage.failed", detail=detail))
+
     def _update_annotation_storage_label(self, json_path=None):
         if not self.filename_a:
-            self.annotationStorageLabel.setText("")
+            self._show_annotation_line(self.annotationStorageLabel, lambda: "")
             return
         path = json_path or annotation_file_path(self.filename_a)
-        writable = is_annotation_storage_writable(self.filename_a)
-        prefix = "서버 공유 저장" if writable else "⚠ 저장 불가"
-        self.annotationStorageLabel.setText(f"{prefix}: {path}")
+        key = "annot.storage.shared" if is_annotation_storage_writable(self.filename_a) else "annot.storage.blocked"
+        self._show_annotation_line(self.annotationStorageLabel, lambda: ui_text.text(key, path=path))
 
     def on_video_annotations_reset(self, video_path):
         fps = 0.0
@@ -734,17 +763,15 @@ class PlayerAnnotationsMixin:
         self.refresh_annotation_ui(redraw=False)
         self._update_annotation_storage_label()
         if self._annotation_unreadable_video:
-            self.annotationStorageLabel.setText(
-                f"⚠ 주석 저장 안 함 (주석 파일을 읽지 못함): {annotation_file_path(video_path)}"
-            )
-            self.annotationStatusLabel.setText("⚠ 주석 파일을 읽지 못함 — 이 영상은 주석을 저장하지 않음")
+            unreadable = annotation_file_path(video_path)
+            self._show_annotation_line(self.annotationStorageLabel,
+                                       lambda: ui_text.text("annot.storage.unreadable", path=unreadable))
+            self._show_annotation_line(self.annotationStatusLabel, lambda: ui_text.text("annot.status.unreadable"))
         elif loaded:
             count = self.annotation_store.total_count()
-            self.annotationStatusLabel.setText(
-                f"주석 {count}개 자동 로드 · 서버 공유 JSON"
-            )
+            self._show_annotation_line(self.annotationStatusLabel, lambda: ui_text.text("annot.status.loaded", count=count))
         else:
-            self.annotationStatusLabel.setText("주석: 없음 (서버 폴더에 자동 저장)")
+            self._show_annotation_line(self.annotationStatusLabel, lambda: ui_text.text("annot.status.none_shared"))
 
     def toggle_annotation_mode(self, checked):
         if checked and getattr(self, "ocrSelectRoiButton", None) and self.ocrSelectRoiButton.isChecked():
@@ -781,9 +808,9 @@ class PlayerAnnotationsMixin:
         self.auto_save_annotations()
         self.refresh_annotation_ui(redraw=True)
         self._focus_annotation(item)
-        self.annotationStatusLabel.setText(
-            f"프레임 {start_frame + 1}~{end_frame + 1}에 {item.get('type')} 주석 추가 (자동 저장)"
-        )
+        kind = item.get("type")
+        self._show_annotation_line(self.annotationStatusLabel, lambda: ui_text.text(
+            "annot.status.added", start=start_frame + 1, end=end_frame + 1, kind=self._annotation_kind(kind)))
 
     def on_annotation_text_requested(self, norm_x, norm_y):
         text, ok = QInputDialog.getText(
@@ -812,9 +839,8 @@ class PlayerAnnotationsMixin:
         self.auto_save_annotations()
         self.refresh_annotation_ui(redraw=True)
         self._focus_annotation(item)
-        self.annotationStatusLabel.setText(
-            f"프레임 {start_frame + 1}~{end_frame + 1}에 텍스트 주석 추가 (자동 저장)"
-        )
+        self._show_annotation_line(self.annotationStatusLabel, lambda: ui_text.text(
+            "annot.status.added", start=start_frame + 1, end=end_frame + 1, kind=self._annotation_kind("text")))
 
     def _redraw_frame_with_annotations(self, draw=True):
         if self.frame_a is None:
@@ -875,9 +901,9 @@ class PlayerAnnotationsMixin:
         items = self.annotation_store.get_frame(frame_idx)
         total = self.annotation_store.total_count()
         frame_count = len(self.annotation_store.frames_with_annotations())
-        self.annotationStatusLabel.setText(
-            f"전체 {total}개 / {frame_count}개 프레임에 표시 · 목록 {total}개 · 현재 프레임 {frame_idx + 1}: {len(items)}개 (자동 저장)"
-        )
+        here = len(items)
+        self._show_annotation_line(self.annotationStatusLabel, lambda: ui_text.text(
+            "annot.status.counts", total=total, frames=frame_count, frame=frame_idx + 1, here=here))
 
     def _annotation_list_label(self, item):
         start = int(item.get("start_frame", 0))
@@ -888,9 +914,9 @@ class PlayerAnnotationsMixin:
             text = item.get("text", "")
             preview = text if len(text) <= 24 else text[:24] + "..."
             size = item.get("font_size", DEFAULT_FONT_SIZE)
-            return f"[{range_label} 텍스트 {size}px] {preview}"
+            return ui_text.text("annot.list.text", range=range_label, size=size, preview=preview)
         stroke = item.get("stroke_width", DEFAULT_STROKE_WIDTH)
-        return f"[{range_label} {ann_type} {stroke}px]"
+        return f"[{range_label} {self._annotation_kind(ann_type)} {stroke}px]"
 
     def delete_selected_annotation(self):
         selected = self.annotationListWidget.currentItem()

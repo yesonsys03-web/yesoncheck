@@ -26,7 +26,7 @@ from tests.conftest import ROOT
 from tests.test_fast_startup import wait_until
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 from yesoncheck import app as app_module  # sys.frozen을 바꾸기 전에 (불러올 때 frozen이면 _MEIPASS를 찾음)
-from yesoncheck import default_app, file_associations, instances, update_install
+from yesoncheck import default_app, file_associations, instances, ui_text, update_install
 from yesoncheck.user_files import UserFileError
 
 MAC_ONLY = pytest.mark.skipif(
@@ -562,12 +562,12 @@ def test_help_menu_item_per_platform(new_player, dialogs, tmp_path, monkeypatch,
     player = new_player(make_config(str(tmp_path), {}))
     [help_menu] = [action.menu() for action in player.menuBar().actions() if action.text() == "&Help"]
     texts = [action.text() for action in help_menu.actions()]
-    assert (default_app.MENU_TEXT in texts) is is_mac
-    assert default_app.MENU_TEXT == "동영상 기본 앱으로 정하기…"
+    assert (ui_text.text(default_app.MENU_KEY) in texts) is is_mac
+    assert ui_text.text(default_app.MENU_KEY) == "동영상 기본 앱으로 정하기…"
     if is_mac:
         # 묻지 않고 정하기 (소스 실행이면 안내만 — 이 시험은 소스 실행)
         monkeypatch.delattr(sys, "frozen", raising=False)
-        [action] = [action for action in help_menu.actions() if action.text() == default_app.MENU_TEXT]
+        [action] = [action for action in help_menu.actions() if action.text() == ui_text.text(default_app.MENU_KEY)]
         action.trigger()
         assert dialogs.messages == [("information", default_app.TITLE, default_app.SOURCE_RUN_TEXT)]
         assert fake_ls.calls == []

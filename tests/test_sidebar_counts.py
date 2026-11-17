@@ -211,3 +211,17 @@ def test_refresh_button_updates_the_count(player, qapp, tmp_path):
     wait_refreshed(player)
     qapp.processEvents()
     assert player.sidebar_count_label.text() == "3개 — 기본 1 (TK1 1) · HD 2 (TK1 2)"
+
+
+def test_english_count_line_keeps_the_korean_order_of_versions():
+    """같은 수의 버전·테이크 사이에서 '버전 없음'의 자리가 언어마다 달랐음(이름순 — '없음'은 맨 뒤, 'none'은 TK1과 v01 사이)
+    → 두 언어 모두 한국어 차례 (리뷰 M-7)."""
+    from yesoncheck import ui_text
+
+    paths = ["/a/S1_HD_TK1.mov", "/a/S2_HD_v01.mov", "/a/S3_HD.mov"]
+    assert count_text("mov", paths, []) == "3개 — HD 3 (TK1 1 · v01 1 · 없음 1)"
+    ui_text.set_language("en")
+    try:
+        assert count_text("mov", paths, []) == "3 items — HD 3 (TK1 1 · v01 1 · none 1)"
+    finally:
+        ui_text.set_language("ko")

@@ -61,9 +61,9 @@ from PyQt5 import sip
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QMessageBox
 
-from yesoncheck import error_window, hover_strip, hover_strip_builder, user_files, worker_lifecycle
+from yesoncheck import error_window, hover_strip, hover_strip_builder, ui_text, user_files, worker_lifecycle
 from yesoncheck.external_tools import ToolNotFoundError
-from yesoncheck.hover_strip import LOG_PREFIX, MENU_TEXT, SETTINGS_TITLE, THUMB_WIDTH
+from yesoncheck.hover_strip import LOG_PREFIX, SETTINGS_TITLE, THUMB_WIDTH
 from yesoncheck.sequence_scan import is_sequence_path
 from yesoncheck.slider_preview import LookupResult, SliderHoverFilter, SliderPreviewPopup, popup_parent
 
@@ -72,7 +72,6 @@ IDLE_S = 0.3  # 재생 캡처의 위치가 이 안에 바뀌었으면 쉬는 때
 TICK_MS = 50  # 쉬는 때 판정 간격 — 띄울 워커가 있거나 돌고 있는 동안만 돎
 BUSY_LOG_S = 5.0  # 워커 없이 이만큼 넘게 바쁘면 진단 기록 한 줄 (계획마다 한 번)
 BUILDER_LABEL = "슬라이더 썸네일 띠"  # release_worker의 기록 이름
-HOVER_TIP = "슬라이더 위에 커서를 올리면 그 프레임의 작은 그림을 보여 줍니다 — 이 창은 바로, 이미 열린 다른 창은 다음에 켤 때부터"
 
 
 class PlayerHoverThumbsMixin:
@@ -248,7 +247,8 @@ class PlayerHoverThumbsMixin:
     def _hover_fail(self, text: str) -> None:
         """틱 정지 + 알림: 기록(stderr)은 매번, 오류 창은 파일마다 한 번 (이미 띄운 파일이면 기록만). 이미 채운 장은 그대로 보임."""
         self._hover_timer.stop()
-        message = f"띠를 만들지 못했습니다 — {self._hover_path}\n{text}\n\nSettings → {MENU_TEXT}을 끄면 만들지 않습니다"
+        menu = ui_text.with_particle(ui_text.text(hover_strip.MENU_KEY), "을")
+        message = f"띠를 만들지 못했습니다 — {self._hover_path}\n{text}\n\nSettings → {menu} 끄면 만들지 않습니다"
         if self._hover_path in self._hover_failed_for:
             print(f"{LOG_PREFIX} {message}", file=sys.stderr, flush=True)
             return
@@ -316,9 +316,9 @@ class PlayerHoverThumbsMixin:
         """Settings → 슬라이더 썸네일 — 체크 가능한 항목 하나 (Mac·Windows 모두). 툴팁이 보이게 하고 체크는 지금 캐시에 맞춤.
         create_menu_bar가 화면 그리기 메뉴(_add_display_menu) 바로 뒤에서 부름 — 창을 만드는 중이라 아직 _init_hover_thumbs 전일 수 있어 여기서는 항목만 만듦."""
         settings_menu.setToolTipsVisible(True)
-        self.hover_thumbs_action = settings_menu.addAction(MENU_TEXT)
+        # 글·툴팁은 글자 표에서 — 언어가 바뀌면 retranslate_settings_menus가 다시 읽음 (VideoPlayerBase._menu_text)
+        self.hover_thumbs_action = self._menu_text(settings_menu.addAction(""), hover_strip.MENU_KEY, hover_strip.TIP_KEY)
         self.hover_thumbs_action.setCheckable(True)
-        self.hover_thumbs_action.setToolTip(HOVER_TIP)
         self.hover_thumbs_action.triggered.connect(lambda checked: self.set_slider_thumbnails(checked))
         self._sync_hover_thumbs_menu()
 

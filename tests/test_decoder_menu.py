@@ -27,6 +27,8 @@ from yesoncheck.movie_pipe_source import SOURCE_MODE_ENV
 mac_only = pytest.mark.skipif(sys.platform != "darwin", reason="Mac 전용 메뉴")
 
 MENU_TEXT = "재생 디코더 (Mac)"
+# 한국어 화면의 툴팁 (글자 표 settings.decoder.tip — 시험은 한국어로 돎)
+DECODER_TIP = "이 창은 바로 바꾸고 이 Mac의 설정 파일(prefs.json)에 저장합니다 — 이미 열린 다른 창은 다음에 켤 때부터 따릅니다"
 LABELS = {"videotoolbox": "VideoToolbox (기본)", "ffmpeg": "ffmpeg (예전 방식)"}
 CV2_TIP = "YESONCHECK_MOVIE_SOURCE=cv2가 모든 빠른 디코더를 끕니다 — 지우고 앱을 다시 켜면 이 설정을 씁니다"
 SET_LOG = "[재생] 디코더 설정: {} (Setting 메뉴)"
@@ -152,8 +154,8 @@ def test_menu_checks_the_effective_decoder_at_start(make_player, auto, dialogs, 
     assert checked(player) == [expected]
     for action in player.decoder_actions.values():
         assert action.isEnabled()
-        assert action.toolTip() == player_base.DECODER_TIP
-    assert "다른 창" in player_base.DECODER_TIP
+        assert action.toolTip() == DECODER_TIP
+    assert "다른 창" in DECODER_TIP
     assert dialogs.messages == []
 
 
@@ -196,7 +198,7 @@ def test_menu_after_prefs_read_failure_checks_ffmpeg_with_the_source(make_player
     player = make_player()
     assert checked(player) == ["ffmpeg"]
     assert player.decoder_actions["ffmpeg"].toolTip() == SOURCE_FALLBACK
-    assert player.decoder_actions["videotoolbox"].toolTip() == player_base.DECODER_TIP
+    assert player.decoder_actions["videotoolbox"].toolTip() == DECODER_TIP
     assert all(a.isEnabled() for a in player.decoder_actions.values())
 
 
@@ -223,7 +225,7 @@ def test_choosing_ffmpeg_saves_logs_swaps_then_resets(fake_native_player, auto, 
     assert events == [("swap", "ffmpeg", "ffmpeg"), ("reset",)]
     assert capsys.readouterr().out.count(SET_LOG.format("ffmpeg") + "\n") == 1
     assert checked(player) == ["ffmpeg"]
-    assert player.decoder_actions["ffmpeg"].toolTip() == player_base.DECODER_TIP
+    assert player.decoder_actions["ffmpeg"].toolTip() == DECODER_TIP
     assert dialogs.messages == []
 
     player.decoder_actions["videotoolbox"].trigger()  # 되돌리기도 같은 길
@@ -327,7 +329,7 @@ def test_choosing_ffmpeg_in_fallback_session_saves_without_reopen(make_player, a
     assert effective_decoder() == ("ffmpeg", SOURCE_PREFS)
     assert events == []
     assert checked(player) == ["ffmpeg"]
-    assert player.decoder_actions["ffmpeg"].toolTip() == player_base.DECODER_TIP
+    assert player.decoder_actions["ffmpeg"].toolTip() == DECODER_TIP
     out = capsys.readouterr().out
     assert SET_LOG.format("ffmpeg") in out and SAME_LOG in out
 
@@ -349,7 +351,7 @@ def test_choosing_ffmpeg_after_runtime_fallback_saves_without_reopen(fake_native
     assert mac_prefs.read_prefs() == {PREF_KEY: "ffmpeg"}
     assert effective_decoder() == ("ffmpeg", SOURCE_PREFS)
     assert events == []
-    assert checked(player) == ["ffmpeg"] and player.decoder_actions["ffmpeg"].toolTip() == player_base.DECODER_TIP
+    assert checked(player) == ["ffmpeg"] and player.decoder_actions["ffmpeg"].toolTip() == DECODER_TIP
     out = capsys.readouterr().out
     assert SET_LOG.format("ffmpeg") in out and SAME_LOG in out
     assert dialogs.messages == []

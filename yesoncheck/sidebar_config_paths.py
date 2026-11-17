@@ -44,10 +44,10 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
-from yesoncheck import build_info, path_map_setup, paths, shared_config, shared_config_load, timing_log
+from yesoncheck import build_info, path_map_setup, paths, shared_config, shared_config_load, timing_log, ui_text
 from yesoncheck.path_map_setup_dialog import PathMapSetupDialog
 from yesoncheck.shared_config_load import SharedConfigLoad, SharedConfigState, config_dir_from_chosen_folder
-from yesoncheck.sidebar_items import LOADING_NOTICE, LOADING_TITLE_SUFFIX, LOADING_WORK_ITEM, WORK_PLACEHOLDER
+from yesoncheck.sidebar_items import LOADING_NOTICE
 
 
 class SidebarConfigPathsMixin:
@@ -65,7 +65,7 @@ class SidebarConfigPathsMixin:
 
     def _first_work_item(self):
         """작품 목록의 첫 항목: 불러오는 동안은 "공유 설정 불러오는 중…", 그 뒤는 "작품선택" (골라도 아무 일 없음)."""
-        return LOADING_WORK_ITEM if getattr(self, "shared_config_loading", False) else WORK_PLACEHOLDER
+        return ui_text.text("picker.loading" if getattr(self, "shared_config_loading", False) else "picker.work")
 
     def set_shared_config_loading_state(self):
         """공유 설정을 아직 읽지 않은 빈 '불러오는 중' 상태 (파일·NAS 접근 없음). start_shared_config_load가 채움."""
@@ -104,7 +104,7 @@ class SidebarConfigPathsMixin:
         if self._shared_config_load is not None:
             raise RuntimeError("공유 설정을 이미 불러오는 중입니다 (start_shared_config_load를 두 번 부름)")
         self.shared_config_loading = True
-        self.setWindowTitle(build_info.title_base() + LOADING_TITLE_SUFFIX)
+        self.setWindowTitle(build_info.title_base() + ui_text.text("title.loading"))
         timing_log.startup("공유 설정 불러오기 시작 (백그라운드)")
         load = SharedConfigLoad()
         load.loaded.connect(self._on_shared_config_loaded)  # 창은 GUI 스레드 → 대기열을 거쳐 GUI 스레드에서 실행
@@ -160,14 +160,15 @@ class SidebarConfigPathsMixin:
         return False
 
     def _update_shared_config_title(self):
+        """창 제목을 지금 상태(불러오는 중·공유 설정 오류·변환표 오류)와 지금 언어로 — 상태가 바뀔 때와 언어가 바뀐 뒤."""
         if getattr(self, "shared_config_loading", False):
-            self.setWindowTitle(build_info.title_base() + LOADING_TITLE_SUFFIX)
+            self.setWindowTitle(build_info.title_base() + ui_text.text("title.loading"))
             return
         title = build_info.title_base()  # 빌드된 앱은 "Yeson Checker 1.1.0", 소스 실행은 "Yeson Checker"
         if self.shared_config_problem:
-            title += " — 공유 설정 오류 (작품 목록 없음)"
+            title += ui_text.text("title.config_problem")
         if getattr(self, "path_map_problem", None):
-            title += " — 변환표 오류 (작품 경로 관리에서 자동 설정)" if paths.IS_WINDOWS else " — 변환표 오류"
+            title += ui_text.text("title.path_map_problem.windows" if paths.IS_WINDOWS else "title.path_map_problem")
         self.setWindowTitle(title)
 
     def resolve_shared_config_problem(self, works_not_opening=None):
@@ -430,6 +431,7 @@ class SidebarConfigPathsMixin:
             self.workComboBox.addItem(work_name)
         self.workComboBox.blockSignals(False)
         self._update_shared_config_title()
+        self._sync_work_picker()  # 작품을 읽어 왔으면 사이드바의 작품 묶음을 보임 (sidebar_controls)
         self.update_season_list()
 
     def save_work_paths(self, parent=None):
@@ -771,6 +773,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         # 콤보박스에도 추가
         if work_name not in [self.workComboBox.itemText(i) for i in range(self.workComboBox.count())]:
             self.workComboBox.addItem(work_name)
+        self._sync_work_picker()
         self._refresh_work_path_table(table)
         QMessageBox.information(dialog, "추가 완료", f"'{work_name}' 작품이 추가되었습니다.")
 
