@@ -92,11 +92,12 @@ def test_command_fails_loudly_for_an_unknown_version():
 
 
 def test_newest_release_is_the_ui_redesign_awaiting_its_date():
-    """1.10.0(UI 개편)의 노트가 두 언어로 맨 위에 — 날짜는 배포의 0번에서 (BUILD.md 7-1)."""
+    """2.0.0(UI 개편 — 사용자 결정 2026-11-17, 1.10.0이 아니라 2.0.0)의 노트가 두 언어로 맨 위에 — 날짜는 배포의 0번에서
+    (BUILD.md 7-1)."""
     from yesoncheck import release_notes_en
 
     for notes in (release_notes, release_notes_en):
         newest = notes.RELEASES[0]
-        assert newest.version == "1.10.0" and newest.date is None, notes.__name__
-    text = release_notes.notes_text("1.10.0")
+        assert newest.version == "2.0.0" and newest.date is None, notes.__name__
+    text = release_notes.notes_text("2.0.0")
     assert "화면 언어" in text and "재생 줄" in text

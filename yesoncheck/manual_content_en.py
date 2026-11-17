@@ -49,7 +49,7 @@ PAGES = (
              ("fig", "menus", "The Playback menu opened", ()),
              ("p", "The menu bar has {{menu.file}} · {{menu.view}} · {{menu.playback}} · {{menu.compare}} · {{menu.tools}} · "
                    "**Settings** · **Help**. The parentheses at the end of an item show its shortcut — you can just press the key without "
-                   "opening the menu. Right-clicking the video area brings up all the same menus too. → [[view/context|Right-click menu]]"),
+                   "opening the menu ({Enter} only while the list has focus). Right-clicking the video area brings up all the same menus too. → [[view/context|Right-click menu]]"),
              ("table", ("Menu", "What it contains"), (
                  ("{{menu.file}}", "Open video A and B, open a folder, add and manage bookmarks"),
                  ("{{menu.view}}", "Fit, original size, zoom in and out, full screen, hide controls, theme, file name text → [[view]]"),
@@ -98,9 +98,9 @@ PAGES = (
                  ("Space", "Play / pause"),
                  (("←", ","), "Previous frame"),
                  (("→", "."), "Next frame"),
-                 ("Home", "Go to the first frame — while playing selected videos, only to the start of the current video (the "
-                          "playlist continues)"),
-                 ("End", "Go to the last frame (stops playback if it is playing)"),
+                 ("Home", "Stop and go to the first frame — while playing selected videos, stop at the start of the current "
+                          "video; the playlist does not end"),
+                 ("End", "Stop and go to the last frame"),
                  ("L (ㅣ)", "Loop playback on ↔ off"),
                  ("Mouse wheel", "Step one frame at a time — anywhere in the window except over the list (up = next, down = previous)"),
              )),
@@ -167,7 +167,7 @@ PAGES = (
              ("fig", "playbar", "Playback bar and time slider", (
                  "**File name** — the file open in A. While the wipe is on, B's name is shown as well.",
                  "**Playback buttons** — go to start ({Home}) · step back one frame ({←}) · play/pause ({Space}) · step forward one "
-                 "frame ({→}) · go to end ({End}).",
+                 "frame ({→}) · go to end ({End}). The go-to-start and go-to-end buttons stop playback.",
                  "{{transport.loop}} — after reaching the end, starts again from the beginning.",
                  "**Frame number** — the current frame (starting from 1) / the total number of frames and the length in feet and "
                  "frames (16 frames = 1 foot; `3F 00f` means 3 feet 0 frames). Click the box, type a number and press {Enter} to "
@@ -189,7 +189,7 @@ PAGES = (
                  ("Mouse wheel", "Step one frame at a time (anywhere in the window except over the list)"),
              )),
              ("list", (
-                 "Turn on {{transport.loop}} ({L}) on the playback bar to repeat from the beginning after reaching the end.",
+                 "Turn on the {{transport.loop}} button on the playback bar to repeat from the beginning after reaching the end.",
                  "The fps box on the playback bar shows the frame rate of the video.",
                  "If the `real` value in the fps box during playback is far below the original fps, playback is slow. The value is "
                  "measured once per second, so it fluctuates by about ±1; while playback is stopped and during the first second "
@@ -233,8 +233,8 @@ PAGES = (
                  "In the All tab, **only the videos (mov)** among the selected items are played and sequences are skipped. "
                  "Right-click → {{side_menu.all.select_movs}} selects only the videos.",
                  "In the Seq tab, the {{playlist.play}} button is disabled.",
-                 "While the selected videos are playing, the go-to-start button on the playback bar ({Home}) only goes to the start "
-                 "of the current video — the playlist continues.",
+                 "While the selected videos are playing, the go-to-start button on the playback bar ({Home}) stops and goes only to "
+                 "the start of the current video — the playlist does not end, so playing again plays that video from the start and then moves on to the next one.",
              )),
              ("h", "Sound", "sound"),
              ("p", "Adjust it with the volume slider at the right end of the playback bar (hover the mouse over it to see the "
@@ -326,7 +326,7 @@ PAGES = (
                  "sequences in it into the list ({I}) / {{sidebar.bookmark.add}} · {{sidebar.bookmark.manage}} "
                  "([[library/bookmarks|Bookmarks]]) / read the list again ({F5}).",
                  "{{sidebar.mode.list}} · {{sidebar.mode.thumb}} — change how the list looks.",
-                 "**Mov · Seq · All tabs** — videos / image sequences / both. The `↕` next to the All tab is the **Sort** button. "
+                 "**Mov · Seq · All tabs** — videos / image sequences / both. The button next to the All tab (`Name ▾` in the picture) is the **Sort** button. "
                  "→ [[sidebar/sort|Sorting]]",
                  "**Video list** — click an item to open it in A. Selected items are orange.",
                  "**Count line** — the number of items in the tab you are viewing.",
@@ -461,7 +461,7 @@ PAGES = (
              ("list", (
                  "**Adding** — choose a folder with {{sidebar.bookmarks}} ▾ → {{sidebar.bookmark.add}} in the sidebar; a folder "
                  "dropped onto the window is also added automatically.",
-                 "**Opening** — open the manager window with {{sidebar.bookmarks}} ▾ → {{sidebar.bookmark.manage}} or {P}, then "
+                 "**Opening** — open the manager window with {{sidebar.bookmarks}} ▾ → {{sidebar.bookmark.manage}}, then "
                  "double-click an item ({Enter} or the window's ‘폴더 열기’ (Open folder) button does the same).",
                  "**Editing a path** — click the selected item once more, or right-click → **경로 수정** (Edit path), to edit it in "
                  "place. Finishing with {Enter} saves it immediately; {Esc} cancels. You can also copy a path in another app and "
@@ -539,12 +539,12 @@ PAGES = (
                  "size and line width.",
                  "**Annotations on the video** — click one in annotation mode and yellow dots appear (the arrow in the picture); "
                  "drag to move or resize it.",
-                 "**‘Annotation mode’ badge** — indicates that the mode is on. The cursor also becomes a crosshair.",
+                 "**{{badge.annotation}} badge** — indicates that the mode is on. The cursor also becomes a crosshair.",
              )),
              ("h", "Drawing", "draw"),
              ("steps", (
-                 "Open a video in A and click {{transport.annotate}} on the playback bar (or press {N}) to open the "
-                 "{{panel.annotation}} panel.",
+                 "Open a video in A and click {{transport.annotate}} on the playback bar to open the {{panel.annotation}} panel "
+                 "({N} opens the panel you used last, so it may open the OCR panel instead).",
                  "Turn on {{annot.mode}}.",
                  "Choose a **Tool** and a **Color**.",
                  "For shapes (rectangle, ellipse, line, arrow), **drag** on the video; for text, **click** and type the text in "

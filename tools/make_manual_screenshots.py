@@ -235,6 +235,17 @@ def real_screen_size():
         QApplication.primaryScreen = original
 
 
+
+def check_window_language(player, language):
+    """이 샷의 언어로 그린 창인지 (Review Focus — English 그림에 한국어 메인 창 글자가 남지 않게). 언어 값만이 아니라 창에 보이는
+    글자를 봄 — 언어보다 먼저 만든 창은 언어 값이 맞아도 옛 글자를 그림. 견주는 위젯은 두 언어에서 글이 다른 것만('File'은 같음)."""
+    from yesoncheck import ui_text
+
+    sc.require(ui_text.language() == language, f"화면 언어가 {ui_text.language()} (기대 {language})")
+    for shown, key in ((player.menu_actions["menu.file.open_a"].text(), "menu.file.open_a"),
+                       (player.openFolderButton.text(), "sidebar.open_folder")):
+        sc.require(shown == ui_text.text(key), f"창의 글자 {shown!r}가 이 언어({language})의 {key} 글 {ui_text.text(key)!r}이 아님")
+
 class Stage:
     """샷 함수에 건네는 도구: 합성 영상 경로, 창 만들기, 정착한 그림 찍기, 저장."""
 
@@ -263,9 +274,7 @@ class Stage:
         player.show()
         self.cleanups.append(player.close)
         self.pump()
-        # 이 샷의 언어로 만든 창인지 (Review Focus — English 그림에 한국어 메인 창 글자가 남지 않게)
-        sc.require(ui_text.language() == self.language, f"화면 언어가 {ui_text.language()} (기대 {self.language})")
-        sc.require(player.menuBar().actions()[0].text() == ui_text.text("menu.file"), "메뉴 막대의 첫 메뉴가 이 언어의 File이 아님")
+        check_window_language(player, self.language)
         return player
 
     def open_job(self, player, row=0, frame=18):
@@ -567,12 +576,20 @@ def shot_wipe(st):
     from PyQt5.QtCore import QPoint
 
     middle = QPoint(top.x(), (top.y() + bottom.y()) // 2)
+    from PyQt5.QtCore import QRect
+
+    bar = player.transportBar
+    row = widget_rect(player, bar)
+
+    def column(rect):  # 재생 줄 그림과 같음 — 위에 얹으면 토글의 글자를 가려 아래 띠에 (UI 개편 PR 4 리뷰)
+        return QRect(rect.left(), row.top(), rect.width(), row.height())
+
     st.save("wipe", image, [
-        Callout(1, widget_rect(player, player.transportBar.wipeButton), "t"),
-        Callout(2, union(player, player.transportBar.wipeXButton, player.transportBar.wipeYButton), "t"),
+        Callout(1, column(widget_rect(player, bar.wipeButton)), "bo"),
+        Callout(2, column(union(player, bar.wipeXButton, bar.wipeYButton)), "bo"),
         Callout(3, point_rect(middle), "c"),
-        Callout(4, widget_rect(player, player.filenameLabel), "t"),
-    ])
+        Callout(4, column(widget_rect(player, player.filenameLabel)), "bo"),
+    ], band=2 * BADGE_RADIUS + 2 * BAND_GAP)
 
 
 def shot_seq_tab(st):
@@ -588,12 +605,12 @@ def shot_seq_tab(st):
     from PyQt5.QtCore import QRect
 
     rows = widget_rect(player, player.seq_sidebar)
-    st.save("seq_tab", image, [
-        Callout(1, widget_rect(player, player.sidebar_tabs.tabBar()), "ro"),
-        Callout(2, QRect(rows.left(), rows.top() + 110, rows.width(), 2), "c"),  # 목록 안, 항목 글자 아래 빈 곳
-        Callout(3, widget_rect(player, player.sidebar_count_label), "r"),
+    st.save("seq_tab", image, [  # 1~3은 사이드바 그림처럼 왼쪽 여백에 — 탭 막대 오른쪽은 정렬 단추라 가림 (UI 개편 PR 4 리뷰)
+        Callout(1, widget_rect(player, player.sidebar_tabs.tabBar()), "g"),
+        Callout(2, QRect(rows.left(), rows.top(), rows.width(), 110), "g"),
+        Callout(3, widget_rect(player, player.sidebar_count_label), "g"),
         Callout(4, widget_rect(player, player.filenameLabel), "t"),
-    ])
+    ], gutter=GUTTER)
 
 
 def shot_all_tab(st):
@@ -865,7 +882,7 @@ def shot_update_banner(st):
 
     player = st.player()
     st.open_job(player)
-    player.update_banner.show_offer("1.10.0", "1.9.4")
+    player.update_banner.show_offer("2.0.0", "1.9.4")
     st.pump()
     image = st.grab(player)
     banner = widget_rect(player, player.update_banner)

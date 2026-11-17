@@ -8,7 +8,7 @@ import zlib
 
 import pytest
 
-from yesoncheck import manual_content, manual_html, manual_open, release_notes
+from yesoncheck import manual_content, manual_content_en, manual_html, manual_open, release_notes
 from yesoncheck.manual_languages import KOREAN
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -468,3 +468,41 @@ def test_release_notes_do_not_turn_braces_into_keys(monkeypatch):
     assert "요약 {이건 키가 아님} <strong>굵게</strong> <code>코드</code>" in text
     assert "<li>항목 {그대로}</li>" in text
     assert "<h3>" not in text.split('id="releases"')[1]  # 제목 없는 묶음은 제목 줄이 없음
+
+
+UI_PARTICLE_RE = re.compile(r"\{\{(?P<key>[a-z0-9_.]+)\}\}(?P<particle>으로|로|이|가|을|를|은|는|과|와)(?![가-힣])")
+UI_THEN_KEY_RE = re.compile(r"\{\{(?P<ui>[a-z0-9_.]+)\}\}(?P<gap>[^{}\n]{0,6}?)(?<!\{)\{(?P<key>[^{}]+)\}(?!\})")
+
+
+def test_korean_particles_after_screen_text_follow_the_text():
+    """{{키}} 바로 뒤에 손으로 붙인 조사가 글자 표의 그 글과 맞음 — '주석로'·'목록로' 같은 글이 렌더되지 않게, 글자 표의 글이
+    바뀌면 여기서 드러나게 (UI 개편 PR 4 리뷰 I-1). 읽는 소리를 모르는 끝(영문·괄호)은 ui_text.particle이 두 꼴을 함께 주므로 건너뜀."""
+    from yesoncheck import ui_text
+
+    pair_of = {part: pair for pair in ui_text.PARTICLE_PAIRS for part in pair.split("/")}
+    wrong = []
+    for text in all_texts(manual_content):
+        for match in UI_PARTICLE_RE.finditer(text):
+            screen = manual_html._without_mnemonic(ui_text.TEXTS[match["key"]]["ko"])
+            expected = ui_text.particle(screen, pair_of[match["particle"]])
+            if "(" in expected:
+                continue
+            if expected != match["particle"]:
+                wrong.append(f"{screen}{match['particle']} → {screen}{expected}")
+    assert wrong == []
+
+
+@pytest.mark.parametrize("content", [manual_content, manual_content_en], ids=["ko", "en"])
+def test_shortcut_already_in_screen_text_is_not_written_again(content):
+    """글자 표의 글에 이미 '(L)'처럼 단축키가 들어 있으면 바로 뒤에 {L}을 또 적지 않음 — '반복 재생 (L)(L)'·'북마크 관리… (P)나 P'
+    (UI 개편 PR 4 리뷰 I-1)."""
+    from yesoncheck import ui_text
+
+    language = "ko" if content is manual_content else "en"
+    doubled = []
+    for text in all_texts(content):
+        for match in UI_THEN_KEY_RE.finditer(text):
+            screen = manual_html._without_mnemonic(ui_text.TEXTS[match["ui"]][language])
+            if f"({match['key']})" in screen:
+                doubled.append(match.group(0))
+    assert doubled == []
