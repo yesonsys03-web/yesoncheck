@@ -3,6 +3,25 @@
 ## 소개
 YesonCheck는 PyQt5 기반의 영상 비교/검토 툴입니다. 이번 리팩터링으로 코드가 패키지 구조(`yesoncheck/`)로 재정비되어 유지보수가 쉬워졌으며, 기능과 UI는 기존 버전과 동일하게 동작합니다.
 
+## 스크린샷
+화면은 모두 합성 영상과 지어낸 파일 이름으로 찍은 것입니다(사용법 매뉴얼의 그림과 같음 — 번호의 뜻은 앱의 Help → 사용법에).
+
+**메인 창** — 왼쪽 사이드바(영상 목록), 가운데 영상, 오른쪽 도구 패널(수정 사항 주석), 아래 재생 줄
+
+![메인 창](yesoncheck/manual_images/ko/overview.png)
+
+**A/B 와이프 비교** — 두 영상을 겹쳐 선을 옮겨 가며 비교
+
+![A/B 와이프](yesoncheck/manual_images/ko/wipe.png)
+
+**슬라이더 미리보기** — 시간 슬라이더에 마우스를 올리면 그 자리 프레임의 그림과 번호
+
+![슬라이더 미리보기](yesoncheck/manual_images/ko/hover.png)
+
+**OCR 검토 창** — 글자로 찾은 구간을 고치고 클립으로 내보내기
+
+![OCR 검토 창](yesoncheck/manual_images/ko/review.png)
+
 ## 준비 사항
 - Python 3.10 (권장: `./setup_build_env.sh`가 만드는 `~/coding/p310_tf` 가상환경 — TensorFlow 포함. TF 이전의 `~/coding/p310`은 빌드에 쓰지 않음)
 - 시스템에 설치된 FFmpeg 6.x 이상 (`ffmpeg`, `ffprobe` 명령어가 PATH에서 동작해야 함)
