@@ -109,8 +109,41 @@ def test_shortcuts_page_lists_every_key_the_code_handles():
             for spec, _text in block[1]:
                 listed.extend((spec,) if isinstance(spec, str) else spec)
     for key in ("Space", "←", "→", ",", ".", "+", "=", "2", "-", "1", "3", "4", "F (ㄹ)", "Shift+F", "V (ㅍ)", "N (ㅜ)", "T (ㅅ)",
-                "B (ㅠ)", "P (ㅔ)", "R (ㄱ)", "Ctrl+O", "Ctrl+휠", "↑", "↓", "Enter", "\\", "F5", "F1", "D (ㅇ)", "X (ㅌ)", "Ctrl+Z"):
+                "B (ㅠ)", "P (ㅔ)", "R (ㄱ)", "Ctrl+O", "Ctrl+휠", "↑", "↓", "Enter", "\\", "F5", "F1", "D (ㅇ)", "X (ㅌ)", "Ctrl+Z",
+                # UI 개편(2026-11-16): 처음·끝(재생 줄), 영상 A 열기·폴더 열기·반복 재생·와이프 켜기(player_menus.KEY_SHORTCUTS)
+                "Home", "End", "O (ㅐ)", "I (ㅑ)", "L (ㅣ)", "W (ㅈ)"):
         assert key in listed, key
+
+
+def all_texts(content):
+    """매뉴얼 글의 모든 글(쪽 제목·소개·절 제목·문단·그림 설명·표·목록·차례·알림 상자)."""
+    texts = []
+    for item in content.PAGES:
+        texts += [item.title, item.lead]
+        for block in item.blocks:
+            kind = block[0]
+            if kind in ("h", "p", "note", "tip", "warn"):
+                texts.append(block[1])
+            elif kind == "fig":
+                texts += [block[2], *block[3]]
+            elif kind == "keys":
+                texts += [text for _spec, text in block[1]]
+            elif kind == "table":
+                texts += [cell for row in ([block[1]] if block[1] else []) + list(block[2]) for cell in row]
+            elif kind in ("steps", "list"):
+                texts += list(block[1])
+    return texts
+
+
+def test_korean_manual_names_main_window_texts_through_the_text_table():
+    """메인 창의 이름은 {{키}}로 — 손으로 굵게 적은 글이 글자 표의 한국어 글과 같으면 실패 (글자 표를 고치면 매뉴얼이 따라가게).
+    한 글자짜리('X'·'Y')와 값 자리가 든 글은 빼고."""
+    from yesoncheck import ui_text
+
+    values = {text for entry in ui_text.TEXTS.values() if "{" not in entry["ko"]
+              for text in [manual_html._without_mnemonic(entry["ko"])] if len(text) >= 2}
+    bolds = [found for text in all_texts(manual_content) for found in re.findall(r"\*\*(.+?)\*\*", text)]
+    assert sorted({bold for bold in bolds if bold in values}) == []
 
 
 def test_manual_text_has_no_private_paths():
