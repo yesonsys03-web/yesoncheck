@@ -16,6 +16,7 @@ from yesoncheck import manual_content, manual_content_en, release_notes, release
 
 LINK_RE = re.compile(r"\[\[([a-z_]+(?:/[a-z0-9_.]+)?)(?:\|[^\]]+)?\]\]")
 KEY_RE = re.compile(r"\{([^{}]+)\}")
+UI_RE = re.compile(r"\{\{([a-z0-9_.]+)\}\}")  # 화면 글자 표시 (manual_html._UI와 같은 모양)
 HANGUL_RE = re.compile(r"[ㄱ-ㆎ가-힣]")
 
 
@@ -53,12 +54,15 @@ LANGUAGES = (KOREAN, ENGLISH)  # 첫째가 기준: 요소 id에 앞말이 없고
 
 def _tokens(text):
     """글 안의 링크 대상과 키 — 번역해도 같아야 하는 것 (키의 한글 자판 표시 "F (ㄹ)"도 그대로)."""
-    return sorted(LINK_RE.findall(text)), sorted(KEY_RE.findall(text))
+    without_ui = UI_RE.sub("", text)  # 화면 글자 표시 안의 {키}는 키 표시가 아님
+    return sorted(LINK_RE.findall(text)), sorted(KEY_RE.findall(without_ui)), sorted(UI_RE.findall(text))
 
 
 def _same_tokens(where, base_text, other_text, problems, keys=True):
-    base_links, base_keys = _tokens(base_text)
-    other_links, other_keys = _tokens(other_text)
+    base_links, base_keys, base_ui = _tokens(base_text)
+    other_links, other_keys, other_ui = _tokens(other_text)
+    if base_ui != other_ui:
+        problems.append(f"{where}: 화면 글자 표시가 다름 {base_ui} ≠ {other_ui}")
     if base_links != other_links:
         problems.append(f"{where}: 링크가 다름 {base_links} ≠ {other_links}")
     if keys and base_keys != other_keys:

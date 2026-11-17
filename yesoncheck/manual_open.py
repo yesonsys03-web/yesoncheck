@@ -28,9 +28,10 @@ def images_dir():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), IMAGES_FOLDER)
 
 
-def load_image(name, folder=None):
-    """그림 `<이름>.png`의 바이트. 없으면 FileNotFoundError 그대로 (빌드에서 빠졌다는 뜻 — 지어내지 않음)."""
-    with open(os.path.join(images_dir() if folder is None else folder, name + ".png"), "rb") as fh:
+def load_image(name, language="ko", folder=None):
+    """그 언어의 화면으로 찍은 그림 `<폴더>/<언어>/<이름>.png`의 바이트. 없으면 FileNotFoundError 그대로 (빌드에서 빠졌다는 뜻 —
+    지어내지도, 다른 언어의 그림으로 대신하지도 않음)."""
+    with open(os.path.join(images_dir() if folder is None else folder, language, name + ".png"), "rb") as fh:
         return fh.read()
 
 

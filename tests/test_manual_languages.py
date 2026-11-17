@@ -54,8 +54,11 @@ def note_strings(notes):
                 yield release.version, item
 
 
+UI_MARK_RE = re.compile(r"\{\{[a-z0-9_.]+\}\}")  # 화면 글자 표시 {{키}} — 글이 아니라 표시라 글자 비율에서 뺌
+
+
 def hangul_share(texts):
-    joined = "".join(texts)
+    joined = UI_MARK_RE.sub("", "".join(texts))
     return len(HANGUL_RE.findall(joined)) / max(1, len(LETTER_RE.findall(joined)))
 
 
@@ -175,6 +178,15 @@ def test_parity_check_names_what_differs(other, word):
     assert problems and any(word in problem for problem in problems), problems
 
 
+def test_parity_check_compares_screen_text_markup():
+    """화면 글자 표시 {{키}}는 두 언어에서 같아야 함 — 그 안의 {sidebar.refresh}를 키 표시로 세지 않음."""
+    base = content([one((("p", "글 {{sidebar.refresh}}"),))])
+    assert manual_languages.content_problems(base, content([one((("p", "Text {{sidebar.refresh}}"),))])) == []
+    problems = manual_languages.content_problems(base, content([one((("p", "Text **Refresh**"),))]))
+    assert any("화면 글자 표시가 다름" in problem for problem in problems), problems
+    assert not any("키 표시" in problem for problem in problems), problems
+
+
 def notes(*releases):
     return SimpleNamespace(RELEASES=tuple(releases))
 
@@ -250,8 +262,9 @@ def test_ids_are_unique_and_addresses_are_shared(document):
     assert {f"en:{value}" for value in targets} <= english_ids
 
 
-def test_pictures_are_embedded_once(document):
-    """그림은 기준 언어(한글) 쪽에만 들어가고 영문 쪽은 이름으로 가리킴 — 파일 크기가 두 배가 되지 않게."""
+def test_pictures_with_the_same_bytes_are_embedded_once(document):
+    """두 언어의 그림이 바이트까지 같으면(이 픽스처의 그림은 모두 같음) 기준 언어(한글) 쪽에만 들어가고 영문 쪽은 이름으로
+    가리킴 — 파일 크기가 두 배가 되지 않게. (다른 그림이면 영문 쪽에 제 그림 — test_manual_html)"""
     korean, english = language_part(document, "div", "ko"), language_part(document, "div", "en")
     figures = sum(1 for page in manual_content.PAGES for block in page.blocks if block[0] == "fig")
     assert document.count('src="data:image/png;base64,') == korean.count('src="data:image/png;base64,') == figures
@@ -282,3 +295,16 @@ def test_script_gets_the_languages_and_their_words(document):
     assert "document.getElementById(prefix() + key + '--' + anchor)" in script  # 지금 언어의 절로
     assert "root.setAttribute('data-lang', lang);" in script and "root.setAttribute('lang', lang);" in script
     assert "q.value = '';  // 찾던 낱말은 앞 언어의 것" in script  # 언어를 바꾸면 찾기 칸을 비움
+
+
+def test_english_manual_has_no_korean_main_window_text():
+    """English 매뉴얼은 메인 창의 이름을 English 화면 글자({{키}})로 — 메인 창의 한국어 글(한글 3자 이상, 두 언어가 다른 것)이
+    English 글에 남으면 실패. 딸린 창(화면에 한글로 남는 창)의 한글 이름은 ‘…’ 안에 적고(그 안은 보지 않음 — 북마크 관리 창의
+    ‘폴더 열기’처럼 메인 창과 같은 낱말일 수 있음) 괄호 안에 영어 뜻 (UI 개편 PR 4)."""
+    from yesoncheck import manual_html, ui_text
+    from tests.test_manual_html import all_texts
+
+    korean = {manual_html._without_mnemonic(entry["ko"]) for entry in ui_text.TEXTS.values()
+              if entry["ko"] != entry["en"] and "{" not in entry["ko"] and len(re.findall("[가-힣]", entry["ko"])) >= 3}
+    text = re.sub("‘[^’]*’", "", "\n".join(all_texts(manual_content_en)))
+    assert sorted(value for value in korean if value in text) == []

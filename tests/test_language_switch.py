@@ -1328,3 +1328,21 @@ def test_list_width_other_than_the_start_width_is_kept_when_the_language_changes
     shown.switch_to_list_mode()
     settle()
     assert shown.mainSplitter.sizes()[0] == start + 31
+
+
+def test_screenshot_tool_language_check_catches_a_window_left_in_another_language(player):
+    """매뉴얼 그림 도구의 창 언어 확인 — 한국어로 만든 창에서 언어만 English로 바꾸고 화면을 다시 그리지 않았으면 실패해야 함
+    (English 그림에 한국어 메인 창 글자가 찍히는 경우 — Review Focus 1). 'File'은 두 언어에서 같은 글이라 그것만 보면 이 경우를
+    잡지 못함 (UI 개편 PR 4 리뷰)."""
+    tools_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools")
+    sys.path.insert(0, tools_dir)
+    try:
+        import make_manual_screenshots as tool
+    finally:
+        sys.path.remove(tools_dir)
+    tool.check_window_language(player, "ko")
+    ui_text.set_language("en")
+    with pytest.raises(RuntimeError):
+        tool.check_window_language(player, "en")
+    player.retranslate_ui()
+    tool.check_window_language(player, "en")
