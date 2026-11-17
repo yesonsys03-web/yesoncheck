@@ -45,7 +45,7 @@ PAGES = (
          (
              ("h", "화면 구성", "screen"),
              ("fig", "overview", "메인 창 (주석 패널을 연 모습)", (
-                 "**메뉴** — {{menu.file}}·{{menu.view}}·{{menu.playback}}·{{menu.compare}}·{{menu.tools}}·Settings·Help. "
+                 "**메뉴** — {{menu.file}}·{{menu.view}}·{{menu.playback}}·{{menu.compare}}·{{menu.tools}}·**Settings**·**Help**. "
                  "Mac에서는 화면 맨 위의 메뉴 막대에 있습니다. → [[start/menus|메뉴]]",
                  "**사이드바** — 작품 고르기, 폴더·북마크 단추, 영상 목록(Mov·Seq·All 탭), 선택 재생 단추. → [[sidebar]]",
                  "**영상 영역** — 영상이 보이는 곳. 마우스 휠로 한 프레임씩 넘기고, 확대하면 드래그로 옮깁니다. 우클릭하면 메뉴가 모두 뜹니다. → [[view]]",
@@ -55,7 +55,7 @@ PAGES = (
              )),
              ("h", "메뉴", "menus"),
              ("fig", "menus", "Playback 메뉴를 펼친 모습", ()),
-             ("p", "메뉴 막대에는 {{menu.file}} · {{menu.view}} · {{menu.playback}} · {{menu.compare}} · {{menu.tools}} · Settings · Help가 "
+             ("p", "메뉴 막대에는 {{menu.file}} · {{menu.view}} · {{menu.playback}} · {{menu.compare}} · {{menu.tools}} · **Settings** · **Help**가 "
                    "있습니다. 항목 끝의 괄호는 그 일의 단축키입니다 — 메뉴를 열지 않고 키만 눌러도 됩니다. 영상 영역을 우클릭해도 "
                    "같은 메뉴가 모두 뜹니다. → [[view/context|우클릭 메뉴]]"),
              ("table", ("메뉴", "들어 있는 것"), (

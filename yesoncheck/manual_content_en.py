@@ -34,7 +34,7 @@ PAGES = (
          (
              ("h", "Screen layout", "screen"),
              ("fig", "overview", "Main window (with the annotation panel open)", (
-                 "**Menus** — {{menu.file}}, {{menu.view}}, {{menu.playback}}, {{menu.compare}}, {{menu.tools}}, Settings and Help. "
+                 "**Menus** — {{menu.file}}, {{menu.view}}, {{menu.playback}}, {{menu.compare}}, {{menu.tools}}, **Settings** and **Help**. "
                  "On Mac they are in the menu bar at the top of the screen. → [[start/menus|Menus]]",
                  "**Sidebar** — choosing a show, the folder and bookmark buttons, the video list (Mov, Seq and All tabs) and the "
                  "button for playing selected videos. → [[sidebar]]",
@@ -48,7 +48,7 @@ PAGES = (
              ("h", "Menus", "menus"),
              ("fig", "menus", "The Playback menu opened", ()),
              ("p", "The menu bar has {{menu.file}} · {{menu.view}} · {{menu.playback}} · {{menu.compare}} · {{menu.tools}} · "
-                   "Settings · Help. The parentheses at the end of an item show its shortcut — you can just press the key without "
+                   "**Settings** · **Help**. The parentheses at the end of an item show its shortcut — you can just press the key without "
                    "opening the menu. Right-clicking the video area brings up all the same menus too. → [[view/context|Right-click menu]]"),
              ("table", ("Menu", "What it contains"), (
                  ("{{menu.file}}", "Open video A and B, open a folder, add and manage bookmarks"),
