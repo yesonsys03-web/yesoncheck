@@ -106,7 +106,7 @@ TEXTS = {
     "side_menu.open_a": {"ko": "비디오 A 열기", "en": "Open as video A"},
     "side_menu.open_b": {"ko": "비디오 B 열기", "en": "Open as video B"},
     "side_menu.merge": {"ko": "애니매틱 하나로 합치기", "en": "Merge animatics into one"},
-    "side_menu.copy": {"ko": "파일 복사", "en": "Copy files"},
+    "side_menu.copy": {"ko": "파일 복사 (C)", "en": "Copy files (C)"},
     "side_menu.thumbnails": {"ko": "썸네일 재생성", "en": "Regenerate thumbnails"},
     "side_menu.info": {"ko": "미디어 정보", "en": "Media info"},
     # Seq

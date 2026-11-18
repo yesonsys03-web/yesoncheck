@@ -197,6 +197,8 @@ PAGES = (
                  ("I (ㅑ)", "Open a folder"),
                  ("P (ㅔ)", "Open the bookmark manager window (if there are no bookmarks at all, only a notice appears)"),
                  ("R (ㄱ)", "Regenerate the thumbnails of the videos selected in the list"),
+                 ("C (ㅊ)", "Copy the videos selected in the list to another folder — same as {{side_menu.copy}} in the right-click menu "
+                            "(on the All tab, movs only; does nothing on the Seq tab)"),
                  ("F5", "Refresh the list"),
                  ("F1", "User guide (this manual)"),
              )),

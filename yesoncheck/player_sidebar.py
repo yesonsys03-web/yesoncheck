@@ -262,8 +262,31 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         selected_items = self.sidebar.selectedItems()
         if not selected_items:
             return
+        self._copy_files_choosing_folder([item.toolTip() for item in selected_items])
 
-        file_paths = [item.toolTip() for item in selected_items]
+    def copy_files_for_key(self):
+        """C 키(한글 ㅊ) — 지금 보는 탭에서 고른 영상을 폴더를 골라 복사 (우클릭 '파일 복사'와 같은 일, 사용자 요청 2026-11-18).
+        고르는 규칙은 선택 재생과 같음(`_playlist_selection`): Mov 탭은 Mov 목록의 선택, All 탭은 All 목록의 선택 중 mov만 —
+        Seq 탭에는 이 기능이 없음(숨은 Mov 탭의 선택을 복사하지 않게)."""
+        tab = self.sidebar_tabs.currentWidget()
+        if tab is self.seq_sidebar:
+            print("[파일 복사] Seq 탭에는 파일 복사가 없습니다 — Mov·All 탭에서 영상을 고르세요")
+            return
+        items = self._playlist_selection()
+        if items:
+            self._copy_files_choosing_folder([item.toolTip() for item in items])
+        elif tab is self.all_sidebar and self.all_sidebar.selectedItems():
+            # All 탭에서 시퀀스만 고름 — 무엇이 왜 복사되지 않는지 알림 (조용히 무시하지 않음)
+            print("[파일 복사] 선택에 mov가 없음 (시퀀스는 파일 복사에서 건너뜀)")
+            QMessageBox.information(
+                self, "파일 복사",
+                "선택에 mov가 없습니다 — 시퀀스는 파일 복사에서 건너뜁니다.\n"
+                f"복사할 mov를 선택하세요 (우클릭 → '{ui_text.text('side_menu.all.select_movs')}').")
+        else:
+            print("[파일 복사] 고른 영상이 없습니다")
+
+    def _copy_files_choosing_folder(self, file_paths):
+        """폴더를 고르게 한 뒤 file_paths를 그 폴더로 복사 (고르지 않으면 아무것도 안 함)."""
         target_path = QFileDialog.getExistingDirectory(self, "Select Folder to Copy")
         target_path = paths.normalize_native(target_path)
         if target_path:
