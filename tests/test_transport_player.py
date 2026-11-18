@@ -510,3 +510,23 @@ def test_turning_the_wipe_off_without_b_does_nothing_more(player, tmp_path):
     player.wipeCheckBox.setChecked(True)
     player.wipeCheckBox.setChecked(False)
     assert player.cap_b is None and player.cap_a is not None and player.filenameLabel.text() == "A: a.mp4"
+
+
+def test_turning_the_wipe_off_during_playback_keeps_playing_a(player, tmp_path):
+    """재생 중에 와이프를 꺼도 재생은 A로 이어짐 — 닫은 B를 읽지 않음(리뷰가 짚은 빈틈: 틱의 B 읽기는 wipeEnabled가 막음)."""
+    assert player.open_file("A", clip(tmp_path, "a.mp4")) and player.open_file("B", clip(tmp_path, "b.mp4"))
+    player.wipeCheckBox.setChecked(True)
+    player.wipeXButton.setChecked(True)
+    player.seek_to_frame(5)
+    player.play_video()
+    try:
+        assert player.timer.isActive()
+        player.next_frame_playback()
+        player.wipeCheckBox.setChecked(False)
+        start = player.get_current_frame_index()
+        for _ in range(3):
+            player.next_frame_playback()
+        assert player.cap_b is None and player.frame_b is None
+        assert player.get_current_frame_index() == start + 3
+    finally:
+        player.pause_video()
