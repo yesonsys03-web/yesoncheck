@@ -106,8 +106,9 @@ PAGES = (
              ("steps", (
                  "Run the downloaded `YesonCheck_Setup_<version>.exe`. It installs without administrator rights (no UAC prompt).",
                  "The default install folder is `C:\\YesonCheck` (right under the system drive) — it is best to keep it. Some features such as OCR "
-                 "fail in a path that contains Korean characters or spaces. If that folder cannot be created on the PC, choose another folder you "
-                 "can write to (with an English name and no spaces).",
+                 "fail in a path that contains non-ASCII characters (such as Korean) or spaces. If that folder cannot be created on the PC, choose "
+                 "another folder you can write to whose whole path has no non-ASCII characters or spaces — but not inside "
+                 "`%LOCALAPPDATA%\\YesonCheck`, the app's settings and log folder: an app installed there cannot be updated.",
                  "You can choose **Create a desktop shortcut**. A **Yeson Checker** entry is added to the Start menu.",
                  "If you finish with ‘Yeson Checker 실행’ (Run Yeson Checker) checked on the last screen, the app starts right away.",
              )),
@@ -120,7 +121,7 @@ PAGES = (
                  "In the window that opens, drag the `YesonCheck_Autocut_AppleSilicon` app (`YesonCheck_Autocut_Intel` for the Intel file) onto the "
                  "**Applications** folder next to it.",
                  "Open the app from the **Applications** folder in Finder (응용 프로그램 on a Korean Mac). An app opened directly inside the dmg "
-                 "cannot be set as the default app for videos.",
+                 "cannot install updates and cannot be set as the default app for videos.",
              )),
              ("note", "When you open an app downloaded from the internet or a messenger for the first time, macOS may block it — this app has no "
                       "Apple signature or notarization. After it is blocked once, click **Open Anyway** (그래도 열기) near the bottom of "
