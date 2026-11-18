@@ -45,9 +45,15 @@ KEY_SHORTCUTS = (
     (Qt.Key_W, "ㅈ", "menu.compare.wipe"),
 )
 # 메뉴 막대에 없는 일의 단축키: (Qt 키, 한글 자판 글자, 그 일의 글자 표 키 — 오류 알림용, 처리기 이름) — 받는 규칙은 위 표와 같음
-# (C = 사이드바 우클릭의 '파일 복사', 사용자 요청 2026-11-18)
+# (사이드바 우클릭 메뉴의 일 — 사용자 요청 2026-11-18; 지금 탭을 따르는 처리는 sidebar_keys. 비디오 A·B 열기는 [ ] — 와이프의 왼쪽·
+#  오른쪽: B는 파일 이름 글자 키, O는 메뉴 막대의 파일 고르기 창이라 쓰지 않음 — 사용자 결정; [ ]는 한글 자판에서도 같은 글자)
 ITEM_KEY_SHORTCUTS = (
     (Qt.Key_C, "ㅊ", "side_menu.copy", "copy_files_for_key"),
+    (Qt.Key_J, "ㅓ", "side_menu.merge", "merge_videos_for_key"),
+    (Qt.Key_M, "ㅡ", "side_menu.info", "show_media_info_for_key"),
+    (Qt.Key_R, "ㄱ", "side_menu.thumbnails", "regenerate_thumbnails_for_key"),
+    (Qt.Key_BracketLeft, "[", "side_menu.open_a", "open_in_a_for_key"),
+    (Qt.Key_BracketRight, "]", "side_menu.open_b", "open_in_b_for_key"),
 )
 CHECKABLE = frozenset({"menu.view.overlay_text", "menu.playback.loop", "menu.compare.wipe", "menu.compare.x",
                        "menu.compare.y", "menu.tools.annotation", "menu.tools.ocr"})
@@ -132,12 +138,12 @@ class PlayerMenusMixin:
         return False
 
     def _key_shortcut_runs(self):
-        """(Qt 키, 한글 글자, 글자 표 키, 부를 함수) — 메뉴 항목의 키(`KEY_SHORTCUTS`)와 메뉴 막대에 없는 일의 키(`ITEM_KEY_SHORTCUTS`)."""
-        handlers = self._menu_handlers()
+        """(Qt 키, 한글 글자, 글자 표 키, 부를 함수) — 메뉴 항목의 키(`KEY_SHORTCUTS`)와 메뉴 막대에 없는 일의 키(`ITEM_KEY_SHORTCUTS`).
+        처리기는 부를 때 찾음 — 다른 키(Space·화살표 …)마다 찾지 않고, 찾다가 난 오류도 run_key_shortcut의 try 안에서 알림."""
         for qt_key, hangul, text_key in KEY_SHORTCUTS:
-            yield qt_key, hangul, text_key, lambda handler=handlers[text_key]: self._run_menu_item(handler)
+            yield qt_key, hangul, text_key, lambda text_key=text_key: self._run_menu_item(self._menu_handlers()[text_key])
         for qt_key, hangul, text_key, name in ITEM_KEY_SHORTCUTS:
-            yield qt_key, hangul, text_key, getattr(self, name)
+            yield qt_key, hangul, text_key, lambda name=name: getattr(self, name)()
 
     def _run_menu_item(self, run):
         try:

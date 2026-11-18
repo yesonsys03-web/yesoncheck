@@ -103,18 +103,18 @@ TEXTS = {
     "thumb.stop.list_changed": {"ko": "목록이 바뀜", "en": "list changed"},
     "thumb.stop.list_mode": {"ko": "목록 모드로 바꿈", "en": "switched to list mode"},
     # 목록의 우클릭 메뉴 — Mov
-    "side_menu.open_a": {"ko": "비디오 A 열기", "en": "Open as video A"},
-    "side_menu.open_b": {"ko": "비디오 B 열기", "en": "Open as video B"},
-    "side_menu.merge": {"ko": "애니매틱 하나로 합치기", "en": "Merge animatics into one"},
+    "side_menu.open_a": {"ko": "비디오 A 열기 ([)", "en": "Open as video A ([)"},
+    "side_menu.open_b": {"ko": "비디오 B 열기 (])", "en": "Open as video B (])"},
+    "side_menu.merge": {"ko": "애니매틱 하나로 합치기 (J)", "en": "Merge animatics into one (J)"},
     "side_menu.copy": {"ko": "파일 복사 (C)", "en": "Copy files (C)"},
-    "side_menu.thumbnails": {"ko": "썸네일 재생성", "en": "Regenerate thumbnails"},
-    "side_menu.info": {"ko": "미디어 정보", "en": "Media info"},
+    "side_menu.thumbnails": {"ko": "썸네일 재생성 (R)", "en": "Regenerate thumbnails (R)"},
+    "side_menu.info": {"ko": "미디어 정보 (M)", "en": "Media info (M)"},
     # Seq
-    "side_menu.seq.open_a": {"ko": "비디오 A로 열기", "en": "Open as video A"},
-    "side_menu.seq.open_b": {"ko": "비디오 B로 열기", "en": "Open as video B"},
+    "side_menu.seq.open_a": {"ko": "비디오 A로 열기 ([)", "en": "Open as video A ([)"},
+    "side_menu.seq.open_b": {"ko": "비디오 B로 열기 (])", "en": "Open as video B (])"},
     "side_menu.seq.export": {"ko": "선택한 시퀀스로 MOV 만들기…", "en": "Make MOV from selected sequences…"},
-    "side_menu.seq.thumbnails": {"ko": "썸네일 다시 만들기", "en": "Remake thumbnails"},
-    "side_menu.seq.info": {"ko": "정보 보기", "en": "Show info"},
+    "side_menu.seq.thumbnails": {"ko": "썸네일 다시 만들기 (R)", "en": "Remake thumbnails (R)"},
+    "side_menu.seq.info": {"ko": "정보 보기 (M)", "en": "Show info (M)"},
     # All
     "side_menu.all.select_movs": {"ko": "Mov만 모두 선택", "en": "Select all Mov only"},
     # 맨 아래의 '다른 앱으로 열기' (sidebar_open_with)

@@ -126,9 +126,12 @@ class PlayerPlaybackMixin:
         selected_items = self.sidebar.selectedItems()
         if not selected_items:
             return
+        self._merge_files([item.toolTip() for item in selected_items])
 
-        file_paths = [item.toolTip() for item in selected_items]
-        file_paths.sort()
+    def _merge_files(self, file_paths):
+        """file_paths를 하나로 합침 — 저장할 곳을 묻고(고르지 않으면 아무것도 안 함) ffmpeg 워커로. 합치는 차례는 경로 이름순.
+        우클릭 '애니매틱 하나로 합치기'와 J 키(sidebar_keys)가 함께 씀."""
+        file_paths = sorted(file_paths)
 
         output_file_path, _ = QFileDialog.getSaveFileName(self, "병합된 비디오 저장", "", "비디오 파일 (*.mov *.mp4)")
 
@@ -2094,10 +2097,10 @@ class PlayerPlaybackMixin:
             event.accept()
             return
 
-        # 한글 자판 대응 단축키 매핑 (V 키 제외)
-        # T-ㅅ, B-ㅠ, F-ㄹ, R-ㄱ
-        # ㅅ: '\u3145', ㅠ: '\u315C', ㄹ: '\u3139', ㄱ: '\u3131'
-        if text in ['ㅅ', 'ㅠ', 'ㄹ', 'ㄱ']:
+        # 한글 자판 대응 단축키 매핑 (V 키 제외 — R·ㄱ은 위 run_key_shortcut의 ITEM_KEY_SHORTCUTS)
+        # T-ㅅ, B-ㅠ, F-ㄹ
+        # ㅅ: '\u3145', ㅠ: '\u315C', ㄹ: '\u3139'
+        if text in ['ㅅ', 'ㅠ', 'ㄹ']:
             if text == 'ㅅ':  # T
                 self.toggle_theme()
                 event.accept()
@@ -2118,11 +2121,6 @@ class PlayerPlaybackMixin:
                     self.toggle_video_only_fullscreen()
                 else:
                     self.toggle_fullscreen()
-                event.accept()
-                return
-            elif text == 'ㄱ':  # R
-                # 썸네일 재생성 단축키
-                self.regenerate_selected_thumbnails()
                 event.accept()
                 return
         
@@ -2170,11 +2168,6 @@ class PlayerPlaybackMixin:
             self.videoWidget.reset_view()
         elif key == Qt.Key_4: 
             self.videoWidget.show_original_size()
-        elif key == Qt.Key_R:
-            # 썸네일 재생성 단축키
-            self.regenerate_selected_thumbnails()
-            event.accept()
-            return
         # Ctrl+H는 eventFilter에서 처리하므로 여기서는 제거
         else: 
             super().keyPressEvent(event)
@@ -2590,6 +2583,10 @@ class PlayerPlaybackMixin:
         읽지 못하면(깨진 파일·ffprobe 없음) 기록에 트레이스백 + 창에 그 사유(평문)."""
         file_path = self.sidebar.item(index.row()).toolTip()
         if not file_path: return
+        self.show_media_info(file_path)
+
+    def show_media_info(self, file_path):
+        """file_path의 미디어 정보 창 (우클릭 '미디어 정보'와 M 키 — sidebar_keys)."""
         msg_box = QMessageBox(self); msg_box.setWindowTitle("미디어 정보")
         msg_box.setProperty("ycTitle", "미디어 정보")  # macOS의 QMessageBox는 창 제목을 버림 — 시험·기록용
         try:

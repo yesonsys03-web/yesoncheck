@@ -480,8 +480,10 @@ def test_a_held_key_does_not_repeat_the_action(player, key_calls):
     assert not player.loopCheckBox.isChecked() and not player.wipeCheckBox.isChecked() and key_calls == []
 
 
-def test_typing_in_an_input_field_is_not_a_shortcut(shown, qapp, key_calls):
-    """글자를 치는 칸(프레임 번호·OCR 패턴)에서 친 o·i·l·w는 그 칸의 것 — 창까지 오지 않음."""
+def test_typing_in_an_input_field_is_not_a_shortcut(shown, qapp, key_calls, monkeypatch):
+    """글자를 치는 칸(프레임 번호·OCR 패턴)에서 친 o·i·l·w와 사이드바 키 c·j·m·r·[·]은 그 칸의 것 — 창까지 오지 않음."""
+    for _key, _hangul, _text_key, name in player_menus.ITEM_KEY_SHORTCUTS:
+        monkeypatch.setattr(shown, name, lambda name=name: key_calls.append((name,)))
     shown.show_tool_panel("ocr")
     shown.ocrPatternLineEdit.setVisible(True)  # 사용자 패턴 방식에서만 보이는 칸 — 여기서는 키가 어디로 가는지만 봄
     shown.ocrPatternLineEdit.setEnabled(True)
@@ -490,10 +492,10 @@ def test_typing_in_an_input_field_is_not_a_shortcut(shown, qapp, key_calls):
         field.setFocus()
         qapp.processEvents()
         assert field.hasFocus(), field.objectName()
-        QTest.keyClicks(field, "oilw")
+        QTest.keyClicks(field, "oilwcjmr[]")
     assert key_calls == []
     assert not shown.loopCheckBox.isChecked() and not shown.wipeCheckBox.isChecked()
-    assert shown.ocrPatternLineEdit.text().endswith("oilw")
+    assert shown.ocrPatternLineEdit.text().endswith("oilwcjmr[]")
 
 
 def test_a_failing_shortcut_handler_runs_once_and_is_reported(shown, monkeypatch):

@@ -112,8 +112,8 @@ def test_shortcuts_page_lists_every_key_the_code_handles():
                 "B (ㅠ)", "P (ㅔ)", "R (ㄱ)", "Ctrl+O", "Ctrl+휠", "↑", "↓", "Enter", "\\", "F5", "F1", "D (ㅇ)", "X (ㅌ)", "Ctrl+Z",
                 # UI 개편(2026-11-16): 처음·끝(재생 줄), 영상 A 열기·폴더 열기·반복 재생·와이프 켜기(player_menus.KEY_SHORTCUTS)
                 "Home", "End", "O (ㅐ)", "I (ㅑ)", "L (ㅣ)", "W (ㅈ)",
-                # 파일 복사(player_menus.ITEM_KEY_SHORTCUTS, 2026-11-18)
-                "C (ㅊ)"):
+                # 사이드바 우클릭 메뉴의 일(player_menus.ITEM_KEY_SHORTCUTS, 2026-11-18): 파일 복사·합치기·미디어 정보·비디오 A·B로 열기
+                "C (ㅊ)", "J (ㅓ)", "M (ㅡ)", "[", "]"):
         assert key in listed, key
 
 

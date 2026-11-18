@@ -196,9 +196,18 @@ PAGES = (
                  ("O (ㅐ)", "Open video A"),
                  ("I (ㅑ)", "Open a folder"),
                  ("P (ㅔ)", "Open the bookmark manager window (if there are no bookmarks at all, only a notice appears)"),
-                 ("R (ㄱ)", "Regenerate the thumbnails of the videos selected in the list"),
+                 ("R (ㄱ)", "Regenerate the thumbnails of the items selected in the list — same as {{side_menu.thumbnails}} in the "
+                            "right-click menu (on the Seq tab, the selected sequences; on the All tab, both the selected videos "
+                            "and sequences)"),
                  ("C (ㅊ)", "Copy the videos selected in the list to another folder — same as {{side_menu.copy}} in the right-click menu "
-                            "(on the All tab, movs only; does nothing on the Seq tab)"),
+                            "(on the All tab, movs only; not available on the Seq tab)"),
+                 ("J (ㅓ)", "Merge the videos selected in the list into one — same as {{side_menu.merge}} in the right-click menu "
+                            "(on the All tab, movs only; not available on the Seq tab)"),
+                 ("M (ㅡ)", "Show information about the item selected in the list — same as {{side_menu.info}} for a video and "
+                            "{{side_menu.seq.info}} for a sequence"),
+                 ("[", "Open the item selected in the list as video A — same as {{side_menu.open_a}} in the right-click menu"),
+                 ("]", "Open the item selected in the list as video B — for putting the video to wipe against in B (same as "
+                       "{{side_menu.open_b}} in the right-click menu)"),
                  ("F5", "Refresh the list"),
                  ("F1", "User guide (this manual)"),
              )),
@@ -357,7 +366,8 @@ PAGES = (
              ("h", "Steps", "steps"),
              ("steps", (
                  "Open a video in A.",
-                 "Open B with {{menu.file}} → {{menu.file.open_b}}, or right-click in the list → {{side_menu.open_b}}.",
+                 "Open B with {{menu.file}} → {{menu.file.open_b}}, or select a video in the list and press {]} (same as right-click "
+                 "→ {{side_menu.open_b}}).",
                  "Turn on {{transport.wipe}} on the playback bar ({W}) and click {{transport.wipe.x}} or {{transport.wipe.y}}. The "
                  "{{menu.compare}} menu has the same items.",
                  "Drag the line on the video to compare.",
@@ -454,7 +464,8 @@ PAGES = (
                  "{{sidebar.mode.thumb}} — shows a thumbnail for each video. The first time, generating them takes a while, and "
                  "while they are being generated a progress bar below the list shows the progress. Click {{sidebar.mode.list}} to "
                  "go back.",
-                 "If a thumbnail does not match its video, select the item and press {R}, or right-click → {{side_menu.thumbnails}}.",
+                 "If a thumbnail does not match its video, select the item and press {R}, or choose {{side_menu.thumbnails}} from the "
+                 "right-click menu.",
                  "{{sidebar.refresh}} ({F5}) — syncs the list with the disk again (removes videos that are gone and adds new ones). "
                  "In thumbnail mode it also regenerates the thumbnails of videos that have become newer because they were "
                  "re-rendered.",
@@ -469,7 +480,7 @@ PAGES = (
                   "frame rate or presence of sound differ, they are merged to match the first video (black bars if the aspect "
                   "ratio differs)."),
                  ("{{side_menu.copy}}", "Copies the selected files to another folder."),
-                 ("{{side_menu.thumbnails}}", "Regenerates the thumbnails of the selected videos ({R})."),
+                 ("{{side_menu.thumbnails}}", "Regenerates the thumbnails of the selected videos."),
                  ("{{side_menu.info}}", "Shows file information such as codec, resolution and frame count."),
                  ("Open with QuickTime Player", "Opens the selected videos in QuickTime Player (Mac only)."),
                  ("{{open_with.menu}} ▸", "Opens them with an app you have registered."),

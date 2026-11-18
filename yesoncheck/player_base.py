@@ -814,15 +814,6 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
                 self.show_bookmarks()
                 return True
 
-            # R 키 처리 (썸네일 재생성)
-            if key == Qt.Key_R:
-                self.regenerate_selected_thumbnails()
-                return True
-            
-            # 한글 키 처리 (ㄱ 키 - 썸네일 재생성)
-            if hasattr(event, 'text') and event.text() == 'ㄱ':
-                self.regenerate_selected_thumbnails()
-                return True
         
         # 사이드바 드래그앤드롭 처리
         if source == self.sidebar:
