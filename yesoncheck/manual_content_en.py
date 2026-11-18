@@ -197,8 +197,8 @@ PAGES = (
                  ("I (ㅑ)", "Open a folder"),
                  ("P (ㅔ)", "Open the bookmark manager window (if there are no bookmarks at all, only a notice appears)"),
                  ("R (ㄱ)", "Regenerate the thumbnails of the items selected in the list — same as {{side_menu.thumbnails}} in the "
-                            "right-click menu (on the Seq tab, the selected sequences; on the All tab, both the selected videos "
-                            "and sequences)"),
+                            "right-click menu on the Mov tab and {{side_menu.seq.thumbnails}} on the Seq tab; on the All tab, both "
+                            "the selected videos and sequences"),
                  ("C (ㅊ)", "Copy the videos selected in the list to another folder — same as {{side_menu.copy}} in the right-click menu "
                             "(on the All tab, movs only; not available on the Seq tab)"),
                  ("J (ㅓ)", "Merge the videos selected in the list into one — same as {{side_menu.merge}} in the right-click menu "

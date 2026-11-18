@@ -468,3 +468,103 @@ def test_ctrl_bracket_is_not_the_open_key(player, folder, calls, monkeypatch):
     select(player.sidebar, [mov_item(player, "tk1.mov")], current=mov_item(player, "tk1.mov"))
     player.keyPressEvent(key_event(Qt.Key_BracketLeft, "[", Qt.ControlModifier))
     assert calls == []
+
+
+# ---------------------------------------------------------------- 리뷰 반영 (2026-11-18 별도 리뷰)
+
+def test_r_key_on_seq_tab_needs_a_selection_not_just_the_current_item(player, folder, calls, qapp, capsys):
+    """고른 것이 없으면 현재 항목(Tab 포커스로 생기는 보이지 않는 줄)의 썸네일을 지우고 다시 만들지 않음 — 다른 키처럼 기록만 (리뷰 M-1)."""
+    drop_folder(player, "video", folder)
+    seq_tab(player, qapp)
+    player.seq_sidebar.clearSelection()
+    player.seq_sidebar.setCurrentItem(seq_item(player, "tk2"), player.seq_sidebar.selectionModel().NoUpdate)
+    assert player.seq_sidebar.currentItem() is seq_item(player, "tk2") and player.seq_sidebar.selectedItems() == []
+    capsys.readouterr()
+    player.keyPressEvent(key_event(Qt.Key_R, "r"))
+    assert calls == []
+    assert "[썸네일 다시 만들기] 고른 시퀀스가 없습니다" in capsys.readouterr().out
+
+
+def stale_all_list(player, qapp, folder, select_names, remove_name):
+    """All 탭에서 select_names의 mov를 고른 뒤 원본 Mov 목록에서 remove_name을 빼, All 목록이 낡은 채(다시 만들기 타이머가 도는 중)로 둠."""
+    show_all_tab(player, qapp)
+    select(player.all_sidebar, [all_item(player, "mov", name) for name in select_names])
+    player.sidebar.takeItem(player.sidebar.row(mov_item(player, remove_name + ".mov")))
+    assert player._all_rebuild_timer.isActive()  # 아직 다시 만들지 않음 — All에는 빠진 영상이 남아 있음
+    assert all_item(player, "mov", remove_name) is not None
+
+
+def test_all_tab_key_rebuilds_the_stale_list_first(player, folder, calls, qapp):
+    """밀린 All 목록 다시 만들기를 먼저 돌림 (우클릭 메뉴와 같음) — 원본에서 빠진 영상을 '골랐다'고 보고 '선택된 파일이 없습니다'
+    창을 띄우지 않게 (리뷰 M-2)."""
+    drop_folder(player, "video", folder)
+    stale_all_list(player, qapp, folder, ["tk3"], "tk3")
+    player.keyPressEvent(key_event(Qt.Key_R, "r"))
+    assert calls == []  # 다시 만든 목록에는 tk3이 없어 고른 것이 없음
+    assert not player._all_rebuild_timer.isActive()
+
+
+def test_all_tab_key_keeps_the_selection_across_the_rebuild(player, folder, calls, qapp, monkeypatch):
+    drop_folder(player, "video", folder)
+    stale_all_list(player, qapp, folder, ["tk1"], "tk3")
+    watch_open(player, monkeypatch, calls)
+    player.keyPressEvent(key_event(Qt.Key_BracketLeft, "["))
+    assert calls == [("open", "A", "tk1.mov")]
+    assert not player._all_rebuild_timer.isActive()
+
+
+def test_merge_order_is_by_name_not_by_list_order(player, folder, monkeypatch, tmp_path):
+    """J·우클릭 합치기 모두 이름순으로 합침 — 목록 차례(정렬·옮김)와 다를 때 (리뷰 L-3: 예전에는 정렬을 지워도 실패하는 시험이 없었음)."""
+    from types import SimpleNamespace
+    from yesoncheck import player_playback
+
+    drop_folder(player, "video", folder)
+    moved = player.sidebar.takeItem(player.sidebar.row(mov_item(player, "tk1.mov")))
+    player.sidebar.addItem(moved)  # 목록 차례: … tk3, tk1
+    select(player.sidebar, [mov_item(player, "tk1.mov"), mov_item(player, "tk3.mov")])
+    assert [item.text() for item in player._playlist_selection()] == ["tk3.mov", "tk1.mov"]
+
+    workers, merged = [], []
+    stub = SimpleNamespace(connect=lambda *args: None)
+
+    class FakeWorker:
+        def __init__(self, run, partial_output):
+            self.run, self.progress, self.finished, self.error = run, stub, stub, stub
+            workers.append(self)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args, **kwargs: (str(tmp_path / "merged.mov"), ""))
+    monkeypatch.setattr(player, "require_ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr(player_playback, "FFmpegWorker", FakeWorker)
+    monkeypatch.setattr(player_playback.external_tools, "merge_videos_ffmpeg",
+                        lambda ffmpeg, paths, out, *rest: merged.append([os.path.basename(p) for p in paths]))
+    player.keyPressEvent(key_event(Qt.Key_J, "j"))
+    player.merge_videos()  # 우클릭 메뉴 길
+    for worker in workers:
+        worker.run(SimpleNamespace(progress=SimpleNamespace(emit=lambda value: None), register_process=lambda process: None))
+    player.progress_dialog.close()
+    assert merged == [["tk1.mov", "tk3.mov"]] * 2
+
+
+def test_all_tab_mixed_selection_logs_the_skipped_sequences(player, folder, target, qapp, capsys):
+    """mov와 시퀀스를 섞어 고르면 mov만 복사하고 건너뛴 시퀀스 수를 기록 (조용히 넘기지 않음 — 리뷰 L-4)."""
+    drop_folder(player, "video", folder)
+    show_all_tab(player, qapp)
+    select(player.all_sidebar, [all_item(player, "mov", "tk1"), all_item(player, "seq", "tk1"), all_item(player, "seq", "tk2")])
+    capsys.readouterr()
+    player.keyPressEvent(key_event(Qt.Key_C, "c"))
+    assert copied(target[0]) == ["tk1.mov"]
+    assert "[파일 복사] 시퀀스 2개는 건너뜀" in capsys.readouterr().out
+
+
+def test_error_report_names_the_key_once(player, folder, monkeypatch):
+    """오류 알림 글에 키를 한 번만 — '단축키 C … — 파일 복사' ('파일 복사 (C)'로 두 번 적지 않음, 리뷰 L-7)."""
+    drop_folder(player, "video", folder)
+    reports = []
+    monkeypatch.setattr(player_menus.error_window, "report_from_handler",
+                        lambda prefix, context: reports.append(context))
+    monkeypatch.setattr(player, "copy_files_for_key", lambda: 1 / 0)
+    player.keyPressEvent(key_event(Qt.Key_C, "c"))
+    assert reports == ["단축키 C의 동작을 하다가 오류가 났습니다 — 파일 복사"]

@@ -2092,7 +2092,8 @@ class PlayerPlaybackMixin:
             event.accept()
             return
 
-        # 메뉴 항목의 단축키 O·I·L·W (한글 ㅐ·ㅑ·ㅣ·ㅈ) — 영상 A 열기·폴더 열기·반복 재생·와이프 켜기 (player_menus.KEY_SHORTCUTS)
+        # 메뉴 항목의 단축키 O·I·L·W (한글 ㅐ·ㅑ·ㅣ·ㅈ — player_menus.KEY_SHORTCUTS)와 사이드바 우클릭 메뉴의 키
+        # C·J·M·R·[·] (ITEM_KEY_SHORTCUTS — sidebar_keys)
         if self.run_key_shortcut(event):
             event.accept()
             return
