@@ -45,7 +45,11 @@ class SidebarKeysMixin:
         self._open_for_key("B", "side_menu.open_b")
 
     def _open_for_key(self, side, text_key):
-        """고른 것 중 현재 항목(현재 항목이 고른 것 밖이면 고른 것의 첫 줄)을 side에 엶 — 영상은 경로, 시퀀스는 가상 경로."""
+        """고른 것 중 현재 항목(현재 항목이 고른 것 밖이면 고른 것의 첫 줄)을 side에 엶 — 영상은 경로, 시퀀스는 가상 경로.
+        선택 재생 중에는 열지 않음 — 목록 클릭처럼 (사용자 요청 2026-11-18; 클릭과 달리 키는 기록 한 줄 — 눌렀는데 아무 일도 없어 보이지 않게)."""
+        if self.is_playlist_playing:
+            print(f"[{item_name(text_key, korean=True)}] 선택 재생 중에는 열지 않습니다 — 이어 재생을 끝낸 뒤 여세요")
+            return
         tab = self._key_tab()
         item = _focused_selected_item(tab)
         if item is None:

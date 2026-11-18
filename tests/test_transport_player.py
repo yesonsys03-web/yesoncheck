@@ -467,8 +467,66 @@ def test_file_name_shows_b_only_while_the_wipe_is_on(player, tmp_path):
     player.wipeCheckBox.setChecked(False)
     assert player.filenameLabel.text() == "A: a.mp4"
     player.wipeCheckBox.setChecked(True)
-    assert player.filenameLabel.text() == "A: a.mp4, B: b.mp4"
-    assert player.open_file("B", clip(tmp_path, "c.mp4"))  # 와이프가 켜진 채 B를 바꿈
+    assert player.filenameLabel.text() == "A: a.mp4"  # 와이프를 끄면 B를 닫음 (2026-11-18 — 아래 시험)
+    assert player.open_file("B", clip(tmp_path, "c.mp4"))  # 와이프가 켜진 채 B를 엶
     assert player.filenameLabel.text() == "A: a.mp4, B: c.mp4"
     player._release_side("B")
     assert player.filenameLabel.text() == "A: a.mp4"
+
+
+# ---------------------------------------------------------------- 와이프를 끄면 B를 닫음 (사용자 결정 2026-11-18)
+
+def test_turning_the_wipe_off_closes_b(player, tmp_path, monkeypatch):
+    """와이프를 끄면 B 영상을 닫음 — 다시 켜면 새 B를 열 때까지 B 자리는 검정 (사용자 결정 2026-11-18: 1.9.4·2.0.0은 B가 열린 채
+    남아, 다시 켜고 X·Y를 누르면 같은 B 그림이 다시 보였음 — 시험으로 확인)."""
+    assert player.open_file("A", clip(tmp_path, "a.mp4")) and player.open_file("B", clip(tmp_path, "b.mp4"))
+    player.wipeCheckBox.setChecked(True)
+    player.wipeXButton.setChecked(True)
+    player.seek_to_frame(10)  # 와이프면 B도 읽음 (← → 한 장 이동은 A만)
+    assert player.frame_b is not None
+    old_b = player.cap_b
+    assert old_b.isOpened()
+
+    player.wipeCheckBox.setChecked(False)
+    assert not old_b.isOpened()  # 놓음 — 메모리·파일이 돌아옴
+    assert player.cap_b is None and player.frame_b is None and player.filename_b == ""
+    assert player.filenameLabel.text() == "A: a.mp4"
+
+    drawn = []
+    real = player.videoWidget.updateFrame
+    monkeypatch.setattr(player.videoWidget, "updateFrame", lambda a, b: (drawn.append(b), real(a, b)))
+    player.wipeCheckBox.setChecked(True)
+    player.wipeXButton.setChecked(True)
+    player.seek_to_frame(20)
+    assert drawn and all(b is None for b in drawn)  # B 자리는 검정 — 같은 B가 다시 나오지 않음
+
+    assert player.open_file("B", clip(tmp_path, "c.mp4"))  # 새 B를 채우면 다시 보임
+    player.seek_to_frame(30)
+    assert drawn[-1] is not None and player.filenameLabel.text() == "A: a.mp4, B: c.mp4"
+
+
+def test_turning_the_wipe_off_without_b_does_nothing_more(player, tmp_path):
+    assert player.open_file("A", clip(tmp_path, "a.mp4"))
+    player.wipeCheckBox.setChecked(True)
+    player.wipeCheckBox.setChecked(False)
+    assert player.cap_b is None and player.cap_a is not None and player.filenameLabel.text() == "A: a.mp4"
+
+
+def test_turning_the_wipe_off_during_playback_keeps_playing_a(player, tmp_path):
+    """재생 중에 와이프를 꺼도 재생은 A로 이어짐 — 닫은 B를 읽지 않음(리뷰가 짚은 빈틈: 틱의 B 읽기는 wipeEnabled가 막음)."""
+    assert player.open_file("A", clip(tmp_path, "a.mp4")) and player.open_file("B", clip(tmp_path, "b.mp4"))
+    player.wipeCheckBox.setChecked(True)
+    player.wipeXButton.setChecked(True)
+    player.seek_to_frame(5)
+    player.play_video()
+    try:
+        assert player.timer.isActive()
+        player.next_frame_playback()
+        player.wipeCheckBox.setChecked(False)
+        start = player.get_current_frame_index()
+        for _ in range(3):
+            player.next_frame_playback()
+        assert player.cap_b is None and player.frame_b is None
+        assert player.get_current_frame_index() == start + 3
+    finally:
+        player.pause_video()

@@ -568,3 +568,32 @@ def test_error_report_names_the_key_once(player, folder, monkeypatch):
     monkeypatch.setattr(player, "copy_files_for_key", lambda: 1 / 0)
     player.keyPressEvent(key_event(Qt.Key_C, "c"))
     assert reports == ["단축키 C의 동작을 하다가 오류가 났습니다 — 파일 복사"]
+
+
+@pytest.mark.parametrize("tab_name", ["mov", "seq", "all"])
+def test_brackets_do_nothing_while_selected_playback_runs(player, folder, calls, qapp, monkeypatch, capsys, tab_name):
+    """선택 재생 중에는 [ ]로 영상을 바꾸지 않음 — 목록 클릭처럼 (사용자 요청 2026-11-18). 키는 받은 것(목록의 글자 찾기로 넘기지 않음),
+    조용히 넘기지 않게 기록 한 줄."""
+    drop_folder(player, "video", folder)
+    watch_open(player, monkeypatch, calls)
+    if tab_name == "mov":
+        widget, item = player.sidebar, mov_item(player, "tk1.mov")
+    elif tab_name == "seq":
+        seq_tab(player, qapp)
+        widget, item = player.seq_sidebar, seq_item(player, "tk1")
+    else:
+        show_all_tab(player, qapp)
+        widget, item = player.all_sidebar, all_item(player, "mov", "tk1")
+    select(widget, [item], current=item)
+    player.is_playlist_playing = True
+    try:
+        capsys.readouterr()
+        assert player.eventFilter(widget, key_event(Qt.Key_BracketLeft, "[")) is True
+        player.keyPressEvent(key_event(Qt.Key_BracketRight, "]"))
+        assert calls == []
+        out = capsys.readouterr().out
+        assert "[비디오 A 열기] 선택 재생 중에는 열지 않습니다" in out and "[비디오 B 열기] 선택 재생 중에는 열지 않습니다" in out
+    finally:
+        player.is_playlist_playing = False
+    player.keyPressEvent(key_event(Qt.Key_BracketLeft, "["))  # 끝나면 다시 열림
+    assert [call[:2] for call in calls] == [("open", "A")]

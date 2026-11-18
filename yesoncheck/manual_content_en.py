@@ -205,9 +205,9 @@ PAGES = (
                             "(on the All tab, movs only; not available on the Seq tab)"),
                  ("M (ㅡ)", "Show information about the item selected in the list — same as {{side_menu.info}} for a video and "
                             "{{side_menu.seq.info}} for a sequence"),
-                 ("[", "Open the item selected in the list as video A — same as {{side_menu.open_a}} in the right-click menu"),
+                 ("[", "Open the item selected in the list as video A — same as {{side_menu.open_a}} in the right-click menu (not during selected playback)"),
                  ("]", "Open the item selected in the list as video B — for putting the video to wipe against in B (same as "
-                       "{{side_menu.open_b}} in the right-click menu)"),
+                       "{{side_menu.open_b}} in the right-click menu; not during selected playback)"),
                  ("F5", "Refresh the list"),
                  ("F1", "User guide (this manual)"),
              )),
@@ -375,6 +375,7 @@ PAGES = (
              ("h", "Things to know", "notes"),
              ("list", (
                  "If A and B have **different sizes (resolutions), the B area is black**. Compare videos of the same size.",
+                 "**Turning the wipe off closes B.** When you turn it back on, the B area is black until you open a video as B ({]}).",
                  "**Only A is shown while you drag** the time slider; when you release it, B is synced to the same frame as A.",
                  "{←} {→} move **only A** one frame at a time (B stays where it is). The mouse wheel moves A and B together, and "
                  "clicking the time slider also syncs B to the same frame as A again.",

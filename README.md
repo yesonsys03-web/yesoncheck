@@ -14,7 +14,7 @@ YesonCheck는 애니메이션 제작의 검수를 위한 영상 플레이어입�
 
 ![메인 창](yesoncheck/manual_images/ko/overview.png)
 
-**A/B 와이프 비교** — 두 영상을 겹쳐 선을 옮겨 가며 비교
+**A/B 와이프 비교** — 두 영상을 겹쳐 선을 옮겨 가며 비교 (와이프를 끄면 B가 닫힘 — 다시 비교할 때는 B를 새로 엶)
 
 ![A/B 와이프](yesoncheck/manual_images/ko/wipe.png)
 
