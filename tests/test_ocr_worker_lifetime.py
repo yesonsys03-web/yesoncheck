@@ -89,7 +89,8 @@ elif scenario == "close_timeout":
 
 # 창을 QApplication보다 먼저 지움: 이 스크립트는 app.launch를 거치지 않아 그 끝의 정리(app.release_windows_before_app)가 없음 —
 # 창이 살아 있는 채 파이썬이 끝나면 QApplication 래퍼를 풀 때 PyQt가 래퍼를 돌며 창을 지우다 간헐적으로 죽었음(Windows 0xC0000005,
-# 본문은 끝까지 돈 뒤 — 2026-11-19 진단: 시험 그대로 60번 중 5번)
+# 본문은 끝까지 돈 뒤 — 2026-11-19 Windows 진단: 시험 그대로 1회차 60번 중 5번·2회차 200번 중 22번, 끝에서 창을 먼저 지운 판 200번 중 0번).
+# 창의 부모 없는 fullscreenButton(레이아웃에 넣지 않은 단추) 하나는 남아 정리 때 지워지지만 파이썬 필터가 없어 그 진단에서 문제없었음
 from PyQt5 import sip
 if "player" in globals():
     sip.delete(player)

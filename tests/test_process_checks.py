@@ -24,7 +24,7 @@ def test_running_process_is_not_gone():
     try:
         started = time.monotonic()
         assert gone(process.pid, timeout_s=0.3) is False
-        assert time.monotonic() - started >= 0.3  # 기다린 뒤에 거짓 (바로 거짓이 아님)
+        assert time.monotonic() - started >= 0.28  # 기다린 뒤에 거짓 (바로 거짓이 아님 — 여유는 Windows 시계 눈금)
         assert process.poll() is None  # 기다리는 동안 건드리지 않음
     finally:
         process.kill()
@@ -56,7 +56,7 @@ def test_pid_listed_past_the_deadline_is_not_gone(monkeypatch):
     monkeypatch.setattr(process_checks.psutil, "pid_exists", lambda pid: True)
     started = time.monotonic()
     assert gone(4321, timeout_s=0.2) is False
-    assert 0.2 <= time.monotonic() - started < 2
+    assert 0.18 <= time.monotonic() - started < 2
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="좀비(죽었지만 거두지 않은 자식)는 POSIX의 것")

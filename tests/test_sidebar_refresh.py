@@ -1830,8 +1830,19 @@ assert player._sidebar_scan is not None and player._sidebar_scan.isRunning()
 player.close()  # 읽는 중에 창을 닫음 → 끝날 때까지 붙잡아 둠 (창은 기다리지 않음)
 assert player._sidebar_scan is None
 assert len(player_base._RELEASED_WORKERS) == 1, player_base._RELEASED_WORKERS
+# 창을 지금 지움: del만으로는 창의 묶인 메서드(연결·필터)가 래퍼를 붙들어 창이 끝까지 남았고, 그러면 파이썬이 끝날 때
+# QApplication 정리 중에 지워짐 — Windows에서 간헐 0xC0000005가 나던 상태(test_ocr_worker_lifetime의 끝 줄 설명). 읽기 스레드는
+# 부모가 없어 함께 지워지지 않음 — 아래가 '창이 사라져도 스레드는 남음'을 진짜로 봄.
+# 지우기 전에 이벤트를 잠깐 돌림: 앱은 창을 닫은 뒤에도 이벤트 루프가 돌고 루프가 끝난 뒤에야 창을 지움 — 영상을 열 때 미뤄 둔
+# 호출(QTimer.singleShot의 람다 — 소리 위치 맞추기)이 지운 창의 재생기를 부르지 않게 같은 차례로
+for _ in range(10):
+    app.processEvents()
+    time.sleep(0.01)
+from PyQt5 import sip
+sip.delete(player)
 del player
 gc.collect()  # 창이 사라져도 읽기 스레드는 남아 있어야 함
+assert not [w for w in app.topLevelWidgets() if type(w).__name__ == "VideoPlayer"], "창이 지워지지 않았습니다"
 release.set()
 assert player_base.wait_for_released_workers(10) == []
 for _ in range(20):
