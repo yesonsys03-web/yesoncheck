@@ -90,6 +90,60 @@ PAGES = (
              )),
              ("tip", "이 사용법은 {F1} 또는 Help → {{help.manual}}으로 언제든 다시 열 수 있습니다. 단축키만 빨리 보려면 [[shortcuts]] 쪽을 보세요."),
          )),
+    Page("install", "설치", "시작",
+         "새 컴퓨터에 YesonCheck를 설치하는 방법입니다. 한 번 설치하면 그 뒤의 새 버전은 앱이 알려 주고 받아서 설치합니다.",
+         (
+             ("h", "받기", "download"),
+             ("p", "설치 파일은 GitHub의 Releases 쪽(`github.com/yesonsys03-web/yesoncheck/releases`)에 버전마다 있습니다. "
+                   "**Latest** 표시가 붙은 것이 최신판입니다."),
+             ("table", ("컴퓨터", "파일"), (
+                 ("Windows", "`YesonCheck_Setup_<버전>.exe`"),
+                 ("Mac (Apple Silicon)", "`YesonCheck_Autocut_AppleSilicon_<버전>.dmg`"),
+                 ("Mac (Intel)", "`YesonCheck_Autocut_Intel_<버전>.dmg`"),
+             )),
+             ("p", "Mac은 macOS 12.3 이상이 필요합니다. 어느 파일을 받을지는 Apple 메뉴 → **이 Mac에 관하여**에서 봅니다 — "
+                   "**칩**이 Apple M1·M2 같은 것이면 Apple Silicon, **프로세서**가 Intel이면 Intel입니다."),
+             ("h", "Windows", "windows"),
+             ("steps", (
+                 "받은 `YesonCheck_Setup_<버전>.exe`를 실행합니다. 관리자 권한(UAC 창) 없이 설치됩니다.",
+                 "설치 폴더는 기본으로 `C:\\YesonCheck`(시스템 드라이브 바로 아래)입니다 — 그대로 두는 것이 좋습니다. 경로에 영문이 아닌 "
+                 "글자(한글 등)나 공백이 있으면 OCR 같은 일부 기능이 실패합니다. 그 폴더를 만들 수 없는 PC라면, 경로 전체에 영문이 아닌 글자와 "
+                 "공백이 없고 직접 쓸 수 있는 다른 폴더를 고릅니다 — 단 앱의 설정·기록 폴더인 `%LOCALAPPDATA%\\YesonCheck` 안에 설치하면 "
+                 "업데이트할 수 없습니다.",
+                 "**바탕 화면에 바로 가기 만들기**를 고를 수 있습니다. 시작 메뉴에는 **Yeson Checker**가 생깁니다.",
+                 "끝 화면에서 **Yeson Checker 실행**을 체크한 채 마치면 바로 켜집니다.",
+             )),
+             ("p", "이미 설치된 PC에서 다시 실행하면 같은 폴더에 덮어 설치되고, 설정은 그대로 남습니다."),
+             ("warn", "영상의 소리를 들으려면 **K-Lite Codec Pack**(Basic판이면 충분)을 함께 설치합니다. 없으면 화면은 나오지만 소리가 "
+                      "나지 않습니다. → [[playback/sound|소리]]"),
+             ("h", "Mac", "mac"),
+             ("steps", (
+                 "받은 `.dmg`를 더블클릭해 엽니다.",
+                 "열린 창의 `YesonCheck_Autocut_AppleSilicon` 앱(Intel 파일이면 `YesonCheck_Autocut_Intel`)을 옆의 **Applications** 폴더로 "
+                 "끌어다 놓습니다.",
+                 "Finder의 **응용 프로그램** 폴더에서 앱을 엽니다. dmg 안에서 바로 연 앱으로는 업데이트를 설치할 수 없고 동영상 기본 "
+                 "앱도 정할 수 없습니다.",
+             )),
+             ("note", "인터넷·메신저로 받은 앱은 처음 열 때 macOS가 막을 수 있습니다 — 이 앱에는 Apple의 서명·공증이 없습니다. 한 번 열어 "
+                      "막힌 뒤 **시스템 설정 → 개인정보 보호 및 보안** 아래쪽의 **그래도 열기**를 누릅니다(macOS 12는 시스템 환경설정 → "
+                      "보안 및 개인 정보 보호의 일반 탭). 또는 터미널에서 "
+                      "`xattr -dr com.apple.quarantine /Applications/YesonCheck_Autocut_AppleSilicon.app`(Intel이면 끝을 "
+                      "`YesonCheck_Autocut_Intel.app`으로)을 실행한 뒤 엽니다. macOS 15부터는 Finder의 우클릭 → 열기로는 넘어가지 않습니다."),
+             ("h", "설치한 뒤", "after"),
+             ("list", (
+                 "**Mac**은 처음 켤 때, 동영상(.mov·.mp4)을 더블클릭하면 YesonCheck로 열지 한 번 묻습니다. → [[windows/default|동영상 기본 앱]]",
+                 "그 뒤로는 새 버전이 나오면 창 위에 알림 띠가 뜨고, 누르면 받아서 설치합니다 — 손으로 다시 설치하지 않아도 됩니다. → [[update]]",
+                 "예손 사내 공유 설정 폴더가 없는 PC(회사 밖)에서는 켤 때마다 '공유 설정 오류' 창이 뜹니다(Windows는 그 전에 "
+                 "'공유 설정 폴더 선택' 안내와 폴더 고르기 창 — 취소하면 됩니다). 닫으면 작품 선택과 작품 경로 관리만 빼고 모두 쓸 수 "
+                 "있습니다. → [[library/works|작품 고르기]]",
+             )),
+             ("h", "지우기", "remove"),
+             ("list", (
+                 "**Windows** — 설정 → 앱에서 **Yeson Checker**를 제거합니다.",
+                 "**Mac** — 응용 프로그램 폴더의 앱을 휴지통으로 옮깁니다.",
+                 "어느 쪽이든 설정과 기록(로그)은 사용자 폴더에 남아, 다시 설치하면 그대로 이어집니다.",
+             )),
+         )),
     Page("shortcuts", "단축키", "시작",
          "키보드만으로 대부분의 검수를 할 수 있습니다. 한글 입력 상태에서도 그대로 동작합니다 — 괄호 안이 한글 자판의 같은 키입니다.",
          (

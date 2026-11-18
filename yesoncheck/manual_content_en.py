@@ -89,6 +89,64 @@ PAGES = (
              ("tip", "You can open this manual again at any time with {F1} or Help → {{help.manual}}. For a quick look at the "
                      "shortcuts only, see the [[shortcuts]] page."),
          )),
+    Page("install", "Installation", "Getting started",
+         "How to install YesonCheck on a new computer. Once it is installed, the app tells you about each new version and downloads and installs it.",
+         (
+             ("h", "Download", "download"),
+             ("p", "The installers for each version are on the Releases page on GitHub (`github.com/yesonsys03-web/yesoncheck/releases`). "
+                   "The one marked **Latest** is the newest version."),
+             ("table", ("Computer", "File"), (
+                 ("Windows", "`YesonCheck_Setup_<version>.exe`"),
+                 ("Mac (Apple Silicon)", "`YesonCheck_Autocut_AppleSilicon_<version>.dmg`"),
+                 ("Mac (Intel)", "`YesonCheck_Autocut_Intel_<version>.dmg`"),
+             )),
+             ("p", "The Mac version needs macOS 12.3 or later. To see which file you need, open Apple menu → **About This Mac** "
+                   "(이 Mac에 관하여): if **Chip** shows something like Apple M1 or M2, it is Apple Silicon; if **Processor** shows Intel, it is Intel."),
+             ("h", "Windows", "windows"),
+             ("steps", (
+                 "Run the downloaded `YesonCheck_Setup_<version>.exe`. It installs without administrator rights (no UAC prompt).",
+                 "The default install folder is `C:\\YesonCheck` (right under the system drive) — it is best to keep it. Some features such as OCR "
+                 "fail in a path that contains non-ASCII characters (such as Korean) or spaces. If that folder cannot be created on the PC, choose "
+                 "another folder you can write to whose whole path has no non-ASCII characters or spaces — but not inside "
+                 "`%LOCALAPPDATA%\\YesonCheck`, the app's settings and log folder: an app installed there cannot be updated.",
+                 "You can choose **Create a desktop shortcut**. A **Yeson Checker** entry is added to the Start menu.",
+                 "If you finish with ‘Yeson Checker 실행’ (Run Yeson Checker) checked on the last screen, the app starts right away.",
+             )),
+             ("p", "Running the installer again on a PC where it is already installed installs over the same folder, and your settings stay."),
+             ("warn", "To hear the sound of videos, also install **K-Lite Codec Pack** (the Basic edition is enough). Without it the picture shows "
+                      "but there is no sound. → [[playback/sound|Sound]]"),
+             ("h", "Mac", "mac"),
+             ("steps", (
+                 "Double-click the downloaded `.dmg` to open it.",
+                 "In the window that opens, drag the `YesonCheck_Autocut_AppleSilicon` app (`YesonCheck_Autocut_Intel` for the Intel file) onto the "
+                 "**Applications** folder next to it.",
+                 "Open the app from the **Applications** folder in Finder (응용 프로그램 on a Korean Mac). An app opened directly inside the dmg "
+                 "cannot install updates and cannot be set as the default app for videos.",
+             )),
+             ("note", "When you open an app downloaded from the internet or a messenger for the first time, macOS may block it — this app has no "
+                      "Apple signature or notarization. After it is blocked once, click **Open Anyway** (그래도 열기) near the bottom of "
+                      "**System Settings → Privacy & Security** (시스템 설정 → 개인정보 보호 및 보안) (on macOS 12: System Preferences → Security "
+                      "& Privacy, General tab). Or run "
+                      "`xattr -dr com.apple.quarantine /Applications/YesonCheck_Autocut_AppleSilicon.app` in Terminal (for Intel, end it with "
+                      "`YesonCheck_Autocut_Intel.app`) and then open the app. From macOS 15, right-click → Open in Finder no longer gets past the block."),
+             ("h", "After installing", "after"),
+             ("list", (
+                 "On a **Mac**, the first time you start it, YesonCheck asks once whether double-clicking a video (.mov, .mp4) should open it in "
+                 "YesonCheck. → [[windows/default|Default app for videos]]",
+                 "After that, when a new version comes out a notice bar appears at the top of the window; click it to download and install — you "
+                 "do not need to reinstall by hand. → [[update]]",
+                 "On a PC without Yeson's in-house shared settings folder (outside the company), a ‘공유 설정 오류’ (Shared settings error) window "
+                 "appears at every start (on Windows it is preceded by a ‘공유 설정 폴더 선택’ (Choose the shared settings folder) notice and a "
+                 "folder picker — just cancel). After you close it, everything works except choosing shows and managing show paths. "
+                 "→ [[library/works|Choosing a show]]",
+             )),
+             ("h", "Uninstalling", "remove"),
+             ("list", (
+                 "**Windows** — remove **Yeson Checker** in Settings → Apps (설정 → 앱).",
+                 "**Mac** — move the app in the Applications folder to the Trash.",
+                 "Either way, settings and logs stay in your user folder, so they carry over if you install again.",
+             )),
+         )),
     Page("shortcuts", "Keyboard shortcuts", "Getting started",
          "Most of the review work can be done with the keyboard alone. The keys also work while the Korean input method is on — "
          "the character in parentheses is the same key on the Korean keyboard layout.",
