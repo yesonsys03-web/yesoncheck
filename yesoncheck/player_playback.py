@@ -2565,6 +2565,11 @@ class PlayerPlaybackMixin:
     def toggle_wipe_effect(self, state):
         enabled = state == Qt.Checked
         self.videoWidget.toggleWipeEffect(enabled)
+        if not enabled and (self.cap_b is not None or self.filename_b):
+            # 와이프를 끄면 B를 닫음 — 다시 켜면 새 B를 열 때까지 B 자리는 검정 (사용자 결정 2026-11-18: 예전에는 B가 열린 채 남아
+            # 다시 켜고 X·Y를 누르면 같은 B가 다시 보였음; 닫으면 B 캡처의 메모리도 돌아옴)
+            print(f"[와이프] 와이프를 꺼서 B를 닫음: {os.path.basename(self.filename_b)}")
+            self._release_side('B')
         self.show_file_names()  # B 이름은 와이프가 켜진 동안만
         self.wipeXButton.setEnabled(enabled)
         self.wipeYButton.setEnabled(enabled)

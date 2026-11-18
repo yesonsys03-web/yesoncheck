@@ -308,24 +308,22 @@ def test_swap_handles_b_side_with_wipe(player_with_fake_native_ab, probes):
     assert last.a is new_a.frames[20] and last.b is new_b.frames[20] and (last.axis, last.ratio) == ("x", 0.3)
 
 
-def test_swap_keeps_b_position_when_wipe_is_off(player_with_fake_native_ab, probes):
-    """와이프를 끈 동안 B는 탐색을 따라가지 않음(seek_to_frame은 와이프일 때만 B를 맞춤) — 바꿔 끼운 새 B는 옛 B가 읽어 둔 번호(10)를 한 번 읽어
-    frame_b로 두고(새 캡처는 0번에서 시작하고 프레임이 없으므로) 다음 자리 11에 섬, A는 30번. 옛 frame_b 객체는 다시 쓰지 않음(실패한 GL 길의 네이티브
-    프레임일 수 있음 — Task 5). 와이프를 다시 켜면 예전처럼 그 자리에서 이어짐.
+def test_swap_after_the_wipe_is_off_swaps_only_a(player_with_fake_native_ab, probes):
+    """와이프를 끄면 B를 닫으므로(사용자 결정 2026-11-18 — 예전에는 B가 열린 채 남아 이 시험이 '와이프를 끈 동안의 B 자리'를 지켰음)
+    바꿔 끼우기는 A만 — A는 30번 그대로, B는 없고 ffprobe도 A만.
 
-    깨지는 변경: B의 자리를 옮겨 두지 않으면 새 B는 0번; 와이프가 꺼진 채 바꾼 B를 읽지 않으면 frame_b가 None; 옛 frame_b를 그대로 두면 객체 단언."""
+    깨지는 변경: 와이프를 꺼도 B가 남으면 cap_b 단언; 닫힌 B를 바꿔 끼우려 하면 probe 단언·예외."""
     rig = player_with_fake_native_ab
     player = rig.player
-    player.seek_to_frame(11)  # 와이프 켬 — B도 10번을 읽어 다음 자리 11
+    player.seek_to_frame(11)
     player.wipeCheckBox.setChecked(False)
-    player.seek_to_frame(31)  # 와이프 끔 — A만 30번
-    assert int(player.cap_b.get(cv2.CAP_PROP_POS_FRAMES)) == 11
-    old_frame_b = player.frame_b
+    assert player.cap_b is None and player.filename_b == ''
+    player.seek_to_frame(31)
 
     assert player.swap_movie_captures_for_decoder() is True
 
-    assert int(player.cap_b.get(cv2.CAP_PROP_POS_FRAMES)) == 11
-    assert player.frame_b is player.cap_b.frames[10] and player.frame_b is not old_frame_b
+    assert player.cap_b is None and player.frame_b is None
+    assert probes.calls == [player.filename_a]
     assert player.get_current_frame_index() == 30
     assert not player.wipeCheckBox.isChecked()
 

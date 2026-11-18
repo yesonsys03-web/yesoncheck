@@ -375,6 +375,7 @@ PAGES = (
              ("h", "Things to know", "notes"),
              ("list", (
                  "If A and B have **different sizes (resolutions), the B area is black**. Compare videos of the same size.",
+                 "**Turning the wipe off closes B.** When you turn it back on, the B area is black until you open a video as B ({]}).",
                  "**Only A is shown while you drag** the time slider; when you release it, B is synced to the same frame as A.",
                  "{←} {→} move **only A** one frame at a time (B stays where it is). The mouse wheel moves A and B together, and "
                  "clicking the time slider also syncs B to the same frame as A again.",
