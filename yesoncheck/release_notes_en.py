@@ -7,6 +7,29 @@ entry for entry (no Qt). The deploy notes (GitHub Release, update banner) still 
 from yesoncheck.release_notes import Release
 
 RELEASES = (
+    Release("2.0.1", "2026-11-18",
+            "Keys for the sidebar — C copy files · J merge · M media info · R regenerate thumbnails · [ ] open as video A/B. "
+            "Turning the wipe off now closes video B.",
+            (
+                ("Sidebar shortcuts (new)", (
+                    "Keys do the right-click menu's jobs on what you selected in the sidebar — C copy files · J merge animatics "
+                    "into one · M media info (show info for a sequence) · R regenerate thumbnails · [ ] open as video A/B (to "
+                    "put the videos to wipe with the keyboard). The right-click menu shows the key at the end of each item.",
+                    "The keys act on what is selected in the tab you are looking at. On the All tab, C and J handle movs only; "
+                    "on the Seq tab, C and J are not available.",
+                    "R now also regenerates the thumbnails of what is selected on the Seq and All tabs (before, it always used "
+                    "the selection in the Mov list).",
+                    "During selected playback the [ ] keys do not change the video (the same as clicking the list).",
+                )),
+                ("Wipe", (
+                    "Turning the wipe off closes video B — to compare again, open B anew (] key). Before, B stayed open and the "
+                    "same B came back when you turned the wipe on again and pressed X or Y.",
+                )),
+                ("User manual", (
+                    "New installation page — download · installing on Windows · installing on Mac · after installing · "
+                    "uninstalling.",
+                )),
+            )),
     Release("2.0.0", "2026-11-17",
             "A redesigned window — the playback controls sit in one row under the slider, the middle column is replaced by "
             "annotation and OCR panels you open when you need them, there are new menus, and you can choose the screen "
