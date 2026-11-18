@@ -21,6 +21,7 @@ from yesoncheck.sidebar_sorting import SidebarSortMixin
 from yesoncheck.sidebar_playlist import SidebarPlaylistMixin
 from yesoncheck.sidebar_config_paths import SidebarConfigPathsMixin
 from yesoncheck.sidebar_controls import SidebarControlsMixin
+from yesoncheck.sidebar_keys import SidebarKeysMixin
 from yesoncheck.sidebar_refresh import SidebarRefreshMixin
 from yesoncheck.sidebar_sequences import SidebarSequencesMixin
 from yesoncheck.sidebar_thumbnails import SidebarThumbnailsMixin
@@ -44,7 +45,7 @@ from yesoncheck.sidebar_items import (
 )
 
 
-class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin, SidebarControlsMixin, SidebarRefreshMixin, SidebarSequencesMixin, SidebarAllMixin, SidebarSortMixin, SidebarOpenWithMixin, SidebarThumbnailsMixin):
+class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin, SidebarControlsMixin, SidebarRefreshMixin, SidebarSequencesMixin, SidebarAllMixin, SidebarSortMixin, SidebarOpenWithMixin, SidebarThumbnailsMixin, SidebarKeysMixin):
 
     def dragEnterEvent(self, event):
         """메인 윈도우에 파일 드래그앤드롭 이벤트"""
@@ -262,8 +263,10 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         selected_items = self.sidebar.selectedItems()
         if not selected_items:
             return
+        self._copy_files_choosing_folder([item.toolTip() for item in selected_items])
 
-        file_paths = [item.toolTip() for item in selected_items]
+    def _copy_files_choosing_folder(self, file_paths):
+        """폴더를 고르게 한 뒤 file_paths를 그 폴더로 복사 (고르지 않으면 아무것도 안 함)."""
         target_path = QFileDialog.getExistingDirectory(self, "Select Folder to Copy")
         target_path = paths.normalize_native(target_path)
         if target_path:

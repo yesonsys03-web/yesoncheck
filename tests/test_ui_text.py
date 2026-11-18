@@ -88,6 +88,17 @@ SHORTCUT_TEXTS = {
     "menu.playback.last": "(End)",
     "menu.playback.playlist": "(Enter)",
     "menu.tools.toggle": "(N)",
+    # 사이드바 우클릭 메뉴 — 사용자 요청 2026-11-18 (player_menus.ITEM_KEY_SHORTCUTS; 비디오 A·B 열기는 [ ] — 사용자 결정)
+    "side_menu.open_a": "([)",
+    "side_menu.open_b": "(])",
+    "side_menu.seq.open_a": "([)",
+    "side_menu.seq.open_b": "(])",
+    "side_menu.merge": "(J)",
+    "side_menu.copy": "(C)",
+    "side_menu.thumbnails": "(R)",
+    "side_menu.info": "(M)",
+    "side_menu.seq.thumbnails": "(R)",
+    "side_menu.seq.info": "(M)",
 }
 
 # 이 PR(가운데 열 없애기)이 쓰는 키 — 빠지면 창을 만들 때 KeyError

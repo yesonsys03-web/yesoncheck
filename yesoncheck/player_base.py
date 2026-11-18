@@ -695,8 +695,8 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
                     event.accept()
                     return True
             
-            # 메뉴 항목의 단축키 O·I·L·W (한글 ㅐ·ㅑ·ㅣ·ㅈ) — 영상 A 열기·폴더 열기·반복 재생·와이프 켜기
-            # (player_menus.KEY_SHORTCUTS — Ctrl과 함께면 아님: Ctrl+O는 바로 위에서 이미 받음)
+            # 메뉴 항목의 단축키 O·I·L·W (한글 ㅐ·ㅑ·ㅣ·ㅈ)와 사이드바 우클릭 메뉴의 키 C·J·M·R·[·]
+            # (player_menus.KEY_SHORTCUTS·ITEM_KEY_SHORTCUTS — Ctrl과 함께면 아님: Ctrl+O는 바로 위에서 이미 받음)
             if self.run_key_shortcut(event):
                 return True
 
@@ -814,15 +814,6 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
                 self.show_bookmarks()
                 return True
 
-            # R 키 처리 (썸네일 재생성)
-            if key == Qt.Key_R:
-                self.regenerate_selected_thumbnails()
-                return True
-            
-            # 한글 키 처리 (ㄱ 키 - 썸네일 재생성)
-            if hasattr(event, 'text') and event.text() == 'ㄱ':
-                self.regenerate_selected_thumbnails()
-                return True
         
         # 사이드바 드래그앤드롭 처리
         if source == self.sidebar:

@@ -28,7 +28,7 @@ from yesoncheck.sidebar_sequences import SequenceExportDialog
 
 # 맨 아래는 '다른 앱으로 열기' 무리 (sidebar_open_with — QuickTime Player 항목은 Mac에만)
 OPEN_WITH_TEXTS = (["QuickTime Player로 열기"] if sys.platform == "darwin" else []) + ["다른 앱으로 열기"]
-MENU_TEXTS = ["비디오 A로 열기", "비디오 B로 열기", "선택한 시퀀스로 MOV 만들기…", "썸네일 다시 만들기", "정보 보기",
+MENU_TEXTS = ["비디오 A로 열기 ([)", "비디오 B로 열기 (])", "선택한 시퀀스로 MOV 만들기…", "썸네일 다시 만들기 (R)", "정보 보기 (M)",
               *OPEN_WITH_TEXTS]
 JOB_LABEL = "시퀀스 MOV 만들기"
 
@@ -190,9 +190,9 @@ def test_context_menu_open_in_a_and_b_use_the_clicked_sequence(player, tmp_path,
     opened = []
     monkeypatch.setattr(player, "open_file", lambda video_type, path=None: opened.append((video_type, path)))
 
-    menus.pick[:] = ["비디오 A로 열기"]
+    menus.pick[:] = ["비디오 A로 열기 ([)"]
     player.show_seq_context_menu(item_pos(player, 1))
-    menus.pick[:] = ["비디오 B로 열기"]
+    menus.pick[:] = ["비디오 B로 열기 (])"]
     player.show_seq_context_menu(item_pos(player, 2))
 
     assert opened == [("A", seqs[1].identity), ("B", seqs[2].identity)]
@@ -247,7 +247,7 @@ def test_context_menu_regenerate_uses_the_selected_items(player, tmp_path, menus
     select_rows(player, 1, 2)
     regenerated = []
     monkeypatch.setattr(player, "regenerate_seq_thumbnails", lambda items: regenerated.append(list(items)))
-    menus.pick[:] = ["썸네일 다시 만들기"]
+    menus.pick[:] = ["썸네일 다시 만들기 (R)"]
 
     player.show_seq_context_menu(item_pos(player, 1))
 
@@ -258,7 +258,7 @@ def test_context_menu_info_shows_the_clicked_sequence(player, tmp_path, menus, m
     seqs = fill_list(player, folder_with(tmp_path))
     shown = []
     monkeypatch.setattr(player, "show_seq_info", lambda item: shown.append(item.data(Qt.UserRole)))
-    menus.pick[:] = ["정보 보기"]
+    menus.pick[:] = ["정보 보기 (M)"]
 
     player.show_seq_context_menu(item_pos(player, 2))
 

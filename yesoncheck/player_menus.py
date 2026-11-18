@@ -12,10 +12,13 @@ Settings·Help 앞에 메뉴 다섯: **File · View · Playback · Compare · To
 - 글자는 글자 표(`ui_text`) — 제목은 두 언어 모두 영어(지금의 Settings·Help처럼), 항목은 지금 언어.
 - **키 넷은 이 모듈의 표로 받는다**(`KEY_SHORTCUTS` — O 영상 A 열기 · I 폴더 열기 · L 반복 재생 · W 와이프 켜기, 한글 자판의
   같은 자리 ㅐ·ㅑ·ㅣ·ㅈ도; 사용자 요청 2026-11-16): 창의 키 처리 두 곳이 `run_key_shortcut(event)`를 부르고, 하는 일은 그 메뉴
-  항목의 처리기 그대로. 다른 키(Space·← → …)는 예전부터 키 처리 코드에 직접 있음.
+  항목의 처리기 그대로. 메뉴 막대에 없는 일의 키는 `ITEM_KEY_SHORTCUTS`(사이드바 우클릭 메뉴의 일 — C 파일 복사·
+  J 합치기·M 미디어 정보·R 썸네일 다시 만들기·[ ] 비디오 A·B로 열기, 2026-11-18; 할 일은 `sidebar_keys`)로 같은 규칙에 받음. 다른 키(Space·← → …)는 예전부터 키 처리 코드에 직접 있음.
 - 메뉴는 창의 다른 위젯보다 **먼저** 만들어진다(`create_menu_bar` — `VideoPlayerBase.__init__` 앞부분). 그래서 처리기는
   이름을 그때 풀지 않는 람다이고, 만들 때 위젯을 건드리지 않는다.
 """
+
+import re
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QAction, QMenu
@@ -43,6 +46,27 @@ KEY_SHORTCUTS = (
     (Qt.Key_L, "ㅣ", "menu.playback.loop"),
     (Qt.Key_W, "ㅈ", "menu.compare.wipe"),
 )
+# 메뉴 막대에 없는 일의 단축키: (Qt 키, 한글 자판 글자, 그 일의 글자 표 키 — 오류 알림용, 처리기 이름) — 받는 규칙은 위 표와 같음
+# (사이드바 우클릭 메뉴의 일 — 사용자 요청 2026-11-18; 지금 탭을 따르는 처리는 sidebar_keys. 비디오 A·B 열기는 [ ] — 와이프의 왼쪽·
+#  오른쪽: B는 파일 이름 글자 키, O는 메뉴 막대의 파일 고르기 창이라 쓰지 않음 — 사용자 결정; [ ]는 한글 자판에서도 같은 글자)
+ITEM_KEY_SHORTCUTS = (
+    (Qt.Key_C, "ㅊ", "side_menu.copy", "copy_files_for_key"),
+    (Qt.Key_J, "ㅓ", "side_menu.merge", "merge_videos_for_key"),
+    (Qt.Key_M, "ㅡ", "side_menu.info", "show_media_info_for_key"),
+    (Qt.Key_R, "ㄱ", "side_menu.thumbnails", "regenerate_thumbnails_for_key"),
+    (Qt.Key_BracketLeft, "[", "side_menu.open_a", "open_in_a_for_key"),
+    (Qt.Key_BracketRight, "]", "side_menu.open_b", "open_in_b_for_key"),
+)
+_KEY_MARK = re.compile(r" \([A-Z\[\]]\)$")  # 메뉴 글자 끝의 키 표시 "(C)"·"([)"
+
+
+def item_name(text_key, korean=False):
+    """글자 표의 메뉴 항목 이름에서 끝의 키 표시 `(C)`·`([)`를 뺀 것 — 창 제목·기록 줄·오류 알림에 인용할 때
+    (korean이면 화면 언어와 상관없이 한국어 — 기록 줄)."""
+    text = ui_text.korean(text_key) if korean else ui_text.text(text_key)
+    return _KEY_MARK.sub("", text)
+
+
 CHECKABLE = frozenset({"menu.view.overlay_text", "menu.playback.loop", "menu.compare.wipe", "menu.compare.x",
                        "menu.compare.y", "menu.tools.annotation", "menu.tools.ocr"})
 
@@ -103,7 +127,8 @@ class PlayerMenusMixin:
         }
 
     def run_key_shortcut(self, event):
-        """키 이벤트가 `KEY_SHORTCUTS`의 키면 그 메뉴 항목의 처리기를 부르고 True, 아니면 아무것도 안 하고 False.
+        """키 이벤트가 `KEY_SHORTCUTS`의 키면 그 메뉴 항목의 처리기를, `ITEM_KEY_SHORTCUTS`의 키면 그 처리기(이름)를 부르고 True,
+        아니면 아무것도 안 하고 False.
         창의 키 처리 두 곳(`keyPressEvent`, 목록·창이 받는 `eventFilter`)이 부름.
 
         - Ctrl·Alt·Meta와 함께 누른 키는 아님 (Ctrl+O는 오버레이 컨트롤 위치 되돌리기 — 예전 그대로).
@@ -114,16 +139,24 @@ class PlayerMenusMixin:
         if event.modifiers() & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier):
             return False
         key, text = event.key(), event.text()
-        for qt_key, hangul, text_key in KEY_SHORTCUTS:
+        for qt_key, hangul, text_key, run in self._key_shortcut_runs():
             if key == qt_key or text == hangul:
                 if not event.isAutoRepeat():
                     try:
-                        self._run_menu_item(self._menu_handlers()[text_key])
+                        run()
                     except BaseException:
                         error_window.report_from_handler(
-                            "[단축키]", f"단축키 {chr(qt_key)}의 동작을 하다가 오류가 났습니다 — {ui_text.text(text_key)}")
+                            "[단축키]", f"단축키 {chr(qt_key)}의 동작을 하다가 오류가 났습니다 — {item_name(text_key)}")
                 return True
         return False
+
+    def _key_shortcut_runs(self):
+        """(Qt 키, 한글 글자, 글자 표 키, 부를 함수) — 메뉴 항목의 키(`KEY_SHORTCUTS`)와 메뉴 막대에 없는 일의 키(`ITEM_KEY_SHORTCUTS`).
+        처리기는 부를 때 찾음 — 다른 키(Space·화살표 …)마다 찾지 않고, 찾다가 난 오류도 run_key_shortcut의 try 안에서 알림."""
+        for qt_key, hangul, text_key in KEY_SHORTCUTS:
+            yield qt_key, hangul, text_key, lambda text_key=text_key: self._run_menu_item(self._menu_handlers()[text_key])
+        for qt_key, hangul, text_key, name in ITEM_KEY_SHORTCUTS:
+            yield qt_key, hangul, text_key, lambda name=name: getattr(self, name)()
 
     def _run_menu_item(self, run):
         try:

@@ -584,7 +584,7 @@ LIST_SHORTCUTS = [
     # 프레임 이동·전체화면·썸네일: 창 전역 (목록이 . , F R 같은 글자 키를 '입력해서 찾기'로 먹으므로 목록에도 이벤트 필터가 있어야 함)
     (Qt.Key_Right, "player", "next_frame"), (Qt.Key_Left, "player", "prev_frame"),
     (Qt.Key_Period, "player", "next_frame"), (Qt.Key_Comma, "player", "prev_frame"),
-    (Qt.Key_F, "player", "toggle_fullscreen"), (Qt.Key_R, "player", "regenerate_selected_thumbnails"),
+    (Qt.Key_F, "player", "toggle_fullscreen"), (Qt.Key_R, "player", "regenerate_thumbnails_for_key"),
     # 재생/정지·확대·축소·화면 맞춤: 이벤트 필터의 사이드바 목록 분기 (Mov·Seq 어느 목록이든)
     (Qt.Key_Space, "player", "toggle_play_pause"),
     (Qt.Key_Plus, "video", "zoom_in"), (Qt.Key_Equal, "video", "zoom_in"), (Qt.Key_2, "video", "zoom_in"),
