@@ -31,6 +31,7 @@ from PyQt5.QtCore import Qt
 
 from tests.conftest import write_test_video
 from tests.prores_clips import frame_number, make_numbered_clip, make_numbered_h264, make_truncated, run_ffmpeg
+from tests.process_checks import gone
 from yesoncheck import external_tools, hover_keyframes, hover_strip, hover_strip_builder, movie_pipe_source
 from yesoncheck.hover_keyframes import StreamHeader
 from yesoncheck.hover_strip import LOG_PREFIX, HoverStrip, StripPlan, plan_for
@@ -99,8 +100,8 @@ def make_builder():
     for worker in made:
         worker.stop()
         assert not worker.isRunning()
-        assert worker.pid is None or not psutil.pid_exists(worker.pid)
-        assert [pid for pid in worker.pids if psutil.pid_exists(pid)] == [], f"남은 프로세스: {worker.pids}"
+        assert worker.pid is None or gone(worker.pid)
+        assert [pid for pid in worker.pids if not gone(pid)] == [], f"남은 프로세스: {worker.pids}"
 
 
 class _Signals:
@@ -337,7 +338,7 @@ def test_pause_suspends_process_and_resume_finishes(qapp, numbered_clip_200, mak
         assert drainer.is_alive(), f"파이프를 비우는 도우미가 끝났습니다 (EOF 또는 오류 — {drained}바이트): {errors}"
         worker.stop()
         drainer.join(STOP_WAIT_MS / 1000)
-        assert not worker.isRunning() and not psutil.pid_exists(pid)
+        assert not worker.isRunning() and gone(pid)
         assert not drainer.is_alive() and errors == []
         _pump(qapp, 0.1)
         assert got.done == [] and got.failed == []
@@ -425,7 +426,7 @@ def test_stop_kills_process_and_thread(qapp, numbered_clip, make_builder, capsys
     worker.start()
     worker.stop()
     assert not worker.isRunning()
-    assert [pid for pid in worker.pids if psutil.pid_exists(pid)] == []  # kill 뒤 거둠 — 좀비 없음
+    assert [pid for pid in worker.pids if not gone(pid)] == []  # kill 뒤 거둠 — 좀비 없음
     worker.stop()  # 두 번 불러도 됨
     _pump(qapp, 0.1)
     assert got.done == [] and got.failed == []
@@ -441,7 +442,7 @@ def test_stop_while_paused_kills_process(qapp, numbered_clip_200, make_builder, 
     pid = worker.pid
     worker.stop()  # 정지된 프로세스도 kill은 먹힘 (SIGKILL·TerminateProcess)
     assert worker.wait(STOP_WAIT_MS)
-    assert not psutil.pid_exists(pid)
+    assert gone(pid)
     _pump(qapp, 0.1)
     assert got.done == [] and got.failed == []
     assert _logged(capsys) == []
@@ -465,7 +466,7 @@ def test_stop_while_reading_kills_blocked_process(qapp, make_builder, capsys):
         started = time.monotonic()
         worker.stop()
         assert time.monotonic() - started < STOP_WAIT_MS / 1000
-        assert not worker.isRunning() and not psutil.pid_exists(pid)
+        assert not worker.isRunning() and gone(pid)
     _pump(qapp, 0.1)
     assert got.done == [] and got.failed == [] and strip.filled_count == 0
     assert _logged(capsys) == []
@@ -1001,7 +1002,7 @@ def test_pause_during_coarse_pass_suspends_and_resume_finishes(qapp, h264_gop12,
         assert drainer.is_alive(), f"파이프를 비우는 도우미가 끝났습니다 (EOF 또는 오류 — {drained}바이트): {errors}"
         worker.stop()
         drainer.join(STOP_WAIT_MS / 1000)
-        assert not worker.isRunning() and not psutil.pid_exists(pid)
+        assert not worker.isRunning() and gone(pid)
         assert not drainer.is_alive() and errors == []
         _pump(qapp, 0.1)
         assert got.done == [] and got.failed == [] and got.coarse == []
@@ -1029,7 +1030,7 @@ def test_pause_and_stop_during_keyframe_scan(qapp, make_builder, capsys):
         started = time.monotonic()
         worker.stop()
         assert time.monotonic() - started < 2 * STOP_WAIT_MS / 1000
-        assert not worker.isRunning() and [pid for pid in worker.pids if psutil.pid_exists(pid)] == []
+        assert not worker.isRunning() and [pid for pid in worker.pids if not gone(pid)] == []
         assert len(worker.pids) == 1  # 헤더 ffprobe뿐 — stop 뒤에는 정확한 ffmpeg를 띄우지 않음
     _pump(qapp, 0.1)
     assert got.done == [] and got.failed == [] and got.coarse == [] and worker.coarse_strip is None and strip.filled_count == 0
@@ -1093,7 +1094,7 @@ def test_stop_during_coarse_pass_drops_coarse_strip(qapp, h264_gop12, make_build
     _pump_until(qapp, lambda: paused_at, "거친 띠의 첫 장")
     assert worker.coarse_strip is not None
     worker.stop()
-    assert not worker.isRunning() and [pid for pid in worker.pids if psutil.pid_exists(pid)] == []
+    assert not worker.isRunning() and [pid for pid in worker.pids if not gone(pid)] == []
     assert worker.coarse_strip is None
     assert len(worker.pids) == 3  # 헤더·패킷 ffprobe → 거친 ffmpeg — stop 뒤에는 정확한 ffmpeg를 띄우지 않음
     _pump(qapp, 0.1)
