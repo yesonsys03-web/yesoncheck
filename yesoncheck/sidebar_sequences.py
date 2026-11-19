@@ -718,7 +718,7 @@ class SidebarSequencesMixin:
         """Seq 항목 메뉴의 동작들 (item은 Seq 목록의 항목 — All 탭도 선택을 비춘 뒤 같은 동작을 씀)."""
         identity = item.data(Qt.UserRole).identity
         menu.addAction(ui_text.text("side_menu.seq.open_a")).triggered.connect(lambda: self.open_file('A', identity))
-        menu.addAction(ui_text.text("side_menu.seq.open_b")).triggered.connect(lambda: self.open_file('B', identity))
+        menu.addAction(ui_text.text("side_menu.seq.open_b")).triggered.connect(lambda: self.open_b_and_wipe(identity))
         menu.addSeparator()
         menu.addAction(ui_text.text("side_menu.seq.export")).triggered.connect(lambda: self.export_selected_sequences())
         menu.addSeparator()

@@ -56,9 +56,13 @@ class SidebarKeysMixin:
             print(f"[{item_name(text_key, korean=True)}] 고른 항목이 없습니다")
             return
         if tab is self.seq_sidebar or (tab is self.all_sidebar and item.data(ALL_KIND_ROLE) == "seq"):
-            self.open_file(side, item.data(Qt.UserRole).identity)
+            path = item.data(Qt.UserRole).identity
         else:
-            self.open_file(side, item.toolTip())
+            path = item.toolTip()
+        if side == "B":
+            self.open_b_and_wipe(path)  # B는 와이프까지 켬 (사이드바 B 단추와 같은 길)
+        else:
+            self.open_file(side, path)
 
     # ---------------------------------------------------------------- C·J (mov만)
 

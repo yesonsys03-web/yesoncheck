@@ -95,7 +95,7 @@ class PlayerMenusMixin:
         """항목의 글자 표 키 → 부를 것 (지금의 처리기 — 고를 때 이름을 풂)."""
         return {
             "menu.file.open_a": lambda: self.open_file('A'),
-            "menu.file.open_b": lambda: self.open_file('B'),
+            "menu.file.open_b": lambda: self.open_b_and_wipe(),  # B로 열면 와이프까지 (사이드바 B 단추와 같은 길)
             "menu.file.open_folder": lambda: self.select_folder(),
             "menu.file.bookmark_add": lambda: self.add_bookmark(),
             "menu.file.bookmark_manage": lambda: self.show_bookmarks(),

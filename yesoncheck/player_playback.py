@@ -189,7 +189,7 @@ class PlayerPlaybackMixin:
 
     def open_video_b(self, index):
         file_path = self.sidebar.item(index.row()).toolTip()
-        self.open_file('B', file_path)
+        self.open_b_and_wipe(file_path)
 
     def update_playlist(self):
         """job을 고름(currentIndexChanged): 그 job의 영상 목록을 만듦 (처음 불러오기 — job 폴더를 이 스레드에서 바로 읽음).
@@ -2561,6 +2561,27 @@ class PlayerPlaybackMixin:
                 self.play_video(); self.playSelectedPauseButton.setText('Selected Pause'); self.playSelectedPauseButton.setStyleSheet("background-color: yellow;")
         else:
             self.play_selected_files()
+
+    def open_b_and_wipe(self, file_path=None):
+        """B로 열고, 열었으면 와이프까지 켬 → 열었으면 True (사용자 결정 2026-11-20 — 사이드바 A·B 단추와 함께).
+
+        B를 여는 길(사이드바 B 단추·] 키·Mov·Seq 우클릭·File 메뉴)은 모두 이것: 예전에는 B를 열어도 와이프(W)를 켜고 X나 Y를
+        눌러야 B가 보였음. 와이프가 꺼져 있으면 켜고(toggle_wipe_effect — X·Y 단추가 켜짐), X·Y가 둘 다 꺼져 있으면 X(좌우)를 켬 —
+        이미 켜 둔 축은 그대로. 열지 못하면(없는 파일·파일 창 취소) 아무것도 켜지 않음. A가 없으면(종류가 달라 open_file이 A를
+        닫았음 — 영상 A에 시퀀스 B) 볼 것이 B뿐이라 켜지 않음. file_path가 None이면 파일 창(open_file('B') — 인자 하나로).
+        """
+        opened = self.open_file('B') if file_path is None else self.open_file('B', file_path)
+        if not opened or self.cap_a is None:
+            return bool(opened)
+        turned_on = not self.wipeCheckBox.isChecked()
+        if turned_on:
+            self.wipeCheckBox.setChecked(True)
+        if not self.wipeXButton.isChecked() and not self.wipeYButton.isChecked():
+            self.wipeXButton.setChecked(True)
+            turned_on = True
+        if turned_on:
+            print(f"[와이프] B를 열어 와이프를 켬: {os.path.basename(self.filename_b)}")
+        return True
 
     def toggle_wipe_effect(self, state):
         enabled = state == Qt.Checked
