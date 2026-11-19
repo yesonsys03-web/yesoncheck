@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import QApplication
 
 from tests.conftest import write_test_video
 from tests.prores_clips import frame_number, make_numbered_clip, make_numbered_h264
+from tests.process_checks import gone
 from tests.test_sequence_capture import make_seq
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 from yesoncheck import error_window, external_tools, hover_keyframes, hover_strip, hover_strip_builder, player_hover_thumbs
@@ -87,8 +88,8 @@ def real_builders(monkeypatch):
     for builder in made:
         assert sip.isdeleted(builder) or not builder.isRunning(), f"창을 닫았는데 띠 워커가 돌고 있습니다: {builder.path}"
         if builder.pid is not None:
-            assert not psutil.pid_exists(builder.pid), f"창을 닫았는데 띠 ffmpeg(pid {builder.pid})가 남았습니다"
-        left = [pid for pid in builder.pids if psutil.pid_exists(pid)]  # 거친 띠의 ffprobe·ffmpeg까지
+            assert gone(builder.pid), f"창을 닫았는데 띠 ffmpeg(pid {builder.pid})가 남았습니다"
+        left = [pid for pid in builder.pids if not gone(pid)]  # 거친 띠의 ffprobe·ffmpeg까지
         assert left == [], f"창을 닫았는데 띠 워커의 프로세스가 남았습니다: {left}"
 
 
@@ -475,7 +476,7 @@ def test_release_and_close_stop_builder(slow_ffmpeg, new_player, shown_player, n
     builder = start_and_catch_running(shown_player, numbered_clip)
     shown_player._release_side("A")
     assert sip.isdeleted(builder) or not builder.isRunning()
-    assert not psutil.pid_exists(builder.pid)
+    assert gone(builder.pid)
     assert shown_player._hover_builder is None and shown_player._hover_plan is None
     assert not shown_player._hover_timer.isActive()
 
@@ -485,7 +486,7 @@ def test_release_and_close_stop_builder(slow_ffmpeg, new_player, shown_player, n
     builder = start_and_catch_running(other, numbered_clip)
     other.close()
     assert sip.isdeleted(builder) or not builder.isRunning()
-    assert not psutil.pid_exists(builder.pid)
+    assert gone(builder.pid)
     assert len(real_builders) == 2
 
     def ffmpeg_children():
@@ -501,7 +502,7 @@ def test_reopening_same_path_restarts_builder(slow_ffmpeg, shown_player, numbere
     old_pid = old.pid
     assert player.open_file("A", numbered_clip) is True
     assert sip.isdeleted(old) or not old.isRunning()
-    assert not psutil.pid_exists(old_pid)
+    assert gone(old_pid)
     assert player._hover_builder is None and player._hover_path == numbered_clip  # 새 계획 — 워커는 쉬는 때 다시
 
     wait_until(lambda: player._hover_builder is not None and player._hover_builder.pid is not None, 5,
@@ -549,7 +550,7 @@ def test_opening_next_file_pauses_old_builder_while_opening(slow_ffmpeg, shown_p
     assert player.open_file("A", second_clip) is True
     assert seen == [(second_clip, True, psutil.STATUS_STOPPED if posix else None)]
     assert sip.isdeleted(old) or not old.isRunning()
-    assert not psutil.pid_exists(pid)  # 연 뒤에는 끝남 (정지된 채 kill)
+    assert gone(pid)  # 연 뒤에는 끝남 (정지된 채 kill) — 끝난 PID가 잠깐 남는 Windows는 사라지기를 기다림 (process_checks)
     assert player._hover_path == second_clip and player._hover_builder is None
 
 

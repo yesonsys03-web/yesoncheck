@@ -13,7 +13,6 @@ import json
 import os
 import sys
 
-import psutil
 import pytest
 from PyQt5 import sip
 from PyQt5.QtTest import QTest
@@ -23,6 +22,7 @@ from tests.test_player_hover_thumbs import (  # noqa: F401 (픽스처 — 이 �
     start_and_catch_running, strip_done, wait_until,
 )
 from tests.test_sequence_capture import make_seq
+from tests.process_checks import gone
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 from yesoncheck import app, downscale_filter, hover_strip, windows_display
 from yesoncheck.hover_strip import LOG_PREFIX
@@ -125,7 +125,7 @@ def test_toggle_off_saves_and_closes(slow_ffmpeg, shown_player, numbered_clip, c
     assert json.loads(read_text(hover_strip.prefs_path())) == {hover_strip.PREF_KEY: False}
     assert hover_strip.enabled() is False and not action.isChecked()
     assert player._hover_plan is None and player._hover_strip is None and player._hover_builder is None
-    assert worker_gone(builder) and not psutil.pid_exists(pid)
+    assert worker_gone(builder) and gone(pid)
     assert not player._hover_timer.isActive()
     assert capsys.readouterr().out.count(SET_OFF_LOG) == 1
     for slider in (player.positionScroll, player.overlaySlider):

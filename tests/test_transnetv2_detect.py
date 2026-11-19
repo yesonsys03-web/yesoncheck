@@ -74,6 +74,10 @@ print("REPORT " + json.dumps({
     "animatic2_index": player.ocrModeComboBox.findData("animatic2"),
 }))
 player.close()
+# 창을 QApplication보다 먼저 지움 — app.launch를 거치지 않아 그 끝의 정리가 없음(test_ocr_worker_lifetime의 같은 줄 설명:
+# 창이 살아 있는 채 파이썬이 끝나면 Windows에서 간헐적으로 0xC0000005 — 2026-11-10 CI에서 이 시험도 그렇게 실패함)
+from PyQt5 import sip
+sip.delete(player)
 """
 
 
