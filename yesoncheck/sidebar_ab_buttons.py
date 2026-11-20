@@ -146,12 +146,17 @@ class SidebarAbButtonsMixin:
         self._sidebar_ab_timers = {}
         self._sidebar_ab_viewports = {}  # 뷰포트 → 목록 (필터가 Qt를 부르지 않고 찾게 — 그림 이벤트마다 불림)
         self._sidebar_ab_parts = {}  # 묶음·단추 → 목록 (단추 위의 휠을 그 목록으로 넘김)
+        # 신호를 보내는 객체(단추·타이머·스크롤바·모델·선택 모델)의 주소 → (목록, 단추 쪽 "A"|"B"|None). 신호는 람다가 아니라 이 창의
+        # 바운드 메서드에 잇고 sender()로 목록을 찾음 — PyQt는 바운드 메서드를 약하게, 람다는 강하게 쥐어서 창(self)을 붙잡는 람다를
+        # 이으면 닫은 창이 영영 남았음(파이썬 래퍼가 그때그때 생기는 스크롤바·모델에 이으면 GC도 그 고리를 끊지 못함)
+        self._sidebar_ab_senders = {}
         self._sidebar_ab_filter = _AbHoverFilter(self._ab_event, self)
         for widget in (self.sidebar, self.seq_sidebar, self.all_sidebar):
             box = AbButtons(widget.viewport())
             self._sidebar_ab[widget] = box
-            box.button_a.clicked.connect(lambda _checked=False, w=widget: self._ab_open(w, "A"))
-            box.button_b.clicked.connect(lambda _checked=False, w=widget: self._ab_open(w, "B"))
+            for button, side in ((box.button_a, "A"), (box.button_b, "B")):
+                self._sidebar_ab_senders[sip.unwrapinstance(button)] = (widget, side)
+                button.clicked.connect(self._on_ab_button_clicked)
             for part in (box, box.button_a, box.button_b):
                 self._sidebar_ab_parts[part] = widget
                 part.installEventFilter(self._sidebar_ab_filter)
@@ -162,18 +167,36 @@ class SidebarAbButtonsMixin:
             timer = QTimer(self)
             timer.setSingleShot(True)
             timer.setInterval(0)
-            timer.timeout.connect(lambda w=widget: self._place_ab_buttons(w))
+            self._sidebar_ab_senders[sip.unwrapinstance(timer)] = (widget, None)
+            timer.timeout.connect(self._on_ab_refresh_timeout)
             self._sidebar_ab_timers[widget] = timer
-            widget.verticalScrollBar().valueChanged.connect(lambda _value, w=widget: self._schedule_ab_refresh(w))
-            model = widget.model()
-            # 줄이 움직이거나(줄 수·차례), 줄 높이가 바뀌거나(썸네일 아이콘 — dataChanged), 고른 줄이 바뀌면(묶음 밑 바탕) 다시 맞춤
-            for signal in (model.rowsInserted, model.rowsRemoved, model.modelReset, model.layoutChanged, model.dataChanged,
-                           widget.selectionModel().selectionChanged):
-                signal.connect(lambda *_args, w=widget: self._schedule_ab_refresh(w))
+            # 줄이 움직이거나(스크롤·줄 수·차례), 줄 높이가 바뀌거나(썸네일 아이콘 — dataChanged), 고른 줄이 바뀌면(묶음 밑 바탕) 다시 맞춤
+            model, selection, bar = widget.model(), widget.selectionModel(), widget.verticalScrollBar()
+            for sender, signals in ((bar, (bar.valueChanged,)),
+                                    (model, (model.rowsInserted, model.rowsRemoved, model.modelReset, model.layoutChanged,
+                                             model.dataChanged)),
+                                    (selection, (selection.selectionChanged,))):
+                self._sidebar_ab_senders[sip.unwrapinstance(sender)] = (widget, None)
+                for signal in signals:
+                    signal.connect(self._on_ab_list_changed)
         self.installEventFilter(self._sidebar_ab_filter)  # 창의 WindowDeactivate
         self.sidebar_tabs.currentChanged.connect(self._on_ab_tab_changed)
         for box in self._sidebar_ab.values():
             self._sync_ab_buttons(box, playing=False)  # 창을 만드는 중 — 선택 재생 상태(is_playlist_playing)는 아직 없음
+
+    def _ab_sender(self):
+        """지금 신호를 보낸 객체의 (목록, 단추 쪽) — 이 창의 A·B 신호가 아니면 KeyError."""
+        return self._sidebar_ab_senders[sip.unwrapinstance(self.sender())]
+
+    def _on_ab_button_clicked(self, _checked=False):
+        widget, side = self._ab_sender()
+        self._ab_open(widget, side)
+
+    def _on_ab_refresh_timeout(self):
+        self._place_ab_buttons(self._ab_sender()[0])
+
+    def _on_ab_list_changed(self, *_args):
+        self._schedule_ab_refresh(self._ab_sender()[0])
 
     def _ab_event(self, watched, event):
         """필터 본문 — 참을 돌려주면 그 이벤트를 먹음(단추 위의 휠만)."""

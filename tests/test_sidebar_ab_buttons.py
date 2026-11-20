@@ -532,3 +532,26 @@ def test_modified_click_on_buttons_is_a_click_on_the_row(loaded, qapp, modifier)
     click_with(button, QPoint(button.width() // 2, button.height() // 2))
     assert state() == on_row
     assert len(on_row[0]) == 2  # 범위·더해 고르기가 된 상태 (tk1과 tk3)
+
+
+def test_closed_window_is_not_kept_alive(dialogs, tmp_path, qapp, monkeypatch):
+    """닫고 놓은 창은 남지 않음 — 단추·목록 신호에 창(self)을 붙잡는 람다를 이으면 PyQt가 람다를 강하게 쥐어(파이썬 래퍼가 그때그때
+    생기는 스크롤바·모델에 이으면 GC도 그 고리를 끊지 못함) 창이 영영 남았음: 시험마다 창이 쌓여 전체 시험이 끝나지 않았고 앱도 새 창마다 샘."""
+    import gc
+    import weakref
+
+    from yesoncheck.main_window import VideoPlayer
+
+    monkeypatch.setenv("YESONCHECK_CONFIG_DIR", make_config(str(tmp_path), {}))
+    window = VideoPlayer()
+    window.show()
+    qapp.processEvents()
+    hover(qapp, window.sidebar, QPoint(5, 5))
+    window.close()
+    qapp.processEvents()
+    ref = weakref.ref(window)
+    del window
+    for _ in range(3):
+        gc.collect()
+        qapp.processEvents()
+    assert ref() is None
