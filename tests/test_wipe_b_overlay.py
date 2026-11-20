@@ -212,13 +212,15 @@ def test_no_b_label_without_wipe(wiped):
 
 # ---------------------------------------------------------------- Mac 네이티브 길 (IOSurface — 굽지 않고 아이템)
 
-from tests.native_fakes import FAKE_HEIGHT, FAKE_WIDTH, fake_native_player  # noqa: E402,F401 (fake_native_player: fixture)
+from tests.native_fakes import fake_native_player  # noqa: E402,F401 (fake_native_player: fixture)
+
+NATIVE_WIDTH, NATIVE_HEIGHT = 3840, 2160  # 가짜 기본 크기(16×8)에서는 짧은 이름도 두 글자가 겹쳐 B가 한 줄 위로 올라감 — 4K(행을 함께 쓰는 가짜 프레임)로
 
 
 @pytest.fixture
 def native_wiped(fake_native_player, qapp):  # noqa: F811
     """A·B 가짜 네이티브(GL 스트림 아이템) + 와이프·X·B 키 글자."""
-    rig = fake_native_player(ab=True)
+    rig = fake_native_player(ab=True, size=(NATIVE_WIDTH, NATIVE_HEIGHT))
     rig.player.wipeXButton.setChecked(True)
     rig.player.toggle_overlay_text()
     qapp.processEvents()
@@ -230,8 +232,8 @@ def test_native_b_label_item_right_aligned(native_wiped):
     widget = player.videoWidget
     box, text = widget.overlay_b_box_item, widget.overlay_b_text_item
     assert box.isVisible() and text.text() == player.overlay_label_b()
-    layout = overlay_layout(text.text(), FAKE_WIDTH, FAKE_HEIGHT)
-    assert abs(box.rect().right() - (FAKE_WIDTH - layout.margin_x + layout.pad + 1)) <= 1  # A 상자(margin_x − pad에서 시작)의 거울
+    layout = overlay_layout(text.text(), NATIVE_WIDTH, NATIVE_HEIGHT)
+    assert abs(box.rect().right() - (NATIVE_WIDTH - layout.margin_x + layout.pad + 1)) <= 1  # A 상자(margin_x − pad에서 시작)의 거울
     assert box.rect().bottom() == widget.overlay_box_item.rect().bottom()  # 아래 끝은 A 상자와 같음
     assert widget.overlay_box_item.isVisible()  # A 글자도 그대로
     assert native_wiped.reads == []  # 네이티브 프레임의 픽셀을 파이썬에서 읽지 않음
@@ -280,6 +282,19 @@ def test_native_b_label_hidden_without_wipe_overlay_or_frame(native_wiped):
     assert not widget.overlay_b_box_item.isVisible()
 
 
+def test_native_b_label_hidden_when_b_is_not_given(native_wiped):
+    """B를 넘기지 않는 길(OCR 검토 창이 열린 드래그 — _minimal_preview_seek)에서는 네이티브 길도 B 글자를 숨김: B 자리가 검정인데 B 캡처의
+    옛 번호를 보이지 않게(RGB 길의 test_no_labels_drawn_by_the_widget_when_b_is_not_given과 같은 규칙). A 글자 아이템은 그대로."""
+    player = native_wiped.player
+    widget = player.videoWidget
+    assert widget.overlay_b_box_item.isVisible()
+    widget.updateFrame(player.frame_a, None)
+    assert not widget.overlay_b_box_item.isVisible()
+    assert widget.overlay_box_item.isVisible()
+    player.update_frame()
+    assert widget.overlay_b_box_item.isVisible()
+
+
 @pytest.mark.parametrize("axes", ["x", "y", "xy"])
 def test_a_label_is_not_cut_by_the_wipe_line(wiped, axes):
     """A 글자도 와이프 선에 잘리지 않음 — CPU 길은 A 그림에 구운 글자를 B가 덮었음(사용자 보고 2026-11-20: 선을 A 글자 위로 옮기면 A 글자가
@@ -309,3 +324,183 @@ def test_a_label_pixels_on_the_a_side_are_unchanged_by_the_redraw(wiped):
     top = height - layout.margin_y - layout.text_height - layout.pad
     right = layout.margin_x + layout.text_width + layout.pad + 1
     assert np.array_equal(with_wipe[top:, :right], expected[top:, :right])
+
+
+# ---------------------------------------------------------------- 리뷰에서 찾은 것 (2026-11-20)
+
+LONG_A = "File: EP101_SC050_LAYOUT_BACKGROUND_PAINT_TK1.mov, Frame: 12/480"
+LONG_B = "File: EP101_SC050_LAYOUT_BACKGROUND_PAINT_TK2.mov, Frame: 12/480"
+
+
+def test_label_lift_only_when_the_labels_would_overlap():
+    """이름이 길면 오른쪽 아래의 B 글자가 왼쪽 아래 A 글자의 끝(Frame: n/N)을 덮었음 — 겹칠 때만 B를 한 줄 위로 (사용자 결정)."""
+    from yesoncheck.overlay_text_layout import label_lift, overlay_label_box
+
+    short_a, short_b = "File: a_tk1.mov, Frame: 1/24", "File: b_tk2.mov, Frame: 1/24"
+    assert label_lift(short_a, short_b, 1920, 1080) == 0
+    assert label_lift(None, short_b, 1920, 1080) == 0
+    lift = label_lift(LONG_A, LONG_B, 1920, 1080)
+    assert lift > 0
+    _layout, a = overlay_label_box(LONG_A, 1920, 1080, "left")
+    _layout, b = overlay_label_box(LONG_B, 1920, 1080, "right", lift=lift)
+    assert b.bottom < a.top  # 올린 B 상자는 A 상자보다 위 — 겹치지 않음
+    assert label_lift(short_a, short_b, 1080, 1920) > 0  # 세로 영상은 짧은 이름도 겹침
+
+
+def test_long_names_lift_b_above_a(new_player, dialogs, tmp_path, qapp):  # noqa: F811
+    from tests.conftest import write_test_video
+    from yesoncheck.overlay_text_layout import label_lift, overlay_label_box
+
+    player = new_player(make_config(str(tmp_path), {}))
+    assert player.open_file("A", write_test_video(str(tmp_path / "EP101_SC050_LAYOUT_BACKGROUND_PAINT_TK1.mov"), size=(640, 360)))
+    assert player.open_file("B", write_test_video(str(tmp_path / "EP101_SC050_LAYOUT_BACKGROUND_PAINT_TK2.mov"), size=(640, 360)))
+    player.wipeCheckBox.setChecked(True)
+    player.wipeXButton.setChecked(True)
+    player.seek_to_frame(1)
+    player.toggle_overlay_text()
+    image = shown_image(player)
+    height, width = image.shape[:2]
+    text_a, text_b = player.overlay_label(), player.overlay_label_b()
+    lift = label_lift(text_a, text_b, width, height)
+    assert lift > 0
+    _layout, a = overlay_label_box(text_a, width, height, "left")
+    _layout, b = overlay_label_box(text_b, width, height, "right", lift=lift)
+    assert (image[a.top + 1:a.bottom, a.right - 2:a.right] == 255).all()  # A 상자의 오른쪽 끝(Frame: n/N 쪽)이 그대로
+    assert (image[b.top + 1:b.bottom, b.left + 1:b.left + 3] == 255).all()  # B 상자는 한 줄 위에
+
+
+def test_native_long_names_lift_b_above_a(native_wiped, monkeypatch):
+    player = native_wiped.player
+    monkeypatch.setattr(player, "overlay_label", lambda: LONG_A)
+    monkeypatch.setattr(player, "overlay_label_b", lambda: LONG_B)
+    player.update_frame()
+    widget = player.videoWidget
+    a, b = widget.overlay_box_item.rect(), widget.overlay_b_box_item.rect()
+    assert widget.overlay_box_item.isVisible() and widget.overlay_b_box_item.isVisible()
+    assert b.bottom() < a.top()  # 겹치면 B를 A 줄 위로
+    monkeypatch.setattr(player, "overlay_label", lambda: "File: a.mov, Frame: 1/24")
+    monkeypatch.setattr(player, "overlay_label_b", lambda: "File: b.mov, Frame: 1/24")
+    player.update_frame()
+    assert widget.overlay_b_box_item.rect().bottom() == widget.overlay_box_item.rect().bottom()  # 짧으면 같은 줄
+
+
+class _CountingCapture:
+    """B 캡처를 감싸 set·read 횟수를 셈 (cv2.VideoCapture에는 속성을 달 수 없음)."""
+
+    def __init__(self, cap):
+        self._cap = cap
+        self.sets = 0
+        self.reads = 0
+
+    def set(self, prop, value):
+        self.sets += 1
+        return self._cap.set(prop, value)
+
+    def read(self):
+        self.reads += 1
+        return self._cap.read()
+
+    def __getattr__(self, name):
+        return getattr(self._cap, name)
+
+
+def test_arrow_reads_b_in_order_without_seeking(wiped, qapp):
+    """와이프 중 →: B가 바로 앞 장에 있으면 탐색(set) 없이 다음 장을 읽음 — cv2의 set은 같은 자리여도 키프레임부터 다시 디코드해
+    느렸음(리뷰 실측 키 한 번 93ms 대 18ms). ←(뒤로)는 탐색이 필요함. 화면의 B 쪽은 새로 읽은 그 장의 그림(시험 영상의 i번째 장 = 회색 10·i)."""
+    counting = wiped.cap_b = _CountingCapture(wiped.cap_b)
+    _arrow(wiped, qapp, Qt.Key_Right)
+    assert (counting.sets, counting.reads) == (0, 1)
+    assert abs(int(shown_image(wiped)[5, -5].mean()) - 10) <= 4  # B의 1번 장(회색 10)
+    _arrow(wiped, qapp, Qt.Key_Right)
+    assert (counting.sets, counting.reads) == (0, 2)
+    assert abs(int(shown_image(wiped)[5, -5].mean()) - 20) <= 4
+    _arrow(wiped, qapp, Qt.Key_Left)
+    assert counting.sets == 1 and counting.reads == 3
+    assert abs(int(shown_image(wiped)[5, -5].mean()) - 10) <= 4
+
+
+def test_a_label_redraw_keeps_a_annotations(wiped):
+    """A 글자를 합성 위에 다시 구울 때 A 쪽은 건드리지 않음 — 글자 상자 안의 A 주석이 덮이지 않음(리뷰: 통째로 다시 구우면 주석이 가려짐)."""
+    layout = overlay_layout(wiped.overlay_label(), 640, 360)
+    box_y = 1 - (layout.margin_y + layout.text_height / 2) / 360  # 글자 상자 가운데 높이
+    wiped.annotation_store.add(0, {"type": "rect", "norm_x1": 0.0, "norm_y1": box_y - 0.02, "norm_x2": 0.3, "norm_y2": box_y + 0.02,
+                                   "color": "#ff3333", "stroke_width": 2})
+    wiped.videoWidget.wipe_position_x = 0.95  # A 글자 전부가 A 쪽
+    wiped.update_frame()
+    image = shown_image(wiped)
+    expected = wiped.prepare_frame_for_display(wiped.frame_a)  # A 그림 = 글자 + 그 위에 주석 (예전 그대로)
+    b_left = b_box(wiped, 640, 360)[0]  # 오른쪽 아래 B 글자 상자(A 쪽 위에 그려짐)의 왼쪽 — 그 앞까지가 A 그림 그대로여야 함
+    assert b_left < int(640 * 0.95)
+    assert np.array_equal(image[:, :b_left], expected[:, :b_left])
+    red = (expected[..., 0] > 200) & (expected[..., 1] < 100) & (expected[..., 2] < 100)
+    assert red[:, :b_left].sum() > 100  # 시험이 주석을 실제로 그렸음 (글자 상자 안의 빨간 사각형)
+
+
+def test_no_labels_drawn_by_the_widget_when_b_is_not_given(wiped):
+    """B를 넘기지 않는 길(슬라이더 드래그 미리보기·OCR 검토 창이 열린 드래그 — frame_b None)에서는 위젯이 글자를 그리지 않음:
+    B 쪽은 검정인데 B 캡처가 움직이지 않은 옛 번호를 보였음(리뷰)."""
+    frame = np.zeros((360, 640, 3), np.uint8)  # 글자를 굽지 않은 A (그 길처럼)
+    wiped.videoWidget.updateFrame(frame, None)
+    image = shown_image(wiped)
+    assert not (image == 255).all(axis=2).any()
+
+
+# ---------------------------------------------------------------- 와이프 중 슬라이더 드래그의 B (사용자 결정 2026-11-20)
+
+def _drag(player, frame_idx, total=24, overlay=False):
+    player.is_dragging = True
+    if overlay:
+        player._overlay_slider_preview_seek(frame_idx, total)
+    else:
+        player._quick_preview_seek(frame_idx, total)
+
+
+def _b_side_gray(player):
+    return int(shown_image(player)[5, -5].mean())
+
+
+@pytest.mark.parametrize("overlay", [False, True], ids=["main-slider", "overlay-slider"])
+def test_drag_reads_small_b_along(wiped, overlay):
+    """1920×1080 이하의 B는 끄는 동안에도 A와 같은 장으로 읽어 보여 줌 — 예전에는 B 자리가 검게 깜빡였음(시험 영상의 i번째 장 = 회색 10·i)."""
+    import cv2
+
+    _drag(wiped, 10, overlay=overlay)
+    assert int(wiped.cap_b.get(cv2.CAP_PROP_POS_FRAMES)) == 11 and wiped.frame_b is not None
+    assert abs(_b_side_gray(wiped) - 100) <= 4
+    _drag(wiped, 15, overlay=overlay)
+    assert abs(_b_side_gray(wiped) - 150) <= 4
+
+
+def test_drag_cache_hit_still_reads_small_b(wiped):
+    """A가 캐시에 있는 자리로 돌아와도(캐시 적중 — A를 읽지 않음) B는 그 장으로."""
+    _drag(wiped, 15)
+    _drag(wiped, 5)
+    _drag(wiped, 15)  # A는 캐시에서
+    assert abs(_b_side_gray(wiped) - 150) <= 4
+
+
+def test_drag_keeps_large_b_picture_until_release(new_player, dialogs, tmp_path, qapp):  # noqa: F811
+    """1920×1080보다 큰 B(4K 등)는 끄는 동안 끄기 전 그림 그대로(검게 깜빡이지 않음 — 읽으면 드래그가 느려짐), 놓으면 A와 같은 장으로."""
+    import cv2
+
+    from tests.conftest import write_test_video
+
+    player = new_player(make_config(str(tmp_path), {}))
+    size = (2048, 1152)  # 1920×1080보다 큼
+    assert player.open_file("A", write_test_video(str(tmp_path / "a_big.mov"), size=size))
+    assert player.open_file("B", write_test_video(str(tmp_path / "b_big.mov"), size=size))
+    player.wipeCheckBox.setChecked(True)
+    player.wipeXButton.setChecked(True)
+    player.seek_to_frame(6)  # A·B 5번 장(회색 50)
+    before = player.frame_b
+    _drag(player, 15)
+    assert player.frame_b is before and int(player.cap_b.get(cv2.CAP_PROP_POS_FRAMES)) == 6  # B는 읽지 않음
+    assert abs(_b_side_gray(player) - 50) <= 4  # 검정이 아니라 끄기 전 B 그림
+    maximum = player.positionScroll.maximum()
+    player.positionScroll.blockSignals(True)
+    player.positionScroll.setValue(round(15 / 23 * maximum))
+    player.positionScroll.blockSignals(False)
+    player.sync_audio_on_release()  # 놓음
+    player.is_dragging = False
+    assert int(player.cap_b.get(cv2.CAP_PROP_POS_FRAMES)) == int(player.cap_a.get(cv2.CAP_PROP_POS_FRAMES))
+    assert abs(_b_side_gray(player) - 150) <= 4

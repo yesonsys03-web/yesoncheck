@@ -376,7 +376,8 @@ PAGES = (
              ("list", (
                  "If A and B have **different sizes (resolutions), the B area is black**. Compare videos of the same size.",
                  "**Turning the wipe off closes B.** When you turn it back on, the B area is black until you open a video as B ({]}).",
-                 "**Only A is shown while you drag** the time slider; when you release it, B is synced to the same frame as A.",
+                 "**While you drag** the time slider, B follows A to the same frame if B is 1920×1080 or smaller. If it is larger "
+                 "(4K, etc.), B stays on the last picture it read and is synced to the same frame as A when you release.",
                  "{←} {→} and the mouse wheel move **A and B together** (B goes to the same frame as A), and "
                  "clicking the time slider also syncs B to the same frame as A again.",
                  "Videos are compared only with videos, and image sequences only with sequences. If you open something of a "
@@ -387,7 +388,8 @@ PAGES = (
                  "annotations are not cut off at the line either — they are visible over the B side as well.",
                  "If you turn on the file name and frame number text with the {B} key during a wipe, **B's text** also appears at the "
                  "bottom right of the video — like A's text it is not cut off at the wipe line, "
-                 "and the number is B's own frame number.",
+                 "and the number is B's own frame number. If the file names are long and the two texts would overlap, B's text "
+                 "moves one line up.",
              )),
          )),
     Page("sidebar", "Sidebar (video list)", "Lists & files",

@@ -39,6 +39,8 @@ from yesoncheck.workers import FFmpegWorker
 from yesoncheck import external_tools, file_names, media_info, paths, thumbnails, video_list
 from yesoncheck.player_sidebar import ThumbnailContext
 
+DRAG_B_MAX_PIXELS = 1920 * 1080  # 와이프 중 슬라이더 드래그: B의 화소 수가 이 이하면 끄는 동안에도 B를 A와 같은 장으로 읽음(_drag_wipe_b — 사용자 결정 2026-11-20)
+
 
 def measurement_line(frames, elapsed, native, wipe, display, name, max_gap=0.0, stalls=0):
     """재생 한 바퀴의 [측정] 줄 — `[측정] <장>장 <초>초 (<fps>fps) 최대간격 <ms>ms 끊김 <n>번 네이티브=yes|no 와이프=on|off 표시=gl|pixmap|raster — <파일 이름>`.
@@ -628,7 +630,8 @@ class PlayerPlaybackMixin:
            그 밖의 예외(ToolNotFoundError·probe 해석 오류 — 코드·빌드 쪽)는 잡지 않음.
         3. 고른 쪽이 없으면 끝 — 재생·캐시·프레임 무엇도 건드리지 않음.
         4. 지금 번호(get_current_frame_index — A의 자리가 플레이어의 자리)와 B의 자리(다음에 읽을 번호, 그리고 B가 읽어 둔 프레임이 있는지)를 한 번
-           기억: 와이프가 켜져 있어도 화살표·휠 이동(_seek_direct_fast·_seek_sequential_fast)은 A만 움직이므로 B는 A와 몇 장 어긋나 있을 수 있음.
+           기억: B는 A와 몇 장 어긋나 있을 수 있음(2026-11-20 전에는 ←→가 A만 움직였음 — 지금은 B도 함께; 그래도 큰 B를 끄는 동안·B를 따로
+           옮긴 때·B가 A보다 짧을 때는 어긋남).
            재생 중이었으면 pause_video로 멈춤: 새 캡처를 여는 동안 뜰 수 있는 창(네이티브 실패 → 파이프로 계속, 열기 실패)의 이벤트 루프에서 재생
            틱이 진행하지 않게, 그리고 끝의 play_video가 다시 켤 수 있게(play_video는 타이머가 돌고 있으면 아무것도 안 함). 소리도 함께 멈췄다가
            play_video가 그 번호에 맞춰 이어 줌.
@@ -800,8 +803,8 @@ class PlayerPlaybackMixin:
         return f"File: {os.path.basename(self.filename_a)}, Frame: {int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES))}/{int(self.cap_a.get(cv2.CAP_PROP_FRAME_COUNT))}"
 
     def overlay_label_b(self):
-        """와이프 중 B 키 글자 "File: <B 파일 이름>, Frame: <B 캡처 위치>/<B 전체 장 수>" — A와 같은 모양, 번호는 B 자신의 번호(←→는 A만
-        움직여 A·B 번호가 다를 수 있음). 화면 위젯이 오른쪽 아래(B 쪽)에 그림 — _overlay_b_text."""
+        """와이프 중 B 키 글자 "File: <B 파일 이름>, Frame: <B 캡처 위치>/<B 전체 장 수>" — A와 같은 모양, 번호는 B 자신의 번호(큰 B를
+        끄는 동안·B가 A보다 짧을 때는 A·B 번호가 다를 수 있음). 화면 위젯이 오른쪽 아래에 그림(A 글자와 겹치면 한 줄 위) — _overlay_b_text."""
         return f"File: {os.path.basename(self.filename_b)}, Frame: {int(self.cap_b.get(cv2.CAP_PROP_POS_FRAMES))}/{int(self.cap_b.get(cv2.CAP_PROP_FRAME_COUNT))}"
 
     def _overlay_b_text(self):
@@ -861,11 +864,11 @@ class PlayerPlaybackMixin:
         if hasattr(self, 'overlayStartFrameLabel'):
             self.overlayStartFrameLabel.setText(f'{target_frame_idx + 1}')
 
-        # 오버레이 슬라이더 전용: B 프레임을 완전히 무시하고 A 프레임만 처리
+        # 오버레이 슬라이더 전용 미리보기 (와이프의 B는 _drag_wipe_b)
         self._overlay_slider_preview_seek(target_frame_idx, total_frames)
 
     def _overlay_slider_preview_seek(self, target_frame_idx, total_frames):
-        """오버레이 슬라이더 전용 프리뷰 - B 프레임 완전 무시"""
+        """오버레이 슬라이더 전용 프리뷰 — 캐시를 쓰지 않음. 와이프의 B는 _drag_wipe_b(작은 B는 같은 장, 큰 B는 끄기 전 그림)"""
         try:
             # 오버레이 슬라이더 드래그 중에는 캐시를 사용하지 않음 (이전 영상 프레임 방지)
             # 1. 가까운 프레임은 건너뜀 (문턱 frame_skip_threshold — 고정 5)
@@ -894,8 +897,9 @@ class PlayerPlaybackMixin:
                 # 오버레이 슬라이더 드래그 중에는 캐시에 저장하지 않음
                 # (이전 영상의 프레임이 섞이는 것을 방지)
                 
-                # B 프레임을 강제로 None으로 설정 (오버레이 슬라이더에서는 완전 무시)
-                self.frame_b = None
+                # 와이프가 아니면(B가 없거나 와이프 꺼짐) B 프레임을 None으로 — 와이프의 B는 _overlay_slider_ui_update의 _drag_wipe_b가 맡음
+                if not (self.cap_b and self.videoWidget.wipeEnabled):
+                    self.frame_b = None
                 
                 # 오버레이 슬라이더 전용 UI 업데이트
                 self._overlay_slider_ui_update(target_frame_idx, total_frames)
@@ -905,7 +909,7 @@ class PlayerPlaybackMixin:
             pass
 
     def _overlay_slider_ui_update(self, frame_idx, total_frames):
-        """오버레이 슬라이더 전용 UI 업데이트 - B 프레임 완전 무시"""
+        """오버레이 슬라이더 전용 UI 업데이트 (드래그 미리보기) — 와이프의 B는 _drag_wipe_b"""
         # B 키 오버레이 적용
         frame_a_to_show = self.frame_a
         if hasattr(self, "prepare_frame_for_display"):
@@ -914,10 +918,10 @@ class PlayerPlaybackMixin:
             frame_a_to_show = self.frame_a.copy()
             self.overlay_text(frame_a_to_show)
         
-        # 오버레이 슬라이더에서는 B 프레임을 절대 표시하지 않음
-        frame_b_to_show = None
+        # 와이프의 B: 작은 B는 A와 같은 장을 읽고, 큰 B는 끄기 전 그림 그대로 (예전에는 끄는 동안 B 자리가 검게 깜빡였음 — 사용자 보고 2026-11-20)
+        frame_b_to_show = self._drag_wipe_b(frame_idx)
         
-        # 비디오 프레임 업데이트 (A 프레임만)
+        # 비디오 프레임 업데이트
         self.videoWidget.updateFrame(frame_a_to_show, frame_b_to_show)
         if hasattr(self, "refresh_frame_annotations_display"):
             self.refresh_frame_annotations_display()
@@ -1125,7 +1129,7 @@ class PlayerPlaybackMixin:
                 # 캐시에 저장 (즉시 처리)
                 self.cache_frame(target_frame_idx, self.frame_a)
                 
-                # B 동기화 (드래그 중에는 완전히 스킵)
+                # B 동기화 — 드래그 중의 와이프 B는 _ultra_fast_ui_update의 _drag_wipe_b가 맡음(작은 B는 같은 장을 읽고, 큰 B는 끄기 전 그림 그대로)
                 if not self.is_dragging and self.cap_b and self.videoWidget.wipeEnabled:
                     self.cap_b.set(cv2.CAP_PROP_POS_FRAMES, target_frame_idx)
                     ret_b, frame_b = self.cap_b.read()
@@ -1133,8 +1137,8 @@ class PlayerPlaybackMixin:
                         self.frame_b = self.optimize_for_4k(frame_b)
                     else:
                         self.frame_b = None
-                else:
-                    # 드래그 중이거나 B 비디오가 없으면 B 프레임을 None으로 설정
+                elif not (self.cap_b and self.videoWidget.wipeEnabled):
+                    # B 비디오가 없거나 와이프가 꺼져 있으면 B 프레임을 None으로 설정
                     self.frame_b = None
                 
                 # 초고속 UI 업데이트 (시간 정보만 업데이트)
@@ -1154,9 +1158,11 @@ class PlayerPlaybackMixin:
             frame_a_to_show = self.frame_a.copy()
             self.overlay_text(frame_a_to_show)
         
-        # 드래그 중이거나 B 프레임이 없으면 B 프레임을 표시하지 않음
+        # 와이프의 B: 드래그 중에는 _drag_wipe_b(작은 B는 A와 같은 장을 읽고, 큰 B는 마지막으로 읽은 그림 그대로 — 검게 깜빡이지 않게), 아니면 읽어 둔 B
         frame_b_to_show = None
-        if not self.is_dragging and self.frame_b is not None and (self.videoWidget.wipe_enabled_x or self.videoWidget.wipe_enabled_y):
+        if self.is_dragging:
+            frame_b_to_show = self._drag_wipe_b(frame_idx)
+        elif self.frame_b is not None and (self.videoWidget.wipe_enabled_x or self.videoWidget.wipe_enabled_y):
             frame_b_to_show = self.frame_b
         
         # 비디오 프레임 업데이트
@@ -2027,6 +2033,30 @@ class PlayerPlaybackMixin:
             print(f"빠른 순차적 프레임 읽기 실패: {e}")
             return False
 
+    def _read_wipe_b(self, frame_idx, quick=False):
+        """와이프의 B를 frame_idx 장으로 읽어 frame_b에 (못 읽으면 None). B 캡처가 바로 그 장을 줄 차례(POS == frame_idx)면 탐색 없이 이어 읽음 —
+        cv2의 set은 같은 자리여도 키프레임부터 다시 디코드함(리뷰 실측 2026-11-20: → 키 한 번 93ms 대 18ms). quick: 드래그 미리보기 — 색 변환만."""
+        if int(self.cap_b.get(cv2.CAP_PROP_POS_FRAMES)) != frame_idx:
+            self.cap_b.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        ret_b, raw_b = self.cap_b.read()
+        if not ret_b or raw_b is None:
+            self.frame_b = None
+        else:
+            self.frame_b = self.process_frame(raw_b, gpu=False) if quick else self.process_frame(raw_b)
+
+    def _drag_wipe_b(self, frame_idx):
+        """와이프 중 슬라이더 드래그 미리보기가 보여 줄 B (없으면 None) — 예전에는 끄는 동안 B 자리가 검게 깜빡였음(사용자 보고·결정 2026-11-20):
+        B가 1920×1080 이하(화소 수 DRAG_B_MAX_PIXELS)면 끄는 동안에도 A와 같은 장을 읽어 frame_b로, 더 크면(4K 등 — 읽으면 드래그가 느려짐)
+        읽지 않고 끄기 전 그림(frame_b) 그대로 — 놓을 때 sync_audio_on_release·_overlay_slider_final_seek가 A와 같은 장으로 맞춤.
+        와이프 축이 꺼져 있으면(B가 안 보임) 읽지 않고 None."""
+        widget = self.videoWidget
+        if not (self.cap_b and widget.wipeEnabled and (widget.wipe_enabled_x or widget.wipe_enabled_y)):
+            return None
+        pixels = int(self.cap_b.get(cv2.CAP_PROP_FRAME_WIDTH)) * int(self.cap_b.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        if 0 < pixels <= DRAG_B_MAX_PIXELS and (self.frame_b is None or int(self.cap_b.get(cv2.CAP_PROP_POS_FRAMES)) - 1 != frame_idx):
+            self._read_wipe_b(frame_idx, quick=True)
+        return self.frame_b
+
     def _update_ui_fast(self, frame_idx, total_frames):
         """빠른 UI 업데이트 - 단축키용 (오버레이 반영)"""
         # 프레임 범위 체크 강화
@@ -2035,9 +2065,7 @@ class PlayerPlaybackMixin:
         # 와이프 중 ←→: B도 A와 같은 프레임으로 (휠·슬라이더의 seek_to_frame과 같은 규칙 — 사용자 결정 2026-11-20; 예전엔 A만 움직여 B가 제자리).
         # 이 함수는 ←→의 이동(next_frame·prev_frame)만 부름. B가 이미 그 자리면 다시 읽지 않음
         if self.cap_b and self.videoWidget.wipeEnabled and (self.frame_b is None or int(self.cap_b.get(cv2.CAP_PROP_POS_FRAMES)) - 1 != frame_idx):
-            self.cap_b.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-            ret_b, raw_b = self.cap_b.read()
-            self.frame_b = self.process_frame(raw_b) if ret_b else None
+            self._read_wipe_b(frame_idx)
 
         # 오버레이 반영
         frame_a_to_show = self.frame_a

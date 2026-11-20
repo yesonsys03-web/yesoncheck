@@ -43,7 +43,15 @@ from yesoncheck import gl_bindings, paths, ui_text, windows_display
 from yesoncheck.annotation_overlay import AnnotationOverlay
 from yesoncheck.frame_handles import native_surface_of, whole_surface_handle
 from yesoncheck.gl_video_item import LOG_PREFIX, VIDEO_ITEM_ENV, VideoFrameItem, use_stream_item, video_item_mode
-from yesoncheck.overlay_text_layout import burn_overlay_label, overlay_layout, overlay_reserve_text, widest_digit
+from yesoncheck.overlay_text_layout import (
+    burn_overlay_label,
+    draw_overlay_label,
+    label_lift,
+    overlay_label_box,
+    overlay_layout,
+    overlay_reserve_text,
+    widest_digit,
+)
 from yesoncheck.raster_video_item import AreaScaledPixmapItem
 
 VIEWPORT_ENV = "YESONCHECK_VIEWPORT"
@@ -615,7 +623,7 @@ class CustomVideoWidget(QGraphicsView):
         if native_surface_of(frame_a) is not None or native_surface_of(frame_b) is not None:
             self._show_native_frames(frame_a, frame_b)  # 네이티브(IOSurface) 프레임 — RGB 변환·numpy 합성 없음
             self._refresh_native_overlay(frame_a)
-            self._refresh_native_overlay_b(frame_a)
+            self._refresh_native_overlay_b(frame_a, frame_b)  # A 글자 아이템 뒤에 — 겹치는지를 A 상자로 봄
             self._refresh_native_annotations(frame_a)
             self._after_frame_shown()
             return
@@ -625,6 +633,7 @@ class CustomVideoWidget(QGraphicsView):
         
         q_img = None
         if self.wipe_enabled_x or self.wipe_enabled_y:
+            b_given = frame_b is not None  # B를 넘기지 않는 길(OCR 검토 창이 열린 드래그 등)은 글자도 그리지 않음 — 옛 번호를 보이지 않게
             if frame_b is None or frame_b.shape != frame_a.shape:
                 frame_b = np.zeros_like(frame_a)
             result = frame_a.copy()
@@ -634,16 +643,8 @@ class CustomVideoWidget(QGraphicsView):
             if self.wipe_enabled_y:
                 wipe_y = int(height * self.wipe_position_y)
                 result[wipe_y:, :] = frame_b[wipe_y:, :]
-            text_a = self._overlay_provider() if self._overlay_provider is not None else None
-            if text_a:
-                # A 글자도 합성한 그림 위에 다시 — A 그림에 구운 글자를 B가 덮어 와이프 선에 잘렸음(사용자 보고 2026-11-20). 같은 자리·같은 글·같은
-                # 그리기라 A 쪽 픽셀은 그대로 (공급자는 B 키 글자가 켜졌을 때만 글을 줌 — 네이티브 길의 아이템과 같은 공급자)
-                burn_overlay_label(result, text_a)
-            text_b = self._overlay_b_provider() if self._overlay_b_provider is not None else None
-            if text_b:
-                # 와이프 중 B 키 글자: 합성한 그림(새 사본) 위 오른쪽 아래에 — 와이프 선에 잘리지 않고 늘 보임(A 글자처럼, 사용자 결정 2026-11-20),
-                # 플레이어의 frame_b(다음 틱·드래그 캐시)는 건드리지 않음
-                burn_overlay_label(result, text_b, "right")
+            if b_given:
+                self._burn_wipe_labels(result, width, height)
             q_img = QImage(result.data, width, height, bytes_per_line, QImage.Format_RGB888)
         else:
             q_img = QImage(frame_a.data, width, height, bytes_per_line, QImage.Format_RGB888)
@@ -656,9 +657,34 @@ class CustomVideoWidget(QGraphicsView):
 
         self._pixmap_backing = None  # RGB 그림을 건 뒤에 놓음 — 픽스맵 길이 앞 네이티브 프레임의 표면을 더 쥐지 않게(스트림 길에선 늘 None)
         self.set_overlay_text(None, width, height)  # RGB 프레임의 B 키 글자는 프레임에 구움 — 앞 네이티브 프레임의 아이템이 남지 않게(숨어 있으면 할 일 없음)
-        self.set_overlay_b_text(None, width, height)  # 와이프 중 B 글자도 RGB면 B 그림에 구움(위)
+        self.set_overlay_b_text(None, width, height)  # 와이프 중 B 글자도 RGB 길은 합성한 그림 위에 구움(위 _burn_wipe_labels)
         self.annotation_overlay.clear()  # 주석도 프레임에 구움(prepare_frame_for_display) — 앞 네이티브 프레임의 주석 층을 비움(비어 있으면 할 일 없음)
         self._after_frame_shown()
+
+    def _burn_wipe_labels(self, result, width, height):
+        """RGB 와이프 합성(result — 새 사본) 위의 B 키 글자 (사용자 결정 2026-11-20 — 와이프 선에 잘리지 않게):
+        A 글자는 A 그림에 이미 구워져 있어 B가 덮은 부분(B 쪽에 걸친 부분)만 다시 그림 — A 쪽은 그대로(A 그림의 글자 위 주석을 덮지 않게).
+        B 글자는 오른쪽 아래에 구움 — 이름이 길어(또는 세로 영상) A 글자와 겹치면 한 줄 위로(label_lift). 플레이어의 frame_b는 건드리지 않음.
+        글은 두 공급자(B 키 글자가 켜졌을 때만)."""
+        text_a = self._overlay_provider() if self._overlay_provider is not None else None
+        text_b = self._overlay_b_provider() if self._overlay_b_provider is not None else None
+        if text_a:
+            layout, box = overlay_label_box(text_a, width, height, "left")
+            top, bottom = max(0, box.top), min(height - 1, box.bottom)
+            left, right = max(0, box.left), min(width - 1, box.right)
+            if top <= bottom and left <= right:
+                patch = result[top:bottom + 1, left:right + 1].copy()
+                draw_overlay_label(patch, text_a, layout, box, dx=-left, dy=-top)
+                if self.wipe_enabled_x:
+                    x0 = max(left, int(width * self.wipe_position_x))
+                    if x0 <= right:
+                        result[top:bottom + 1, x0:right + 1] = patch[:, x0 - left:]
+                if self.wipe_enabled_y:
+                    y0 = max(top, int(height * self.wipe_position_y))
+                    if y0 <= bottom:
+                        result[y0:bottom + 1, left:right + 1] = patch[y0 - top:, :]
+        if text_b:
+            burn_overlay_label(result, text_b, "right", lift=label_lift(text_a, text_b, width, height))
 
     def _show_native_frames(self, frame_a, frame_b):
         """A 또는 B가 네이티브 프레임(frame_handles — IOSurface 위 BGRX 뷰)일 때 그리기 — CPU로 픽셀을 읽거나 합성하지 않는다.
@@ -699,7 +725,7 @@ class CustomVideoWidget(QGraphicsView):
 
     def set_overlay_b_provider(self, provider):
         """와이프 중 B 키 글자 공급자 등록 — provider() -> str | None. 플레이어가 창을 만들 때 한 번(_overlay_b_text); 그릴 때마다 불러 RGB 길은
-        B 그림 사본에 오른쪽 아래로 굽고 합성(와이프가 B 쪽만 남김), 네이티브 길은 B 쪽으로 자른 아이템."""
+        합성한 그림 위 오른쪽 아래에 굽고(_burn_wipe_labels), 네이티브 길은 자르지 않는 아이템 — 둘 다 와이프 선에 잘리지 않음."""
         if not callable(provider):
             raise TypeError(f"와이프 중 B 키 글자 공급자는 호출할 수 있어야 합니다: {provider!r}")
         self._overlay_b_provider = provider
@@ -723,12 +749,13 @@ class CustomVideoWidget(QGraphicsView):
             return
         self.set_overlay_text(self._overlay_provider(), width, height)
 
-    def _refresh_native_overlay_b(self, frame_a):
+    def _refresh_native_overlay_b(self, frame_a, frame_b):
         """네이티브 분기의 와이프 중 B 키 글자 아이템 갱신 — 스트림 아이템(GL)일 때만: 픽스맵 길(킬 스위치)은 A만 그려 B가 보이지 않음.
-        글은 공급자(_overlay_b_text — 와이프 축·B 키 글자·B가 있을 때만), 기하는 A의 크기(픽셀은 읽지 않음)."""
+        글은 공급자(_overlay_b_text — 와이프 축·B 키 글자·B가 있을 때만), 기하는 A의 크기(픽셀은 읽지 않음). B를 넘기지 않은 그림(frame_b None —
+        OCR 검토 창이 열린 드래그 등: B 자리가 검정)에는 숨김 — B 캡처의 옛 번호를 보이지 않게(RGB 길과 같은 규칙)."""
         height, width = frame_a.shape[:2]
         text = None
-        if self._overlay_b_provider is not None and self.video_item_stream:
+        if self._overlay_b_provider is not None and self.video_item_stream and frame_b is not None:
             text = self._overlay_b_provider()
         self.set_overlay_b_text(text, width, height)
 
@@ -739,7 +766,17 @@ class CustomVideoWidget(QGraphicsView):
             if self.overlay_b_layer_item.isVisible():
                 self.overlay_b_layer_item.setVisible(False)  # 자식인 상자·글자도 함께 숨음
             return
-        self._place_overlay_label(self.overlay_b_box_item, self.overlay_b_text_item, text, width, height, "right")
+        layout = self._place_overlay_label(self.overlay_b_box_item, self.overlay_b_text_item, text, width, height, "right")
+        a_rect, b_rect = self.overlay_box_item.rect(), self.overlay_b_box_item.rect()
+        if self.overlay_box_item.isVisible():
+            overlaps = a_rect.right() + layout.pad >= b_rect.left()  # A 글자 아이템(네이티브 A)의 실제 폭으로
+            lift = a_rect.height() + layout.pad
+        else:  # A가 RGB면 A 글자는 A 그림에 구워짐 — 그 자리는 굽는 규칙(cv2 폭)으로 셈
+            text_a = self._overlay_provider() if self._overlay_provider is not None else None
+            lift = label_lift(text_a, text, width, height)
+            overlaps = lift > 0
+        if overlaps:  # 이름이 길어(또는 세로 영상) A 글자의 끝(Frame: n/N)을 덮으면 B를 A 줄 위로 (사용자 결정 2026-11-20)
+            self._place_overlay_label(self.overlay_b_box_item, self.overlay_b_text_item, text, width, height, "right", lift=lift)
         self.overlay_b_layer_item.setVisible(True)
 
     def set_annotation_provider(self, provider):
@@ -778,7 +815,7 @@ class CustomVideoWidget(QGraphicsView):
         self.overlay_box_item.setVisible(True)  # 자식인 글자도 함께 보임
 
     @staticmethod
-    def _place_overlay_label(box, text_item, text, width, height, align):
+    def _place_overlay_label(box, text_item, text, width, height, align, lift=0):
         """B 키 글자 상자·글자 아이템의 기하(set_overlay_text의 규칙 — A는 "left", 와이프 중 B는 "right": 기준선 왼쪽 끝을 너비 − margin_x − Qt 글자 폭으로
         옮겨 상자 오른쪽 끝이 너비 − margin_x + pad가 되게 — A 상자 왼쪽 끝 margin_x − pad의 거울)."""
         layout = overlay_layout(text, width, height)
@@ -786,13 +823,14 @@ class CustomVideoWidget(QGraphicsView):
         metrics = QFontMetricsF(font)
         advance = metrics.horizontalAdvance(text)
         x = layout.margin_x if align == "left" else width - layout.margin_x - advance  # 기준선 왼쪽 끝
-        y = height - layout.margin_y
+        y = height - layout.margin_y - lift  # lift: 와이프 중 B 글자가 A 글자와 겹치면 한 줄 위로
         pad = layout.pad
         below = max(pad, layout.baseline, math.ceil(metrics.descent()))
         text_item.setFont(font)
         text_item.setText(text)
         text_item.setPos(x, y - metrics.ascent())  # 상자 좌표(= 프레임 좌표). 글자 아이템의 원점은 글줄 위 — 기준선이 y에 오게
         box.setRect(QRectF(x - pad, y - layout.text_height - pad, advance + 2 * pad + 1, layout.text_height + pad + below + 1))
+        return layout
 
     def _after_frame_shown(self):
         """updateFrame의 꼬리(두 그리기 길이 함께 씀): 새 그림 크기에 장면·맞춤을 맞추고 와이프 선·ROI·편집 핸들을 다시 놓음."""

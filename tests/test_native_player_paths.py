@@ -16,6 +16,7 @@ test_overlay_slider_sync·test_gl_video_item 등)의 무수정 통과와 ci/scre
 
 import re
 
+import cv2
 import numpy as np
 import pytest
 from PyQt5.QtGui import QColor
@@ -201,14 +202,15 @@ SEEK_PATHS = [
     ("prev_frame", "prev_frame — ← (_seek_prev_frame_optimized)", lambda p: p.seek_to_frame(21), lambda p: p.prev_frame(), 19, "held"),
     ("seek_direct_fast_far", "_seek_direct_fast 먼 곳", None, lambda p: p._seek_direct_fast(30, TOTAL), 30, "held"),
     ("seek_direct_fast_near_back", "_seek_direct_fast 가까운 뒤", lambda p: p.seek_to_frame(11), lambda p: p._seek_direct_fast(7, TOTAL), 7, "held"),
-    ("quick_preview_drag", "_quick_preview_seek 드래그 중 — 인라인 색 변환 자리", _drag, lambda p: p._quick_preview_seek(40, TOTAL), 40, "none"),
+    ("quick_preview_drag", "_quick_preview_seek 드래그 중 — 인라인 색 변환 자리(작은 B는 함께 읽음 — _drag_wipe_b)", _drag,
+     lambda p: p._quick_preview_seek(40, TOTAL), 40, "B"),
     ("quick_preview", "_quick_preview_seek 드래그 아님 — optimize_for_4k(A·B)", None, lambda p: p._quick_preview_seek(40, TOTAL), 40, "B"),
     ("minimal_preview", "_minimal_preview_seek — OCR 검토 창, 인라인 색 변환 자리", None, lambda p: p._minimal_preview_seek(60, TOTAL), 60, "none"),
     ("precise_seek_middle", "_precise_seek 가운데 — 슬라이더 놓음(_seek_direct)", None, lambda p: p._precise_seek(30, TOTAL), 30, "B"),
     ("precise_seek_last", "_precise_seek 끝 — 슬라이더 끝(_seek_to_last_frame)", None, lambda p: p._precise_seek(TOTAL - 1, TOTAL), TOTAL - 1, "B"),
     ("overlay_preview_drag", "_overlay_slider_preview_seek 드래그 중 — 인라인 색 변환 자리", _drag,
-     lambda p: p._overlay_slider_preview_seek(40, TOTAL), 40, "none"),
-    ("overlay_preview", "_overlay_slider_preview_seek 드래그 아님 — optimize_for_4k", None, lambda p: p._overlay_slider_preview_seek(40, TOTAL), 40, "none"),
+     lambda p: p._overlay_slider_preview_seek(40, TOTAL), 40, "B"),
+    ("overlay_preview", "_overlay_slider_preview_seek 드래그 아님 — optimize_for_4k", None, lambda p: p._overlay_slider_preview_seek(40, TOTAL), 40, "B"),
     ("overlay_final", "_overlay_slider_final_seek — optimize_for_4k(A·B)", None, lambda p: p._overlay_slider_final_seek(40, TOTAL), 40, "B"),
     ("loop_at_end", "반복 재생 끝 → 처음부터", _loop_at_end, _loop_action, 1, "B"),
 ]
@@ -242,6 +244,34 @@ def test_seek_paths_touch_no_pixels(fake_native_player, name, prepare, action, i
         assert last.b is None
     else:
         assert last.b is player.frame_b and player.frame_b is not None
+
+
+def test_drag_preview_keeps_a_large_native_b_without_reading_it(fake_native_player):
+    """와이프 중 드래그 미리보기: 1920×1080보다 큰 B(4K)는 읽지 않고 마지막으로 읽어 둔 B를 그대로 보임(검게 깜빡이지 않게 — 사용자 결정 2026-11-20;
+    작은 B는 위 표의 드래그 길처럼 A와 같은 장을 읽음). 놓을 때의 길(_overlay_slider_final_seek·sync_audio_on_release)이 A와 같은 장으로 맞춤.
+
+    깨지는 변경: _drag_wipe_b의 크기 판정을 빼면 B 캡처가 움직이고(4K 디코드가 드래그마다), frame_b를 비우면 last.b가 None(검정)."""
+    rig = fake_native_player(ab=True, size=(3840, 2160))
+    player = rig.player
+    player.wipeXButton.setChecked(True)
+    held = player.frame_b
+    b_position = rig.cap_b.get(cv2.CAP_PROP_POS_FRAMES)
+    assert held is not None
+    player.is_dragging = True
+    rig.sides.clear()
+
+    player._quick_preview_seek(40, TOTAL)
+    assert player.frame_a is rig.cap_a.frames[40]
+    assert player.frame_b is held and rig.sides[-1].b is held
+    player._overlay_slider_preview_seek(20, TOTAL)
+    assert player.frame_a is rig.cap_a.frames[20]
+    assert player.frame_b is held and rig.sides[-1].b is held
+    assert rig.cap_b.get(cv2.CAP_PROP_POS_FRAMES) == b_position  # B 캡처는 그대로
+
+    player.is_dragging = False
+    player._overlay_slider_final_seek(20, TOTAL)  # 놓음
+    assert player.frame_b is rig.cap_b.frames[20] and rig.sides[-1].b is player.frame_b
+    assert_untouched(rig)
 
 
 def test_frame_cache_skips_native(player_with_fake_native):
