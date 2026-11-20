@@ -12,9 +12,9 @@
 """
 
 from PyQt5 import sip
-from PyQt5.QtCore import QEvent, QObject, Qt, QTimer
-from PyQt5.QtGui import QCursor
-from PyQt5.QtWidgets import QHBoxLayout, QToolButton, QWidget
+from PyQt5.QtCore import QEvent, QObject, QPointF, Qt, QTimer
+from PyQt5.QtGui import QCursor, QWheelEvent
+from PyQt5.QtWidgets import QApplication, QHBoxLayout, QToolButton, QWidget
 
 from yesoncheck import error_window, ui_text
 from yesoncheck.sidebar_items import ALL_KIND_ROLE
@@ -46,7 +46,7 @@ BUTTON_HEIGHT = 18  # 줄이 이보다 낮으면 줄에 맞춤
 RIGHT_INSET = 3  # 줄 오른쪽 끝에서 띄우는 틈 (px)
 
 # 필터가 보는 이벤트 (그 밖은 곧바로 흘려보냄)
-_WATCHED_EVENTS = frozenset((QEvent.MouseMove, QEvent.Leave, QEvent.Hide, QEvent.Resize, QEvent.WindowDeactivate))
+_WATCHED_EVENTS = frozenset((QEvent.MouseMove, QEvent.Leave, QEvent.Hide, QEvent.Resize, QEvent.WindowDeactivate, QEvent.Wheel))
 
 
 def ab_buttons_style(theme: str, row_background: str) -> str:
@@ -113,8 +113,9 @@ class AbButtons(QWidget):
 
 
 class _AbHoverFilter(QObject):
-    """목록 뷰포트·창의 이벤트를 플레이어의 _ab_event에 넘기는 필터 (이벤트는 그대로 흘려보냄). PyQt5 가상 함수에서 예외가 빠져나가면
-    프로세스가 끝나므로(qFatal) 본문을 감싸 처음 한 번만 크게 알리고 그 뒤로는 부르지 않음."""
+    """목록 뷰포트·창·단추 묶음의 이벤트를 플레이어의 _ab_event에 넘기는 필터 (_ab_event가 참을 돌려준 이벤트 — 목록으로 넘긴 단추 위의
+    휠 — 만 먹고 나머지는 그대로 흘려보냄). PyQt5 가상 함수에서 예외가 빠져나가면 프로세스가 끝나므로(qFatal) 본문을 감싸 처음 한 번만
+    크게 알리고 그 뒤로는 부르지 않음."""
 
     def __init__(self, on_event, parent):
         super().__init__(parent)
@@ -125,7 +126,7 @@ class _AbHoverFilter(QObject):
         if self._failed:
             return False
         try:
-            self._on_event(watched, event)
+            return bool(self._on_event(watched, event))
         except BaseException:
             self._failed = True
             error_window.report_from_handler(AB_LOG_PREFIX, "A·B 단추를 목록 줄에 맞추다 실패했습니다 — 그 뒤로는 단추를 옮기지 않습니다")
@@ -140,12 +141,16 @@ class SidebarAbButtonsMixin:
         self._sidebar_ab = {}
         self._sidebar_ab_timers = {}
         self._sidebar_ab_viewports = {}  # 뷰포트 → 목록 (필터가 Qt를 부르지 않고 찾게 — 그림 이벤트마다 불림)
+        self._sidebar_ab_parts = {}  # 묶음·단추 → 목록 (단추 위의 휠을 그 목록으로 넘김)
         self._sidebar_ab_filter = _AbHoverFilter(self._ab_event, self)
         for widget in (self.sidebar, self.seq_sidebar, self.all_sidebar):
             box = AbButtons(widget.viewport())
             self._sidebar_ab[widget] = box
             box.button_a.clicked.connect(lambda _checked=False, w=widget: self._ab_open(w, "A"))
             box.button_b.clicked.connect(lambda _checked=False, w=widget: self._ab_open(w, "B"))
+            for part in (box, box.button_a, box.button_b):
+                self._sidebar_ab_parts[part] = widget
+                part.installEventFilter(self._sidebar_ab_filter)
             viewport = widget.viewport()
             self._sidebar_ab_viewports[viewport] = widget
             viewport.setMouseTracking(True)  # 단추 없이 움직여도 MouseMove가 오게
@@ -165,22 +170,39 @@ class SidebarAbButtonsMixin:
             self._sync_ab_buttons(box, playing=False)  # 창을 만드는 중 — 선택 재생 상태(is_playlist_playing)는 아직 없음
 
     def _ab_event(self, watched, event):
+        """필터 본문 — 참을 돌려주면 그 이벤트를 먹음(단추 위의 휠만)."""
         kind = event.type()
         if kind not in _WATCHED_EVENTS:
-            return
+            return False
+        if kind == QEvent.Wheel:
+            widget = self._sidebar_ab_parts.get(watched)
+            if widget is None:
+                return False
+            self._forward_wheel(watched, event, widget.viewport())
+            return True
         if watched is self:
             if kind == QEvent.WindowDeactivate:
                 self._hide_ab_buttons()
-            return
+            return False
         widget = self._sidebar_ab_viewports.get(watched)
         if widget is None:
-            return
+            return False
         if kind == QEvent.MouseMove:
             self._place_ab_buttons(widget, event.pos())
         elif kind in (QEvent.Leave, QEvent.Hide):
             self._sidebar_ab[widget].hide()
         elif kind == QEvent.Resize:
             self._schedule_ab_refresh(widget)
+        return False
+
+    @staticmethod
+    def _forward_wheel(source, event, viewport):
+        """단추 위의 휠을 목록 뷰포트로 — 단추는 휠을 쓰지 않고, 커서 아래 줄을 따라오므로 휠을 굴리는 동안 커서가 단추 위일 수 있음
+        (Qt는 코드에서 만든 휠 이벤트를 부모로 넘기지 않아 시험과 실제가 갈리지 않게 직접 넘김)."""
+        position = QPointF(source.mapTo(viewport, event.position().toPoint()))
+        QApplication.sendEvent(viewport, QWheelEvent(position, event.globalPosition(), event.pixelDelta(), event.angleDelta(),
+                                                     event.buttons(), event.modifiers(), event.phase(), event.inverted(),
+                                                     event.source()))
 
     def _schedule_ab_refresh(self, widget):
         """줄이 움직인 뒤(줄 자리가 정해진 다음 — 0ms) 지금 커서 자리로 다시 맞춤."""

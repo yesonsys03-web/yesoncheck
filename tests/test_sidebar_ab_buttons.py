@@ -388,3 +388,43 @@ def test_key_and_button_share_the_path_rule(loaded, qapp):
     hover_item(qapp, widget, item)
     group(loaded, widget).button_b.click()
     assert by_key and loaded.filename_b == by_key
+
+
+# ---------------------------------------------------------------- 단추 위의 휠·우클릭은 목록 것
+
+def test_wheel_over_buttons_scrolls_the_list(player, folder, tmp_path, qapp):  # noqa: F811
+    """단추가 커서 아래 줄 오른쪽 끝을 따라오므로 휠을 굴릴 때 커서가 단추 위일 수 있음 — 단추가 휠을 먹지 않고 목록이 스크롤됨."""
+    from PyQt5.QtGui import QWheelEvent
+
+    many = tmp_path / "many"
+    many.mkdir()
+    for i in range(40):
+        shutil.copy(str(folder / "tk1.mov"), str(many / f"m{i:02d}.mov"))
+    drop_folder(player, "video", many)
+    settle(qapp)
+    widget = player.sidebar
+    hover_item(qapp, widget, widget.item(2))
+    button = group(player, widget).button_b
+    bar = widget.verticalScrollBar()
+    before = bar.value()
+    local = QPoint(button.width() // 2, button.height() // 2)
+    QApplication.sendEvent(button, QWheelEvent(QPointF(local), QPointF(button.mapToGlobal(local)), QPoint(0, 0), QPoint(0, -120),
+                                               Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False))
+    qapp.processEvents()
+    assert bar.value() > before
+
+
+def test_right_click_on_buttons_opens_the_row_menu(loaded, qapp, monkeypatch):
+    from PyQt5.QtGui import QContextMenuEvent
+    from PyQt5.QtWidgets import QMenu
+
+    shown = []
+    monkeypatch.setattr(QMenu, "exec_", lambda menu, *_a: shown.append([a.text() for a in menu.actions()]))
+    widget, tk3 = loaded.sidebar, mov_item(loaded, "tk3.mov")
+    hover_item(qapp, widget, tk3)
+    button = group(loaded, widget).button_b
+    local = QPoint(button.width() // 2, button.height() // 2)
+    QApplication.sendEvent(button, QContextMenuEvent(QContextMenuEvent.Mouse, local, button.mapToGlobal(local)))
+    qapp.processEvents()
+    assert shown and ui_text.text("side_menu.open_b") in shown[-1]
+    assert widget.selectedItems() == [tk3]  # 메뉴를 연 줄
