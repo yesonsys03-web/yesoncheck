@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import (
 
 from yesoncheck import paths, ui_text, video_list
 # PlayerSidebarMixin의 부모 믹스인 (북마크, 선택 재생, 공유 설정·작품 경로, 목록 다시 읽기, Seq 탭, 썸네일)
+from yesoncheck.sidebar_ab_buttons import SidebarAbButtonsMixin
 from yesoncheck.sidebar_all import SidebarAllMixin
 from yesoncheck.sidebar_bookmarks import SidebarBookmarksMixin
 from yesoncheck.sidebar_open_with import SidebarOpenWithMixin
@@ -45,7 +46,7 @@ from yesoncheck.sidebar_items import (
 )
 
 
-class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin, SidebarControlsMixin, SidebarRefreshMixin, SidebarSequencesMixin, SidebarAllMixin, SidebarSortMixin, SidebarOpenWithMixin, SidebarThumbnailsMixin, SidebarKeysMixin):
+class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin, SidebarControlsMixin, SidebarRefreshMixin, SidebarSequencesMixin, SidebarAllMixin, SidebarSortMixin, SidebarOpenWithMixin, SidebarThumbnailsMixin, SidebarKeysMixin, SidebarAbButtonsMixin):
 
     def dragEnterEvent(self, event):
         """메인 윈도우에 파일 드래그앤드롭 이벤트"""

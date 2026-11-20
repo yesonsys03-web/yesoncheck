@@ -55,10 +55,11 @@ class SidebarKeysMixin:
         if item is None:
             print(f"[{item_name(text_key, korean=True)}] 고른 항목이 없습니다")
             return
-        if tab is self.seq_sidebar or (tab is self.all_sidebar and item.data(ALL_KIND_ROLE) == "seq"):
-            self.open_file(side, item.data(Qt.UserRole).identity)
+        path = self._ab_item_path(tab, item)  # 시퀀스는 가상 경로, 영상은 경로 (사이드바 A·B 단추와 같은 규칙)
+        if side == "B":
+            self._open_or_close_b(path)  # B는 와이프까지 켬, 같은 파일이 이미 B면 와이프를 끔 (사이드바 B 단추와 같은 길)
         else:
-            self.open_file(side, item.toolTip())
+            self.open_file(side, path)
 
     # ---------------------------------------------------------------- C·J (mov만)
 

@@ -573,6 +573,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         self.sidebar_count_label.setWordWrap(True)  # All의 포맷이 많아도 줄을 바꿈 — 사이드바(창) 최소 너비를 늘리지 않게
         self._init_all_tab_hooks()  # Mov·Seq 모델 변화 → All 목록 미룬 다시 만들기·개수 줄
         self._init_sidebar_sort()  # 탭 줄 오른쪽(All 탭 옆)의 정렬 단추(self.sidebar_sort_button — 이름·종류·버전·시간)와 미룬 정렬 (SidebarSortMixin)
+        self._init_sidebar_ab_buttons()  # 줄에 마우스를 올리면 뜨는 A·B 단추 (SidebarAbButtonsMixin)
         refresh_shortcut = QShortcut(QKeySequence(Qt.Key_F5), self)  # 목록 다시 읽기 (새로고침 단추와 같음)
         refresh_shortcut.activated.connect(self._refresh_sidebar_by_user)
 
@@ -977,6 +978,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         self.toolPanel.apply_theme('dark')
         self.videoWidget.apply_theme_background('dark')  # GL 뷰포트는 스타일시트 배경 칠을 받지 않음
         self._apply_take_colors(repaint=True)  # Mov 항목의 테이크 색은 테마마다 다름
+        self._apply_sidebar_ab_theme()  # 떠 있는 A·B 단추의 색
         self._schedule_all_rebuild()  # All 탭 시퀀스 글자 색을 테마에 맞춤
 
     def set_light_theme(self):
@@ -986,6 +988,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         self.toolPanel.apply_theme('light')
         self.videoWidget.apply_theme_background('light')  # GL 뷰포트는 스타일시트 배경 칠을 받지 않음
         self._apply_take_colors(repaint=True)  # Mov 항목의 테이크 색은 테마마다 다름
+        self._apply_sidebar_ab_theme()  # 떠 있는 A·B 단추의 색
         self._schedule_all_rebuild()  # All 탭 시퀀스 글자 색을 테마에 맞춤
 
     def toggle_theme(self):
@@ -1504,6 +1507,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
             # 맨 먼저: 뒤의 정리에서 오류가 나도 실행 중인 스레드를 놓지 않은 채 남기지 않게
             self._sidebar_scan_closed = True
             self._hover_thumbs_destroy()  # 슬라이더 썸네일: 띠 워커(ffmpeg) 정지도 맨 앞에 (같은 까닭) + 필터를 떼고 커서 위 창을 바로 지움
+            self._sidebar_ab_detach()  # 사이드바 A·B 단추: 필터를 떼고 신호를 끊음 (닫힌 창이 나중에 지워질 때 파이썬이 불리지 않게)
             if getattr(self, '_app_state_connected', False):
                 QApplication.instance().applicationStateChanged.disconnect(self._on_application_state_changed)
                 self._app_state_connected = False

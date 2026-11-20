@@ -25,7 +25,7 @@ All pictures were taken with synthetic video and made-up file names. They are th
 
 ## Main features
 - **Frame-accurate playback** of videos and image sequences (tga, png, exr …), with a playback bar that always stays in the same place: go to start or end, step one frame, loop, and type a frame number to jump to it
-- **A/B comparison** with a left/right or top/bottom wipe
+- **A/B comparison** with a left/right or top/bottom wipe — hover a list row and click **B** to open it in B with the wipe on
 - **Revision notes**: text and shapes on each frame, saved automatically, and export a video with the notes burned in
 - **OCR and cut detection** (PySceneDetect, TransNetV2) to split animatics into segments — review, merge, split and rename them, then export clips
 - **Fast ProRes playback**: on Mac with the system decoder (VideoToolbox), on Windows with the bundled ffmpeg
