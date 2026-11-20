@@ -80,3 +80,54 @@ def overlay_layout(text, width, height):
         thickness = max(1, round(thickness * room / rw))
     (tw, th), base = cv2.getTextSize(text, OVERLAY_FONT, scale, thickness)
     return OverlayLayout(scale, thickness, pad, margin_x, margin_y, tw, th, base, room)
+
+
+class LabelBox(NamedTuple):
+    """한 글자줄의 흰 상자(끝 픽셀 포함 — cv2.rectangle과 같은 규칙)와 글자 기준선 왼쪽 끝."""
+
+    left: int
+    top: int
+    right: int
+    bottom: int
+    x: int  # 기준선 왼쪽 끝
+    y: int  # 기준선
+
+
+def overlay_label_box(text, width, height, align="left", lift=0):
+    """(OverlayLayout, LabelBox) — align "left"는 기준선 왼쪽 끝이 margin_x(A 글자 — 왼쪽 아래), "right"는 상자 오른쪽 끝이 너비 − margin_x + pad
+    (A 상자 왼쪽 끝 margin_x − pad의 거울 — 와이프 중 B 글자, 오른쪽 아래). lift만큼 위로(겹칠 때 B를 한 줄 위로 — label_lift).
+    그 밖의 정렬은 ValueError."""
+    if align not in ("left", "right"):
+        raise ValueError(f"B 키 글자 정렬은 left 또는 right여야 합니다: {align!r}")
+    layout = overlay_layout(text, width, height)
+    x = layout.margin_x if align == "left" else width - layout.margin_x - layout.text_width
+    y = height - layout.margin_y - lift
+    pad = layout.pad
+    box = LabelBox(x - pad, y - layout.text_height - pad, x + layout.text_width + pad, y + max(pad, layout.baseline), x, y)
+    return layout, box
+
+
+def draw_overlay_label(frame, text, layout, box, dx=0, dy=0):
+    """흰 상자 + 검정 글자를 그림 — (dx, dy)만큼 옮긴 자리에(프레임의 일부를 잘라 낸 배열에 그릴 때)."""
+    cv2.rectangle(frame, (box.left + dx, box.top + dy), (box.right + dx, box.bottom + dy), (255, 255, 255), -1)  # g·p·_ 꼬리까지 상자 안에
+    cv2.putText(frame, text, (box.x + dx, box.y + dy), OVERLAY_FONT, layout.scale, (0, 0, 0), layout.thickness)
+
+
+def burn_overlay_label(frame, text, align="left", lift=0):
+    """B 키 글자를 프레임 픽셀에 구움 — 흰 상자 위 검정 글자(굽는 길: A는 플레이어 overlay_text, 와이프 중 B는 video_widget). 자리는
+    overlay_label_box(정렬·lift), 그 밖의 정렬은 그리기 전에 ValueError."""
+    height, width = frame.shape[:2]
+    layout, box = overlay_label_box(text, width, height, align, lift)
+    draw_overlay_label(frame, text, layout, box)
+
+
+def label_lift(text_a, text_b, width, height):
+    """와이프 중 B 글자를 위로 올릴 거리(px) — 오른쪽 아래의 B 상자가 왼쪽 아래 A 상자와 겹치거나 틈이 pad보다 좁으면(파일 이름이 길거나 세로 영상)
+    A 상자 높이 + pad, 아니면 0 (A의 Frame: n/N을 덮지 않게 — 사용자 결정 2026-11-20 '겹칠 때만 B를 한 줄 위로'). text_a가 None(A 글자 없음)이면 0."""
+    if not text_a or not text_b:
+        return 0
+    _layout_a, a = overlay_label_box(text_a, width, height, "left")
+    layout_b, b = overlay_label_box(text_b, width, height, "right")
+    if a.right + layout_b.pad < b.left:
+        return 0
+    return (a.bottom - a.top + 1) + layout_b.pad
