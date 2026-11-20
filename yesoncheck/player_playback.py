@@ -2031,7 +2031,14 @@ class PlayerPlaybackMixin:
         """빠른 UI 업데이트 - 단축키용 (오버레이 반영)"""
         # 프레임 범위 체크 강화
         frame_idx = max(0, min(frame_idx, total_frames - 1))
-        
+
+        # 와이프 중 ←→: B도 A와 같은 프레임으로 (휠·슬라이더의 seek_to_frame과 같은 규칙 — 사용자 결정 2026-11-20; 예전엔 A만 움직여 B가 제자리).
+        # 이 함수는 ←→의 이동(next_frame·prev_frame)만 부름. B가 이미 그 자리면 다시 읽지 않음
+        if self.cap_b and self.videoWidget.wipeEnabled and (self.frame_b is None or int(self.cap_b.get(cv2.CAP_PROP_POS_FRAMES)) - 1 != frame_idx):
+            self.cap_b.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ret_b, raw_b = self.cap_b.read()
+            self.frame_b = self.process_frame(raw_b) if ret_b else None
+
         # 오버레이 반영
         frame_a_to_show = self.frame_a
         if hasattr(self, "prepare_frame_for_display"):

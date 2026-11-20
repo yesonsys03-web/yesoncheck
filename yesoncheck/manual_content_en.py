@@ -377,7 +377,7 @@ PAGES = (
                  "If A and B have **different sizes (resolutions), the B area is black**. Compare videos of the same size.",
                  "**Turning the wipe off closes B.** When you turn it back on, the B area is black until you open a video as B ({]}).",
                  "**Only A is shown while you drag** the time slider; when you release it, B is synced to the same frame as A.",
-                 "{←} {→} move **only A** one frame at a time (B stays where it is). The mouse wheel moves A and B together, and "
+                 "{←} {→} and the mouse wheel move **A and B together** (B goes to the same frame as A), and "
                  "clicking the time slider also syncs B to the same frame as A again.",
                  "Videos are compared only with videos, and image sequences only with sequences. If you open something of a "
                  "different kind from the other side, the other side is closed and the wipe is turned off.",
@@ -387,7 +387,7 @@ PAGES = (
                  "wipe on — they are visible over the B side as well.",
                  "If you turn on the file name and frame number text with the {B} key during a wipe, **B's text** also appears at the "
                  "bottom right of the video — like A's text it is not cut off at the wipe line, "
-                 "and the number is B's own frame number (different from A's if you moved only A with {←} {→}).",
+                 "and the number is B's own frame number.",
              )),
          )),
     Page("sidebar", "Sidebar (video list)", "Lists & files",

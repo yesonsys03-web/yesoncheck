@@ -5,6 +5,7 @@
 
 import numpy as np
 import pytest
+from PyQt5.QtCore import Qt
 
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 from yesoncheck.overlay_text_layout import burn_overlay_label, overlay_layout
@@ -106,14 +107,51 @@ def test_provider_only_with_wipe_b_and_overlay(wiped):
     assert wiped._overlay_b_text() is None
 
 
-def test_b_label_uses_b_own_frame_number(wiped, qapp):
-    from PyQt5.QtCore import QEvent, Qt
+def test_b_label_uses_b_own_frame_number(wiped):
+    """B 글자의 번호는 B 캡처의 번호 — B가 A와 다른 자리에 있으면 그 번호(A의 번호를 베끼지 않음)."""
+    import cv2
+
+    wiped.cap_b.set(cv2.CAP_PROP_POS_FRAMES, 4)
+    wiped.cap_b.read()
+    assert wiped.overlay_label().endswith("Frame: 1/24")
+    assert wiped.overlay_label_b().endswith("Frame: 5/24")
+
+
+def _arrow(player, qapp, key):
+    from PyQt5.QtCore import QEvent
     from PyQt5.QtGui import QKeyEvent
 
-    wiped.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Right, Qt.NoModifier))  # →는 A만 한 장
+    player.keyPressEvent(QKeyEvent(QEvent.KeyPress, key, Qt.NoModifier))
     qapp.processEvents()
-    assert wiped.overlay_label().endswith("Frame: 2/24")
-    assert wiped.overlay_label_b().endswith("Frame: 1/24")
+
+
+def test_arrows_move_b_with_a(wiped, qapp):
+    """와이프 중 ←→·쉼표·마침표는 B도 A와 같은 프레임으로 (휠·슬라이더처럼 — 사용자 결정 2026-11-20; 예전엔 A만 움직여 B가 제자리)."""
+    import cv2
+
+    for key, number in ((Qt.Key_Right, 2), (Qt.Key_Period, 3), (Qt.Key_Left, 2), (Qt.Key_Comma, 1)):
+        _arrow(wiped, qapp, key)
+        assert wiped.overlay_label().endswith(f"Frame: {number}/24"), key
+        assert wiped.overlay_label_b().endswith(f"Frame: {number}/24"), key
+        assert int(wiped.cap_b.get(cv2.CAP_PROP_POS_FRAMES)) == int(wiped.cap_a.get(cv2.CAP_PROP_POS_FRAMES))
+    _arrow(wiped, qapp, Qt.Key_Right)
+    shown = shown_image(wiped)
+    assert abs(int(shown[5, -5].mean()) - int(wiped.frame_b[5, -5].mean())) <= 2  # 화면의 B 쪽 = 새로 읽은 B 그림
+
+
+def test_arrows_without_wipe_leave_b_alone(new_player, dialogs, tmp_path, qapp):  # noqa: F811
+    """와이프가 꺼져 있으면(B를 연 채 와이프를 켜지 않음) ←→는 예전처럼 A만 — 보이지 않는 B를 읽지 않음."""
+    import cv2
+
+    from tests.conftest import write_test_video
+
+    player = new_player(make_config(str(tmp_path), {}))
+    assert player.open_file("A", write_test_video(str(tmp_path / "a.mov"), size=(640, 360)))
+    assert player.open_file("B", write_test_video(str(tmp_path / "b.mov"), size=(640, 360)))
+    before = int(player.cap_b.get(cv2.CAP_PROP_POS_FRAMES))
+    _arrow(player, qapp, Qt.Key_Right)
+    assert player.overlay_label().endswith("Frame: 2/24")
+    assert int(player.cap_b.get(cv2.CAP_PROP_POS_FRAMES)) == before
 
 
 def test_rgb_wipe_shows_b_label_bottom_right(wiped):
