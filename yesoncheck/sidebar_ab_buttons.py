@@ -105,10 +105,12 @@ class AbButtons(QWidget):
 
     def place(self, row):
         """row(뷰포트 좌표의 줄 사각형) 오른쪽 끝·세로 가운데에 놓고 보임."""
-        height = max(12, min(BUTTON_HEIGHT, row.height() - 4))
+        margins = self.layout().contentsMargins()
+        # 단추 높이 ≤ BUTTON_HEIGHT, 묶음(단추 + 위아래 여백)이 줄 높이를 넘지 않게 — 바닥값을 두면 낮은 줄(글꼴 없는 Windows CI의 12px 줄)에서
+        # 묶음이 줄 밖으로 삐져나왔음
+        height = max(1, min(BUTTON_HEIGHT, row.height() - margins.top() - margins.bottom()))
         for button in (self.button_a, self.button_b):
             button.setFixedSize(BUTTON_WIDTH, height)
-        margins = self.layout().contentsMargins()
         width = 2 * BUTTON_WIDTH + self.layout().spacing() + margins.left() + margins.right()
         box_height = height + margins.top() + margins.bottom()
         self.setGeometry(row.right() + 1 - RIGHT_INSET - width, row.top() + (row.height() - box_height) // 2, width, box_height)

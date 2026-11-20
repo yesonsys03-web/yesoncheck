@@ -129,8 +129,8 @@ def test_thumbnail_mode_centres_on_the_tall_row(loaded, qapp):
 def test_scroll_moves_buttons_to_the_row_now_under_the_cursor(player, folder, tmp_path, qapp):  # noqa: F811
     many = tmp_path / "many"
     many.mkdir()
-    for i in range(40):
-        shutil.copy(str(folder / "tk1.mov"), str(many / f"m{i:02d}.mov"))
+    for i in range(150):  # 줄이 낮은 환경(글꼴 없는 Windows CI — 12px)에서도 목록이 넘쳐 스크롤이 생기게
+        shutil.copy(str(folder / "tk1.mov"), str(many / f"m{i:03d}.mov"))
     drop_folder(player, "video", many)
     settle(qapp)
     widget = player.sidebar
@@ -401,8 +401,8 @@ def test_wheel_over_buttons_scrolls_the_list(player, folder, tmp_path, qapp):  #
 
     many = tmp_path / "many"
     many.mkdir()
-    for i in range(40):
-        shutil.copy(str(folder / "tk1.mov"), str(many / f"m{i:02d}.mov"))
+    for i in range(150):  # 줄이 낮은 환경(글꼴 없는 Windows CI — 12px)에서도 목록이 넘쳐 스크롤이 생기게
+        shutil.copy(str(folder / "tk1.mov"), str(many / f"m{i:03d}.mov"))
     drop_folder(player, "video", many)
     settle(qapp)
     widget = player.sidebar
@@ -577,3 +577,15 @@ def test_closing_the_window_detaches_filters_and_signals(loaded, qapp, monkeypat
     qapp.processEvents()
     assert calls == []
     assert not any(box.isVisible() for box in loaded._sidebar_ab.values())
+
+
+def test_buttons_fit_a_low_row(loaded, qapp):
+    """줄이 낮아도(글꼴 없는 Windows CI는 12px) 묶음이 줄 안에 — 단추 높이에 바닥값을 두면 위아래로 삐져나왔음."""
+    from PyQt5.QtCore import QSize
+
+    widget, tk1 = loaded.sidebar, mov_item(loaded, "tk1.mov")
+    tk1.setSizeHint(QSize(100, 12))
+    settle(qapp)
+    assert row_rect(widget, tk1).height() == 12
+    hover_item(qapp, widget, tk1)
+    assert_on_row(loaded, widget, tk1)
