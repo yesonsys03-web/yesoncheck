@@ -57,7 +57,7 @@ class SidebarKeysMixin:
             return
         path = self._ab_item_path(tab, item)  # 시퀀스는 가상 경로, 영상은 경로 (사이드바 A·B 단추와 같은 규칙)
         if side == "B":
-            self.open_b_and_wipe(path)  # B는 와이프까지 켬 (사이드바 B 단추와 같은 길)
+            self._open_or_close_b(path)  # B는 와이프까지 켬, 같은 파일이 이미 B면 와이프를 끔 (사이드바 B 단추와 같은 길)
         else:
             self.open_file(side, path)
 

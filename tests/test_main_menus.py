@@ -95,7 +95,7 @@ def test_items_carry_no_real_shortcuts_only_the_note_in_the_text(player):
 def test_checkable_items_are_the_toggles(player):
     checkable = {key for key, action in player.menu_actions.items() if action.isCheckable()}
     assert checkable == {"menu.view.overlay_text", "menu.playback.loop", "menu.compare.wipe", "menu.compare.x",
-                         "menu.compare.y", "menu.tools.annotation", "menu.tools.ocr"}
+                         "menu.compare.y", "menu.compare.ab_buttons", "menu.tools.annotation", "menu.tools.ocr"}
 
 
 def test_retranslate_rereads_titles_and_items(player):

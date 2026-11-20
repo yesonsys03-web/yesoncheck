@@ -109,6 +109,7 @@ def test_b_picture_shows_on_the_first_open(loaded, folder, qapp, monkeypatch, ho
         assert loaded.open_b_and_wipe(tk3.toolTip())
     elif how == "button":
         from tests.test_sidebar_ab_buttons import group, hover_item
+        loaded.set_sidebar_ab_buttons(True)  # 처음에는 꺼져 있음
         hover_item(qapp, loaded.sidebar, tk3)
         group(loaded, loaded.sidebar).button_b.click()
     else:

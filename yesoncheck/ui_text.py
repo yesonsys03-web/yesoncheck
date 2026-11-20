@@ -115,6 +115,7 @@ TEXTS = {
     # 사이드바 줄에 마우스를 올리면 뜨는 A·B 단추의 툴팁 (sidebar_ab_buttons)
     "side_ab.open_a": {"ko": "비디오 A로 열기 ([)", "en": "Open as video A ([)"},
     "side_ab.open_b": {"ko": "비디오 B로 열고 와이프 켜기 (])", "en": "Open as video B and turn on wipe (])"},
+    "side_ab.close_b": {"ko": "B 닫기 — 와이프 끄기 (])", "en": "Close B — turn off the wipe (])"},
     "side_ab.playlist": {"ko": "선택 재생 중에는 열지 않습니다 — 이어 재생을 끝낸 뒤 여세요",
                          "en": "Not while playing a selection — end it first"},
     "side_menu.seq.export": {"ko": "선택한 시퀀스로 MOV 만들기…", "en": "Make MOV from selected sequences…"},
@@ -388,6 +389,7 @@ TEXTS = {
     "menu.compare.wipe": {"ko": "와이프 켜기 (W)", "en": "Enable wipe (W)"},
     "menu.compare.x": {"ko": "X축 (좌우)", "en": "X axis (left/right)"},
     "menu.compare.y": {"ko": "Y축 (위아래)", "en": "Y axis (top/bottom)"},
+    "menu.compare.ab_buttons": {"ko": "사이드바 A·B 단추", "en": "Sidebar A·B buttons"},
     "menu.tools.annotation": {"ko": "주석 패널", "en": "Annotation panel"},
     "menu.tools.ocr": {"ko": "OCR 패널", "en": "OCR panel"},
     "menu.tools.toggle": {"ko": "도구 패널 열고 닫기 (N)", "en": "Open/close tool panel (N)"},

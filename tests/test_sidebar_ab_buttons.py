@@ -27,6 +27,7 @@ def player(new_player, dialogs, tmp_path, qapp):  # noqa: F811
     player = new_player(make_config(str(tmp_path), {}))
     player.resize(1200, 800)
     player.show()
+    player.set_sidebar_ab_buttons(True)  # 처음에는 꺼져 있음(사용자 결정) — Compare 메뉴로 켠 것과 같음
     qapp.processEvents()
     return player
 
@@ -273,6 +274,7 @@ def test_deleting_the_window_reports_nothing(dialogs, folder, tmp_path, qapp, mo
     reports = []
     monkeypatch.setattr(error_window, "report_from_handler", lambda prefix, context: reports.append((prefix, context)))
     monkeypatch.setenv("YESONCHECK_CONFIG_DIR", make_config(str(tmp_path), {}))
+    sidebar_ab_buttons.save_ab_buttons_pref(True)  # 켠 채 시작 (이 PC의 설정 — conftest가 시험마다 새 HOME)
     window = VideoPlayer()
     window.show()
     qapp.processEvents()
@@ -543,6 +545,7 @@ def test_closed_window_is_not_kept_alive(dialogs, tmp_path, qapp, monkeypatch):
     from yesoncheck.main_window import VideoPlayer
 
     monkeypatch.setenv("YESONCHECK_CONFIG_DIR", make_config(str(tmp_path), {}))
+    sidebar_ab_buttons.save_ab_buttons_pref(True)  # 켠 채 시작 (이 PC의 설정 — conftest가 시험마다 새 HOME)
     window = VideoPlayer()
     window.show()
     qapp.processEvents()
@@ -589,3 +592,124 @@ def test_buttons_fit_a_low_row(loaded, qapp):
     assert row_rect(widget, tk1).height() == 12
     hover_item(qapp, widget, tk1)
     assert_on_row(loaded, widget, tk1)
+
+
+# ---------------------------------------------------------------- 켜기/끄기 (Compare 메뉴 — 처음에는 꺼짐, 이 PC에 저장)
+
+from yesoncheck import hover_strip, mac_prefs  # noqa: E402
+
+
+@pytest.fixture
+def plain(new_player, dialogs, tmp_path, folder, qapp):  # noqa: F811
+    """설정을 건드리지 않은 창(처음 켠 PC) — 목록에 tk1.mov·tk3.mov."""
+    player = new_player(make_config(str(tmp_path), {}))
+    player.resize(1200, 800)
+    player.show()
+    drop_folder(player, "video", folder)
+    qapp.processEvents()
+    return player
+
+
+def test_buttons_are_off_until_turned_on_from_the_compare_menu(plain, qapp):
+    action = plain.menu_actions["menu.compare.ab_buttons"]
+    assert action.isCheckable() and action.text() == ui_text.text("menu.compare.ab_buttons") == "사이드바 A·B 단추"
+    assert action in plain.main_menus["compare"].actions()
+    plain._sync_menu_states()
+    assert not plain.sidebar_ab_buttons_enabled() and not action.isChecked()
+    tk1 = mov_item(plain, "tk1.mov")
+    hover_item(qapp, plain.sidebar, tk1)
+    assert not group(plain, plain.sidebar).isVisible()  # 꺼져 있으면 뜨지 않음
+    action.trigger()  # 켬
+    assert plain.sidebar_ab_buttons_enabled() and action.isChecked()
+    assert mac_prefs.read_prefs(hover_strip.prefs_path())["sidebar_ab_buttons"] is True
+    assert group(plain, plain.sidebar).isVisible()  # 커서가 줄 위면 바로 뜸
+    action.trigger()  # 끔
+    assert not plain.sidebar_ab_buttons_enabled() and not action.isChecked()
+    assert mac_prefs.read_prefs(hover_strip.prefs_path())["sidebar_ab_buttons"] is False
+    assert not group(plain, plain.sidebar).isVisible()  # 떠 있던 단추가 바로 사라짐
+    hover_item(qapp, plain.sidebar, tk1)
+    assert not group(plain, plain.sidebar).isVisible()
+    group(plain, plain.sidebar).button_b.click()  # 숨은 단추를 눌러도(코드에서) 아무 일도 없음
+    group(plain, plain.sidebar).button_a.click()
+    assert not plain.filename_b and not plain.wipeCheckBox.isChecked()
+
+
+def test_turned_on_setting_is_kept_for_the_next_window(new_player, dialogs, tmp_path):  # noqa: F811
+    sidebar_ab_buttons.save_ab_buttons_pref(True)
+    player = new_player(make_config(str(tmp_path), {}))
+    assert player.sidebar_ab_buttons_enabled()
+
+
+@pytest.mark.parametrize("content", ['{"sidebar_ab_buttons": "yes"}', "{broken"])
+def test_unreadable_setting_starts_off_and_says_why(new_player, dialogs, tmp_path, capsys, content):  # noqa: F811
+    import os
+
+    path = hover_strip.prefs_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(content)
+    player = new_player(make_config(str(tmp_path), {}))
+    assert not player.sidebar_ab_buttons_enabled()
+    captured = capsys.readouterr()
+    assert "[A·B 단추]" in captured.out + captured.err and "Traceback" in captured.err
+    with open(path, encoding="utf-8") as handle:
+        assert handle.read() == content  # 읽지 못한 파일을 덮어쓰지 않음
+
+
+def test_save_failure_keeps_the_old_state(plain, monkeypatch):
+    def fail(value, path=None):
+        raise OSError("디스크가 가득 참")
+
+    monkeypatch.setattr(sidebar_ab_buttons, "save_ab_buttons_pref", fail)
+    reports = []
+    monkeypatch.setattr(error_window, "show_unexpected", lambda prefix, context: reports.append((prefix, context)))
+    plain.menu_actions["menu.compare.ab_buttons"].trigger()
+    assert not plain.sidebar_ab_buttons_enabled()
+    assert not plain.menu_actions["menu.compare.ab_buttons"].isChecked()
+    assert reports and reports[0][0] == sidebar_ab_buttons.AB_LOG_PREFIX
+
+
+# ---------------------------------------------------------------- 같은 파일의 B를 다시 누르면 와이프를 끔 (B 단추·] 키)
+
+def test_b_again_on_the_same_file_turns_the_wipe_off(loaded, qapp):
+    widget, tk3 = loaded.sidebar, mov_item(loaded, "tk3.mov")
+    assert loaded.open_file("A", mov_item(loaded, "tk1.mov").toolTip())
+    hover_item(qapp, widget, tk3)
+    box = group(loaded, widget)
+    assert box.button_b.toolTip() == ui_text.text("side_ab.open_b") and not box.button_b.property("active")
+    box.button_b.click()
+    qapp.processEvents()
+    assert loaded.wipeCheckBox.isChecked() and loaded.filename_b == tk3.toolTip()
+    assert box.button_b.property("active") is True  # 이 줄은 지금 B — 눌린 모양
+    assert box.button_b.toolTip() == ui_text.text("side_ab.close_b") == "B 닫기 — 와이프 끄기 (])"
+    box.button_b.click()  # 같은 파일 — 와이프를 끄고 B를 닫음
+    qapp.processEvents()
+    assert not loaded.wipeCheckBox.isChecked() and loaded.cap_b is None and not loaded.filename_b
+    assert not box.button_b.property("active") and box.button_b.toolTip() == ui_text.text("side_ab.open_b")
+
+
+def test_b_on_another_file_switches_b_and_keeps_the_wipe(loaded, qapp):
+    widget = loaded.sidebar
+    assert loaded.open_file("A", mov_item(loaded, "tk1.mov").toolTip())
+    hover_item(qapp, widget, mov_item(loaded, "tk3.mov"))
+    group(loaded, widget).button_b.click()
+    tk1 = mov_item(loaded, "tk1.mov")
+    hover_item(qapp, widget, tk1)
+    assert not group(loaded, widget).button_b.property("active")  # 다른 줄은 눌린 모양 아님
+    group(loaded, widget).button_b.click()
+    assert loaded.wipeCheckBox.isChecked() and loaded.filename_b == tk1.toolTip()
+
+
+def test_bracket_key_again_closes_b_but_menus_only_open(loaded, qapp):
+    from tests.test_sidebar_keys import select
+
+    widget, tk3 = loaded.sidebar, mov_item(loaded, "tk3.mov")
+    assert loaded.open_file("A", mov_item(loaded, "tk1.mov").toolTip())
+    select(widget, [tk3], current=tk3)
+    assert loaded.eventFilter(widget, key_event(Qt.Key_BracketRight, "]")) is True
+    assert loaded.wipeCheckBox.isChecked() and loaded.filename_b == tk3.toolTip()
+    assert loaded.eventFilter(widget, key_event(Qt.Key_BracketRight, "]")) is True  # 같은 파일 — 끔
+    assert not loaded.wipeCheckBox.isChecked() and loaded.cap_b is None
+    loaded.open_video_b(widget.indexFromItem(tk3))  # 우클릭 '비디오 B 열기'는 열기만 — 두 번 눌러도 열린 채
+    loaded.open_video_b(widget.indexFromItem(tk3))
+    assert loaded.wipeCheckBox.isChecked() and loaded.filename_b == tk3.toolTip()

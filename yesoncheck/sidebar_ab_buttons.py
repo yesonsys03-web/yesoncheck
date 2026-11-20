@@ -11,15 +11,37 @@
 노란 쪽, 글자는 어두운 색) — 글자와 바탕의 명암 대비 4.5:1 이상(시험). 묶음 밑에는 줄의 바탕색을 깔아 긴 이름의 끝이 비치지 않게.
 """
 
+import os
+import traceback
+
 from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QObject, QPoint, QPointF, Qt, QTimer
 from PyQt5.QtGui import QCursor, QMouseEvent, QWheelEvent
 from PyQt5.QtWidgets import QApplication, QHBoxLayout, QToolButton, QWidget
 
-from yesoncheck import error_window, ui_text
+from yesoncheck import error_window, hover_strip, mac_prefs, paths, ui_text
 from yesoncheck.sidebar_items import ALL_KIND_ROLE
+from yesoncheck.user_files import UserFileError
 
 AB_LOG_PREFIX = "[A·B 단추]"
+
+# 켜고 끄기 (Compare 메뉴 — 사용자 결정 2026-11-20: 필요 없는 사람이 헷갈리지 않게 처음에는 꺼짐) — 이 PC의 prefs.json(hover_strip.prefs_path)
+PREF_KEY = "sidebar_ab_buttons"
+
+
+def read_ab_buttons_pref(path=None) -> bool:
+    """이 PC의 설정 — 키가 없으면 False(처음에는 꺼짐), 불리언이 아니면 ValueError(값을 지어내지 않음), 깨진 파일은 UserFileError 그대로."""
+    value = mac_prefs.read_prefs(path or hover_strip.prefs_path()).get(PREF_KEY, False)
+    if not isinstance(value, bool):
+        raise ValueError(f"prefs.json의 {PREF_KEY}는 true/false여야 합니다: {value!r}")
+    return value
+
+
+def save_ab_buttons_pref(value, path=None):
+    """그 키만 저장(다른 키 그대로 — mac_prefs.update_pref). 불리언이 아니면 TypeError(파일 그대로)."""
+    if not isinstance(value, bool):
+        raise TypeError(f"{PREF_KEY}는 불리언이어야 합니다: {value!r}")
+    mac_prefs.update_pref(PREF_KEY, value, path or hover_strip.prefs_path())
 
 # 단추 색 — 테마 → A/B → 바탕·마우스를 올렸을 때·눌렀을 때·글자, 꺼졌을 때(선택 재생 중)
 AB_COLORS = {
@@ -67,6 +89,9 @@ def ab_buttons_style(theme: str, row_background: str) -> str:
             f"QToolButton#{name}:pressed {{ background: {c['pressed']}; }}",
             f"QToolButton#{name}:disabled {{ background: {disabled['bg']}; color: {disabled['fg']}; }}",
         ]
+    b = colors["B"]
+    # 이 줄이 지금 B면 B 단추를 눌린 모양으로(다시 누르면 B 닫기 — 와이프 끄기)
+    rules.append(f"QToolButton#sidebarAbB[active=\"true\"] {{ background: {b['pressed']}; border: 2px solid {b['fg']}; }}")
     return "\n".join(rules)
 
 
@@ -84,7 +109,17 @@ class AbButtons(QWidget):
         self.button_a = self._add_button(layout, "A", "sidebarAbA")
         self.button_b = self._add_button(layout, "B", "sidebarAbB")
         self._style_key = None
+        self.b_active = False  # 이 묶음이 놓인 줄이 지금 B인지 (set_b_active)
         self.hide()
+
+    def set_b_active(self, active: bool):
+        """B 단추를 눌린 모양으로(이 줄이 지금 B) 또는 보통 모양으로 — 시트의 [active="true"] 규칙(속성이 바뀌면 다시 입힘)."""
+        if active == self.b_active:
+            return
+        self.b_active = active
+        self.button_b.setProperty("active", active)
+        self.button_b.style().unpolish(self.button_b)
+        self.button_b.style().polish(self.button_b)
 
     def _add_button(self, layout, text, name):
         button = QToolButton(self)
@@ -146,6 +181,12 @@ class SidebarAbButtonsMixin:
         """(initUI — 세 목록·탭을 만든 뒤) 목록마다 묶음·필터·다시 맞춤 타이머를 만들고 신호에 이음."""
         self._sidebar_ab = {}
         self._sidebar_ab_timers = {}
+        try:
+            self._sidebar_ab_enabled = read_ab_buttons_pref()
+        except (UserFileError, ValueError):
+            traceback.print_exc()
+            print(f"{AB_LOG_PREFIX} 설정(prefs.json의 {PREF_KEY})을 읽지 못해 끈 채로 시작합니다 — 파일은 그대로 둡니다", flush=True)
+            self._sidebar_ab_enabled = False
         self._sidebar_ab_viewports = {}  # 뷰포트 → 목록 (필터가 Qt를 부르지 않고 찾게 — 그림 이벤트마다 불림)
         self._sidebar_ab_parts = {}  # 묶음·단추 → 목록 (단추 위의 휠을 그 목록으로 넘김)
         # 신호를 보내는 객체(단추·타이머·스크롤바·모델·선택 모델)의 주소 → (목록, 단추 쪽 "A"|"B"|None). 신호는 람다가 아니라 이 창의
@@ -297,9 +338,35 @@ class SidebarAbButtonsMixin:
         for box in self._sidebar_ab.values():
             box.hide()
 
+    def sidebar_ab_buttons_enabled(self) -> bool:
+        """사이드바 A·B 단추가 켜져 있는지 (Compare 메뉴의 체크)."""
+        return self._sidebar_ab_enabled
+
+    def set_sidebar_ab_buttons(self, on: bool):
+        """Compare → 사이드바 A·B 단추: 이 PC에 저장(그 키만)하고 이 창에 바로 — 끄면 떠 있던 단추가 사라지고, 켜면 커서가 줄 위면 바로 뜸.
+        저장하지 못하면 오류 창(트레이스백) + 그대로 (이미 열린 다른 창은 다음에 켤 때부터)."""
+        if on == self._sidebar_ab_enabled:
+            return
+        try:
+            save_ab_buttons_pref(on)
+        except (UserFileError, OSError, TimeoutError):
+            error_window.show_unexpected(AB_LOG_PREFIX, "사이드바 A·B 단추 설정을 저장하지 못해 바꾸지 않습니다")
+            return
+        self._sidebar_ab_enabled = on
+        print(f"{AB_LOG_PREFIX} 사이드바 A·B 단추: {'켬' if on else '끔'} (Compare 메뉴)", flush=True)
+        if not on:
+            self._hide_ab_buttons()
+            return
+        current = self.sidebar_tabs.currentWidget()
+        if current in self._sidebar_ab:
+            self._place_ab_buttons(current)
+
     def _place_ab_buttons(self, widget, pos=None):
-        """pos(뷰포트 좌표 — None이면 지금 커서 자리) 아래 줄의 오른쪽 끝에 묶음을 놓거나, 줄이 없으면 숨김."""
+        """pos(뷰포트 좌표 — None이면 지금 커서 자리) 아래 줄의 오른쪽 끝에 묶음을 놓거나, 줄이 없으면 숨김 (꺼져 있으면 늘 숨김)."""
         box = self._sidebar_ab[widget]
+        if not self._sidebar_ab_enabled:
+            box.hide()
+            return
         viewport = widget.viewport()
         if pos is None:
             pos = viewport.mapFromGlobal(QCursor.pos())
@@ -308,6 +375,7 @@ class SidebarAbButtonsMixin:
             box.hide()
             return
         box.restyle(self.current_theme, item.isSelected())
+        box.set_b_active(self._is_open_as_b(self._ab_item_path(widget, item)))
         self._sync_ab_buttons(box)
         row = widget.visualItemRect(item)
         row.setRight(min(row.right(), viewport.rect().right()))  # 긴 이름이 있으면 줄이 뷰포트보다 넓음(가로 스크롤) — 보이는 끝에
@@ -329,7 +397,8 @@ class SidebarAbButtonsMixin:
         playing이 None이면 지금 상태(is_playlist_playing)."""
         if playing is None:
             playing = self.is_playlist_playing
-        for button, key in ((box.button_a, "side_ab.open_a"), (box.button_b, "side_ab.open_b")):
+        b_key = "side_ab.close_b" if box.b_active else "side_ab.open_b"
+        for button, key in ((box.button_a, "side_ab.open_a"), (box.button_b, b_key)):
             button.setEnabled(not playing)
             button.setToolTip(ui_text.text("side_ab.playlist" if playing else key))
 
@@ -345,7 +414,7 @@ class SidebarAbButtonsMixin:
 
     def _ab_open(self, widget, side):
         """A: 그 줄을 누른 것과 같음(그 줄만 고르고 목록의 클릭 처리기). B: 고른 줄은 그대로 두고 B로 열고 와이프까지(open_b_and_wipe)."""
-        if self.is_playlist_playing:
+        if self.is_playlist_playing or not self._sidebar_ab_enabled:
             return
         item = self._ab_row(widget)
         if item is None:
@@ -358,7 +427,23 @@ class SidebarAbButtonsMixin:
                        self.all_sidebar: self.on_all_item_clicked}[widget]
             clicked(item)
         else:
-            self.open_b_and_wipe(self._ab_item_path(widget, item))
+            self._open_or_close_b(self._ab_item_path(widget, item))
+            if not sip.isdeleted(widget):
+                self._place_ab_buttons(widget)  # 눌린 모양·툴팁을 바뀐 B에 맞춤
+
+    def _is_open_as_b(self, path) -> bool:
+        """path가 지금 와이프 중인 B인지 (B 단추의 눌린 모양·다시 누르면 닫기)."""
+        return bool(self.cap_b is not None and self.filename_b and self.wipeCheckBox.isChecked()
+                    and paths.same_path(self.filename_b, paths.normalize_native(path)))
+
+    def _open_or_close_b(self, path):
+        """B 단추·] 키: 같은 파일이 이미 B로 열려 와이프 중이면 와이프를 끔(B도 닫힘 — 11-18 규칙), 아니면 B로 열고 와이프까지
+        (open_b_and_wipe) — 사용자 결정 2026-11-20. 우클릭·File 메뉴는 열기만."""
+        if self._is_open_as_b(path):
+            print(f"[와이프] 같은 B를 다시 눌러 와이프를 끔: {os.path.basename(self.filename_b)}", flush=True)
+            self.wipeCheckBox.setChecked(False)
+            return
+        self.open_b_and_wipe(path)
 
     def _apply_sidebar_ab_theme(self):
         """(테마를 바꿀 때) 보이는 묶음의 색을 새 테마로 — 숨은 묶음은 다음에 뜰 때 맞춤."""

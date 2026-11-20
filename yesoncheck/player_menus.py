@@ -36,7 +36,7 @@ MENUS = (
     ("playback", ("menu.playback.play", "menu.playback.prev", "menu.playback.next", "menu.playback.first",
                   "menu.playback.last", SEPARATOR, "menu.playback.loop", SEPARATOR,
                   "menu.playback.playlist", "menu.playback.playlist_end")),
-    ("compare", ("menu.compare.wipe", "menu.compare.x", "menu.compare.y")),
+    ("compare", ("menu.compare.wipe", "menu.compare.x", "menu.compare.y", SEPARATOR, "menu.compare.ab_buttons")),
     ("tools", ("menu.tools.annotation", "menu.tools.ocr", "menu.tools.toggle", SEPARATOR, "menu.tools.work_paths")),
 )
 # 이 표로 받는 단축키: (Qt 키, 한글 자판의 같은 자리 글자, 항목의 글자 표 키) — 항목의 글자 끝에 같은 키를 적음(`(O)`)
@@ -68,7 +68,7 @@ def item_name(text_key, korean=False):
 
 
 CHECKABLE = frozenset({"menu.view.overlay_text", "menu.playback.loop", "menu.compare.wipe", "menu.compare.x",
-                       "menu.compare.y", "menu.tools.annotation", "menu.tools.ocr"})
+                       "menu.compare.y", "menu.compare.ab_buttons", "menu.tools.annotation", "menu.tools.ocr"})
 
 
 class PlayerMenusMixin:
@@ -120,6 +120,7 @@ class PlayerMenusMixin:
             "menu.compare.wipe": lambda: self.wipeCheckBox.toggle(),
             "menu.compare.x": lambda: self.wipeXButton.isEnabled() and self.wipeXButton.toggle(),
             "menu.compare.y": lambda: self.wipeYButton.isEnabled() and self.wipeYButton.toggle(),
+            "menu.compare.ab_buttons": lambda: self.set_sidebar_ab_buttons(not self.sidebar_ab_buttons_enabled()),
             "menu.tools.annotation": lambda: self.toggle_tool_page("annotation"),
             "menu.tools.ocr": lambda: self.toggle_tool_page("ocr"),
             "menu.tools.toggle": lambda: self.toggle_tool_panel(),
@@ -175,6 +176,7 @@ class PlayerMenusMixin:
             "menu.compare.wipe": wipe_on,
             "menu.compare.x": self.wipeXButton.isChecked(),
             "menu.compare.y": self.wipeYButton.isChecked(),
+            "menu.compare.ab_buttons": self.sidebar_ab_buttons_enabled(),
             "menu.tools.annotation": panel == "annotation",
             "menu.tools.ocr": panel == "ocr",
         }
