@@ -70,8 +70,9 @@ PAGES = (
                   "to the bookmarks automatically."),
                  ("Drop onto the Mov list",
                   "The files are only added to the list, not opened (the video you are viewing and the list stay as they are)."),
-                 ("{{menu.file}} → {{menu.file.open_a}} · {{menu.file.open_b}}", "Choose a file and open it in A or B."),
+                 ("{{menu.file}} → {{menu.file.open_a}} · {{menu.file.open_b}}", "Choose a file and open it in A or B. Opening B also turns on the wipe and the left/right split."),
                  ("Click in the list", "That video opens in A. Use {↑} {↓} to step through the videos one by one."),
+                 ("**A** · **B** buttons on a list row", "Appear on the row under the mouse. **A** is the same as a click; **B** opens it in B and turns on the wipe. → [[sidebar/ab|A·B buttons]]"),
                  ("Choose show → season → job", "Loads the video list of that job (a feature specific to Yeson's in-house workflow). "
                                                 "→ [[library/works|Choosing a show]]"),
                  ("Double-click in Finder or File Explorer", "A new window opens with that video in A. → [[windows]]"),
@@ -206,8 +207,9 @@ PAGES = (
                  ("M (ㅡ)", "Show information about the item selected in the list — same as {{side_menu.info}} for a video and "
                             "{{side_menu.seq.info}} for a sequence"),
                  ("[", "Open the item selected in the list as video A — same as {{side_menu.open_a}} in the right-click menu (not during selected playback)"),
-                 ("]", "Open the item selected in the list as video B — for putting the video to wipe against in B (same as "
-                       "{{side_menu.open_b}} in the right-click menu; not during selected playback)"),
+                 ("]", "Open the item selected in the list as video B and turn on the wipe — turns the wipe on if it is off and splits "
+                       "left/right if neither split is on (same as {{side_menu.open_b}} in the right-click menu and the **B** button on a "
+                       "list row; not during selected playback)"),
                  ("F5", "Refresh the list"),
                  ("F1", "User guide (this manual)"),
              )),
@@ -366,10 +368,11 @@ PAGES = (
              ("h", "Steps", "steps"),
              ("steps", (
                  "Open a video in A.",
-                 "Open B with {{menu.file}} → {{menu.file.open_b}}, or select a video in the list and press {]} (same as right-click "
-                 "→ {{side_menu.open_b}}).",
-                 "Turn on {{transport.wipe}} on the playback bar ({W}) and click {{transport.wipe.x}} or {{transport.wipe.y}}. The "
-                 "{{menu.compare}} menu has the same items.",
+                 "Move the mouse over the list row of the video to open in B and click **B** — the wipe and the left/right split "
+                 "turn on, so the comparison is ready at once. {{menu.file}} → {{menu.file.open_b}}, selecting it in the list and "
+                 "pressing {]}, and right-click → {{side_menu.open_b}} do the same.",
+                 "To split top/bottom, click {{transport.wipe.y}} on the playback bar (it can be on together with left/right). The "
+                 "button that turns the wipe on and off is {{transport.wipe}} ({W}), and the {{menu.compare}} menu has the same items.",
                  "Drag the line on the video to compare.",
              )),
              ("h", "Things to know", "notes"),
@@ -399,7 +402,8 @@ PAGES = (
                  "{{sidebar.mode.list}} · {{sidebar.mode.thumb}} — change how the list looks.",
                  "**Mov · Seq · All tabs** — videos / image sequences / both. The button next to the All tab (`Name ▾` in the picture) is the **Sort** button. "
                  "→ [[sidebar/sort|Sorting]]",
-                 "**Video list** — click an item to open it in A. Selected items are orange.",
+                 "**Video list** — click an item to open it in A. Selected items are orange. Moving the mouse over a row shows the "
+                 "**A**·**B** buttons at its right end. → [[sidebar/ab|A·B buttons]]",
                  "**Count line** — the number of items in the tab you are viewing.",
                  "{{playlist.play}} — plays the selected videos one after another. → [[playback/playlist|Playing selected videos]]",
              )),
@@ -410,6 +414,19 @@ PAGES = (
                  ("All", "Videos and sequences in one list, in name order. Sequence names are shown in sky blue."),
              )),
              ("fig", "all_tab", "All tab — the sky-blue rows are image sequences", ()),
+             ("h", "A·B buttons", "ab"),
+             ("p", "Moving the mouse over a list row shows a blue **A** and a gold **B** button at the right end of that row. This works "
+                   "in the Mov, Seq and All tabs and in thumbnail mode."),
+             ("list", (
+                 "**A** — the same as clicking the row (selects it and opens it in A).",
+                 "**B** — opens that video in B and leaves the selection as it is. If the wipe is off it is turned on, and if neither "
+                 "the left/right nor the top/bottom split is on, the view is split left/right — the A|B comparison is ready at once. "
+                 "→ [[compare]]",
+                 "The {]} key, {{side_menu.open_b}} in the right-click menu and {{menu.file}} → {{menu.file.open_b}} also turn on "
+                 "the wipe when they open B.",
+                 "The buttons can cover the end of a long name — move the mouse away to see it again.",
+                 "During selected playback the buttons are turned off (like a click in the list, they do not change the video).",
+             )),
              ("h", "Count line", "count"),
              ("p", "Right below the list, the number of items in the tab you are viewing is shown; it follows the list as it changes."),
              ("list", (

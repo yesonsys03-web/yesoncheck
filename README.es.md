@@ -25,7 +25,7 @@ Todas las imágenes se tomaron con vídeo sintético y nombres de archivo invent
 
 ## Funciones principales
 - **Reproducción precisa fotograma a fotograma** de vídeos y secuencias de imágenes (tga, png, exr …), con una barra de reproducción que siempre está en el mismo sitio: ir al inicio o al final, avanzar o retroceder un fotograma, repetir y escribir un número de fotograma para saltar a él
-- **Comparación A/B** con cortinilla izquierda/derecha o arriba/abajo
+- **Comparación A/B** con cortinilla izquierda/derecha o arriba/abajo — pasa el ratón por una fila de la lista y pulsa **B** para abrirla en B con la cortinilla activada
 - **Notas de corrección**: texto y formas en cada fotograma, guardadas automáticamente, y exportación de un vídeo con las notas incrustadas
 - **OCR y detección de cortes** (PySceneDetect, TransNetV2) para dividir animáticas en segmentos — revisarlos, unirlos, dividirlos y renombrarlos, y después exportar los clips
 - **Reproducción rápida de ProRes**: en Mac con el decodificador del sistema (VideoToolbox) y en Windows con el ffmpeg incluido
