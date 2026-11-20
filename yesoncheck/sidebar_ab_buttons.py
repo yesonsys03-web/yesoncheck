@@ -12,8 +12,8 @@
 """
 
 from PyQt5 import sip
-from PyQt5.QtCore import QEvent, QObject, QPointF, Qt, QTimer
-from PyQt5.QtGui import QCursor, QWheelEvent
+from PyQt5.QtCore import QEvent, QObject, QPoint, QPointF, Qt, QTimer
+from PyQt5.QtGui import QCursor, QMouseEvent, QWheelEvent
 from PyQt5.QtWidgets import QApplication, QHBoxLayout, QToolButton, QWidget
 
 from yesoncheck import error_window, ui_text
@@ -46,7 +46,11 @@ BUTTON_HEIGHT = 18  # 줄이 이보다 낮으면 줄에 맞춤
 RIGHT_INSET = 3  # 줄 오른쪽 끝에서 띄우는 틈 (px)
 
 # 필터가 보는 이벤트 (그 밖은 곧바로 흘려보냄)
-_WATCHED_EVENTS = frozenset((QEvent.MouseMove, QEvent.Leave, QEvent.Hide, QEvent.Resize, QEvent.WindowDeactivate, QEvent.Wheel))
+_MOUSE_BUTTON_EVENTS = frozenset((QEvent.MouseButtonPress, QEvent.MouseButtonRelease, QEvent.MouseButtonDblClick))
+_WATCHED_EVENTS = frozenset((QEvent.MouseMove, QEvent.Leave, QEvent.Hide, QEvent.Resize, QEvent.WindowDeactivate,
+                             QEvent.Wheel)) | _MOUSE_BUTTON_EVENTS
+# 단추 위에서 이 키와 함께 누르면 그 줄을 그 키로 누른 것(범위·더해 고르기) — 단추는 줄 오른쪽 끝을 덮으므로
+_SELECTION_MODIFIERS = Qt.ShiftModifier | Qt.ControlModifier | Qt.MetaModifier
 
 
 def ab_buttons_style(theme: str, row_background: str) -> str:
@@ -162,7 +166,9 @@ class SidebarAbButtonsMixin:
             self._sidebar_ab_timers[widget] = timer
             widget.verticalScrollBar().valueChanged.connect(lambda _value, w=widget: self._schedule_ab_refresh(w))
             model = widget.model()
-            for signal in (model.rowsInserted, model.rowsRemoved, model.modelReset, model.layoutChanged):
+            # 줄이 움직이거나(줄 수·차례), 줄 높이가 바뀌거나(썸네일 아이콘 — dataChanged), 고른 줄이 바뀌면(묶음 밑 바탕) 다시 맞춤
+            for signal in (model.rowsInserted, model.rowsRemoved, model.modelReset, model.layoutChanged, model.dataChanged,
+                           widget.selectionModel().selectionChanged):
                 signal.connect(lambda *_args, w=widget: self._schedule_ab_refresh(w))
         self.installEventFilter(self._sidebar_ab_filter)  # 창의 WindowDeactivate
         self.sidebar_tabs.currentChanged.connect(self._on_ab_tab_changed)
@@ -180,6 +186,14 @@ class SidebarAbButtonsMixin:
                 return False
             self._forward_wheel(watched, event, widget.viewport())
             return True
+        if kind in _MOUSE_BUTTON_EVENTS:
+            widget = self._sidebar_ab_parts.get(watched)
+            if widget is None:
+                return False
+            if event.modifiers() & _SELECTION_MODIFIERS:
+                self._forward_mouse(watched, event, widget.viewport())  # Shift·Ctrl+클릭은 그 줄을 그 키로 누른 것
+                return True
+            return kind == QEvent.MouseButtonDblClick  # 두 번 누름은 한 번 누름으로 — 줄 더블클릭처럼 한 번만 엶
         if watched is self:
             if kind == QEvent.WindowDeactivate:
                 self._hide_ab_buttons()
@@ -204,6 +218,13 @@ class SidebarAbButtonsMixin:
                                                      event.buttons(), event.modifiers(), event.phase(), event.inverted(),
                                                      event.source()))
 
+    @staticmethod
+    def _forward_mouse(source, event, viewport):
+        """단추 위의 (수정 키를 누른) 마우스 단추 이벤트를 그 자리의 목록 뷰포트로."""
+        local = QPointF(source.mapTo(viewport, event.pos()))
+        QApplication.sendEvent(viewport, QMouseEvent(event.type(), local, event.windowPos(), event.screenPos(), event.button(),
+                                                     event.buttons(), event.modifiers()))
+
     def _schedule_ab_refresh(self, widget):
         """줄이 움직인 뒤(줄 자리가 정해진 다음 — 0ms) 지금 커서 자리로 다시 맞춤."""
         timer = self._sidebar_ab_timers[widget]
@@ -227,13 +248,26 @@ class SidebarAbButtonsMixin:
         viewport = widget.viewport()
         if pos is None:
             pos = viewport.mapFromGlobal(QCursor.pos())
-        item = widget.itemAt(pos) if widget.isVisible() and viewport.rect().contains(pos) else None
+        item = self._ab_item_at(widget, pos) if widget.isVisible() and viewport.rect().contains(pos) else None
         if item is None:
             box.hide()
             return
         box.restyle(self.current_theme, item.isSelected())
         self._sync_ab_buttons(box)
-        box.place(widget.visualItemRect(item))
+        row = widget.visualItemRect(item)
+        row.setRight(min(row.right(), viewport.rect().right()))  # 긴 이름이 있으면 줄이 뷰포트보다 넓음(가로 스크롤) — 보이는 끝에
+        box.place(row)
+
+    @staticmethod
+    def _ab_item_at(widget, pos):
+        """pos 높이의 줄 — 가로 자리는 보지 않고(줄은 뷰포트 폭 전체), 썸네일 모드의 줄 사이 틈(spacing)이면 위·아래의 가까운 줄
+        (틈을 지날 때 단추가 숨었다 뜨며 깜빡이지 않게)."""
+        x = widget.viewport().width() // 2
+        item = widget.itemAt(QPoint(x, pos.y()))
+        gap = widget.spacing()
+        if item is None and gap:
+            item = widget.itemAt(QPoint(x, pos.y() - gap)) or widget.itemAt(QPoint(x, pos.y() + gap))
+        return item
 
     def _sync_ab_buttons(self, box, playing=None):
         """선택 재생 중이면 두 단추를 끄고 툴팁이 까닭을 말함 (줄 클릭·[ ] 키처럼 영상을 바꾸지 않음), 아니면 켜고 원래 툴팁.
@@ -246,7 +280,7 @@ class SidebarAbButtonsMixin:
 
     def _ab_row(self, widget):
         """묶음의 지금 자리(가운데) 아래 줄 — 누를 때 다시 찾음 (그사이 목록이 바뀌었으면 보일 때의 줄이 아님)."""
-        return widget.itemAt(self._sidebar_ab[widget].geometry().center())
+        return self._ab_item_at(widget, self._sidebar_ab[widget].geometry().center())
 
     def _ab_item_path(self, widget, item):
         """줄이 여는 경로 — 시퀀스(Seq 목록·All의 시퀀스 줄)는 가상 경로, 영상은 경로(툴팁). [ ] 키(sidebar_keys)도 이 규칙."""
@@ -263,6 +297,7 @@ class SidebarAbButtonsMixin:
             print(f"{AB_LOG_PREFIX} 단추 자리에 줄이 없습니다")
             return
         if side == "A":
+            widget.setFocus(Qt.MouseFocusReason)  # 줄을 누른 것처럼 목록에 포커스 — 이어서 ↑↓로 다음 영상
             widget.setCurrentItem(item)
             clicked = {self.sidebar: self.on_sidebar_item_clicked, self.seq_sidebar: self.on_seq_item_clicked,
                        self.all_sidebar: self.on_all_item_clicked}[widget]

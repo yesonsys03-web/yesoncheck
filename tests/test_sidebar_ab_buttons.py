@@ -64,10 +64,13 @@ def settle(qapp):
 
 
 def assert_on_row(player, widget, item):
+    """묶음이 그 줄 오른쪽 끝(줄이 뷰포트보다 넓으면 — 긴 이름의 가로 스크롤 — 뷰포트 오른쪽 끝)·세로 가운데에, 뷰포트 안에."""
     box, rect = group(player, widget), row_rect(widget, item)
     assert box.isVisible()
     geometry = box.geometry()
-    assert rect.right() - 8 <= geometry.right() <= rect.right(), (geometry, rect)
+    right_end = min(rect.right(), widget.viewport().rect().right())
+    assert right_end - 8 <= geometry.right() <= right_end, (geometry, rect, widget.viewport().rect())
+    assert geometry.left() >= 0, geometry
     assert abs(geometry.center().y() - rect.center().y()) <= 1, (geometry, rect)
     assert rect.top() <= geometry.top() and geometry.bottom() <= rect.bottom(), (geometry, rect)
 
@@ -428,3 +431,104 @@ def test_right_click_on_buttons_opens_the_row_menu(loaded, qapp, monkeypatch):
     qapp.processEvents()
     assert shown and ui_text.text("side_menu.open_b") in shown[-1]
     assert widget.selectedItems() == [tk3]  # 메뉴를 연 줄
+
+
+# ---------------------------------------------------------------- 리뷰에서 찾은 것
+
+def test_long_names_keep_buttons_inside_the_viewport(loaded, folder, qapp):  # noqa: F811
+    """이름이 사이드바보다 긴 영상이 하나라도 있으면 ListMode는 모든 줄을 그 폭으로 넓힘(가로 스크롤) — 단추는 뷰포트 오른쪽 끝에."""
+    widget = loaded.sidebar
+    long_name = "HH0306_010_0050_OSAN_v01_" + "x" * 60 + ".mov"
+    shutil.copy(str(folder / "tk1.mov"), str(folder / long_name))
+    loaded.add_files_to_sidebar([str(folder / long_name)])
+    settle(qapp)
+    tk1 = mov_item(loaded, "tk1.mov")
+    assert row_rect(widget, tk1).right() > widget.viewport().rect().right()  # 줄이 뷰포트보다 넓음
+    hover_item(qapp, widget, tk1)
+    assert_on_row(loaded, widget, tk1)
+
+
+def test_selection_change_recolors_under_buttons(loaded, qapp):
+    widget, tk1 = loaded.sidebar, mov_item(loaded, "tk1.mov")
+    widget.clearSelection()
+    hover_item(qapp, widget, tk1)
+    assert group(loaded, widget).styleSheet() == ab_buttons_style("dark", ROW_BG["dark"]["normal"])
+    widget.setCurrentItem(tk1)  # 줄을 누름·↑↓와 같은 선택 바뀜 (커서는 그대로)
+    settle(qapp)
+    assert group(loaded, widget).styleSheet() == ab_buttons_style("dark", ROW_BG["dark"]["selected"])
+
+
+def _mouse(kind, widget, local, modifiers=Qt.NoModifier):
+    buttons = Qt.NoButton if kind == QEvent.MouseButtonRelease else Qt.LeftButton
+    return QMouseEvent(kind, QPointF(local), QPointF(widget.mapToGlobal(local)), Qt.LeftButton, buttons, modifiers)
+
+
+def _double_click(widget, local):
+    for kind in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease, QEvent.MouseButtonDblClick, QEvent.MouseButtonRelease):
+        QApplication.sendEvent(widget, _mouse(kind, widget, local))
+
+
+def test_double_click_on_a_button_opens_once(loaded, qapp, monkeypatch):
+    opened = []
+    real_open = loaded.open_file
+    monkeypatch.setattr(loaded, "open_file", lambda *args: opened.append(args) or real_open(*args))
+    widget, tk3 = loaded.sidebar, mov_item(loaded, "tk3.mov")
+    hover_item(qapp, widget, tk3)
+    for name in ("button_a", "button_b"):
+        opened.clear()
+        button = getattr(group(loaded, widget), name)
+        _double_click(button, QPoint(button.width() // 2, button.height() // 2))
+        qapp.processEvents()
+        assert len(opened) == 1, (name, opened)
+
+
+def test_a_gives_the_list_focus_like_a_click(loaded, qapp):
+    loaded.activateWindow()
+    QApplication.setActiveWindow(loaded)
+    loaded.videoWidget.setFocus()
+    qapp.processEvents()
+    widget, tk3 = loaded.sidebar, mov_item(loaded, "tk3.mov")
+    assert not widget.hasFocus()
+    hover_item(qapp, widget, tk3)
+    group(loaded, widget).button_a.click()
+    qapp.processEvents()
+    assert widget.hasFocus()
+
+
+def test_thumbnail_gaps_do_not_hide_buttons(loaded, qapp):
+    """썸네일 모드는 줄 사이에 틈(spacing)이 있음 — 틈을 지날 때 단추가 숨었다 뜨며 깜빡이지 않게 가까운 줄에 둠."""
+    loaded.thumbnailModeButton.click()
+    settle(qapp)
+    widget = loaded.sidebar
+    first, second = widget.item(0), widget.item(1)
+    gap_top, gap_bottom = row_rect(widget, first).bottom() + 1, row_rect(widget, second).top() - 1
+    assert gap_bottom >= gap_top  # 틈이 있음
+    for y in range(gap_top, gap_bottom + 1):
+        hover(qapp, widget, QPoint(widget.viewport().width() // 2, y))
+        assert group(loaded, widget).isVisible(), y
+
+
+@pytest.mark.parametrize("modifier", [Qt.ShiftModifier, Qt.ControlModifier])
+def test_modified_click_on_buttons_is_a_click_on_the_row(loaded, qapp, modifier):
+    """Shift·Ctrl+클릭이 단추 자리(줄 오른쪽 끝)에 걸려도 그 줄을 그 키로 누른 것과 같음 — 범위 고르기·더해 고르기."""
+    widget, tk1, tk3 = loaded.sidebar, mov_item(loaded, "tk1.mov"), mov_item(loaded, "tk3.mov")
+
+    def click_with(target, local):
+        for kind in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease):
+            QApplication.sendEvent(target, _mouse(kind, target, local, modifier))
+        qapp.processEvents()
+
+    def state():
+        return sorted(item.text() for item in widget.selectedItems()), loaded.filename_a
+
+    widget.clearSelection()
+    widget.setCurrentItem(tk1)
+    click_with(widget.viewport(), QPoint(20, row_rect(widget, tk3).center().y()))  # 줄 왼쪽을 그 키로 누름
+    on_row = state()
+    widget.clearSelection()
+    widget.setCurrentItem(tk1)
+    hover_item(qapp, widget, tk3)
+    button = group(loaded, widget).button_a
+    click_with(button, QPoint(button.width() // 2, button.height() // 2))
+    assert state() == on_row
+    assert len(on_row[0]) == 2  # 범위·더해 고르기가 된 상태 (tk1과 tk3)
