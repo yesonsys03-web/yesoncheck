@@ -396,6 +396,7 @@ PAGES = (
                  "and the number is B's own frame number. If the file names are long and the two texts would overlap, B's text "
                  "moves one line up.",
              )),
+             ("fig", "wipe_labels", "After pressing {B} during a wipe — A's text at the bottom left, B's at the bottom right", ()),
          )),
     Page("sidebar", "Sidebar (video list)", "Lists & files",
          "The list of videos and sequences to review. Open and select items here, and do various tasks from the right-click menu.",
@@ -425,6 +426,7 @@ PAGES = (
              ("p", "Moving the mouse over a list row shows a blue **A** and a gold **B** button at the right end of that row. This works "
                    "in the Mov, Seq and All tabs and in thumbnail mode. They are off at first — turn them on and off with "
                    "{{menu.compare}} → {{menu.compare.ab_buttons}} (saved on this PC, so it stays the same next time)."),
+             ("fig", "sidebar_ab", "With the mouse over a row — the **A**·**B** buttons at its right end", ()),
              ("list", (
                  "**A** — the same as clicking the row (selects it and opens it in A).",
                  "**B** — opens that video in B and leaves the selection as it is. If the wipe is off it is turned on, and if neither "
