@@ -28,6 +28,7 @@ from PyQt5.QtGui import (
 from PyQt5.QtWidgets import (
     QApplication,
     QGraphicsEllipseItem,
+    QGraphicsItem,
     QGraphicsLineItem,
     QGraphicsPathItem,
     QGraphicsRectItem,
@@ -283,6 +284,21 @@ class CustomVideoWidget(QGraphicsView):
         self.overlay_text_item = QGraphicsSimpleTextItem(self.overlay_box_item)
         self.overlay_text_item.setBrush(QColor(0, 0, 0))
         self.scene.addItem(self.overlay_box_item)
+        # 와이프 중 B 키 글자(네이티브 프레임 — 굽지 않음, 2026-11-20): 같은 모양의 흰 상자 + 검정 글자를 오른쪽 아래에, B가 보이는 영역 모양의
+        # 자르는 아이템(ItemClipsChildrenToShape — 경로 wipe_b_region, 펜 없음이라 모양 = 경로) 아래에 둬 와이프 선을 넘어 A 쪽에 그려지지 않게.
+        # z는 자르는 아이템에만 OVERLAY_ITEM_Z(상자 자신은 0), 보임/숨김도 자르는 아이템 하나로 (set_overlay_b_text)
+        self.overlay_b_clip_item = QGraphicsPathItem()
+        self.overlay_b_clip_item.setPen(QPen(Qt.NoPen))
+        self.overlay_b_clip_item.setBrush(QBrush(Qt.NoBrush))
+        self.overlay_b_clip_item.setFlag(QGraphicsItem.ItemClipsChildrenToShape, True)
+        self.overlay_b_clip_item.setZValue(OVERLAY_ITEM_Z)
+        self.overlay_b_clip_item.setVisible(False)
+        self.overlay_b_box_item = QGraphicsRectItem(self.overlay_b_clip_item)
+        self.overlay_b_box_item.setPen(QPen(Qt.NoPen))
+        self.overlay_b_box_item.setBrush(QColor(255, 255, 255))
+        self.overlay_b_text_item = QGraphicsSimpleTextItem(self.overlay_b_box_item)
+        self.overlay_b_text_item.setBrush(QColor(0, 0, 0))
+        self.scene.addItem(self.overlay_b_clip_item)
 
         # 주석 층(네이티브 프레임 — 읽기 전용이라 주석을 굽지 않음): 프레임 사각형 하나가 주석마다 자식 아이템(annotation_overlay). 영상 아이템보다 뒤에
         # 넣고 원점·프레임 좌표라 B 키 상자처럼 줌·맞춤에 따라 구운 주석처럼 커짐; z ANNOTATION_OVERLAY_Z. 갱신은 updateFrame(_refresh_native_annotations)
@@ -594,12 +610,14 @@ class CustomVideoWidget(QGraphicsView):
             self.video_item.setPixmap(QPixmap())
             self._pixmap_backing = None  # 빈 픽스맵을 건 뒤에 놓음 — 픽스맵 길이 앞 네이티브 프레임의 표면(4K 33MB)을 더 쥐지 않게
             self.set_overlay_text(None, 0, 0)  # 비운 화면에 앞 네이티브 프레임의 B 키 글자가 남지 않게
+            self.set_overlay_b_text(None, 0, 0)  # 와이프 중 B 글자도
             self.annotation_overlay.clear()  # 주석 층도
             return
 
         if native_surface_of(frame_a) is not None or native_surface_of(frame_b) is not None:
             self._show_native_frames(frame_a, frame_b)  # 네이티브(IOSurface) 프레임 — RGB 변환·numpy 합성 없음
             self._refresh_native_overlay(frame_a)
+            self._refresh_native_overlay_b(frame_a)
             self._refresh_native_annotations(frame_a)
             self._after_frame_shown()
             return
@@ -634,6 +652,7 @@ class CustomVideoWidget(QGraphicsView):
 
         self._pixmap_backing = None  # RGB 그림을 건 뒤에 놓음 — 픽스맵 길이 앞 네이티브 프레임의 표면을 더 쥐지 않게(스트림 길에선 늘 None)
         self.set_overlay_text(None, width, height)  # RGB 프레임의 B 키 글자는 프레임에 구움 — 앞 네이티브 프레임의 아이템이 남지 않게(숨어 있으면 할 일 없음)
+        self.set_overlay_b_text(None, width, height)  # 와이프 중 B 글자도 RGB면 B 그림에 구움(위)
         self.annotation_overlay.clear()  # 주석도 프레임에 구움(prepare_frame_for_display) — 앞 네이티브 프레임의 주석 층을 비움(비어 있으면 할 일 없음)
         self._after_frame_shown()
 
@@ -699,6 +718,42 @@ class CustomVideoWidget(QGraphicsView):
             return
         self.set_overlay_text(self._overlay_provider(), width, height)
 
+    def _refresh_native_overlay_b(self, frame_a):
+        """네이티브 분기의 와이프 중 B 키 글자 아이템 갱신 — 스트림 아이템(GL)일 때만: 픽스맵 길(킬 스위치)은 A만 그려 B가 보이지 않음.
+        글은 공급자(_overlay_b_text — 와이프 축·B 키 글자·B가 있을 때만), 기하는 A의 크기(픽셀은 읽지 않음)."""
+        height, width = frame_a.shape[:2]
+        text = None
+        if self._overlay_b_provider is not None and self.video_item_stream:
+            text = self._overlay_b_provider()
+        self.set_overlay_b_text(text, width, height)
+
+    def wipe_b_region(self, width, height):
+        """width×height 프레임에서 B가 보이는 영역(프레임 좌표 경로) — X면 x ≥ int(너비 × wipe_position_x), Y면 y ≥ int(높이 × wipe_position_y),
+        둘 다면 합집합(RGB 합성과 같은 자리), 와이프 축이 없으면 빈 경로. 와이프 중 B 키 글자 아이템을 이 모양으로 자름."""
+        region = QPainterPath()
+        if self.wipe_enabled_x:
+            x = int(width * self.wipe_position_x)
+            part = QPainterPath()
+            part.addRect(QRectF(x, 0, width - x, height))
+            region = region.united(part)
+        if self.wipe_enabled_y:
+            y = int(height * self.wipe_position_y)
+            part = QPainterPath()
+            part.addRect(QRectF(0, y, width, height - y))
+            region = region.united(part)
+        return region
+
+    def set_overlay_b_text(self, text, width, height):
+        """와이프 중 B 키 글자 아이템(네이티브 프레임용)을 width×height 프레임의 text로 — 오른쪽 아래(상자 오른쪽 끝 = 너비 − margin_x + pad, A 상자의
+        거울), B가 보이는 영역으로 자름(wipe_b_region). None이면 숨김(이미 숨었으면 할 일 없음)."""
+        if text is None:
+            if self.overlay_b_clip_item.isVisible():
+                self.overlay_b_clip_item.setVisible(False)  # 자식인 상자·글자도 함께 숨음
+            return
+        self._place_overlay_label(self.overlay_b_box_item, self.overlay_b_text_item, text, width, height, "right")
+        self.overlay_b_clip_item.setPath(self.wipe_b_region(width, height))
+        self.overlay_b_clip_item.setVisible(True)
+
     def set_annotation_provider(self, provider):
         """주석 공급자 등록 — provider() -> list[dict](보이는 프레임의 주석 — 플레이어의 annotation_store). 플레이어가 창을 만들 때 한 번
         (_annotations_for_native); updateFrame의 네이티브 분기가 프레임마다 불러 주석 층을 갱신(공급자가 없으면 층을 비움)."""
@@ -731,18 +786,25 @@ class CustomVideoWidget(QGraphicsView):
             if self.overlay_box_item.isVisible():
                 self.overlay_box_item.setVisible(False)  # 자식인 글자도 함께 숨음
             return
+        self._place_overlay_label(self.overlay_box_item, self.overlay_text_item, text, width, height, "left")
+        self.overlay_box_item.setVisible(True)  # 자식인 글자도 함께 보임
+
+    @staticmethod
+    def _place_overlay_label(box, text_item, text, width, height, align):
+        """B 키 글자 상자·글자 아이템의 기하(set_overlay_text의 규칙 — A는 "left", 와이프 중 B는 "right": 기준선 왼쪽 끝을 너비 − margin_x − Qt 글자 폭으로
+        옮겨 상자 오른쪽 끝이 너비 − margin_x + pad가 되게 — A 상자 왼쪽 끝 margin_x − pad의 거울)."""
         layout = overlay_layout(text, width, height)
         font = overlay_font(text, layout)
         metrics = QFontMetricsF(font)
-        x, y = layout.margin_x, height - layout.margin_y  # 기준선 왼쪽 끝
+        advance = metrics.horizontalAdvance(text)
+        x = layout.margin_x if align == "left" else width - layout.margin_x - advance  # 기준선 왼쪽 끝
+        y = height - layout.margin_y
         pad = layout.pad
         below = max(pad, layout.baseline, math.ceil(metrics.descent()))
-        self.overlay_text_item.setFont(font)
-        self.overlay_text_item.setText(text)
-        self.overlay_text_item.setPos(x, y - metrics.ascent())  # 상자 좌표(= 프레임 좌표). 글자 아이템의 원점은 글줄 위 — 기준선이 y에 오게
-        self.overlay_box_item.setRect(QRectF(x - pad, y - layout.text_height - pad,
-                                             metrics.horizontalAdvance(text) + 2 * pad + 1, layout.text_height + pad + below + 1))
-        self.overlay_box_item.setVisible(True)  # 자식인 글자도 함께 보임
+        text_item.setFont(font)
+        text_item.setText(text)
+        text_item.setPos(x, y - metrics.ascent())  # 상자 좌표(= 프레임 좌표). 글자 아이템의 원점은 글줄 위 — 기준선이 y에 오게
+        box.setRect(QRectF(x - pad, y - layout.text_height - pad, advance + 2 * pad + 1, layout.text_height + pad + below + 1))
 
     def _after_frame_shown(self):
         """updateFrame의 꼬리(두 그리기 길이 함께 씀): 새 그림 크기에 장면·맞춤을 맞추고 와이프 선·ROI·편집 핸들을 다시 놓음."""

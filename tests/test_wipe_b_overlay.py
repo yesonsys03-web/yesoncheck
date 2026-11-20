@@ -166,3 +166,76 @@ def test_no_b_label_without_wipe(wiped):
     layout = overlay_layout("File: b_tk2.mov, Frame: 1/24", width, height)
     right_half = image[height - layout.margin_y - layout.text_height - layout.pad:, width // 2:]
     assert not (right_half == 255).all(axis=2).any()
+
+
+# ---------------------------------------------------------------- Mac 네이티브 길 (IOSurface — 굽지 않고 아이템)
+
+from PyQt5.QtCore import QPointF  # noqa: E402
+
+from tests.native_fakes import FAKE_HEIGHT, FAKE_WIDTH, fake_native_player  # noqa: E402,F401 (fake_native_player: fixture)
+
+
+@pytest.fixture
+def native_wiped(fake_native_player, qapp):  # noqa: F811
+    """A·B 가짜 네이티브(GL 스트림 아이템) + 와이프·X·B 키 글자."""
+    rig = fake_native_player(ab=True)
+    rig.player.wipeXButton.setChecked(True)
+    rig.player.toggle_overlay_text()
+    qapp.processEvents()
+    return rig
+
+
+def test_native_b_label_item_right_aligned(native_wiped):
+    player = native_wiped.player
+    widget = player.videoWidget
+    box, text = widget.overlay_b_box_item, widget.overlay_b_text_item
+    assert box.isVisible() and text.text() == player.overlay_label_b()
+    layout = overlay_layout(text.text(), FAKE_WIDTH, FAKE_HEIGHT)
+    assert abs(box.rect().right() - (FAKE_WIDTH - layout.margin_x + layout.pad + 1)) <= 1  # A 상자(margin_x − pad에서 시작)의 거울
+    assert box.rect().bottom() == widget.overlay_box_item.rect().bottom()  # 아래 끝은 A 상자와 같음
+    assert widget.overlay_box_item.isVisible()  # A 글자도 그대로
+    assert native_wiped.reads == []  # 네이티브 프레임의 픽셀을 파이썬에서 읽지 않음
+
+
+@pytest.mark.parametrize("axes, a_point", [("x", (FAKE_WIDTH // 2 - 2, FAKE_HEIGHT - 2)),
+                                           ("y", (FAKE_WIDTH - 2, FAKE_HEIGHT // 2 - 2)),
+                                           ("xy", (2, 2))])
+def test_native_b_label_is_clipped_to_the_b_side(native_wiped, axes, a_point):
+    player = native_wiped.player
+    player.wipeXButton.setChecked("x" in axes)
+    player.wipeYButton.setChecked("y" in axes)
+    clip = player.videoWidget.overlay_b_clip_item.path()
+    assert clip.contains(QPointF(FAKE_WIDTH - 2, FAKE_HEIGHT - 2))  # 오른쪽 아래 = B 쪽
+    assert not clip.contains(QPointF(*a_point))  # A 쪽
+
+
+def test_native_b_clip_follows_the_wipe_line(native_wiped):
+    player = native_wiped.player
+    widget = player.videoWidget
+    widget.wipe_position_x = 0.8
+    player.update_frame()
+    line = int(FAKE_WIDTH * 0.8)
+    clip = widget.overlay_b_clip_item.path()
+    assert clip.contains(QPointF(line + 2, FAKE_HEIGHT - 2)) and not clip.contains(QPointF(line - 2, FAKE_HEIGHT - 2))
+
+
+def test_native_b_label_hidden_when_b_is_not_drawn(fake_native_player, qapp):  # noqa: F811
+    rig = fake_native_player(ab=True, video_item="pixmap")  # 킬 스위치(픽스맵 길) — A만 그림
+    rig.player.wipeXButton.setChecked(True)
+    rig.player.toggle_overlay_text()
+    assert not rig.player.videoWidget.overlay_b_box_item.isVisible()
+
+
+def test_native_b_label_hidden_without_wipe_overlay_or_frame(native_wiped):
+    player = native_wiped.player
+    widget = player.videoWidget
+    assert widget.overlay_b_box_item.isVisible()
+    player.toggle_overlay_text()  # B 키 끔
+    assert not widget.overlay_b_box_item.isVisible()
+    player.toggle_overlay_text()
+    player.wipeXButton.setChecked(False)  # 축이 없음 — B가 보이지 않음
+    assert not widget.overlay_b_box_item.isVisible()
+    player.wipeXButton.setChecked(True)
+    assert widget.overlay_b_box_item.isVisible()
+    widget.updateFrame(None, None)  # 빈 화면
+    assert not widget.overlay_b_box_item.isVisible()
