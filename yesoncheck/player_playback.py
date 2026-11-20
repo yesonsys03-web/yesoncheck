@@ -2576,6 +2576,9 @@ class PlayerPlaybackMixin:
         turned_on = not self.wipeCheckBox.isChecked()
         if turned_on:
             self.wipeCheckBox.setChecked(True)
+            # 와이프가 꺼진 채 연 B는 그림을 읽지 않았음(seek_to_frame은 와이프가 켜졌을 때만 B를 읽음) — 지금 프레임으로 다시 가서 B를 A와 같은
+            # 프레임으로 읽음 (안 그러면 B 자리가 검게 남아 한 번 더 눌러야 그림이 들어왔음 — 사용자 보고 2026-11-20)
+            self.seek_to_frame(int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES)))
         if not self.wipeXButton.isChecked() and not self.wipeYButton.isChecked():
             self.wipeXButton.setChecked(True)
             turned_on = True

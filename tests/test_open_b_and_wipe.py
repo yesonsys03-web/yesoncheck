@@ -3,6 +3,7 @@ player.open_b_and_wipe 하나를 부르고, 연 경우에만 와이프를 켜고
 이미 켜 둔 와이프의 축은 그대로, 열지 못하면(없는 파일·파일 창 취소) 와이프를 켜지 않음, 와이프를 끄면 B를 닫는 규칙(11-18)은 그대로.
 """
 
+import cv2
 import pytest
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QFileDialog
@@ -94,3 +95,27 @@ def test_turning_wipe_off_still_closes_b(loaded, folder):  # noqa: F811
     assert loaded.open_b_and_wipe(str(folder / "tk3.mov"))
     loaded.wipeCheckBox.setChecked(False)
     assert loaded.cap_b is None and not loaded.filename_b
+
+
+@pytest.mark.parametrize("how", ["call", "button", "key"])
+def test_b_picture_shows_on_the_first_open(loaded, folder, qapp, monkeypatch, how):  # noqa: F811
+    """와이프가 꺼진 채 B를 열면 seek_to_frame이 B 그림을 읽지 않음(와이프가 켜졌을 때만 읽음) — 그 뒤 와이프를 켜도 B 자리가 검게
+    남아 한 번 더 눌러야 그림이 들어왔음(사용자 보고 2026-11-20). 처음 열 때 B가 A와 같은 프레임의 그림으로 보여야 함."""
+    shown = []
+    real_update = loaded.videoWidget.updateFrame
+    monkeypatch.setattr(loaded.videoWidget, "updateFrame", lambda a, b: shown.append(b) or real_update(a, b))
+    tk3 = mov_item(loaded, "tk3.mov")
+    if how == "call":
+        assert loaded.open_b_and_wipe(tk3.toolTip())
+    elif how == "button":
+        from tests.test_sidebar_ab_buttons import group, hover_item
+        hover_item(qapp, loaded.sidebar, tk3)
+        group(loaded, loaded.sidebar).button_b.click()
+    else:
+        select(loaded.sidebar, [tk3], current=tk3)
+        assert loaded.eventFilter(loaded.sidebar, key_event(Qt.Key_BracketRight, "]")) is True
+    qapp.processEvents()
+    assert wipe_state(loaded) == (True, True, False)
+    assert loaded.frame_b is not None
+    assert int(loaded.cap_b.get(cv2.CAP_PROP_POS_FRAMES)) == int(loaded.cap_a.get(cv2.CAP_PROP_POS_FRAMES))  # A와 같은 프레임
+    assert shown and shown[-1] is not None  # 마지막 그림에 B가 있음
