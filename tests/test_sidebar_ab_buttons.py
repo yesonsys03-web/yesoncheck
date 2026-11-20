@@ -438,7 +438,7 @@ def test_right_click_on_buttons_opens_the_row_menu(loaded, qapp, monkeypatch):
 def test_long_names_keep_buttons_inside_the_viewport(loaded, folder, qapp):  # noqa: F811
     """이름이 사이드바보다 긴 영상이 하나라도 있으면 ListMode는 모든 줄을 그 폭으로 넓힘(가로 스크롤) — 단추는 뷰포트 오른쪽 끝에."""
     widget = loaded.sidebar
-    long_name = "HH0306_010_0050_OSAN_v01_" + "x" * 60 + ".mov"
+    long_name = "EP101_SC050_LAYOUT_TK1_" + "x" * 60 + ".mov"
     shutil.copy(str(folder / "tk1.mov"), str(folder / long_name))
     loaded.add_files_to_sidebar([str(folder / long_name)])
     settle(qapp)
@@ -555,3 +555,25 @@ def test_closed_window_is_not_kept_alive(dialogs, tmp_path, qapp, monkeypatch):
         gc.collect()
         qapp.processEvents()
     assert ref() is None
+
+
+def test_closing_the_window_detaches_filters_and_signals(loaded, qapp, monkeypatch):
+    """창을 닫으면 A·B의 필터를 떼고 신호를 끊음 — 닫힌 창이 나중에(시험 프로세스 끝의 QApplication 정리처럼) 지워질 때 파이썬 필터·슬롯이
+    불리지 않게(그 정리 중에 파이썬이 불리면 간헐 세그폴트 — 11-16 '앱을 끝낼 때의 간헐 세그폴트', 이 시험 파일을 혼자 돌릴 때 한 번 겪음)."""
+    calls = []
+    real_filter = sidebar_ab_buttons._AbHoverFilter.eventFilter
+    monkeypatch.setattr(sidebar_ab_buttons._AbHoverFilter, "eventFilter",
+                        lambda self, watched, event: calls.append(event.type()) or real_filter(self, watched, event))
+    loaded.close()
+    qapp.processEvents()
+    calls.clear()
+    widget = loaded.sidebar
+    timer = loaded._sidebar_ab_timers[widget]
+    QApplication.sendEvent(widget.viewport(), QMouseEvent(QEvent.MouseMove, QPointF(5, 5), Qt.NoButton, Qt.NoButton, Qt.NoModifier))
+    QApplication.sendEvent(loaded, QEvent(QEvent.WindowDeactivate))
+    widget.takeItem(0)  # 목록 신호 → (이어져 있으면) 다시 맞춤 타이머가 돎
+    widget.clearSelection()
+    assert not timer.isActive()  # 신호가 끊겨 슬롯이 불리지 않음
+    qapp.processEvents()
+    assert calls == []
+    assert not any(box.isVisible() for box in loaded._sidebar_ab.values())

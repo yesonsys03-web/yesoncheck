@@ -1506,6 +1506,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
             # 맨 먼저: 뒤의 정리에서 오류가 나도 실행 중인 스레드를 놓지 않은 채 남기지 않게
             self._sidebar_scan_closed = True
             self._hover_thumbs_destroy()  # 슬라이더 썸네일: 띠 워커(ffmpeg) 정지도 맨 앞에 (같은 까닭) + 필터를 떼고 커서 위 창을 바로 지움
+            self._sidebar_ab_detach()  # 사이드바 A·B 단추: 필터를 떼고 신호를 끊음 (닫힌 창이 나중에 지워질 때 파이썬이 불리지 않게)
             if getattr(self, '_app_state_connected', False):
                 QApplication.instance().applicationStateChanged.disconnect(self._on_application_state_changed)
                 self._app_state_connected = False

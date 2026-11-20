@@ -150,25 +150,27 @@ class SidebarAbButtonsMixin:
         # 바운드 메서드에 잇고 sender()로 목록을 찾음 — PyQt는 바운드 메서드를 약하게, 람다는 강하게 쥐어서 창(self)을 붙잡는 람다를
         # 이으면 닫은 창이 영영 남았음(파이썬 래퍼가 그때그때 생기는 스크롤바·모델에 이으면 GC도 그 고리를 끊지 못함)
         self._sidebar_ab_senders = {}
+        self._sidebar_ab_connections = []  # (보내는 객체, 신호, 슬롯) — 창을 닫을 때 끊음(_sidebar_ab_detach)
+        self._sidebar_ab_watched = []  # 필터를 건 객체 — 창을 닫을 때 뗌
         self._sidebar_ab_filter = _AbHoverFilter(self._ab_event, self)
         for widget in (self.sidebar, self.seq_sidebar, self.all_sidebar):
             box = AbButtons(widget.viewport())
             self._sidebar_ab[widget] = box
             for button, side in ((box.button_a, "A"), (box.button_b, "B")):
                 self._sidebar_ab_senders[sip.unwrapinstance(button)] = (widget, side)
-                button.clicked.connect(self._on_ab_button_clicked)
+                self._ab_connect(button, button.clicked, self._on_ab_button_clicked)
             for part in (box, box.button_a, box.button_b):
                 self._sidebar_ab_parts[part] = widget
-                part.installEventFilter(self._sidebar_ab_filter)
+                self._ab_watch(part)
             viewport = widget.viewport()
             self._sidebar_ab_viewports[viewport] = widget
             viewport.setMouseTracking(True)  # 단추 없이 움직여도 MouseMove가 오게
-            viewport.installEventFilter(self._sidebar_ab_filter)
+            self._ab_watch(viewport)
             timer = QTimer(self)
             timer.setSingleShot(True)
             timer.setInterval(0)
             self._sidebar_ab_senders[sip.unwrapinstance(timer)] = (widget, None)
-            timer.timeout.connect(self._on_ab_refresh_timeout)
+            self._ab_connect(timer, timer.timeout, self._on_ab_refresh_timeout)
             self._sidebar_ab_timers[widget] = timer
             # 줄이 움직이거나(스크롤·줄 수·차례), 줄 높이가 바뀌거나(썸네일 아이콘 — dataChanged), 고른 줄이 바뀌면(묶음 밑 바탕) 다시 맞춤
             model, selection, bar = widget.model(), widget.selectionModel(), widget.verticalScrollBar()
@@ -178,11 +180,39 @@ class SidebarAbButtonsMixin:
                                     (selection, (selection.selectionChanged,))):
                 self._sidebar_ab_senders[sip.unwrapinstance(sender)] = (widget, None)
                 for signal in signals:
-                    signal.connect(self._on_ab_list_changed)
-        self.installEventFilter(self._sidebar_ab_filter)  # 창의 WindowDeactivate
-        self.sidebar_tabs.currentChanged.connect(self._on_ab_tab_changed)
+                    self._ab_connect(sender, signal, self._on_ab_list_changed)
+        self._ab_watch(self)  # 창의 WindowDeactivate
+        self._ab_connect(self.sidebar_tabs, self.sidebar_tabs.currentChanged, self._on_ab_tab_changed)
         for box in self._sidebar_ab.values():
             self._sync_ab_buttons(box, playing=False)  # 창을 만드는 중 — 선택 재생 상태(is_playlist_playing)는 아직 없음
+
+    def _ab_connect(self, sender, signal, slot):
+        signal.connect(slot)
+        self._sidebar_ab_connections.append((sender, signal, slot))
+
+    def _ab_watch(self, obj):
+        obj.installEventFilter(self._sidebar_ab_filter)
+        self._sidebar_ab_watched.append(obj)
+
+    def _sidebar_ab_detach(self):
+        """(창을 닫을 때 — _release_resources_on_close) 필터를 떼고 신호를 끊고 타이머를 멈추고 단추를 숨김 — 닫힌 창이 나중에(시험 프로세스 끝의
+        QApplication 정리처럼) 지워질 때 파이썬 필터·슬롯이 불리지 않게: 그 정리 중에 파이썬이 불리면 간헐 세그폴트(11-16 '앱을 끝낼 때의 간헐
+        세그폴트'와 같은 길 — 슬라이더 썸네일의 _hover_thumbs_destroy와 같은 까닭). 여러 번 불러도 됨."""
+        # 이미 지워진 객체는 건너뜀 — Qt가 그 객체의 필터·연결을 함께 없앴음(지워진 객체의 신호를 끊으면 PyQt가 세그폴트)
+        for obj in self._sidebar_ab_watched:
+            if not sip.isdeleted(obj):
+                obj.removeEventFilter(self._sidebar_ab_filter)
+        self._sidebar_ab_watched = []
+        for sender, signal, slot in self._sidebar_ab_connections:
+            if not sip.isdeleted(sender):
+                signal.disconnect(slot)
+        self._sidebar_ab_connections = []
+        for timer in self._sidebar_ab_timers.values():
+            if not sip.isdeleted(timer):
+                timer.stop()
+        for box in self._sidebar_ab.values():
+            if not sip.isdeleted(box):
+                box.hide()
 
     def _ab_sender(self):
         """지금 신호를 보낸 객체의 (목록, 단추 쪽) — 이 창의 A·B 신호가 아니면 KeyError."""
