@@ -9,6 +9,7 @@ import shutil
 import pytest
 from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt
 from PyQt5.QtGui import QColor, QCursor, QMouseEvent
+from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication
 
 from tests.test_sidebar_all_tab import all_item, show_all_tab
@@ -485,6 +486,9 @@ def test_double_click_on_a_button_opens_once(loaded, qapp, monkeypatch):
 
 
 def test_a_gives_the_list_focus_like_a_click(loaded, qapp):
+    # show()가 100ms 뒤에 거는 force_focus(창이 포커스를 가져감)가 지난 뒤부터 — 그 전에 누르면 그 타이머가 목록의 포커스를 도로 가져가
+    # 빠른 러너에서만 실패했음(Apple Silicon CI 2026-11-20; test_transport_player의 shown 픽스처와 같은 기다림)
+    QTest.qWait(250)
     loaded.activateWindow()
     QApplication.setActiveWindow(loaded)
     loaded.videoWidget.setFocus()
