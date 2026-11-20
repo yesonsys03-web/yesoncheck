@@ -278,3 +278,34 @@ def test_native_b_label_hidden_without_wipe_overlay_or_frame(native_wiped):
     assert widget.overlay_b_box_item.isVisible()
     widget.updateFrame(None, None)  # 빈 화면
     assert not widget.overlay_b_box_item.isVisible()
+
+
+@pytest.mark.parametrize("axes", ["x", "y", "xy"])
+def test_a_label_is_not_cut_by_the_wipe_line(wiped, axes):
+    """A 글자도 와이프 선에 잘리지 않음 — CPU 길은 A 그림에 구운 글자를 B가 덮었음(사용자 보고 2026-11-20: 선을 A 글자 위로 옮기면 A 글자가
+    잘림). 합성한 그림 위에 다시 구움(Mac 네이티브 길의 A 글자 아이템은 원래 잘리지 않음)."""
+    wiped.wipeXButton.setChecked("x" in axes)
+    wiped.wipeYButton.setChecked("y" in axes)
+    wiped.videoWidget.wipe_position_x = 0.05  # 선이 A 글자의 왼쪽 — A 글자 대부분이 B 쪽
+    wiped.videoWidget.wipe_position_y = 0.05
+    wiped.update_frame()
+    image = shown_image(wiped)
+    height, width = image.shape[:2]
+    layout = overlay_layout(wiped.overlay_label(), width, height)
+    y = height - layout.margin_y
+    right = layout.margin_x + layout.text_width + layout.pad
+    band = image[y - layout.text_height - layout.pad + 1:y + max(layout.pad, layout.baseline) - 1, right - 2:right]
+    assert (band == 255).all()  # A 상자의 오른쪽 가장자리 안쪽 띠 — B 쪽인데도 흰색
+
+
+def test_a_label_pixels_on_the_a_side_are_unchanged_by_the_redraw(wiped):
+    """다시 굽기는 같은 자리·같은 글·같은 방식이라 A 쪽의 A 글자 픽셀은 바뀌지 않음 — 와이프 없이 보이던 그림과 같음."""
+    wiped.videoWidget.wipe_position_x = 0.95  # A 글자 전부가 A 쪽
+    wiped.update_frame()
+    with_wipe = shown_image(wiped)
+    height, width = with_wipe.shape[:2]
+    layout = overlay_layout(wiped.overlay_label(), width, height)
+    expected = wiped.prepare_frame_for_display(wiped.frame_a)  # A 그림에 구운 A 글자 (예전 그대로)
+    top = height - layout.margin_y - layout.text_height - layout.pad
+    right = layout.margin_x + layout.text_width + layout.pad + 1
+    assert np.array_equal(with_wipe[top:, :right], expected[top:, :right])

@@ -383,8 +383,8 @@ PAGES = (
                  "different kind from the other side, the other side is closed and the wipe is turned off.",
                  "Playing two 4K videos together makes the decoder do twice the work, so depending on the hardware playback may "
                  "not be real time.",
-                 "When you view ProRes on Mac, A's file name text (B key) and annotations are not cut off at the line even with the "
-                 "wipe on — they are visible over the B side as well.",
+                 "The file name text (B key) is not cut off at the line even with the wipe on. When you view ProRes on Mac, A's "
+                 "annotations are not cut off at the line either — they are visible over the B side as well.",
                  "If you turn on the file name and frame number text with the {B} key during a wipe, **B's text** also appears at the "
                  "bottom right of the video — like A's text it is not cut off at the wipe line, "
                  "and the number is B's own frame number.",

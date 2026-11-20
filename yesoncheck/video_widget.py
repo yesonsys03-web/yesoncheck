@@ -634,6 +634,11 @@ class CustomVideoWidget(QGraphicsView):
             if self.wipe_enabled_y:
                 wipe_y = int(height * self.wipe_position_y)
                 result[wipe_y:, :] = frame_b[wipe_y:, :]
+            text_a = self._overlay_provider() if self._overlay_provider is not None else None
+            if text_a:
+                # A 글자도 합성한 그림 위에 다시 — A 그림에 구운 글자를 B가 덮어 와이프 선에 잘렸음(사용자 보고 2026-11-20). 같은 자리·같은 글·같은
+                # 그리기라 A 쪽 픽셀은 그대로 (공급자는 B 키 글자가 켜졌을 때만 글을 줌 — 네이티브 길의 아이템과 같은 공급자)
+                burn_overlay_label(result, text_a)
             text_b = self._overlay_b_provider() if self._overlay_b_provider is not None else None
             if text_b:
                 # 와이프 중 B 키 글자: 합성한 그림(새 사본) 위 오른쪽 아래에 — 와이프 선에 잘리지 않고 늘 보임(A 글자처럼, 사용자 결정 2026-11-20),
@@ -701,7 +706,8 @@ class CustomVideoWidget(QGraphicsView):
 
     def set_overlay_provider(self, provider):
         """B 키 글자 공급자 등록 — provider() -> str | None(None이면 숨김). 플레이어가 창을 만들 때 한 번(_overlay_text_for_native);
-        updateFrame의 네이티브 분기가 프레임마다 불러 아이템을 갱신(공급자가 없으면 아이템을 숨김)."""
+        updateFrame의 네이티브 분기가 프레임마다 불러 아이템을 갱신(공급자가 없으면 아이템을 숨김), RGB 와이프 합성은 합성한 그림 위에 A 글자를
+        다시 구울 때 부름(와이프 선에 잘리지 않게 — 2026-11-20)."""
         if not callable(provider):
             raise TypeError(f"B 키 글자 공급자는 호출할 수 있어야 합니다: {provider!r}")
         self._overlay_provider = provider
