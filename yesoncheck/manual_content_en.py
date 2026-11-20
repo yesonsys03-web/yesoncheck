@@ -177,7 +177,8 @@ PAGES = (
                             "you used last"),
                  ("W (ㅈ)", "Wipe on ↔ off (when B is open)"),
                  ("T (ㅅ)", "Dark theme ↔ light theme"),
-                 ("B (ㅠ)", "Show ↔ hide the file name and frame number text"),
+                 ("B (ㅠ)", "Show ↔ hide the file name and frame number text — during a wipe, B's appears too, at the bottom right "
+                            "(on the B side)"),
                  ("Ctrl+O", "Reset the position and size of the overlay controls (⌘+O on Mac)"),
              )),
              ("note", "After you click in the list and the list has focus, {T} and {B} do not respond. Click once on the video side "
@@ -385,6 +386,9 @@ PAGES = (
                  "not be real time.",
                  "When you view ProRes on Mac, A's file name text (B key) and annotations are not cut off at the line even with the "
                  "wipe on — they are visible over the B side as well.",
+                 "If you turn on the file name and frame number text with the {B} key during a wipe, **B's text** also appears at the "
+                 "bottom right of the video — only on the B side (it is cut off at the line if you move the line to the right edge), "
+                 "and the number is B's own frame number (different from A's if you moved only A with {←} {→}).",
              )),
          )),
     Page("sidebar", "Sidebar (video list)", "Lists & files",
