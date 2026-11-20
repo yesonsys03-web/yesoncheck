@@ -43,7 +43,7 @@ from yesoncheck import gl_bindings, paths, ui_text, windows_display
 from yesoncheck.annotation_overlay import AnnotationOverlay
 from yesoncheck.frame_handles import native_surface_of, whole_surface_handle
 from yesoncheck.gl_video_item import LOG_PREFIX, VIDEO_ITEM_ENV, VideoFrameItem, use_stream_item, video_item_mode
-from yesoncheck.overlay_text_layout import overlay_layout, overlay_reserve_text, widest_digit
+from yesoncheck.overlay_text_layout import burn_overlay_label, overlay_layout, overlay_reserve_text, widest_digit
 from yesoncheck.raster_video_item import AreaScaledPixmapItem
 
 VIEWPORT_ENV = "YESONCHECK_VIEWPORT"
@@ -188,6 +188,7 @@ class CustomVideoWidget(QGraphicsView):
             self.scene.addItem(self.video_item)
         self._pixmap_backing = None  # 픽스맵 길에 그린 네이티브 프레임 — RGB32 픽스맵이 그 메모리를 함께 쓰므로 다음 그림까지 쥠 (_show_native_frames)
         self._overlay_provider = None  # B 키 글자 공급자 () -> str | None — 플레이어가 등록(set_overlay_provider), updateFrame의 네이티브 분기가 부름
+        self._overlay_b_provider = None  # 와이프 중 B 키 글자 공급자 () -> str | None — set_overlay_b_provider
         self._annotation_provider = None  # 주석 공급자 () -> list[dict] — 보이는 프레임의 주석, 플레이어가 등록(set_annotation_provider)
 
         self.wipe_position_x = 0.5
@@ -610,6 +611,10 @@ class CustomVideoWidget(QGraphicsView):
         if self.wipe_enabled_x or self.wipe_enabled_y:
             if frame_b is None or frame_b.shape != frame_a.shape:
                 frame_b = np.zeros_like(frame_a)
+            text_b = self._overlay_b_provider() if self._overlay_b_provider is not None else None
+            if text_b:
+                frame_b = frame_b.copy()  # 사본에 — 플레이어의 frame_b(다음 틱·드래그 캐시)에 글자를 박지 않게
+                burn_overlay_label(frame_b, text_b, "right")  # 와이프 중 B 키 글자: 오른쪽 아래, 합성이 B 쪽만 남김
             result = frame_a.copy()
             if self.wipe_enabled_x:
                 wipe_x = int(width * self.wipe_position_x)
@@ -668,6 +673,13 @@ class CustomVideoWidget(QGraphicsView):
     def _on_stream_failure(self, native):
         """(Qt 루프 — 스트림 아이템의 _fail이 미뤄 부름) 아이템의 그리기 실패를 streamPaintFailed(native)로 넘김."""
         self.streamPaintFailed.emit(native)
+
+    def set_overlay_b_provider(self, provider):
+        """와이프 중 B 키 글자 공급자 등록 — provider() -> str | None. 플레이어가 창을 만들 때 한 번(_overlay_b_text); 그릴 때마다 불러 RGB 길은
+        B 그림 사본에 오른쪽 아래로 굽고 합성(와이프가 B 쪽만 남김), 네이티브 길은 B 쪽으로 자른 아이템."""
+        if not callable(provider):
+            raise TypeError(f"와이프 중 B 키 글자 공급자는 호출할 수 있어야 합니다: {provider!r}")
+        self._overlay_b_provider = provider
 
     def set_overlay_provider(self, provider):
         """B 키 글자 공급자 등록 — provider() -> str | None(None이면 숨김). 플레이어가 창을 만들 때 한 번(_overlay_text_for_native);

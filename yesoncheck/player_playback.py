@@ -799,6 +799,19 @@ class PlayerPlaybackMixin:
         (_overlay_text_for_native)이 함께 씀(두 길의 글자가 어긋나지 않게). 캡처 위치는 CAP_PROP_POS_FRAMES(다음에 읽을 번호 = 지금 보이는 1부터 번호)."""
         return f"File: {os.path.basename(self.filename_a)}, Frame: {int(self.cap_a.get(cv2.CAP_PROP_POS_FRAMES))}/{int(self.cap_a.get(cv2.CAP_PROP_FRAME_COUNT))}"
 
+    def overlay_label_b(self):
+        """와이프 중 B 키 글자 "File: <B 파일 이름>, Frame: <B 캡처 위치>/<B 전체 장 수>" — A와 같은 모양, 번호는 B 자신의 번호(←→는 A만
+        움직여 A·B 번호가 다를 수 있음). 화면 위젯이 오른쪽 아래(B 쪽)에 그림 — _overlay_b_text."""
+        return f"File: {os.path.basename(self.filename_b)}, Frame: {int(self.cap_b.get(cv2.CAP_PROP_POS_FRAMES))}/{int(self.cap_b.get(cv2.CAP_PROP_FRAME_COUNT))}"
+
+    def _overlay_b_text(self):
+        """와이프 중 B 키 글자 공급자 — videoWidget이 그릴 때마다 부름(set_overlay_b_provider, 창을 만들 때 등록). B 키 글자가 꺼졌거나
+        와이프 축이 둘 다 꺼졌거나(B가 보이지 않음) B가 없으면 None, 아니면 overlay_label_b (사용자 요청 2026-11-20)."""
+        widget = self.videoWidget
+        if not self.show_overlay or not (widget.wipe_enabled_x or widget.wipe_enabled_y) or not self.cap_b or not self.filename_b:
+            return None
+        return self.overlay_label_b()
+
     def _overlay_text_for_native(self):
         """네이티브 프레임의 B 키 오버레이 글자 — videoWidget이 updateFrame의 네이티브 분기마다 부르는 공급자(set_overlay_provider, 창을 만들 때 등록).
         B가 꺼졌거나 A가 없으면 None(아이템을 숨김), 아니면 overlay_label."""
