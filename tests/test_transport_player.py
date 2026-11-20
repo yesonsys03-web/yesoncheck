@@ -482,7 +482,7 @@ def test_turning_the_wipe_off_closes_b(player, tmp_path, monkeypatch):
     assert player.open_file("A", clip(tmp_path, "a.mp4")) and player.open_file("B", clip(tmp_path, "b.mp4"))
     player.wipeCheckBox.setChecked(True)
     player.wipeXButton.setChecked(True)
-    player.seek_to_frame(10)  # 와이프면 B도 읽음 (← → 한 장 이동은 A만)
+    player.seek_to_frame(10)  # 와이프면 B도 읽음
     assert player.frame_b is not None
     old_b = player.cap_b
     assert old_b.isOpened()

@@ -11,8 +11,10 @@ optimize_for_4k(자동 모드)가 GPU 길을 건너뜀. 오버레이 슬라이�
 
 B 단언은 놓는 길이 둘:
 - 놓을 때 정확한 위치로 옮기는 이동(_precise_seek)이 도는 드래그 — 마지막 움직임이 프레임 캐시에 맞아 캡처가 5장 넘게 떨어진 채 놓음(test_drag_release_seek와 같은 길).
-- 이동이 안 도는 드래그(캐시 미적중 — 캡처가 이미 목표에 있음): 드래그 미리보기가 B 동기화를 통째로 건너뛰어 frame_b가 None인 채라, 표지를 풀어도 B가 검게 남음.
-  놓을 때 B를 A의 장에 맞춰 다시 그려야 함(sync_audio_on_release의 elif) — 이 길의 시험은 A·B에 같은 클립을 열어 두 프레임의 밝기가 같음(같은 장)으로 가름.
+- 이동이 안 도는 드래그(캐시 미적중 — 캡처가 이미 목표에 있음): 놓을 때 B가 A의 장이 아니면 맞춰 다시 그려야 함(sync_audio_on_release의 elif) —
+  이 길의 시험은 A·B에 같은 클립을 열어 두 프레임의 밝기가 같음(같은 장)으로 가름. 2026-11-20부터 드래그 미리보기는 B를 비우지 않음(_drag_wipe_b —
+  사용자 결정): 1920×1080 이하의 B는 끄는 동안에도 A와 같은 장을 읽고, 더 큰 B(4K)는 읽지 않고 마지막 그림 그대로라 놓을 때 맞춤. 시험 영상은 작으므로
+  '큰 B' 길은 문턱(player_playback.DRAG_B_MAX_PIXELS)을 0으로 바꿔 만듦(big_b).
   와이프면 정밀 이동의 허용 오차가 0(캡처와 1~5장 차이로 놓아도 이동 — 슬라이더·라벨·A/B 캡처가 함께 목표로), B가 이미 그 자리면(평범한 클릭·오버레이 슬라이더 놓기) elif도 다시 읽지 않음.
   정밀 이동이 아무것도 안 하는 모서리(끝에서 3장째 + A가 목표 − 1): 놓는 쪽이 이동 뒤 A 캡처가 목표에 없으면 _seek_direct로 맞춤.
 """
@@ -28,6 +30,7 @@ from PyQt5.QtWidgets import QApplication
 
 from tests.conftest import write_test_video
 from tests.test_drag_release_seek import CountingCapture
+from yesoncheck import player_playback
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 
 FRAMES = 48
@@ -62,6 +65,12 @@ def wipe_player(new_player, dialogs, tmp_path):  # noqa: F811
     QApplication.processEvents()
     assert player.videoWidget.wipeEnabled and player.videoWidget.wipe_enabled_x
     return player
+
+
+@pytest.fixture
+def big_b(monkeypatch):
+    """B를 '큰 B'(1920×1080보다 큼 — 4K처럼)로 취급 — 끄는 동안 B를 읽지 않고 마지막 그림 그대로 두는 길 (시험 영상은 작아 문턱을 0으로)."""
+    monkeypatch.setattr(player_playback, "DRAG_B_MAX_PIXELS", 0)
 
 
 def drag_off_the_capture(player):
@@ -114,7 +123,7 @@ def test_b_frame_is_drawn_again_after_release_in_wipe_mode(wipe_player, monkeypa
 
     pos = drag_off_the_capture(player)
     assert player.is_dragging is True
-    calls.clear()  # 드래그 중의 그림(B 없음이 정상)은 보지 않음 — 놓은 뒤만
+    calls.clear()  # 드래그 중의 그림은 보지 않음 — 놓은 뒤만
 
     release(player, pos)
 
@@ -137,8 +146,8 @@ def test_sync_audio_on_release_alone_clears_the_drag_flag(wipe_player):
 def drag_to_an_uncached_frame(player):
     """메인 슬라이더를 20% 자리에서 눌러 60%로 한 번만 끌고 놓지 않은 채 멈춤; 놓을 자리(QPoint) 반환.
 
-    60%의 장은 캐시에 없어(미적중) 미리보기가 캡처를 그 장으로 옮기고(캡처 = 슬라이더의 장 — 놓을 때 정확한 위치로 옮기는 이동이 안 돎)
-    B 동기화는 통째로 건너뛰어 frame_b를 None으로 둠 — 와이프 B가 검게 남는 흐름."""
+    60%의 장은 캐시에 없어(미적중) 미리보기가 캡처를 그 장으로 옮김(캡처 = 슬라이더의 장 — 놓을 때 정확한 위치로 옮기는 이동이 안 돎).
+    B는 크기에 따라: 작은 B는 그 장을 함께 읽고, 큰 B(big_b)는 읽지 않아 누를 때의 장(20%)으로 남음 — 놓을 때 맞추지 않으면 B가 옛 그림인 흐름."""
     slider = player.positionScroll
     y = slider.height() // 2
     QTest.mousePress(slider, Qt.LeftButton, Qt.NoModifier, QPoint(int(slider.width() * 0.2), y))
@@ -147,14 +156,14 @@ def drag_to_an_uncached_frame(player):
     send_drag_move(slider, QPoint(int(slider.width() * 0.6), y))
     capture_index = int(player.cap_a.get(cv2.CAP_PROP_POS_FRAMES)) - 1
     assert player.cache_hits == 0  # 전제: 캐시 미적중
-    assert abs(capture_index - slider.value()) <= SEEK_THRESHOLD  # 전제: 놓을 때 정확한 위치로 옮기는 이동이 안 돎
-    assert player.frame_b is None  # 전제: 미리보기가 B를 비워 둠
+    assert capture_index == slider.value()  # 전제: 놓을 때 정확한 위치로 옮기는 이동이 안 돎 (와이프면 허용 오차 0)
     return QPoint(int(slider.width() * 0.6), y)
 
 
-def test_b_is_resynced_on_release_without_precise_seek(wipe_player, monkeypatch):
-    """캐시 미적중 드래그를 놓으면(정확한 위치로 옮기는 이동이 안 돎) B를 A가 보여 주는 장에 맞춰 다시 그림 — 안 맞추면 frame_b가 None인 채 B 칸이 검게 남음.
-    A·B가 같은 클립이라 같은 장이면 두 프레임의 밝기가 같음(write_test_video는 i번 장이 (i * 10) % 255 — 이웃 장과 10 차이)."""
+def test_b_is_resynced_on_release_without_precise_seek(wipe_player, big_b, monkeypatch):
+    """큰 B(끄는 동안 읽지 않음)로 캐시 미적중 드래그를 놓으면(정확한 위치로 옮기는 이동이 안 돎) B를 A가 보여 주는 장에 맞춰 다시 그림 — 안 맞추면 B 칸이
+    끄기 전 그림으로 남음(2026-11-20 전에는 frame_b가 None이라 검게 남았음). A·B가 같은 클립이라 같은 장이면 두 프레임의 밝기가 같음(write_test_video는
+    i번 장이 (i * 10) % 255 — 이웃 장과 10 차이)."""
     player = wipe_player
     calls = []
     original = player.videoWidget.updateFrame
@@ -167,11 +176,14 @@ def test_b_is_resynced_on_release_without_precise_seek(wipe_player, monkeypatch)
 
     pos = drag_to_an_uncached_frame(player)
     assert player.is_dragging is True
+    assert position(player.cap_b) - 1 != player.positionScroll.value()  # 전제: B 캡처는 누를 때의 장 — 끄는 동안 읽지 않았음
+    assert calls[-1] == (True, True)  # 끄는 동안에도 B 자리는 검정이 아니라 마지막으로 읽은 B 그림
+    assert player.frame_b.mean() != pytest.approx(player.frame_a.mean(), abs=2)  # 전제: 아직 다른 장
     calls.clear()
 
     release(player, pos)
 
-    assert calls, "놓은 뒤 한 번도 그리지 않음 — B가 검게 남음"
+    assert calls, "놓은 뒤 한 번도 그리지 않음 — B가 끄기 전 그림으로 남음"
     assert calls[-1] == (True, True), f"놓은 뒤 마지막 그림에 B가 없음: {calls}"
     assert player.frame_b is not None
     assert player.frame_b.mean() == pytest.approx(player.frame_a.mean(), abs=2)  # 같은 장 (이웃 장이면 10 차이)
@@ -180,6 +192,29 @@ def test_b_is_resynced_on_release_without_precise_seek(wipe_player, monkeypatch)
 
 def position(cap):
     return int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+
+
+def test_small_b_follows_the_drag_and_release_reads_nothing_more(wipe_player, monkeypatch):
+    """작은 B(1920×1080 이하 — 시험 영상)는 끄는 동안 이미 A와 같은 장: 캐시 미적중 드래그를 놓을 때 B를 다시 읽지도 그리지도 않음."""
+    player = wipe_player
+    pos = drag_to_an_uncached_frame(player)
+    assert position(player.cap_b) - 1 == player.positionScroll.value()  # 끄는 동안 B도 그 장으로
+    assert player.frame_b is not None and player.frame_b.mean() == pytest.approx(player.frame_a.mean(), abs=2)
+    player.cap_b = CountingCapture(player.cap_b)
+    draws = []
+    original = player.videoWidget.updateFrame
+
+    def recording_update_frame(*args, **kwargs):
+        draws.append(args)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(player.videoWidget, "updateFrame", recording_update_frame)
+
+    release(player, pos)
+
+    assert (player.cap_b.reads, player.cap_b.sets) == (0, 0) and draws == []
+    assert player.is_dragging is False
+    assert player.frame_b.mean() == pytest.approx(player.frame_a.mean(), abs=2)
 
 
 def test_narrow_wipe_drag_back_onto_a_cached_frame_keeps_slider_label_and_captures_aligned(wipe_player):
@@ -247,11 +282,15 @@ def test_overlay_slider_release_reads_b_only_once(wipe_player):
     assert position(player.cap_b) - 1 == 30
 
 
-def test_wipe_release_where_precise_seek_does_nothing_near_the_end_still_aligns_b_and_captures(wipe_player, monkeypatch):
+@pytest.mark.parametrize("b_follows_drag", [True, False], ids=["small-b", "big-b"])
+def test_wipe_release_where_precise_seek_does_nothing_near_the_end_still_aligns_b_and_captures(wipe_player, monkeypatch, b_follows_drag):
     """끝에서 세 번째 장(48장 클립의 45번)에서 놓을 때 정밀 이동이 아무것도 안 하는 모서리: 허용 오차 0이라 놓을 때 _precise_seek가 불리는데,
     _seek_conservative의 기존 가드(`목표 == cap_a의 POS` — POS는 '다음에 읽을 번호'라 A가 목표 − 1에 있을 때 참)가 이동 없이 False를 돌려줌.
-    그러면 그림(캐시 적중)만 45번이고 A 캡처는 44, B는 드래그 중의 옛 장(44)으로 남음 — 놓는 쪽이 이동 뒤 A 캡처가 목표에 없으면 직접 이동으로 함께 맞춤.
-    만드는 법: 45(미적중 — 캐시에 담김) → 44(이웃이라 미리보기가 건너뛰고 valueChanged가 44로 이동) → 45(캐시 적중 — 캡처는 44에 남고 그림만 45)."""
+    그러면 그림(캐시 적중)만 45번이고 A 캡처는 44(큰 B면 B도 드래그 중의 옛 장 44)로 남음 — 놓는 쪽이 이동 뒤 A 캡처가 목표에 없으면 직접 이동으로 함께 맞춤.
+    만드는 법: 45(미적중 — 캐시에 담김) → 44(이웃이라 미리보기가 건너뛰고 valueChanged가 44로 이동) → 45(캐시 적중 — 캡처는 44에 남고 그림만 45).
+    작은 B는 끄는 동안 A의 그림을 따라 읽으므로(_drag_wipe_b) 마지막 움직임에서 B 캡처만 45에 가 있음 — 두 경우 모두 놓은 뒤 A·B 캡처가 45."""
+    if not b_follows_drag:
+        monkeypatch.setattr(player_playback, "DRAG_B_MAX_PIXELS", 0)  # 큰 B처럼 — 끄는 동안 읽지 않음
     player = wipe_player
     calls = []
     original = player.videoWidget.updateFrame
@@ -266,7 +305,8 @@ def test_wipe_release_where_precise_seek_does_nothing_near_the_end_still_aligns_
     for value in (45, 44, 45):
         bar.setSliderPosition(value)
     assert player.cache_hits == 1
-    assert position(player.cap_a) - 1 == 44 and position(player.cap_b) - 1 == 44 and bar.value() == 45  # 전제: A 캡처가 목표 − 1 (가드에 닿는 자리)
+    assert position(player.cap_a) - 1 == 44 and bar.value() == 45  # 전제: A 캡처가 목표 − 1 (가드에 닿는 자리)
+    assert position(player.cap_b) - 1 == (45 if b_follows_drag else 44)
     calls.clear()
 
     bar.setSliderDown(False)

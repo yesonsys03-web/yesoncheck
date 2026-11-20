@@ -330,7 +330,8 @@ def test_swap_after_the_wipe_is_off_swaps_only_a(player_with_fake_native_ab, pro
 
 @pytest.mark.parametrize("b_native", [True, False], ids=["b-prores", "b-h264"])
 def test_swap_keeps_wipe_b_offset(fake_native_player, probes, b_native):
-    """와이프(X축)인데 화살표 이동은 A만 움직이므로(_seek_direct_fast — 기존 동작) A 23 / B 20으로 어긋난 채 바꿔 끼움: 바꾼 뒤에도 A 23 / B 20 —
+    """와이프(X축)인데 A 23 / B 20으로 어긋난 채 바꿔 끼움(←→는 2026-11-20부터 B도 A에 맞추므로 어긋남은 B를 직접 옮겨 만듦 — B가 더 짧은 영상
+    이거나 예전 판처럼 어긋날 수 있는 경우를 지킴): 바꾼 뒤에도 A 23 / B 20 —
     화면(set_sides의 마지막 그림)도 그 쌍, 다음 재생 틱은 A 24 / B 21. B가 ProRes면 B도 새 캡처, h264(진짜 cv2 — 바꾸지 않음)여도 같은 어긋남.
 
     깨지는 변경: 끝의 seek_to_frame 뒤에 B를 원래 번호로 되돌리지 않으면 B가 23(어긋남을 잃음); 되돌린 뒤 update_frame을 부르지 않으면 화면의
@@ -340,9 +341,11 @@ def test_swap_keeps_wipe_b_offset(fake_native_player, probes, b_native):
     if not b_native:
         probes.codecs["clip_b.mov"] = "mpeg4"
     player.wipeXButton.setChecked(True)
-    player.seek_to_frame(21)  # A·B 20
-    for _ in range(3):
-        player.next_frame()  # A만 23
+    player.seek_to_frame(24)  # A·B 23
+    player.cap_b.set(cv2.CAP_PROP_POS_FRAMES, 20)  # B만 20으로
+    ok, raw_b = player.cap_b.read()
+    assert ok
+    player.frame_b = player.process_frame(raw_b)
     assert player.get_current_frame_index() == 23 and int(player.cap_b.get(cv2.CAP_PROP_POS_FRAMES)) == 21
     old_b, before_b = player.cap_b, player.frame_b.copy() if not b_native else None
     rig.sides.clear()
