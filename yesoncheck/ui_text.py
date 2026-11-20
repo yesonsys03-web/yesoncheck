@@ -112,6 +112,11 @@ TEXTS = {
     # Seq
     "side_menu.seq.open_a": {"ko": "비디오 A로 열기 ([)", "en": "Open as video A ([)"},
     "side_menu.seq.open_b": {"ko": "비디오 B로 열기 (])", "en": "Open as video B (])"},
+    # 사이드바 줄에 마우스를 올리면 뜨는 A·B 단추의 툴팁 (sidebar_ab_buttons)
+    "side_ab.open_a": {"ko": "비디오 A로 열기 ([)", "en": "Open as video A ([)"},
+    "side_ab.open_b": {"ko": "비디오 B로 열고 와이프 켜기 (])", "en": "Open as video B and turn on wipe (])"},
+    "side_ab.playlist": {"ko": "선택 재생 중에는 열지 않습니다 — 이어 재생을 끝낸 뒤 여세요",
+                         "en": "Not while playing a selection — end it first"},
     "side_menu.seq.export": {"ko": "선택한 시퀀스로 MOV 만들기…", "en": "Make MOV from selected sequences…"},
     "side_menu.seq.thumbnails": {"ko": "썸네일 다시 만들기 (R)", "en": "Remake thumbnails (R)"},
     "side_menu.seq.info": {"ko": "정보 보기 (M)", "en": "Show info (M)"},
