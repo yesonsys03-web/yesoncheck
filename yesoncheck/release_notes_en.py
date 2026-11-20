@@ -7,6 +7,28 @@ entry for entry (no Qt). The deploy notes (GitHub Release, update banner) still 
 from yesoncheck.release_notes import Release
 
 RELEASES = (
+    Release("2.1.0", "2026-11-20",
+            "A·B buttons on sidebar rows open a wipe comparison in one click (turn them on in the Compare menu). During a wipe the "
+            "B key's text also shows B's file name and frame number, and B now follows A with ←/→ and while you drag the slider.",
+            (
+                ("Sidebar A·B buttons (new)", (
+                    "Turn on Compare → Sidebar A·B buttons, and hovering a row in the list shows A and B buttons at the right end "
+                    "of that row (Mov, Seq and All tabs, also in thumbnail mode). They are off at first, and your choice is saved "
+                    "on this PC.",
+                    "B opens that video as video B and turns on the wipe so you can compare right away. Clicking B again on the "
+                    "same row turns the wipe off. The ] key works the same.",
+                    "A is the same as clicking the row (it opens that video as video A).",
+                    "Right-click 'Open as video B' and File → Open video B… now turn on the wipe too.",
+                )),
+                ("Wipe", (
+                    "If you turn on the file name and frame number text with the B key during a wipe, B's text also appears at the "
+                    "bottom right of the video — with B's own frame number, and neither text is cut off at the wipe line. If the "
+                    "file names are long and the two texts would overlap, B's text moves one line up.",
+                    "During a wipe, ←/→ now move B together with A to the same frame (before, only A moved).",
+                    "Dragging the time slider during a wipe no longer flashes the B side black — B follows along if it is "
+                    "1920×1080 or smaller, and otherwise (4K, etc.) stays on its last picture until you release.",
+                )),
+            )),
     Release("2.0.1", "2026-11-18",
             "Keys for the sidebar — C copy files · J merge · M media info · R regenerate thumbnails · [ ] open as video A/B. "
             "Turning the wipe off now closes video B.",
