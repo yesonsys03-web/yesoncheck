@@ -12,7 +12,7 @@ from PyQt5.QtGui import QColor, QCursor, QMouseEvent
 from PyQt5.QtWidgets import QApplication
 
 from tests.test_sidebar_all_tab import all_item, show_all_tab
-from tests.test_sidebar_keys import seq_tab
+from tests.test_sidebar_keys import key_event, seq_tab
 from tests.test_sidebar_open_with import folder, mov_item  # noqa: F401 (folder: fixture)
 from tests.test_sidebar_seq_tab import seq_item
 from tests.test_sidebar_take_colors import contrast
@@ -283,3 +283,108 @@ def test_deleting_the_window_reports_nothing(dialogs, folder, tmp_path, qapp, mo
     qapp.processEvents()
     assert reports == []
     assert "Traceback" not in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------- A·B 누르기
+
+def _target(loaded, qapp, where):
+    """(목록, 줄, 열릴 경로의 끝) — A는 열어 둔 채(B를 열면 와이프가 켜지게 같은 종류로)."""
+    seq_identity = seq_item(loaded, "tk2").data(Qt.UserRole).identity if loaded.seq_sidebar.count() else None
+    if where == "mov":
+        assert loaded.open_file("A", mov_item(loaded, "tk1.mov").toolTip())
+        return loaded.sidebar, mov_item(loaded, "tk3.mov"), "tk3.mov"
+    if where == "seq":
+        assert loaded.open_file("A", seq_identity)
+        seq_tab(loaded, qapp)
+        return loaded.seq_sidebar, seq_item(loaded, "tk1"), "tk1.seq"
+    show_all_tab(loaded, qapp)
+    if where == "all_mov":
+        assert loaded.open_file("A", mov_item(loaded, "tk1.mov").toolTip())
+        return loaded.all_sidebar, all_item(loaded, "mov", "tk3"), "tk3.mov"
+    assert loaded.open_file("A", seq_identity)
+    return loaded.all_sidebar, all_item(loaded, "seq", "tk1"), "tk1.seq"
+
+
+@pytest.mark.parametrize("where", ["mov", "seq", "all_mov", "all_seq"])
+def test_a_is_the_same_as_clicking_the_row(loaded, qapp, where):
+    widget, item, expected = _target(loaded, qapp, where)
+    other = next(widget.item(i) for i in range(widget.count()) if widget.item(i) is not item)
+    widget.clearSelection()
+    other.setSelected(True)
+    loaded.wipeCheckBox.setChecked(False)
+    hover_item(qapp, widget, item)
+    group(loaded, widget).button_a.click()
+    qapp.processEvents()
+    assert widget.selectedItems() == [item] and widget.currentItem() is item
+    assert loaded.filename_a.endswith(expected)
+    assert not loaded.wipeCheckBox.isChecked()
+
+
+@pytest.mark.parametrize("where", ["mov", "seq", "all_mov", "all_seq"])
+def test_b_opens_b_with_wipe_and_keeps_the_selection(loaded, qapp, where):
+    widget, item, expected = _target(loaded, qapp, where)
+    a_before = loaded.filename_a
+    others = [widget.item(i) for i in range(widget.count()) if widget.item(i) is not item][:2]
+    widget.clearSelection()
+    for other in others:
+        other.setSelected(True)
+    loaded.wipeCheckBox.setChecked(False)
+    hover_item(qapp, widget, item)
+    group(loaded, widget).button_b.click()
+    qapp.processEvents()
+    assert sorted(map(id, widget.selectedItems())) == sorted(map(id, others))  # 고른 줄은 그대로
+    assert loaded.filename_b.endswith(expected) and loaded.filename_a == a_before
+    assert (loaded.wipeCheckBox.isChecked(), loaded.wipeXButton.isChecked(), loaded.wipeYButton.isChecked()) == (True, True, False)
+
+
+def test_click_opens_the_row_under_the_button_now(loaded, qapp, capsys):
+    widget = loaded.sidebar
+    assert loaded.open_file("A", mov_item(loaded, "tk1.mov").toolTip())
+    first = widget.item(0)
+    hover_item(qapp, widget, first)
+    now = widget.item(1)
+    widget.takeItem(0)  # 단추 자리에 다음 줄이 올라옴 (다시 맞추기 전에 누름 — 이벤트를 돌리지 않음)
+    group(loaded, widget).button_b.click()
+    assert loaded.filename_b == now.toolTip()
+    last = widget.item(widget.count() - 1)
+    hover_item(qapp, widget, last)
+    loaded._release_side("B")
+    widget.takeItem(0)  # 단추 자리(옛 마지막 줄)가 빔
+    group(loaded, widget).button_b.click()
+    assert not loaded.filename_b
+    assert "[A·B 단추] 단추 자리에 줄이 없습니다" in capsys.readouterr().out
+
+
+def test_disabled_while_playing_a_selection(loaded, qapp):
+    widget, tk3 = loaded.sidebar, mov_item(loaded, "tk3.mov")
+    assert loaded.open_file("A", mov_item(loaded, "tk1.mov").toolTip())
+    loaded.wipeCheckBox.setChecked(False)
+    loaded.is_playlist_playing = True
+    hover_item(qapp, widget, tk3)
+    box = group(loaded, widget)
+    assert not box.button_a.isEnabled() and not box.button_b.isEnabled()
+    assert box.button_a.toolTip() == box.button_b.toolTip() == ui_text.text("side_ab.playlist")
+    box.button_b.click()
+    loaded._ab_open(widget, "B")
+    loaded._ab_open(widget, "A")
+    assert not loaded.filename_b and not loaded.wipeCheckBox.isChecked()
+    assert loaded.filename_a.endswith("tk1.mov")
+    loaded.is_playlist_playing = False
+    hover_item(qapp, widget, tk3)
+    assert box.button_a.isEnabled() and box.button_b.isEnabled()
+    assert box.button_b.toolTip() == ui_text.text("side_ab.open_b")
+
+
+def test_key_and_button_share_the_path_rule(loaded, qapp):
+    assert loaded.open_file("A", seq_item(loaded, "tk2").data(Qt.UserRole).identity)
+    show_all_tab(loaded, qapp)
+    widget, item = loaded.all_sidebar, all_item(loaded, "seq", "tk1")
+    widget.clearSelection()
+    item.setSelected(True)
+    widget.setCurrentItem(item)
+    assert loaded.eventFilter(widget, key_event(Qt.Key_BracketRight, "]")) is True
+    by_key = loaded.filename_b
+    loaded._release_side("B")
+    hover_item(qapp, widget, item)
+    group(loaded, widget).button_b.click()
+    assert by_key and loaded.filename_b == by_key

@@ -17,6 +17,7 @@ from PyQt5.QtGui import QCursor
 from PyQt5.QtWidgets import QHBoxLayout, QToolButton, QWidget
 
 from yesoncheck import error_window, ui_text
+from yesoncheck.sidebar_items import ALL_KIND_ROLE
 
 AB_LOG_PREFIX = "[A·B 단추]"
 
@@ -143,6 +144,8 @@ class SidebarAbButtonsMixin:
         for widget in (self.sidebar, self.seq_sidebar, self.all_sidebar):
             box = AbButtons(widget.viewport())
             self._sidebar_ab[widget] = box
+            box.button_a.clicked.connect(lambda _checked=False, w=widget: self._ab_open(w, "A"))
+            box.button_b.clicked.connect(lambda _checked=False, w=widget: self._ab_open(w, "B"))
             viewport = widget.viewport()
             self._sidebar_ab_viewports[viewport] = widget
             viewport.setMouseTracking(True)  # 단추 없이 움직여도 MouseMove가 오게
@@ -158,7 +161,8 @@ class SidebarAbButtonsMixin:
                 signal.connect(lambda *_args, w=widget: self._schedule_ab_refresh(w))
         self.installEventFilter(self._sidebar_ab_filter)  # 창의 WindowDeactivate
         self.sidebar_tabs.currentChanged.connect(self._on_ab_tab_changed)
-        self.retranslate_sidebar_ab_buttons()
+        for box in self._sidebar_ab.values():
+            self._sync_ab_buttons(box, playing=False)  # 창을 만드는 중 — 선택 재생 상태(is_playlist_playing)는 아직 없음
 
     def _ab_event(self, watched, event):
         kind = event.type()
@@ -206,7 +210,43 @@ class SidebarAbButtonsMixin:
             box.hide()
             return
         box.restyle(self.current_theme, item.isSelected())
+        self._sync_ab_buttons(box)
         box.place(widget.visualItemRect(item))
+
+    def _sync_ab_buttons(self, box, playing=None):
+        """선택 재생 중이면 두 단추를 끄고 툴팁이 까닭을 말함 (줄 클릭·[ ] 키처럼 영상을 바꾸지 않음), 아니면 켜고 원래 툴팁.
+        playing이 None이면 지금 상태(is_playlist_playing)."""
+        if playing is None:
+            playing = self.is_playlist_playing
+        for button, key in ((box.button_a, "side_ab.open_a"), (box.button_b, "side_ab.open_b")):
+            button.setEnabled(not playing)
+            button.setToolTip(ui_text.text("side_ab.playlist" if playing else key))
+
+    def _ab_row(self, widget):
+        """묶음의 지금 자리(가운데) 아래 줄 — 누를 때 다시 찾음 (그사이 목록이 바뀌었으면 보일 때의 줄이 아님)."""
+        return widget.itemAt(self._sidebar_ab[widget].geometry().center())
+
+    def _ab_item_path(self, widget, item):
+        """줄이 여는 경로 — 시퀀스(Seq 목록·All의 시퀀스 줄)는 가상 경로, 영상은 경로(툴팁). [ ] 키(sidebar_keys)도 이 규칙."""
+        if widget is self.seq_sidebar or (widget is self.all_sidebar and item.data(ALL_KIND_ROLE) == "seq"):
+            return item.data(Qt.UserRole).identity
+        return item.toolTip()
+
+    def _ab_open(self, widget, side):
+        """A: 그 줄을 누른 것과 같음(그 줄만 고르고 목록의 클릭 처리기). B: 고른 줄은 그대로 두고 B로 열고 와이프까지(open_b_and_wipe)."""
+        if self.is_playlist_playing:
+            return
+        item = self._ab_row(widget)
+        if item is None:
+            print(f"{AB_LOG_PREFIX} 단추 자리에 줄이 없습니다")
+            return
+        if side == "A":
+            widget.setCurrentItem(item)
+            clicked = {self.sidebar: self.on_sidebar_item_clicked, self.seq_sidebar: self.on_seq_item_clicked,
+                       self.all_sidebar: self.on_all_item_clicked}[widget]
+            clicked(item)
+        else:
+            self.open_b_and_wipe(self._ab_item_path(widget, item))
 
     def _apply_sidebar_ab_theme(self):
         """(테마를 바꿀 때) 보이는 묶음의 색을 새 테마로 — 숨은 묶음은 다음에 뜰 때 맞춤."""
@@ -217,5 +257,4 @@ class SidebarAbButtonsMixin:
     def retranslate_sidebar_ab_buttons(self):
         """툴팁을 지금 언어로 (player_language.RETRANSLATORS)."""
         for box in self._sidebar_ab.values():
-            box.button_a.setToolTip(ui_text.text("side_ab.open_a"))
-            box.button_b.setToolTip(ui_text.text("side_ab.open_b"))
+            self._sync_ab_buttons(box)
