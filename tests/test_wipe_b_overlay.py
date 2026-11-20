@@ -1,6 +1,6 @@
 """와이프 중 B 키 글자에 B도 (사용자 요청 2026-11-20 — "와이프 on시 단축키 B 하면 A만 뜨는데, B 파일명도 B 부분에"):
-와이프가 켜져 있고 B가 열려 있을 때 B 키 글자를 켜면 영상 오른쪽 아래에 B의 'File: <B 이름>, Frame: <B 번호>/<B 전체>'가 B 쪽에만.
-A 글자(왼쪽 아래)는 그대로. 굽는 그리기는 A·B 공용(overlay_text_layout.burn_overlay_label) — 오른쪽 정렬은 A 상자의 거울 자리.
+와이프가 켜져 있고 B가 열려 있을 때 B 키 글자를 켜면 영상 오른쪽 아래에 B의 'File: <B 이름>, Frame: <B 번호>/<B 전체>'.
+와이프 선에 잘리지 않고 영상 위에 늘 보임(사용자 결정 2026-11-20 'B 텍스트도 A처럼 잘리지 않게'). A 글자(왼쪽 아래)는 그대로. 굽는 그리기는 A·B 공용(overlay_text_layout.burn_overlay_label) — 오른쪽 정렬은 A 상자의 거울 자리.
 """
 
 import numpy as np
@@ -126,14 +126,18 @@ def test_rgb_wipe_shows_b_label_bottom_right(wiped):
     assert (image[height - layout.margin_y, layout.margin_x - layout.pad] == 255).all()  # A 상자도 그대로 (왼쪽 아래)
 
 
-def test_b_label_is_cut_by_the_wipe_line(wiped):
+@pytest.mark.parametrize("axes", ["x", "y", "xy"])
+def test_b_label_is_not_cut_by_the_wipe_line(wiped, axes):
+    """선을 오른쪽(아래) 끝 가까이 옮겨 B 상자가 A 쪽에 놓여도 B 글자는 그대로 보임 — 합성한 그림 위에 구움(A 글자처럼, 사용자 결정)."""
+    wiped.wipeXButton.setChecked("x" in axes)
+    wiped.wipeYButton.setChecked("y" in axes)
     wiped.videoWidget.wipe_position_x = 0.99
+    wiped.videoWidget.wipe_position_y = 0.99
     wiped.update_frame()
     image = shown_image(wiped)
     height, width = image.shape[:2]
     left, top, right, bottom = b_box(wiped, width, height)
-    wipe_x = int(width * 0.99)
-    assert not (image[top:bottom + 1, left:wipe_x] == 255).all(axis=2).any()  # 선 왼쪽(A 쪽)에는 B 상자가 없음
+    assert (image[top + 1:bottom - 1, left + 1:left + 3] == 255).all()  # 상자 왼쪽 가장자리 안쪽 띠 — 선 왼쪽(A 쪽)인데도 흰색
 
 
 def test_rgb_path_does_not_touch_frame_b(wiped):
@@ -170,8 +174,6 @@ def test_no_b_label_without_wipe(wiped):
 
 # ---------------------------------------------------------------- Mac 네이티브 길 (IOSurface — 굽지 않고 아이템)
 
-from PyQt5.QtCore import QPointF  # noqa: E402
-
 from tests.native_fakes import FAKE_HEIGHT, FAKE_WIDTH, fake_native_player  # noqa: E402,F401 (fake_native_player: fixture)
 
 
@@ -197,26 +199,25 @@ def test_native_b_label_item_right_aligned(native_wiped):
     assert native_wiped.reads == []  # 네이티브 프레임의 픽셀을 파이썬에서 읽지 않음
 
 
-@pytest.mark.parametrize("axes, a_point", [("x", (FAKE_WIDTH // 2 - 2, FAKE_HEIGHT - 2)),
-                                           ("y", (FAKE_WIDTH - 2, FAKE_HEIGHT // 2 - 2)),
-                                           ("xy", (2, 2))])
-def test_native_b_label_is_clipped_to_the_b_side(native_wiped, axes, a_point):
-    player = native_wiped.player
-    player.wipeXButton.setChecked("x" in axes)
-    player.wipeYButton.setChecked("y" in axes)
-    clip = player.videoWidget.overlay_b_clip_item.path()
-    assert clip.contains(QPointF(FAKE_WIDTH - 2, FAKE_HEIGHT - 2))  # 오른쪽 아래 = B 쪽
-    assert not clip.contains(QPointF(*a_point))  # A 쪽
+@pytest.mark.parametrize("axes", ["x", "y", "xy"])
+def test_native_b_label_is_not_clipped(native_wiped, axes):
+    """B 글자 아이템은 와이프 선에 잘리지 않음(A 글자 아이템처럼 영상 위에 — 사용자 결정): 자르는 조상이 없고, 선을 끝 가까이 옮겨도 같은 자리에 보임."""
+    from PyQt5.QtWidgets import QGraphicsItem
 
-
-def test_native_b_clip_follows_the_wipe_line(native_wiped):
     player = native_wiped.player
     widget = player.videoWidget
-    widget.wipe_position_x = 0.8
+    player.wipeXButton.setChecked("x" in axes)
+    player.wipeYButton.setChecked("y" in axes)
+    before = widget.overlay_b_box_item.rect()
+    widget.wipe_position_x = 0.99
+    widget.wipe_position_y = 0.99
     player.update_frame()
-    line = int(FAKE_WIDTH * 0.8)
-    clip = widget.overlay_b_clip_item.path()
-    assert clip.contains(QPointF(line + 2, FAKE_HEIGHT - 2)) and not clip.contains(QPointF(line - 2, FAKE_HEIGHT - 2))
+    box = widget.overlay_b_box_item
+    assert box.isVisible() and box.rect() == before
+    parent = box.parentItem()
+    while parent is not None:
+        assert not parent.flags() & QGraphicsItem.ItemClipsChildrenToShape
+        parent = parent.parentItem()
 
 
 def test_native_b_label_hidden_when_b_is_not_drawn(fake_native_player, qapp):  # noqa: F811
