@@ -30,8 +30,7 @@ from yesoncheck.mac_native_gate import native_ineligible_reason, native_wanted
 from yesoncheck.movie_pipe_source import PipeCaptureError, maybe_pipe_capture, movie_source_mode, probe_for_open, probe_movie
 from yesoncheck.playback_clock import PlaybackClock
 from yesoncheck.overlay_text_layout import (  # noqa: F401 (overlay_metrics: 옛 import 경로 — tests/test_overlay_text_size.py가 여기서 부름)
-    OVERLAY_FONT,
-    overlay_layout,
+    burn_overlay_label,
     overlay_metrics,
 )
 from yesoncheck.sequence_scan import is_sequence_path
@@ -813,15 +812,7 @@ class PlayerPlaybackMixin:
         글자·굵기·여백은 `overlay_metrics(높이)` — 프레임 높이에 비례(1080p는 예전 scale 0.7·굵기 2·여백 10/20/5의 1.5배, 4K는 그 2배 픽셀이라 창에 맞춰 줄여 보면
         1080p와 같은 크기, 굵기는 줄여 볼 때 가늘어 보이는 만큼 더) — 예전에는 픽셀 고정이라 4K에서 반 크기로 보였음(사용자 보고). 프레임 너비를 넘치면 들어갈 만큼 줄임
         (`overlay_layout` — 네이티브 프레임의 아이템 길 video_widget.set_overlay_text와 같은 규칙)."""
-        height, width = frame.shape[:2]
-        text = self.overlay_label()
-        layout = overlay_layout(text, width, height)
-        x = layout.margin_x
-        y = height - layout.margin_y
-        pad = layout.pad
-        cv2.rectangle(frame, (x - pad, y - layout.text_height - pad), (x + layout.text_width + pad, y + max(pad, layout.baseline)),
-                      (255, 255, 255), -1)  # g·p·_ 꼬리(baseline)까지 상자 안에
-        cv2.putText(frame, text, (x, y), OVERLAY_FONT, layout.scale, (0, 0, 0), layout.thickness)
+        burn_overlay_label(frame, self.overlay_label())  # 그리기는 A·B 공용 (와이프 중 B 글자는 video_widget이 오른쪽 아래로)
 
     def on_overlay_slider_pressed(self):
         """오버레이 슬라이더를 누를 때 현재 프레임 라벨 표시"""

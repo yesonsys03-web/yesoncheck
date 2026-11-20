@@ -80,3 +80,19 @@ def overlay_layout(text, width, height):
         thickness = max(1, round(thickness * room / rw))
     (tw, th), base = cv2.getTextSize(text, OVERLAY_FONT, scale, thickness)
     return OverlayLayout(scale, thickness, pad, margin_x, margin_y, tw, th, base, room)
+
+
+def burn_overlay_label(frame, text, align="left"):
+    """B 키 글자를 프레임 픽셀에 구움 — 흰 상자 위 검정 글자(굽는 길: A는 플레이어 overlay_text, 와이프 중 B는 video_widget). 크기·여백은
+    overlay_layout. align "left"는 기준선 왼쪽 끝이 margin_x(A 글자 — 왼쪽 아래), "right"는 상자 오른쪽 끝이 너비 − margin_x + pad(A 상자 왼쪽 끝
+    margin_x − pad의 거울 — 와이프 중 B 글자, 오른쪽 아래). 그 밖의 값은 그리기 전에 ValueError."""
+    if align not in ("left", "right"):
+        raise ValueError(f"B 키 글자 정렬은 left 또는 right여야 합니다: {align!r}")
+    height, width = frame.shape[:2]
+    layout = overlay_layout(text, width, height)
+    x = layout.margin_x if align == "left" else width - layout.margin_x - layout.text_width
+    y = height - layout.margin_y
+    pad = layout.pad
+    cv2.rectangle(frame, (x - pad, y - layout.text_height - pad), (x + layout.text_width + pad, y + max(pad, layout.baseline)),
+                  (255, 255, 255), -1)  # g·p·_ 꼬리(baseline)까지 상자 안에
+    cv2.putText(frame, text, (x, y), OVERLAY_FONT, layout.scale, (0, 0, 0), layout.thickness)
