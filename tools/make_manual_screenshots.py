@@ -592,6 +592,58 @@ def shot_wipe(st):
     ], band=2 * BADGE_RADIUS + 2 * BAND_GAP)
 
 
+def shot_wipe_labels(st):
+    """와이프 중의 B 키 글자 — 왼쪽 아래 A, 오른쪽 아래 B (와이프 선에 잘리지 않음). B는 사용자가 여는 길(open_b_and_wipe — 와이프·좌우
+    나누기까지 켬)로, 글자는 B 키와 같은 토글로 켬."""
+    from PyQt5.QtCore import QRect
+
+    player = st.player()
+    st.open_job(player, row=0, frame=30)
+    sc.require(player.open_b_and_wipe(st.media("EP101", "EP101_SC001_TK2.mov")), "B를 열지 못함")
+    sc.require(player.videoWidget.wipe_enabled_x, "와이프가 켜지지 않음")
+    player.seek_to_frame(30)  # B를 열면 첫 프레임으로 돌아감 — 다시 그 장으로 (와이프라 B도 같은 장으로 읽음)
+    player.toggle_overlay_text()
+    st.pump()
+    sc.require(player._overlay_b_text(), "와이프 중 B 글자가 없음")
+    image = st.grab(player)
+    st.save("wipe_labels", image, crop_to=QRect(video_point(player, 0.0, 0.56), video_point(player, 1.0, 1.0)), pad=0)
+
+
+def shot_sidebar_ab(st):
+    """목록 줄에 마우스를 올렸을 때 그 줄 오른쪽 끝의 A·B 단추 — Compare 메뉴로 켠 뒤(처음에는 꺼져 있음). 화면 없이는 진짜 마우스가
+    없어 커서 자리를 옮기고 그 자리의 MouseMove를 보냄(tests/test_sidebar_ab_buttons.py의 hover와 같음), 커서는 그려 넣음.
+    **차례가 중요**: 화면 없는 Qt는 QCursor.setPos 뒤에 스스로 MouseMove를 하나 만들어 보내는데, 2배 배율(QT_SCALE_FACTOR=2)에서는 그
+    자리가 창의 화면 좌표만큼 어긋남(이 창에서 뷰포트 (90, 20) 대신 (140, 70) — 단추가 다섯째 줄에 떴음). 그래서 커서를 먼저 옮기고
+    그 이벤트를 흘려보낸 뒤에 맞는 자리의 MouseMove를 보냄 — 그 뒤 목록이 바뀌어 다시 맞출 때(0ms 타이머)는 QCursor.pos를 읽어 맞음."""
+    from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, Qt
+    from PyQt5.QtGui import QCursor, QMouseEvent
+    from PyQt5.QtWidgets import QApplication
+
+    player = st.player()
+    st.open_job(player)
+    player.menu_actions["menu.compare.ab_buttons"].trigger()
+    sc.require(player.sidebar_ab_buttons_enabled(), "사이드바 A·B 단추가 켜지지 않음")
+    rows = player.sidebar
+    hovered = 1  # A에 연 TK1(0번 줄) 바로 아래의 TK2 — B로 열 만한 줄
+    row = rows.visualItemRect(rows.item(hovered))
+    at = QPoint(row.left() + int(row.width() * 0.36), row.center().y())  # 그려 넣는 커서가 이름 끝의 테이크(TK2)를 가리지 않는 자리
+    QCursor.setPos(rows.viewport().mapToGlobal(at))
+    st.pump()
+    QApplication.sendEvent(rows.viewport(), QMouseEvent(QEvent.MouseMove, QPointF(at), Qt.NoButton, Qt.NoButton, Qt.NoModifier))
+    image = st.grab(player)
+    box = player._sidebar_ab[rows]
+    sc.require(box.isVisible(), "A·B 단추가 뜨지 않음")
+    under = rows.itemAt(box.geometry().center())
+    sc.require(under is not None and rows.row(under) == hovered,
+               f"A·B 단추가 마우스를 올린 줄({hovered})에 있지 않음: {None if under is None else rows.row(under)}")
+    cursor = rows.viewport().mapTo(player, at)
+    draw_cursor(image, cursor.x(), cursor.y() - 2)
+    column = sidebar_column(player)
+    top = widget_rect(player, player.sidebar_tabs.tabBar()).top()
+    last = rows.viewport().mapTo(player, rows.visualItemRect(rows.item(rows.count() - 1)).bottomLeft())
+    st.save("sidebar_ab", image, crop_to=QRect(column.left(), top, column.width(), last.y() + 16 - top), pad=6)
+
+
 def shot_seq_tab(st):
     player = st.player()
     st.open_job(player)
@@ -925,6 +977,8 @@ SHOTS = {
     "playbar": shot_playbar,
     "hover": shot_hover,
     "wipe": shot_wipe,
+    "wipe_labels": shot_wipe_labels,
+    "sidebar_ab": shot_sidebar_ab,
     "seq_tab": shot_seq_tab,
     "all_tab": shot_all_tab,
     "seq_menu": shot_seq_menu,
