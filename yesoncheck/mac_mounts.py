@@ -101,6 +101,28 @@ def _exists(path):
         return False
 
 
+def _exists_or_unknown(path):
+    """path가 있는지 — 확인하지 못하면(위 폴더를 읽지 못함) 있는 쪽으로 (모르면 '없다'고 하지 않음)."""
+    try:
+        return _exists(path)
+    except (OSError, ValueError):
+        return True
+
+
+def share_trace(mount_map, canonical):
+    """canonical(공유 설정의 Mac 경로)이 속한 공유(/USA_DB 등)를 이 Mac이 쓰던 흔적이 있는지.
+
+    그 앞부분이 이 Mac에 있거나(공유가 붙어 있음·붙는 자리만 있음), 자동 연결 설정·fstab에 그 이름의 공유가 있으면 True
+    (다른 곳에 붙여 바꿔 여는 것 포함 — MountMap.has_trace_of). 있는지 확인하지 못하면 True. mount_map이 None(자동 연결
+    설정을 읽지 않음)이면 이 Mac에 그 앞부분이 있는지만 봄. 공유를 열어 보지 않음(위 폴더의 목록만). '이 Mac에는 공유
+    설정이 아예 없음'을 가를 때 씀 (shared_config_load의 config_missing).
+    """
+    if mount_map is not None:
+        return mount_map.has_trace_of(canonical)
+    root = first_root(canonical)
+    return root is None or _exists_or_unknown(root)
+
+
 def _config_lines(path, problems, missing_ok=False, inline_comments=True):
     """자동 연결 설정·fstab 파일의 줄 → [토큰 목록]: 빈 줄·주석은 빼고 끝의 \\로 이어진 줄은 합침. 주석은 #부터
     (inline_comments가 아니면 줄 맨 앞의 #만 — fstab의 smb 비밀번호에 #이 들어갈 수 있음). 읽지 못하면 problems에 남기고
@@ -442,6 +464,17 @@ class MountMap:
             return
         self._unshared_logged.add(area)
         print(f"[공유] {area} 아래 영상의 썸네일은 이 Mac 경로로 이름을 지어 다른 PC와 나눠 쓰지 않음: {error}", flush=True)
+
+    def has_trace_of(self, canonical):
+        """canonical이 속한 앞부분(/USA_DB 등)의 공유를 이 Mac이 쓰던 흔적: 자동 연결 설정·fstab에 그 이름의 공유가 있거나
+        (forward·ambiguous의 공유도 이 이름으로 고른 것이라 여기에 듦), 그 앞부분이 이 Mac에 있음. 확인하지 못하면 True."""
+        root = self._root_of(canonical)
+        if root is None:
+            return True
+        name = posixpath.basename(root)
+        if any(name in mount.names for mount in self.mounts):
+            return True
+        return _exists_or_unknown(_local(self.root, root))
 
     def describe(self, canonical):
         """canonical(공유 설정의 Mac 경로)을 이 Mac에서 어디로 여는지 찾아본 내용 — 열지 못했을 때 오류에 덧붙임."""

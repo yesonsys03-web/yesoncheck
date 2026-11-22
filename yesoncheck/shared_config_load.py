@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
-from yesoncheck import path_map_setup, paths, shared_config, timing_log
+from yesoncheck import mac_mounts, path_map_setup, paths, shared_config, timing_log
 
 
 @dataclass
@@ -31,17 +31,20 @@ class SharedConfigState:
     config_dir: str = None
     work_paths: dict = field(default_factory=dict)
     shared_config_problem: str = None
-    # 문제가 '이 PC에 공유 설정이 아예 없음'일 때만 True — (Mac) 기본 자리에 설정 폴더가 없음, (Windows) 정해 둔 폴더가 없고 이 PC의
-    # 공유에서도 하나도 못 찾았으며 Harmony식 폴더·바로 가기(C:\USA_DB…)의 흔적도 없음. 망가진 것(폴더는 있는데 파일이 없거나 깨짐·
-    # 정해 둔 폴더가 열리지 않음·응답 없음·예상 못 한 오류)과 환경 변수로 정한 폴더는 False. 창이 '회사 밖 PC'를 가를 때 씀
+    # 문제가 '이 PC에 공유 설정이 아예 없음'일 때만 True — 설정을 찾지 못했고 사내 공유를 쓰던 흔적도 없음: (Mac) 기본 자리에 작품
+    # 경로 파일이 없고, 공유의 앞부분(/USA_DB)이 이 Mac에 없으며 자동 연결 설정·fstab에도 그 이름의 공유가 없음
+    # (mac_mounts.share_trace), (Windows) 정해 둔 폴더가 없고 이 PC의 공유에서 하나도 못 찾았으며 Harmony식 폴더·바로 가기
+    # (C:\USA_DB·C:\USA_DB.lnk)도 없음 (config_dir_local_trace). 망가진 것(폴더는 있는데 파일이 없거나 깨짐·권한·정해 둔 폴더가
+    # 열리지 않음·응답 없음·예상 못 한 오류)과 환경 변수로 정한 폴더는 False. 창이 '회사 밖 PC'를 가를 때 씀
     # (SidebarConfigPathsMixin.resolve_shared_config_problem)
     config_missing: bool = False
     path_map_problem: str = None
     config_dir_candidates: list = field(default_factory=list)
     config_dir_search_failed: bool = False
     config_dir_search_problems: list = field(default_factory=list)  # (Windows) 자동 찾기 중 확인하지 못한 곳
-    # (Windows) Harmony식 폴더·바로 가기(C:\USA_DB…)가 있는데 쓰지 못한 사유 (없으면 None) — 예손 설정이 된 PC의 흔적
-    config_dir_local_problem: str = None
+    # (Windows) Harmony식 폴더·바로 가기의 흔적 (없으면 None) — 예손 설정이 된 PC: 확인하다 난 문제 줄, 또는 문제 없이 지나갔어도
+    # C:\USA_DB(무엇이든)·C:\USA_DB.lnk가 있다는 한 줄 (path_map_setup.harmony_folder_trace)
+    config_dir_local_trace: str = None
     activate_path_map: bool = False  # (Windows) 넣을 때 paths.activate(path_map) — 아니면 활성 변환표를 그대로 둠
     path_map: object = None  # paths.PathMap (이 PC에 연결된 주소를 앞으로 옮김) 또는 None(변환표 해제)
     works_not_opening: list = None  # (Windows) 시작할 때 미리 계산한 '열리지 않는 작품' — None이면 계산하지 않음
@@ -119,7 +122,7 @@ def _auto_find_config_dir(state, shares, share_problems):
     local, local_problem = path_map_setup.find_local_config_dir()
     search_problems = list(share_problems) + ([local_problem] if local_problem else [])
     state.config_dir_search_problems = search_problems
-    state.config_dir_local_problem = local_problem
+    state.config_dir_local_trace = local_problem or path_map_setup.harmony_folder_trace()
     if local:
         timing_log.log("공유 설정", f"Harmony 경로({path_map_setup.system_drive()}\\"
                                    f"{paths._mac_parts(shared_config.MAC_CONFIG_DIR)[0]})에서 찾음: {local} — "
@@ -219,10 +222,10 @@ def gather_shared_config(find_works_not_opening=False):
         config_dir = found or config_dir
     if config_dir is None:
         # (Windows만 여기로 옴) 정해 둔 폴더가 없고 자동 찾기도 하나로 정하지 못함: 하나도 못 찾았고 Harmony식 폴더의 흔적도
-        # 없으면 이 PC에는 공유 설정이 없는 것(config_missing). 여럿 찾았으면 창이 고르게 하고, 흔적이 있는데 쓰지 못했으면 문제.
+        # 없으면 이 PC에는 공유 설정이 없는 것(config_missing). 여럿 찾았으면 창이 고르게 하고, 흔적이 있으면 알릴 일.
         # 응답 없는 네트워크 드라이브 같은 '확인하지 못한 곳'은 가르지 않음 — 회사 밖 PC에도 흔함 (기록에는 남음)
         state.shared_config_problem = "공유 설정 폴더가 아직 정해지지 않았습니다."
-        state.config_missing = state.config_dir_search_failed and state.config_dir_local_problem is None
+        state.config_missing = state.config_dir_search_failed and state.config_dir_local_trace is None
         return state
     state.config_dir = config_dir
     work_paths_file = os.path.join(config_dir, shared_config.WORK_PATHS_FILENAME)
@@ -236,8 +239,10 @@ def gather_shared_config(find_works_not_opening=False):
         lookup = ""
         if not paths.IS_WINDOWS and not os.environ.get(shared_config.CONFIG_DIR_ENV):
             lookup = f"\n\n{shared_config.mac_config_dir_lookup()}"  # (Mac) 공유 설정 폴더를 어디서 찾아봤는지
-            # (Mac) 기본 자리에 설정 폴더 자체가 없으면 이 Mac에는 공유 설정이 없는 것. 폴더는 있는데 파일만 없으면 망가진 것
-            state.config_missing = isinstance(exc, shared_config.WorkPathsFileMissing) and not os.path.isdir(config_dir)
+            # (Mac) 파일이 없고 그 공유를 이 Mac이 쓰던 흔적도 없으면 이 Mac에는 공유 설정이 없는 것. 흔적이 있으면(공유가 붙어
+            # 있는데 설정만 없음·자동 연결 설정에 있는 공유가 붙지 않음) 알릴 일
+            state.config_missing = (isinstance(exc, shared_config.WorkPathsFileMissing)
+                                    and not mac_mounts.share_trace(paths.active_mount_map(), shared_config.MAC_CONFIG_DIR))
         problems.append(f"{exc}{lookup}\n\n{traceback.format_exc()}")
         timing_log.log("공유 설정", f"작품 경로를 읽지 못함 ({timing_log.since(started)})")
     if not paths.IS_WINDOWS and paths.active_mount_map() is not None:
