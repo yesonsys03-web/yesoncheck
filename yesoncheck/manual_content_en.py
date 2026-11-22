@@ -136,10 +136,9 @@ PAGES = (
                  "YesonCheck. → [[windows/default|Default app for videos]]",
                  "After that, when a new version comes out a notice bar appears at the top of the window; click it to download and install — you "
                  "do not need to reinstall by hand. → [[update]]",
-                 "On a PC without Yeson's in-house shared settings folder (outside the company), a ‘공유 설정 오류’ (Shared settings error) window "
-                 "appears at every start (on Windows it is preceded by a ‘공유 설정 폴더 선택’ (Choose the shared settings folder) notice and a "
-                 "folder picker — just cancel). After you close it, everything works except choosing shows and managing show paths. "
-                 "→ [[library/works|Choosing a show]]",
+                 "On a PC without Yeson's in-house shared settings folder (outside the company), everything works except choosing shows and "
+                 "managing show paths. No notice window appears about the missing shared settings — only{{title.config_problem}} is added "
+                 "to the end of the window title. → [[library/works|Choosing a show]]",
              )),
              ("h", "Uninstalling", "remove"),
              ("list", (
@@ -547,6 +546,10 @@ PAGES = (
                  "administrator — shows are added and paths are corrected in {{menu.tools}} → {{menu.tools.work_paths}} (password "
                  "required).",
                  "On Windows, if the shared settings folder is somewhere else, choose it with Settings → {{settings.shared_config}}.",
+                 "If the shared settings cannot be read,{{title.config_problem}} is added to the end of the window title. On a PC that has "
+                 "loaded the shows before, a ‘공유 설정 오류’ (Shared settings error) window also tells you at startup — check the NAS "
+                 "connection and start the app again. On a PC that has never loaded the shows and has no shared settings folder (outside "
+                 "the company), that window is not shown; the reason is only written to the log.",
              )),
              ("h", "Opening a folder", "folder"),
              ("list", (

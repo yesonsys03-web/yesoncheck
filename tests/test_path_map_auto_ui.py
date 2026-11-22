@@ -15,7 +15,7 @@ from PyQt5.QtWidgets import QDialog, QInputDialog, QLabel, QProgressDialog
 from yesoncheck import path_map_setup, paths, shared_config
 from yesoncheck.path_map_setup import Share
 from yesoncheck.path_map_setup_dialog import PathMapSetupDialog
-from tests.test_work_paths_ui import make_config
+from tests.test_work_paths_ui import make_config, remember_works_were_read
 
 NAS = "\\\\localhost\\yc_fake"
 WORK = {"W": "/Volumes/yc/작품"}
@@ -177,6 +177,7 @@ def test_multiple_config_dirs_pick_one(win, dialogs, tmp_path, monkeypatch):
 
 
 def test_no_config_dir_found_opens_folder_picker(win, dialogs, tmp_path, monkeypatch):
+    remember_works_were_read()  # 사내 PC — 작품을 읽어 온 적이 없는 PC는 회사 밖으로 보고 조용히 (test_outside_pc_quiet_start)
     win.shares = [Share("\\\\localhost\\yc_fake_none", ["N:"])]
     monkeypatch.setattr(path_map_setup, "_default_is_file", lambda p: False)
     player = win.player()
@@ -625,6 +626,7 @@ def label_texts(dialog):
 def test_config_search_skips_share_that_never_answers(win, dialogs, short_timeout, dead_share_hangs):
     import time
 
+    remember_works_were_read()  # 사내 PC — 작품을 읽어 온 적이 없는 PC는 응답 없는 드라이브가 있어도 조용히 (기록에는 남음)
     win.shares = [Share(DEAD, ["W:"])]
     started = time.monotonic()
     player = win.player()

@@ -52,11 +52,13 @@ def test_validate_config_dir(tmp_path):
 
 def test_read_work_paths(tmp_path):
     f = tmp_path / "work_paths.json"
-    with pytest.raises(SharedConfigError, match="파일이 없습니다"):
+    with pytest.raises(shared_config.WorkPathsFileMissing, match="파일이 없습니다") as missing:
         shared_config.read_work_paths(str(f))
+    assert isinstance(missing.value, SharedConfigError)  # 받는 쪽은 예전처럼 SharedConfigError로도 받음
     f.write_text("{broken", encoding="utf-8")
-    with pytest.raises(SharedConfigError, match="읽지 못했습니다"):
+    with pytest.raises(SharedConfigError, match="읽지 못했습니다") as broken:
         shared_config.read_work_paths(str(f))
+    assert not isinstance(broken.value, shared_config.WorkPathsFileMissing)  # 없는 것과 망가진 것은 가름
     f.write_text('["a"]', encoding="utf-8")
     with pytest.raises(SharedConfigError, match="형식 오류"):
         shared_config.read_work_paths(str(f))
