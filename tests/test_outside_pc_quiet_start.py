@@ -49,7 +49,10 @@ def outside_mac(mac_env, monkeypatch, tmp_path):
 
 @pytest.fixture
 def share_place(mac_env, monkeypatch, tmp_path):
-    """공유의 앞부분은 이 Mac에 있는 Mac(공유가 붙어 있는 사내 Mac) → 그 아래 설정 폴더가 놓일 자리 (아직 만들지 않음)."""
+    """공유의 앞부분이 이 Mac에 있는 Mac(공유가 붙어 있는 사내 Mac) → 그 아래 설정 폴더가 놓일 자리 (아직 만들지 않음).
+    자리는 진짜 폴더(tmp) 아래이고 자동 연결 설정은 읽지 않은 채(None)라, 흔적은 그 경로의 맨 앞 이름(/private 등)이 이 Mac에
+    있다는 데서 옴 — tmp 아래의 USA_DB 폴더를 만들었는지와는 무관. '앞부분의 폴더가 있어서'라는 까닭 자체는
+    test_share_trace_with_automount_settings_read_sees_a_share_folder_on_this_mac·test_share_trace_is_assumed_…가 지킴."""
     place = tmp_path / "USA_DB" / "test_jn" / ".yesoncheck"
     monkeypatch.setattr(shared_config, "MAC_CONFIG_DIR", str(place))
     return place
