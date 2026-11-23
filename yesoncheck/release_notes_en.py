@@ -7,6 +7,33 @@ entry for entry (no Qt). The deploy notes (GitHub Release, update banner) still 
 from yesoncheck.release_notes import Release
 
 RELEASES = (
+    Release("2.1.1", "2026-11-23",
+            "The ‘공유 설정 오류’ (Shared settings error) window no longer appears at every start on PCs without Yeson's in-house "
+            "shared settings (outside the company) or not connected to the NAS. An ‘업데이트 확인 실패’ (Update check failed) window "
+            "that could appear on such PCs is fixed too.",
+            (
+                ("Notice windows at startup", (
+                    "When the shared settings cannot be found (a PC used outside the company, or one not connected to the NAS), the "
+                    "‘공유 설정 오류’ (Shared settings error) window is no longer shown at startup. On Windows the ‘공유 설정 폴더 선택’ "
+                    "(Choose the shared settings folder) notice and the folder picker no longer appear either. Only choosing shows "
+                    "is unavailable; everything else works as before.",
+                    "In that case only ‘shared settings error (no show list)’ is added to the end of the window title. Tools → "
+                    "Manage show paths… shows the reason.",
+                    "If the shared settings folder opens but the file in it is broken or missing, a window still tells you as before.",
+                    "Fixed: on a PC where the shared settings were not found, the automatic update check could show an ‘업데이트 확인 "
+                    "실패’ (Update check failed) window. Such PCs now check for new versions on the internet (GitHub) only.",
+                )),
+                ("In-house: things to know", (
+                    "If you start the app while the NAS is not connected, there is no notice window: the show list is empty and the "
+                    "window title shows it — check the NAS connection and start the app again.",
+                    "On Windows, if the shared settings folder is not found automatically, choose it yourself with Settings → Change "
+                    "shared settings folder... (before, a picker appeared at startup).",
+                )),
+                ("Manual", (
+                    "Added pictures of the sidebar A·B buttons and of the B key text during a wipe.",
+                    "Added a ‘window title ends with shared settings error’ entry to Troubleshooting.",
+                )),
+            )),
     Release("2.1.0", "2026-11-20",
             "A·B buttons on sidebar rows open a wipe comparison in one click (turn them on in the Compare menu). During a wipe the "
             "B key's text also shows B's file name and frame number, and B now follows A with ←/→ and while you drag the slider.",
