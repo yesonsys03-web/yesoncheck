@@ -117,9 +117,19 @@ def _frame_names(entries, unreadable):
     return [entry.name for entry in entries if _may_be_frame(entry.name) and _is_file(entry, unreadable)]
 
 
+def _is_frames_folder(folder):
+    """folder가 frames 폴더(sequence_scan.FRAMES_DIR)인지 — 이름만 봄, 대소문자 무시 (Windows)."""
+    return os.path.basename(os.path.normpath(folder)).lower() == sequence_scan.FRAMES_DIR.lower()
+
+
 def _sequences_in(folder, frame_names):
-    """folder 바로 안의 프레임 후보 이름들에서 묶은 시퀀스. 임시 프레임 폴더(temp_frames)는 묶지 않음."""
-    return [] if _is_temp_frames(folder) else sequence_scan.group_sequences(folder, frame_names)
+    """folder 바로 안의 프레임 후보 이름들에서 묶은 시퀀스. 임시 프레임 폴더(temp_frames)는 묶지 않고, Harmony 미리보기 프레임
+    (sequence_scan.is_preview_frame — frames 폴더 안에서는 preview-로 시작하는 프레임 모두)은 목록에 넣지 않음."""
+    if _is_temp_frames(folder):
+        return []
+    in_frames = _is_frames_folder(folder)
+    kept = [name for name in frame_names if not sequence_scan.is_preview_frame(name, in_frames_folder=in_frames)]
+    return sequence_scan.group_sequences(folder, kept)
 
 
 def sort_sequences(sequences):

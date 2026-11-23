@@ -334,3 +334,59 @@ def test_no_import_cycle_in_either_order(first, second):
     code = f"import {first}, {second}; from yesoncheck import video_list as v; assert v.natural_key"
     done = subprocess.run([sys.executable, "-c", code], cwd=REPO_ROOT, capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
+
+
+# ---- Harmony 미리보기 프레임 제외 (2026-11-24 — 검수에 필요 없는 파일, 깨진 프레임에서 썸네일 오류 창이 떴음) ----
+
+PREVIEW_HEX = "0a1b2c3d4e5f6a7b"  # 지어낸 16진수 16자리
+
+
+def preview_frames(folder, numbers=(10, 11, 12), stem=None, ext="tga", pad=0):
+    """프레임 파일들을 만듦 — 기본은 Harmony 미리보기 모양(번호를 0으로 채우지 않음: …-10.tga), pad를 주면 0으로 채움(…-0001.png)."""
+    stem = stem or f"preview-{PREVIEW_HEX}"
+    for n in numbers:
+        touch(folder / f"{stem}-{n:0{pad}d}.{ext}")
+
+
+def test_harmony_preview_frames_are_not_listed_in_a_job(tmp_path):
+    job = tmp_path / "job"
+    frames = build_tree(job)
+    preview_frames(frames)
+    preview_frames(frames, stem="preview-ABCDEF0123456789")  # 한 폴더에 미리보기 묶음이 여럿이어도
+    result = video_list.scan_job("FL", str(job))
+    assert [s.base for s in result.sequences] == ["EX01_tk1"]
+    assert sorted(names(result)) == ["EX01_tk1.mov", "EX02.mov"]  # 영상은 그대로
+    assert result.unreadable == []
+
+
+def test_anything_starting_with_preview_dash_is_not_listed_in_a_frames_folder(tmp_path):
+    """frames 폴더 안에서는 preview-로 시작하는 프레임이면 16진수 모양이 아니어도 뺌 (대소문자 무시 — 폴더 이름도)."""
+    root = tmp_path / "root"
+    for folder in (root / "scene-01" / "frames", root / "scene-02" / "Frames"):
+        preview_frames(folder, numbers=(1, 2, 3), stem="preview-final", ext="png", pad=4)
+        preview_frames(folder, numbers=(10, 11), stem="Preview-test")
+        touch(folder / "real_tk1-0001.tga")
+        touch(folder / "real_tk1-0002.tga")
+    result = video_list.scan_folder(str(root))
+    assert [s.base for s in result.sequences] == ["real_tk1", "real_tk1"]
+
+
+def test_outside_a_frames_folder_only_the_harmony_shape_is_dropped(tmp_path):
+    """frames가 아닌 폴더에서는 Harmony 미리보기 모양(preview-<16진수 16자리>-<번호>)만 뺌 — 사용자가 preview-로 이름 지은 시퀀스는 보임."""
+    root = tmp_path / "renders"
+    preview_frames(root, numbers=(1, 2, 3), stem="preview-final", ext="png", pad=4)
+    preview_frames(root)  # Harmony 모양 — 다른 폴더로 옮겨 둔 미리보기 프레임
+    touch(root / "preview_shot01-0001.tga")
+    touch(root / "preview_shot01-0002.tga")
+    result = video_list.scan_folder(str(root))
+    assert [s.base for s in result.sequences] == ["preview-final", "preview_shot01"]
+
+
+def test_videos_named_preview_are_still_listed(tmp_path):
+    """빼는 것은 이미지 시퀀스의 프레임뿐 — 영상(Mov 목록)은 건드리지 않음."""
+    job = tmp_path / "job"
+    frames = job / "scene-01" / "frames"
+    touch(frames / "preview-final.mov")
+    preview_frames(frames)
+    result = video_list.scan_job("FL", str(job))
+    assert names(result) == ["preview-final.mov"] and result.sequences == []

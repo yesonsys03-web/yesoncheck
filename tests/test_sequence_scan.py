@@ -169,3 +169,51 @@ def test_temp_frames_dir_name():
 def test_seqinfo_constructible_directly():
     s = SeqInfo(dir="/j", base="a", ext="tga", pad=4, first=1, last=10, count=8)
     assert s.missing == 2 and s.identity == os.path.join("/j", "a.seq")
+
+
+# ---- Harmony 미리보기 프레임 (목록에 넣지 않는 이름 — 2026-11-24) ----
+
+HEX = "0a1b2c3d4e5f6a7b"  # 지어낸 16진수 16자리 (Harmony가 미리보기 프레임 이름에 넣는 모양)
+
+
+@pytest.mark.parametrize("name", [
+    f"preview-{HEX}-10.tga", f"preview-{HEX}-1.tga", f"preview-{HEX}-0010.png", f"Preview-{HEX.upper()}-10.TGA",
+])
+def test_harmony_preview_frame_is_recognised_anywhere(name):
+    from yesoncheck.sequence_scan import is_preview_frame
+
+    assert is_preview_frame(name) is True
+    assert is_preview_frame(name, in_frames_folder=True) is True
+
+
+@pytest.mark.parametrize("name", [
+    "preview-final-0001.tga",  # 16진수 16자리가 아님
+    "preview-cafe-0001.tga",  # 짧은 16진수 낱말
+    f"preview-{HEX}0-10.tga",  # 17자리
+    "preview-0001.tga",
+])
+def test_other_names_starting_with_preview_dash_are_hidden_only_in_a_frames_folder(name):
+    from yesoncheck.sequence_scan import is_preview_frame
+
+    assert is_preview_frame(name) is False
+    assert is_preview_frame(name, in_frames_folder=True) is True
+
+
+@pytest.mark.parametrize("name", [
+    "EX01_tk1-0001.tga", "preview_shot01-0001.tga", "previews-0001.tga", f"mypreview-{HEX}-10.tga", f"EX01_preview-{HEX}-10.tga",
+])
+def test_ordinary_frames_are_never_preview_frames(name):
+    from yesoncheck.sequence_scan import is_preview_frame
+
+    assert is_preview_frame(name) is False
+    assert is_preview_frame(name, in_frames_folder=True) is False
+
+
+def test_grouping_itself_still_groups_preview_frames():
+    """이름 규칙(group_sequences·sequence_of_frame)은 그대로 — 빼는 것은 목록 읽기(video_list)뿐이라, 프레임을 직접 열면 예전처럼 열림."""
+    from yesoncheck.sequence_scan import sequence_of_frame
+
+    names = [f"preview-{HEX}-{n}.tga" for n in (10, 11, 12)]
+    [seq] = group_sequences("/j/frames", names)
+    assert (seq.base, seq.first, seq.last, seq.count) == (f"preview-{HEX}", 10, 12, 3)
+    assert sequence_of_frame("/j/frames", names, names[0]) == seq
