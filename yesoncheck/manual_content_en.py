@@ -594,9 +594,9 @@ PAGES = (
                  "If the same folder has a matching `<name>.mov` (or, if there is none, `.mp4`), the FPS of that video is used; "
                  "otherwise it is 24 fps.",
                  "For a frame whose number is missing, the frame right before it is shown as is.",
-                 "Frames that Toon Boom Harmony writes for its previews (`preview-<hex>-<number>.<ext>`, and any frame starting with "
-                 "`preview-` inside a `frames` folder) are not review material and are left out of the list. They still open if you "
-                 "choose such a frame file yourself or drop it onto the window.",
+                 "Frames that Toon Boom Harmony writes for its previews (`preview-<hex>-<number>.<ext>`) and, inside a `frames` folder, "
+                 "any file starting with `preview-` (a frame or a video) are not review material and are left out of the list. They "
+                 "still open if you choose such a file yourself or drop it onto the window.",
              )),
              ("h", "Opening", "open"),
              ("list", (

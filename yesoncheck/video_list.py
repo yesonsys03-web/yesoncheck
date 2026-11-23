@@ -122,6 +122,12 @@ def _is_frames_folder(folder):
     return os.path.basename(os.path.normpath(folder)).lower() == sequence_scan.FRAMES_DIR.lower()
 
 
+def _is_frames_preview(name, in_frames):
+    """frames 폴더 안(in_frames)의 preview-로 시작하는 파일인지 (대소문자 무시) — 프레임이든 영상이든 검수에 쓰지 않는 파일이라 목록에
+    넣지 않음 (사용자 결정 2026-11-24). 영상은 이 규칙만 봄 — 프레임은 어느 폴더에서나 Harmony 미리보기 모양도 뺌(is_preview_frame)."""
+    return in_frames and name.lower().startswith(sequence_scan.PREVIEW_PREFIX)
+
+
 def _sequences_in(folder, frame_names):
     """folder 바로 안의 프레임 후보 이름들에서 묶은 시퀀스. 임시 프레임 폴더(temp_frames)는 묶지 않고, Harmony 미리보기 프레임
     (sequence_scan.is_preview_frame — frames 폴더 안에서는 preview-로 시작하는 프레임 모두)은 목록에 넣지 않음."""
@@ -156,8 +162,10 @@ def _read_folder(folder, unreadable, files_only=False):
     try:
         with os.scandir(folder) as it:
             entries = list(it)
+        in_frames = _is_frames_folder(folder)
         videos = [(entry.name, entry.path) for entry in entries
-                  if file_names.is_listed_video(entry.name) and (not files_only or _is_file(entry, unreadable))]
+                  if file_names.is_listed_video(entry.name) and not _is_frames_preview(entry.name, in_frames)
+                  and (not files_only or _is_file(entry, unreadable))]
         return videos, _sequences_in(folder, _frame_names(entries, unreadable))
     except (FileNotFoundError, NotADirectoryError):
         parent = os.path.dirname(folder)
@@ -242,13 +250,19 @@ def scan_job(work, base_path):
     # job 폴더 바로 안의 시퀀스 (영상처럼 모든 작품 규칙에 해당)
     sequences = list(_sequences_in(base_path, _frame_names(entries, unreadable)))
     tasks = []  # 읽을 하위 폴더 — 차례로 읽던 때의 그 차례 (결과도 이 차례로 합침)
+    in_frames = _is_frames_folder(base_path)  # job 폴더 자신이 frames인 드문 경우에도 같은 규칙 (_read_folder·scan_folder와 같게)
+
+    def listed(entry):
+        """job 폴더 바로 안의 항목이 목록에 넣을 영상 이름인지 (하위 폴더를 고르는 데는 쓰지 않음)."""
+        return file_names.is_listed_video(entry.name) and not _is_frames_preview(entry.name, in_frames)
+
     if work == "MS_Animatic":
-        videos = [(e.name, e.path) for e in entries if file_names.is_listed_video(e.name)]
+        videos = [(e.name, e.path) for e in entries if listed(e)]
     elif work == "TJS_Animatic":
-        videos = [(e.name, e.path) for e in entries if file_names.is_listed_video(e.name) and _is_file(e, unreadable)]
+        videos = [(e.name, e.path) for e in entries if listed(e) and _is_file(e, unreadable)]
         tasks += [_SubRead(entry.path, entry, files_only=True) for entry in entries if not entry.name.startswith('.')]
     else:
-        videos = [(e.name, e.path) for e in entries if file_names.is_listed_video(e.name)]
+        videos = [(e.name, e.path) for e in entries if listed(e)]
         if work == "BB_Animatic":
             sub = "Quicktime"
         elif work == "TGN_Animatic":
@@ -331,13 +345,15 @@ def scan_folder(folder):
             unreadable.append((current, e))
             continue
         frame_names = []
+        in_frames = _is_frames_folder(current)
         for entry in entries:
             if _is_dir(entry, unreadable):
                 if not os.path.islink(entry.path):
                     pending.append(entry.path)
             elif not entry.name.startswith('.'):
                 if os.path.splitext(entry.name.lower())[1] in VIDEO_EXTENSIONS:
-                    videos.append((entry.name, entry.path))
+                    if not _is_frames_preview(entry.name, in_frames):
+                        videos.append((entry.name, entry.path))
                 elif _may_be_frame(entry.name):
                     frame_names.append(entry.name)
         sequences.extend(_sequences_in(current, frame_names))

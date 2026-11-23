@@ -382,14 +382,51 @@ def test_outside_a_frames_folder_only_the_harmony_shape_is_dropped(tmp_path):
     assert [s.base for s in result.sequences] == ["preview-final", "preview_shot01"]
 
 
-def test_videos_named_preview_are_still_listed(tmp_path):
-    """빼는 것은 이미지 시퀀스의 프레임뿐 — 영상(Mov 목록)은 건드리지 않음."""
+def test_videos_starting_with_preview_dash_are_not_listed_in_a_frames_folder_of_a_job(tmp_path):
+    """frames 폴더 안에서는 preview-로 시작하는 **파일**을 넣지 않음 — 프레임뿐 아니라 영상도 (사용자: "frames 폴더 내의 preview-로
+    시작하는 파일은 표시하지 않아도 돼"). preview_…·previews-…처럼 다른 이름과 검수할 영상은 그대로."""
     job = tmp_path / "job"
     frames = job / "scene-01" / "frames"
-    touch(frames / "preview-final.mov")
+    for name in ("preview-final.mov", "Preview-CLIP.MP4", "preview_shot.mov", "previews-x.mov", "SHOT_tk1.mov"):
+        touch(frames / name)
     preview_frames(frames)
     result = video_list.scan_job("FL", str(job))
-    assert names(result) == ["preview-final.mov"] and result.sequences == []
+    assert sorted(names(result)) == ["SHOT_tk1.mov", "preview_shot.mov", "previews-x.mov"] and result.sequences == []
+
+
+def test_videos_starting_with_preview_dash_are_not_listed_in_a_frames_folder_when_loading_a_folder(tmp_path):
+    """폴더 불러오기(하위 폴더까지): frames 폴더(대소문자 무시·읽는 폴더 자신이어도)의 preview- 영상은 빼고, 다른 폴더의 것은 둠."""
+    root = tmp_path / "root"
+    touch(root / "scene-01" / "frames" / "preview-clip.mov")
+    touch(root / "scene-01" / "frames" / "SHOT_tk1.mov")
+    touch(root / "scene-02" / "Frames" / "PREVIEW-clip.mp4")
+    touch(root / "renders" / "preview-clip.mov")  # frames가 아닌 폴더 — 사용자가 이름 지은 영상
+    result = video_list.scan_folder(str(root))
+    assert sorted(names(result)) == ["SHOT_tk1.mov", "preview-clip.mov"]
+    assert [os.path.basename(os.path.dirname(path)) for name, path in result.videos if name == "preview-clip.mov"] == ["renders"]
+    only_frames = video_list.scan_folder(str(root / "scene-01" / "frames"))
+    assert names(only_frames) == ["SHOT_tk1.mov"]
+
+
+def test_job_rules_that_read_other_folders_keep_preview_videos(tmp_path):
+    """frames가 아닌 폴더를 읽는 작품 규칙(job 바로 안 등)은 그대로 — preview- 영상이어도 보임."""
+    job = tmp_path / "job"
+    touch(job / "preview-clip.mov")
+    assert names(video_list.scan_job("MS_Animatic", str(job))) == ["preview-clip.mov"]
+    assert names(video_list.scan_job("FL", str(job))) == ["preview-clip.mov"]  # job 폴더 바로 안
+
+
+@pytest.mark.parametrize("work", ["MS_Animatic", "TJS_Animatic", "FL"])
+def test_a_job_folder_that_is_itself_named_frames_follows_the_same_rule(tmp_path, work):
+    """job 폴더 자신이 frames인 드문 경우: 바로 안의 preview- 영상은 빼되, preview-로 시작하는 하위 폴더는 예전처럼 읽음."""
+    job = tmp_path / "frames"
+    touch(job / "preview-clip.mov")
+    touch(job / "SHOT_tk1.mov")
+    touch(job / "preview-sub" / "frames" / "inner.mov")  # 기본 규칙(FL)이 읽는 하위/frames
+    touch(job / "preview-sub" / "direct.mov")  # TJS 규칙이 읽는 하위 폴더 한 단계
+    result = video_list.scan_job(work, str(job))
+    expected = {"MS_Animatic": ["SHOT_tk1.mov"], "TJS_Animatic": ["SHOT_tk1.mov", "direct.mov"], "FL": ["SHOT_tk1.mov", "inner.mov"]}
+    assert sorted(names(result)) == expected[work]
 
 
 def test_the_folder_being_read_is_itself_a_frames_folder(tmp_path):
