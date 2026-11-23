@@ -921,6 +921,9 @@ PAGES = (
                  ("The app does not start on Windows after choosing GPU",
                   "Delete the `display_renderer` line in `%LOCALAPPDATA%\\YesonCheck\\prefs.json`, or start the app with the "
                   "environment variable `YESONCHECK_VIEWPORT=raster`."),
+                 ("The window title ends with{{title.config_problem}}",
+                  "The shared settings were not found. In-house, check the NAS connection and start the app again. Outside the "
+                  "company, just keep using the app — only choosing shows is unavailable. → [[library/works|Choosing a show]]"),
                  ("A show is not in the list or its folder cannot be found",
                   "Tell your administrator — it is fixed in {{menu.tools}} → {{menu.tools.work_paths}}."),
              )),
