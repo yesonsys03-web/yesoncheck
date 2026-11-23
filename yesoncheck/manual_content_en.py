@@ -548,7 +548,8 @@ PAGES = (
                  "On Windows, if the shared settings folder is somewhere else, choose it with Settings → {{settings.shared_config}}.",
                  "If the shared settings cannot be found (not connected to the in-house NAS, or outside the company), the app starts "
                  "without any notice window and{{title.config_problem}} is added to the end of the window title — only choosing shows "
-                 "is unavailable. In-house, check the NAS connection and start the app again. {{menu.tools}} → {{menu.tools.work_paths}} "
+                 "is unavailable. In-house, check the NAS connection and start the app again (on Windows, if it still is not found, "
+                 "choose the folder yourself with Settings → {{settings.shared_config}} above). {{menu.tools}} → {{menu.tools.work_paths}} "
                  "shows the detailed reason. If the shared settings folder opens but the file in it is broken or missing, a "
                  "‘공유 설정 오류’ (Shared settings error) window tells you at startup.",
              )),

@@ -484,7 +484,8 @@ PAGES = (
                  "{{menu.tools}} → {{menu.tools.work_paths}}(비밀번호 필요)에서 작품을 더하고 경로를 고칩니다.",
                  "Windows에서 공유 설정 폴더가 다른 곳에 있으면 Settings → {{settings.shared_config}}으로 고릅니다.",
                  "공유 설정을 찾지 못하면(사내 NAS에 연결되지 않음·회사 밖) 알림 창 없이 켜지고, 창 제목 끝에{{title.config_problem}}이 "
-                 "붙습니다 — 작품 고르기만 쓸 수 없습니다. 사내라면 NAS 연결을 확인한 뒤 앱을 다시 켜세요. 자세한 사유는 "
+                 "붙습니다 — 작품 고르기만 쓸 수 없습니다. 사내라면 NAS 연결을 확인한 뒤 앱을 다시 켜세요(Windows에서 그래도 찾지 "
+                 "못하면 위의 Settings → {{settings.shared_config}}으로 폴더를 직접 고릅니다). 자세한 사유는 "
                  "{{menu.tools}} → {{menu.tools.work_paths}}를 누르면 보입니다. 공유 설정 폴더는 열리는데 그 안의 파일이 깨졌거나 없을 "
                  "때는 켤 때 '공유 설정 오류' 창으로 알립니다.",
              )),

@@ -213,6 +213,40 @@ def test_windows_saved_folder_that_no_longer_opens_is_not_found(win, monkeypatch
     assert state.config_not_found is True
 
 
+def test_windows_saved_folder_behind_a_network_error_is_not_found(win, monkeypatch):  # noqa: F811
+    """서버에 닿지 않을 때 Windows가 '파일 없음'이 아닌 네트워크 오류를 낼 수도 있음 — 폴더가 보이지 않으면 그것도 찾지 못함."""
+    no_shares_windows(win, monkeypatch)
+    shared_config.save_local_settings({"config_dir": GONE_UNC})
+
+    def unreachable(work_paths_file):
+        try:
+            raise OSError(1231, "The network location cannot be reached (가짜 재현)", work_paths_file)
+        except OSError as exc:
+            raise shared_config.SharedConfigError(f"작품 경로 파일을 읽지 못했습니다: {work_paths_file}\n{exc}") from exc
+
+    monkeypatch.setattr(shared_config, "read_work_paths", unreachable)
+    state = shared_config_load.gather_shared_config()
+    assert "읽지 못했습니다" in state.shared_config_problem and "가짜 재현" in state.shared_config_problem
+    assert state.config_not_found is True
+
+
+def test_windows_found_folder_that_could_not_be_saved_is_real_trouble(win, monkeypatch):  # noqa: F811
+    """공유 설정 폴더를 찾았는데 PC별 설정에 적지 못함 — 찾지 못한 것이 아니라 이 PC의 문제."""
+    no_shares_windows(win, monkeypatch)
+    share = "\\\\localhost\\yc_fake_cfg"
+    win.shares = [path_map_setup.Share(share, ["U:"])]
+    target = f"{share}\\test_jn\\.yesoncheck"
+    monkeypatch.setattr(path_map_setup, "_default_is_file", lambda p: p.casefold() == f"{target}\\work_paths.json".casefold())
+
+    def refuse(updates):
+        raise OSError("디스크가 가득 참 (가짜 재현)")
+
+    monkeypatch.setattr(shared_config, "save_local_settings", refuse)
+    state = shared_config_load.gather_shared_config()
+    assert "저장하지 못했습니다" in state.shared_config_problem and "가짜 재현" in state.shared_config_problem
+    assert state.config_not_found is False
+
+
 def test_windows_saved_folder_that_does_not_answer_is_not_found(win, monkeypatch):  # noqa: F811
     no_shares_windows(win, monkeypatch)
     shared_config.save_local_settings({"config_dir": GONE_UNC})
