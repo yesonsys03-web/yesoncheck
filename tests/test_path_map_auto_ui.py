@@ -176,15 +176,18 @@ def test_multiple_config_dirs_pick_one(win, dialogs, tmp_path, monkeypatch):
         assert json.load(fh) == {"config_dir": targets[1]}
 
 
-def test_no_config_dir_found_opens_folder_picker(win, dialogs, tmp_path, monkeypatch):
+def test_no_config_dir_found_is_quiet_at_start(win, dialogs, tmp_path, monkeypatch, capsys):
+    """하나도 못 찾으면 시작할 때 폴더 고르기·오류 창을 띄우지 않고 기록만 (2026-11-23 — 회사 밖에서 혼자 쓰는 PC:
+    test_quiet_start_without_shared_config). 폴더는 Settings → 공유 설정 폴더 변경으로 고름. 그 전에는 안내 + 폴더 고르기 + 오류 창."""
     win.shares = [Share("\\\\localhost\\yc_fake_none", ["N:"])]
     monkeypatch.setattr(path_map_setup, "_default_is_file", lambda p: False)
     player = win.player()
     assert player.config_dir_candidates == [] and player.shared_config_problem
-    player.resolve_shared_config_problem()  # dialogs.folders가 비어 있음 → 폴더 선택 취소
-    assert any(kind == "information" and "연결된 네트워크 드라이브에서 공유 설정 폴더를 찾지 못했습니다" in text
-               for kind, _t, text in dialogs.messages)
-    assert any(kind == "critical" and title == "공유 설정 오류" for kind, title, _text in dialogs.messages)
+    capsys.readouterr()
+    player.resolve_shared_config_problem()
+    assert dialogs.messages == []
+    out = capsys.readouterr().out
+    assert "창으로 알리지 않음" in out and "공유 설정 폴더가 아직 정해지지 않았습니다" in out
     assert not os.path.exists(os.path.join(str(tmp_path / "appdata"), "YesonCheck", "settings.json"))
 
 
@@ -496,7 +499,7 @@ def test_harmony_link_realpath_error_continues_with_drives(win, dialogs, tmp_pat
     assert "가짜 재현" in capsys.readouterr().out
 
 
-def test_harmony_link_realpath_error_shown_when_nothing_found(win, dialogs, tmp_path, monkeypatch):
+def test_harmony_link_realpath_error_kept_when_nothing_found(win, dialogs, tmp_path, monkeypatch, capsys):
     win.shares = []
     mirror = harmony_mirror(tmp_path)
     monkeypatch.setattr(path_map_setup, "_default_is_file", lambda p: p.casefold() == f"{mirror}\\work_paths.json".casefold())
@@ -507,9 +510,14 @@ def test_harmony_link_realpath_error_shown_when_nothing_found(win, dialogs, tmp_
     monkeypatch.setattr(path_map_setup, "_default_realpath", broken)
     player = win.player()
     assert player.config_dir_search_failed and player.shared_config_problem
-    player.resolve_shared_config_problem()  # 폴더 선택 안내에 확인하지 못한 곳이 보임 (dialogs.folders 비어 있음 → 취소)
-    infos = [text for kind, title, text in dialogs.messages if kind == "information" and title == "공유 설정 폴더 선택"]
-    assert len(infos) == 1 and mirror in infos[0] and "가짜 재현" in infos[0]
+    capsys.readouterr()
+    player.resolve_shared_config_problem()  # 시작할 때는 창 없이 기록에 (2026-11-23) — 확인하지 못한 곳도 함께
+    assert dialogs.messages == []
+    out = capsys.readouterr().out
+    assert "창으로 알리지 않음" in out and mirror in out and "가짜 재현" in out
+    player.manage_work_paths()  # 창으로는 Tools → 작품 경로 관리에서 봄
+    warnings = [text for kind, title, text in dialogs.messages if kind == "warning" and title == "작품 경로 관리"]
+    assert len(warnings) == 1 and mirror in warnings[0] and "가짜 재현" in warnings[0]
 
 
 def test_choose_config_dir_on_link_uses_real_unc(win, dialogs, tmp_path, monkeypatch, capsys):
@@ -622,7 +630,7 @@ def label_texts(dialog):
     return "\n".join(label.text() for label in dialog.findChildren(QLabel))
 
 
-def test_config_search_skips_share_that_never_answers(win, dialogs, short_timeout, dead_share_hangs):
+def test_config_search_skips_share_that_never_answers(win, dialogs, short_timeout, dead_share_hangs, capsys):
     import time
 
     win.shares = [Share(DEAD, ["W:"])]
@@ -631,12 +639,16 @@ def test_config_search_skips_share_that_never_answers(win, dialogs, short_timeou
     assert time.monotonic() - started < short_timeout + 3
     line = f"W: ({DEAD}) — {short_timeout:g}초 안에 응답 없음 (서버가 꺼졌거나 느림)"
     assert player.config_dir_search_problems == [line] and player.config_dir_search_failed
-    player.resolve_shared_config_problem()  # 폴더 선택 안내에 보임 (dialogs.folders 비어 있음 → 취소)
-    infos = [text for kind, title, text in dialogs.messages if kind == "information" and title == "공유 설정 폴더 선택"]
-    assert len(infos) == 1 and line in infos[0]
+    capsys.readouterr()
+    player.resolve_shared_config_problem()  # 시작할 때는 창 없이 기록에 (2026-11-23)
+    assert dialogs.messages == []
+    assert line in capsys.readouterr().out
+    player.manage_work_paths()  # 창으로는 Tools → 작품 경로 관리에서 봄
+    warnings = [text for kind, title, text in dialogs.messages if kind == "warning" and title == "작품 경로 관리"]
+    assert len(warnings) == 1 and line in warnings[0]
 
 
-def test_configured_config_dir_that_never_answers(win, dialogs, short_timeout, tmp_path, monkeypatch):
+def test_configured_config_dir_that_never_answers(win, dialogs, short_timeout, tmp_path, monkeypatch, capsys):
     import threading
     import time
 
@@ -663,10 +675,12 @@ def test_configured_config_dir_that_never_answers(win, dialogs, short_timeout, t
         release.set()
     expected = f"공유 설정 폴더가 {short_timeout:g}초 안에 응답하지 않습니다: {slow} (서버가 꺼졌거나 느림)"
     assert player.shared_config_problem == expected
-    assert player.work_paths_config_dir is None  # GUI 스레드의 resolve가 그 폴더를 다시 열어 보지 않게
-    player.resolve_shared_config_problem()
-    infos = [text for kind, title, text in dialogs.messages if kind == "information" and title == "공유 설정 폴더 선택"]
-    assert len(infos) == 1 and expected in infos[0]
+    assert player.work_paths_config_dir is None  # GUI 스레드가 그 폴더를 다시 열어 보지 않게
+    capsys.readouterr()
+    player.resolve_shared_config_problem()  # 시작할 때는 창 없이 기록에 (2026-11-23) — 정해 둔 폴더는 그대로 둠
+    assert dialogs.messages == []
+    assert expected in capsys.readouterr().out
+    assert json.loads(settings.read_text(encoding="utf-8")) == {"config_dir": slow}
 
 
 def test_works_check_skips_root_that_never_answers(win, dialogs, short_timeout, dead_share_hangs, monkeypatch):

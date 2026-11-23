@@ -31,6 +31,11 @@ class SharedConfigState:
     config_dir: str = None
     work_paths: dict = field(default_factory=dict)
     shared_config_problem: str = None
+    # 문제가 '공유 설정을 찾지 못함'일 때만 True — 공유 설정 폴더가 지금 이 PC에서 보이지 않음(없음·NAS에 닿지 않음): 회사 밖에서
+    # 혼자 쓰는 PC, 밖에서 켠 사내 노트북, 사내에서 NAS가 끊긴 PC (앱은 셋을 구별하지 못함). 창은 이때 시작할 때 알림 창을
+    # 띄우지 않고 창 제목·기록에만 남김 (SidebarConfigPathsMixin.resolve_shared_config_problem). 진짜 문제(폴더는 열리는데 파일이
+    # 없거나 깨짐·권한 없음·PC별 설정 파일이 깨짐·찾은 폴더를 저장하지 못함·예상 못 한 오류)와 설정 폴더를 여럿 찾은 것은 False
+    config_not_found: bool = False
     path_map_problem: str = None
     config_dir_candidates: list = field(default_factory=list)
     config_dir_search_failed: bool = False
@@ -93,6 +98,17 @@ def _config_dir_usable(config_dir):
     result = {True: "쓸 수 있음", False: "쓸 수 없음", None: "응답 없음"}[usable]
     timing_log.log("공유 설정", f"설정 폴더 확인 ({timing_log.since(started)}) — {result}")
     return usable
+
+
+def _config_folder_gone(config_dir, error):
+    """작품 경로를 읽지 못한 까닭(error — read_work_paths의 SharedConfigError)이 '공유 설정 폴더가 지금 이 PC에서 보이지 않아서'인지.
+
+    폴더가 없거나(NAS가 붙지 않음·회사 밖) SHARE_PROBE_TIMEOUT_S초 안에 답이 없으면 True. 폴더는 열리는데 파일이 없거나 깨진 것,
+    권한이 없어 열지 못한 것(PermissionError — 고칠 수 있는 문제)은 False.
+    """
+    if isinstance(error.__cause__, PermissionError):
+        return False
+    return not path_map_setup.probe(os.path.isdir, config_dir)
 
 
 def _auto_find_config_dir(state, shares, share_problems):
@@ -203,6 +219,7 @@ def gather_shared_config(find_works_not_opening=False):
             f"공유 설정 폴더가 {path_map_setup.SHARE_PROBE_TIMEOUT_S:g}초 안에 응답하지 않습니다: {config_dir} "
             "(서버가 꺼졌거나 느림)"
         )
+        state.config_not_found = True
         return state
     if not usable:
         found = _auto_find_config_dir(state, *available_shares())
@@ -210,7 +227,10 @@ def gather_shared_config(find_works_not_opening=False):
             return state
         config_dir = found or config_dir
     if config_dir is None:
+        # (Windows만 여기로 옴) 정해 둔 폴더가 없고 자동 찾기도 하나로 정하지 못함: 하나도 못 찾았으면 '찾지 못함', 여럿 찾았으면
+        # 창이 고르게 함
         state.shared_config_problem = "공유 설정 폴더가 아직 정해지지 않았습니다."
+        state.config_not_found = state.config_dir_search_failed
         return state
     state.config_dir = config_dir
     work_paths_file = os.path.join(config_dir, shared_config.WORK_PATHS_FILENAME)
@@ -225,6 +245,7 @@ def gather_shared_config(find_works_not_opening=False):
         if not paths.IS_WINDOWS and not os.environ.get(shared_config.CONFIG_DIR_ENV):
             lookup = f"\n\n{shared_config.mac_config_dir_lookup()}"  # (Mac) 공유 설정 폴더를 어디서 찾아봤는지
         problems.append(f"{exc}{lookup}\n\n{traceback.format_exc()}")
+        state.config_not_found = _config_folder_gone(config_dir, exc)
         timing_log.log("공유 설정", f"작품 경로를 읽지 못함 ({timing_log.since(started)})")
     if not paths.IS_WINDOWS and paths.active_mount_map() is not None:
         # (Mac) path_map.json의 "mac"(공유 설정의 앞부분)까지 보고 이 Mac에서 공유가 붙은 곳을 마저 정함. 창에는

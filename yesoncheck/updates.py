@@ -182,12 +182,13 @@ class SourceResult:
 def read_nas(config_dir: str | None, platform_key: str) -> SourceResult:
     """NAS(공유 설정 폴더)의 updates/latest.json을 읽음.
 
-    config_dir가 None이면 공유 설정 폴더를 아직 모름(expected_problem). updates 폴더나 latest.json이
+    config_dir가 None이면 공유 설정 폴더를 모름(expected_problem — 아직 불러오는 중이거나, 찾지 못해 창이 넘기지 않음:
+    PlayerUpdateMixin.start_update_check). updates 폴더나 latest.json이
     없으면 NAS에 아직 배포된 버전이 없음(expected_problem). 그 밖의 OSError·형식 오류·이 플랫폼용 항목이
     없으면 error. 예상 못 한 예외는 트레이스백째 error에 넣는다(삼키지 않음).
     """
     if config_dir is None:
-        return SourceResult("NAS", "", None, "공유 설정 폴더를 아직 모름", None)
+        return SourceResult("NAS", "", None, "공유 설정 폴더를 모름 (아직 불러오는 중이거나 찾지 못함)", None)
     updates_dir = os.path.join(config_dir, NAS_DIR_NAME)
     manifest_path = os.path.join(updates_dir, MANIFEST_NAME)
     try:

@@ -49,6 +49,9 @@ from yesoncheck.path_map_setup_dialog import PathMapSetupDialog
 from yesoncheck.shared_config_load import SharedConfigLoad, SharedConfigState, config_dir_from_chosen_folder
 from yesoncheck.sidebar_items import LOADING_NOTICE
 
+# 공유 설정을 찾지 못했을 때 시작할 때의 알림 창 대신 기록에 남기는 머리 줄 (그 아래에 문제 글 전문 — resolve_shared_config_problem)
+NOT_FOUND_LOG = "[공유 설정] 공유 설정을 찾지 못함 — 시작할 때 창으로 알리지 않음 (작품 고르기 없이 계속, 사유는 아래):"
+
 
 class SidebarConfigPathsMixin:
     """VideoPlayer의 공유 설정 읽기·문제 알림·변환표 자동 설정과 작품 경로 관리·비밀번호."""
@@ -76,6 +79,7 @@ class SidebarConfigPathsMixin:
         """(GUI 스레드) gather_shared_config 결과를 창에 넣고 (Windows) 이 PC의 변환표를 활성화합니다."""
         self.work_paths = state.work_paths
         self.shared_config_problem = state.shared_config_problem
+        self.shared_config_not_found = state.config_not_found
         self.path_map_problem = state.path_map_problem
         self.config_dir_candidates = state.config_dir_candidates
         self.config_dir_search_failed = state.config_dir_search_failed
@@ -177,7 +181,14 @@ class SidebarConfigPathsMixin:
         Windows: 설정 폴더를 못 찾았으면 고르게 하고(찾은 후보가 여럿이면 그 목록에서), 변환표가 없거나
         열리지 않는 작품이 있으면 연결된 드라이브로 변환표 자동 설정을 제안합니다.
         works_not_opening: 시작할 때 백그라운드에서 미리 계산한 '열리지 않는 작품' (None이면 여기서 확인).
+
+        공유 설정을 찾지 못한 것(shared_config_not_found — 없음·NAS에 닿지 않음)이면 어느 PC에서도 창을 띄우지 않고 문제 글을
+        기록에만 남깁니다 (사용자 결정 2026-11-23: 회사 밖에서는 혼자 쓰는 앱이라 켤 때마다 뜨는 창이 필요 없고, 앱은 밖에서 켠
+        노트북과 사내의 NAS 끊김을 구별하지 못함). 창 제목의 표시는 그대로이고, 사유는 Tools → 작품 경로 관리에서도 보입니다.
         """
+        if self.shared_config_problem and self.shared_config_not_found:
+            print(f"{NOT_FOUND_LOG}\n{self._shared_config_problem_text()}{self._config_dir_search_problems_text()}", flush=True)
+            return
         if self.shared_config_problem and paths.IS_WINDOWS and not shared_config.is_valid_config_dir(self.work_paths_config_dir):
             if self.config_dir_candidates:
                 picked = self._pick_config_dir_candidate()
@@ -603,7 +614,8 @@ class SidebarConfigPathsMixin:
         if self.shared_config_problem or self.work_paths_config_dir is None:
             QMessageBox.warning(
                 self, "작품 경로 관리",
-                f"공유 설정에 문제가 있어 작품 경로를 관리할 수 없습니다.\n\n{self.shared_config_problem or '공유 설정 폴더 없음'}",
+                f"공유 설정에 문제가 있어 작품 경로를 관리할 수 없습니다.\n\n{self.shared_config_problem or '공유 설정 폴더 없음'}"
+                f"{self._config_dir_search_problems_text()}",  # 시작할 때 창으로 알리지 않은 '확인하지 못한 곳'도 여기서 봄
             )
             return
         if not self._confirm_work_paths_password():

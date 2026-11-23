@@ -284,7 +284,8 @@ def activate(path_map):
 def active_map():
     if _active_map is None:
         raise PathMapError(
-            "변환표(path_map.json)가 로드되지 않았습니다. 시작할 때 표시된 변환표 오류(또는 공유 설정 오류)를 확인하세요."
+            "변환표(path_map.json)가 로드되지 않았습니다. 시작할 때 알린 변환표 오류, 또는 창 제목의 '공유 설정 오류' 표시를 "
+            "확인하세요 (공유 설정을 찾지 못한 PC는 시작할 때 창으로 알리지 않음 — 사유는 Tools → 작품 경로 관리)."
         )
     return _active_map
 
