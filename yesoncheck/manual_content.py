@@ -786,6 +786,9 @@ PAGES = (
                                                   "`YESONCHECK_MOVIE_SOURCE=cv2`로 예전 방식으로 엽니다."),
                  ("GPU를 고른 뒤 Windows에서 앱이 켜지지 않음", "`%LOCALAPPDATA%\\YesonCheck\\prefs.json`에서 `display_renderer` 줄을 "
                                                      "지우거나, 환경 변수 `YESONCHECK_VIEWPORT=raster`로 켭니다."),
+                 ("창 제목 끝에{{title.config_problem}}이 붙음",
+                  "공유 설정을 찾지 못한 것입니다. 사내에서는 NAS 연결을 확인한 뒤 앱을 다시 켜세요. 회사 밖에서는 그대로 쓰면 됩니다 — "
+                  "작품 고르기만 없습니다. → [[library/works|작품 고르기]]"),
                  ("작품이 목록에 없거나 폴더를 찾지 못함", "관리자에게 알려 주세요 — {{menu.tools}} → {{menu.tools.work_paths}}에서 고칩니다."),
              )),
              ("h", "앱 기록 (문제를 알릴 때 함께 보내 주세요)", "logs"),
