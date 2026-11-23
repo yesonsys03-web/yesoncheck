@@ -18,6 +18,7 @@ import pytest
 from tests.conftest import write_test_video
 from tests.test_fast_startup import wait_until
 from tests.test_mac_mounts import NO_SUCH_CONFIG
+from tests.test_sidebar_refresh import wait_refreshed
 from tests.test_update_ui import _built_app, check_now, fake_check  # noqa: F401 (fake_check: fixture)
 from yesoncheck import frame_annotations, path_map_setup, paths, shared_config
 
@@ -89,6 +90,19 @@ def test_loading_a_folder_into_the_sidebar(standalone, dialogs, tmp_path):
     assert [(kind, title) for kind, title, _text in dialogs.messages] == [("information", "폴더 로드 완료")]  # 평소의 안내뿐
 
 
+def test_refreshing_the_list_picks_up_a_new_video(standalone, dialogs, tmp_path):
+    folder = tmp_path / "shots"
+    for name in ("s01.mp4", "s02.mp4"):
+        video_in(folder, name)
+    standalone.load_videos_from_folder(str(folder))
+    assert standalone.sidebar.count() == 2
+    video_in(folder, "s03.mp4")
+    standalone._refresh_sidebar_by_user()  # 새로고침 단추·F5
+    wait_refreshed(standalone)
+    assert standalone.sidebar.count() == 3
+    assert dialogs.errors() == []
+
+
 def test_bookmarking_a_folder(standalone, dialogs, tmp_path):
     folder = tmp_path / "shots"
     folder.mkdir()
@@ -127,6 +141,15 @@ def test_automatic_update_check_is_quiet_and_leaves_the_nas_alone(standalone, di
     [(_current, _platform_key, config_dir, _base_url)] = fake_check.calls
     assert config_dir is None  # 찾지 못한 공유 설정 폴더(NAS)를 다시 읽지 않음 — GitHub만
     assert dialogs.messages == []
+
+
+def test_manual_update_check_says_the_share_was_not_found_without_alarm(standalone, dialogs, monkeypatch, tmp_state_dir):
+    """Help → 업데이트 확인…: NAS 쪽은 확인하지 못했다고만 보임 — 경고 창이 아니라 안내 창 (진짜 updates.check, GitHub 확인은 끔)."""
+    _built_app(monkeypatch, "1.1.0")
+    check_now(standalone, manual=True)
+    [(kind, title, text)] = dialogs.messages
+    assert (kind, title) == ("information", "업데이트 확인")
+    assert "NAS: 확인하지 못함" in text and "찾지 못함" in text
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX의 '폴더가 아님' 오류로 재현 (Windows의 네트워크 오류 자리)")
