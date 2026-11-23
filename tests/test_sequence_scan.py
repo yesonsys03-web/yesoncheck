@@ -217,3 +217,17 @@ def test_grouping_itself_still_groups_preview_frames():
     [seq] = group_sequences("/j/frames", names)
     assert (seq.base, seq.first, seq.last, seq.count) == (f"preview-{HEX}", 10, 12, 3)
     assert sequence_of_frame("/j/frames", names, names[0]) == seq
+
+
+@pytest.mark.parametrize("name, expected", [
+    ("preview-clip.mov", True), ("Preview-CLIP.MP4", True), ("preview-final-0001.tga", True), (f"preview-{HEX}-10.tga", True),
+    ("preview_clip.mov", False), ("previews-clip.mov", False), ("SHOT_tk1.mov", False), ("mypreview-clip.mov", False),
+])
+def test_frames_preview_name_is_one_rule_for_frames_and_videos(name, expected):
+    """frames 폴더 안의 preview-로 시작하는 파일 — 프레임과 영상이 함께 쓰는 한 규칙 (목록 읽기가 영상에, is_preview_frame이 프레임에)."""
+    from yesoncheck.sequence_scan import is_frames_preview_name, is_preview_frame
+
+    assert is_frames_preview_name(name, in_frames_folder=True) is expected
+    assert is_frames_preview_name(name, in_frames_folder=False) is False
+    if expected:
+        assert is_preview_frame(name, in_frames_folder=True) is True  # 프레임 규칙의 첫 갈래가 같은 함수

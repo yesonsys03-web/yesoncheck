@@ -449,3 +449,17 @@ def test_is_listed_sequence_follows_the_listing_rule():
     assert video_list.is_listed_sequence(harmony) is False  # Harmony 모양은 어느 폴더에서나
     assert video_list.is_listed_sequence(named) is True
     assert video_list.is_listed_sequence(SeqInfo(frames_dir, "preview-final", "png", 4, 1, 3, 3)) is False  # frames 폴더 안
+
+
+def test_refresh_quietly_drops_an_old_listed_preview_video_and_keeps_one_dropped_on_purpose(tmp_path):
+    """예전 버전이 목록에 넣어 둔 frames/preview-….mov는 다시 읽기에서 조용히 빠지고 (파일이 그대로 있으니 '없어진 영상'이 아님 —
+    알릴 것이 없음), 사용자가 따로 끌어다 놓은 같은 영상(출처 없는 줄)은 파일이 있는 동안 남음."""
+    job = tmp_path / "job"
+    preview = touch(job / "scene-01" / "frames" / "preview-a.mov")
+    shot = touch(job / "scene-01" / "frames" / "SHOT_tk1.mov")
+    source = ListSource("job", str(job), "FL")
+    read = video_list.read_sources([source], [preview])
+    assert read.errors == {} and read.gone_files == set() and read.unverified == []
+    rows = [(preview, source), (shot, source), (preview, None)]
+    removed, new_list = video_list.plan_refresh(rows, read.results, read.gone_files)
+    assert removed == [0] and new_list == [1, 2]
