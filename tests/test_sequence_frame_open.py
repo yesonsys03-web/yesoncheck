@@ -809,14 +809,19 @@ def test_dropping_an_ordinary_frame_does_not_bring_in_the_preview_sequences(play
     assert dialogs.messages == []
 
 
-def test_a_preview_frame_dropped_on_purpose_still_opens_and_only_it_is_listed(player, dialogs, tmp_path):
-    """미리보기 프레임 파일을 직접 놓으면 예전처럼 그 시퀀스가 열리고 목록에 들어감 — 놓지 않은 다른 미리보기 묶음은 딸려 오지 않음."""
+@pytest.mark.parametrize("target", ["video", "window", "sidebar"])
+def test_a_preview_frame_dropped_on_purpose_still_opens_and_only_it_is_listed(player, dialogs, tmp_path, target):
+    """미리보기 프레임 파일을 직접 놓으면 예전처럼 그 시퀀스가 목록에 들어가고(영상 영역·창이면 열림, Mov 목록이면 목록에만) —
+    놓지 않은 다른 미리보기 묶음은 딸려 오지 않음."""
     folder = frames_folder_with_previews(tmp_path)
 
-    drop_files(player, "video", [frame(folder, PREVIEW, 11, pad=2)])
+    drop_files(player, target, [frame(folder, PREVIEW, 11, pad=2)])
 
-    assert isinstance(player.cap_a, ImageSequenceCapture)
-    assert player.filename_a == virtual(os.path.join(str(folder), PREVIEW + ".seq"))
+    if target == "sidebar":
+        assert player.cap_a is None and player.filename_a == ""  # Mov 목록에 놓으면 열지 않음
+    else:
+        assert isinstance(player.cap_a, ImageSequenceCapture)
+        assert player.filename_a == virtual(os.path.join(str(folder), PREVIEW + ".seq"))
     assert seq_identities(player) == [PREVIEW + ".seq", "tk1.seq"]
     assert dialogs.messages == []
 

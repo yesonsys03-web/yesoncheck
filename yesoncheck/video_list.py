@@ -133,9 +133,10 @@ def _sequences_in(folder, frame_names):
 
 
 def is_listed_sequence(seq):
-    """seq(SeqInfo)가 목록에 넣는 시퀀스인지 — Harmony 미리보기 프레임의 묶음이 아님 (_sequences_in이 이름으로 빼는 것과 같은 규칙).
+    """seq(SeqInfo)가 Harmony 미리보기 프레임의 묶음이 아닌지 (_sequences_in이 이름으로 빼는 것과 같은 미리보기 규칙 — **그것만** 봄:
+    임시 프레임 폴더(temp_frames)인지는 보지 않으므로 목록 읽기의 규칙 전체는 아님).
     폴더의 걸러지지 않은 묶음에서 고를 때 씀: 끌어다 놓은 프레임의 폴더(SidebarSequencesMixin._dropped_frames — 놓은 프레임을 찾으려고
-    폴더의 모든 묶음을 만들므로, 목록에 덧붙일 때 이것으로 고름)."""
+    폴더의 모든 묶음을 만들므로, 목록에 덧붙일 때 이것으로 고름; 그 길은 예전부터 temp_frames를 가리지 않음)."""
     return not sequence_scan.is_preview_frame(seq.frame_name(seq.first), in_frames_folder=_is_frames_folder(seq.dir))
 
 
