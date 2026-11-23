@@ -638,7 +638,11 @@ class PlayerUpdateMixin:
                 _log_update("업데이트 확인 (자동): 앞의 확인이 아직 끝나지 않음 — 끝나면 다시 확인")
             return
         current = updates.Version.parse(info.version)
-        check = UpdateCheck(current, build_info.platform_key(), self.work_paths_config_dir, updates.github_base_url())
+        # 공유 설정을 찾지 못한 PC(회사 밖·NAS에 닿지 않음)는 그 폴더의 updates를 다시 읽지 않음 → NAS 쪽은 '폴더를 모름'(예상된
+        # 실패 — 자동 확인이면 창 없음), GitHub만 확인. 다시 읽으면 닿지 않는 서버가 '파일 없음'이 아닌 오류를 낼 때 켤 때마다
+        # '업데이트 확인 실패' 창이 뜸 (2026-11-23)
+        config_dir = None if self.shared_config_not_found else self.work_paths_config_dir
+        check = UpdateCheck(current, build_info.platform_key(), config_dir, updates.github_base_url())
         check.done.connect(self._on_update_checked)  # 창은 GUI 스레드 → 대기열을 거쳐 GUI 스레드에서 실행
         check.failed.connect(self._on_update_check_failed)
         self._update_check = check
