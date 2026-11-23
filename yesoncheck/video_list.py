@@ -118,7 +118,7 @@ def _frame_names(entries, unreadable):
 
 
 def _is_frames_folder(folder):
-    """folder가 frames 폴더(sequence_scan.FRAMES_DIR)인지 — 이름만 봄, 대소문자 무시 (Windows)."""
+    """folder가 frames 폴더(sequence_scan.FRAMES_DIR)인지 — 그 폴더 자신의 이름만 봄(frames 아래의 하위 폴더는 아님), 대소문자 무시 (Windows)."""
     return os.path.basename(os.path.normpath(folder)).lower() == sequence_scan.FRAMES_DIR.lower()
 
 
@@ -130,6 +130,13 @@ def _sequences_in(folder, frame_names):
     in_frames = _is_frames_folder(folder)
     kept = [name for name in frame_names if not sequence_scan.is_preview_frame(name, in_frames_folder=in_frames)]
     return sequence_scan.group_sequences(folder, kept)
+
+
+def is_listed_sequence(seq):
+    """seq(SeqInfo)가 목록에 넣는 시퀀스인지 — Harmony 미리보기 프레임의 묶음이 아님 (_sequences_in이 이름으로 빼는 것과 같은 규칙).
+    폴더의 걸러지지 않은 묶음에서 고를 때 씀: 끌어다 놓은 프레임의 폴더(SidebarSequencesMixin._dropped_frames — 놓은 프레임을 찾으려고
+    폴더의 모든 묶음을 만들므로, 목록에 덧붙일 때 이것으로 고름)."""
+    return not sequence_scan.is_preview_frame(seq.frame_name(seq.first), in_frames_folder=_is_frames_folder(seq.dir))
 
 
 def sort_sequences(sequences):

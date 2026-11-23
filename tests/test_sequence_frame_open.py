@@ -782,3 +782,53 @@ def test_dropping_frames_from_two_folders_groups_each_folder_once(player, dialog
 
     assert sorted(groupings) == sorted([str(first), str(second)])
     assert seq_identities(player) == ["tk1.seq", "tk2.seq"]
+
+
+# ---- Harmony 미리보기 프레임 (목록에서 뺌 — 2026-11-24): 끌어다 놓은 프레임의 폴더에서도 ----
+
+PREVIEW = "preview-0a1b2c3d4e5f6a7b"  # 지어낸 16진수 16자리 (Harmony 미리보기 프레임의 이름 모양)
+
+
+def frames_folder_with_previews(tmp_path):
+    """Harmony 씬의 frames 폴더: 검수할 시퀀스 tk1 + 미리보기 묶음 둘 (하나는 Harmony 모양, 하나는 그냥 preview-로 시작)."""
+    folder = tmp_path / "scene-01" / "frames"
+    make_seq(str(folder), "tk1", range(1, 5))
+    make_seq(str(folder), PREVIEW, range(10, 14), pad=2)
+    make_seq(str(folder), "preview-other", range(1, 4))
+    return folder
+
+
+@pytest.mark.parametrize("target", ["video", "window", "sidebar"])
+def test_dropping_an_ordinary_frame_does_not_bring_in_the_preview_sequences(player, dialogs, tmp_path, target):
+    """평범한 프레임 한 장을 놓으면 그 폴더의 시퀀스들이 Seq 목록에 들어가는데, 미리보기 묶음은 딸려 오지 않음."""
+    folder = frames_folder_with_previews(tmp_path)
+
+    drop_files(player, target, [frame(folder, "tk1", 2)])
+
+    assert seq_identities(player) == ["tk1.seq"]
+    assert dialogs.messages == []
+
+
+def test_a_preview_frame_dropped_on_purpose_still_opens_and_only_it_is_listed(player, dialogs, tmp_path):
+    """미리보기 프레임 파일을 직접 놓으면 예전처럼 그 시퀀스가 열리고 목록에 들어감 — 놓지 않은 다른 미리보기 묶음은 딸려 오지 않음."""
+    folder = frames_folder_with_previews(tmp_path)
+
+    drop_files(player, "video", [frame(folder, PREVIEW, 11, pad=2)])
+
+    assert isinstance(player.cap_a, ImageSequenceCapture)
+    assert player.filename_a == virtual(os.path.join(str(folder), PREVIEW + ".seq"))
+    assert seq_identities(player) == [PREVIEW + ".seq", "tk1.seq"]
+    assert dialogs.messages == []
+
+
+def test_a_preview_sequence_dropped_on_purpose_leaves_the_list_at_the_next_refresh(player, dialogs, tmp_path):
+    """직접 놓은 미리보기 시퀀스는 열린 채로 있지만, 목록을 다시 읽으면(F5·다른 앱에서 돌아옴) 목록에서는 빠짐 — 목록 규칙이 넣지 않는 이름."""
+    folder = frames_folder_with_previews(tmp_path)
+    drop_files(player, "video", [frame(folder, PREVIEW, 11, pad=2)])
+    assert PREVIEW + ".seq" in seq_identities(player)
+
+    refresh(player)
+
+    assert seq_identities(player) == ["tk1.seq"]
+    assert isinstance(player.cap_a, ImageSequenceCapture) and player.filename_a.endswith(PREVIEW + ".seq")  # 연 것은 그대로
+    assert dialogs.messages == []

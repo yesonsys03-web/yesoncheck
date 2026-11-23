@@ -390,3 +390,25 @@ def test_videos_named_preview_are_still_listed(tmp_path):
     preview_frames(frames)
     result = video_list.scan_job("FL", str(job))
     assert names(result) == ["preview-final.mov"] and result.sequences == []
+
+
+def test_the_folder_being_read_is_itself_a_frames_folder(tmp_path):
+    """읽는 폴더 자신이 frames여도 (끝의 구분자가 있어도) preview-로 시작하는 프레임은 뺌."""
+    folder = tmp_path / "scene-01" / "frames"
+    preview_frames(folder, numbers=(1, 2, 3), stem="preview-final", ext="png", pad=4)
+    touch(folder / "real_tk1-0001.tga")
+    touch(folder / "real_tk1-0002.tga")
+    for given in (str(folder), str(folder) + os.sep):
+        assert [s.base for s in video_list.scan_folder(given).sequences] == ["real_tk1"]
+
+
+def test_is_listed_sequence_follows_the_listing_rule():
+    """걸러지지 않은 묶음(끌어다 놓은 프레임의 폴더)에서 고를 때 쓰는 판정 — 목록 읽기와 같은 규칙."""
+    frames_dir = os.path.join("j", "scene-01", "frames")
+    other_dir = os.path.join("j", "renders")
+    harmony = SeqInfo(other_dir, f"preview-{PREVIEW_HEX}", "tga", 2, 10, 40, 31)
+    named = SeqInfo(other_dir, "preview-final", "png", 4, 1, 3, 3)
+    assert video_list.is_listed_sequence(SeqInfo(frames_dir, "EX01_tk1", "tga", 4, 1, 2, 2)) is True
+    assert video_list.is_listed_sequence(harmony) is False  # Harmony 모양은 어느 폴더에서나
+    assert video_list.is_listed_sequence(named) is True
+    assert video_list.is_listed_sequence(SeqInfo(frames_dir, "preview-final", "png", 4, 1, 3, 3)) is False  # frames 폴더 안
