@@ -22,11 +22,6 @@ class SharedConfigError(Exception):
     """공유 설정 폴더나 작품 경로 파일, PC별 설정을 쓸 수 없을 때."""
 
 
-class WorkPathsFileMissing(SharedConfigError):
-    """작품 경로 파일이 그 자리에 없을 때 — 읽다 난 다른 문제(깨짐·권한)와 가름: 공유 설정이 아예 없는 PC인지 볼 때 씀
-    (shared_config_load.gather_shared_config의 config_missing)."""
-
-
 def local_settings_path():
     """Windows PC별 설정 파일 위치."""
     appdata = os.environ.get("APPDATA")
@@ -98,13 +93,12 @@ def is_valid_config_dir(config_dir):
 
 
 def read_work_paths(work_paths_file):
-    """작품 경로 파일을 읽습니다: {작품 이름: Mac 경로}. 문제가 있으면 SharedConfigError (파일은 건드리지 않음) —
-    파일이 없으면 그 하위 클래스 WorkPathsFileMissing."""
+    """작품 경로 파일을 읽습니다: {작품 이름: Mac 경로}. 문제가 있으면 SharedConfigError (파일은 건드리지 않음)."""
     try:
         with open(work_paths_file, encoding="utf-8") as fh:
             data = json.load(fh)
     except FileNotFoundError as exc:
-        raise WorkPathsFileMissing(f"작품 경로 파일이 없습니다: {work_paths_file}\nNAS 연결을 확인하세요.") from exc
+        raise SharedConfigError(f"작품 경로 파일이 없습니다: {work_paths_file}\nNAS 연결을 확인하세요.") from exc
     except (OSError, ValueError) as exc:
         raise SharedConfigError(f"작품 경로 파일을 읽지 못했습니다: {work_paths_file}\n{exc}") from exc
     if not isinstance(data, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in data.items()):

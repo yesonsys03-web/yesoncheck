@@ -546,10 +546,11 @@ PAGES = (
                  "administrator — shows are added and paths are corrected in {{menu.tools}} → {{menu.tools.work_paths}} (password "
                  "required).",
                  "On Windows, if the shared settings folder is somewhere else, choose it with Settings → {{settings.shared_config}}.",
-                 "If the shared settings cannot be read,{{title.config_problem}} is added to the end of the window title. On a PC that has "
-                 "loaded the shows before, or that is set up to use the in-house shares, a ‘공유 설정 오류’ (Shared settings error) window "
-                 "also tells you at startup — check the NAS connection and start the app again. On a PC with no such trace (outside the "
-                 "company), that window is not shown; the reason is only written to the log.",
+                 "If the shared settings cannot be found (not connected to the in-house NAS, or outside the company), the app starts "
+                 "without any notice window and{{title.config_problem}} is added to the end of the window title — only choosing shows "
+                 "is unavailable. In-house, check the NAS connection and start the app again. {{menu.tools}} → {{menu.tools.work_paths}} "
+                 "shows the detailed reason. If the shared settings folder opens but the file in it is broken or missing, a "
+                 "‘공유 설정 오류’ (Shared settings error) window tells you at startup.",
              )),
              ("h", "Opening a folder", "folder"),
              ("list", (

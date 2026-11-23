@@ -6,7 +6,7 @@ import pytest
 from PyQt5.QtCore import QThread, Qt
 from PyQt5.QtWidgets import QApplication
 
-from yesoncheck import hover_strip, mac_prefs, paths, work_picker
+from yesoncheck import paths
 from yesoncheck.paths import PathMap
 from tests.conftest import write_test_video
 
@@ -20,12 +20,6 @@ def make_config(base, work_paths, path_map=None, raw=None):
         with open(os.path.join(config, "path_map.json"), "w", encoding="utf-8") as fh:
             json.dump(path_map, fh)
     return config
-
-
-def remember_works_were_read():
-    """이 PC에서 작품을 읽어 온 적이 있음(사내 PC)을 prefs.json에 적음 — 창을 만들기 전에. 이 기억이 없고 공유 설정도 아예 없는
-    PC는 회사 밖 PC로 보고 시작할 때 공유 설정 알림 창을 띄우지 않음 (test_outside_pc_quiet_start)."""
-    mac_prefs.update_pref(work_picker.PREF_KEY, True, hover_strip.prefs_path())
 
 
 @pytest.fixture

@@ -593,26 +593,6 @@ def find_local_config_dir(drive=None, mac_config_dir=None, is_file=None, realpat
     return candidate, None
 
 
-def harmony_folder_trace(drive=None, mac_config_dir=None, is_file=None):
-    """(Windows) 시스템 드라이브에 Harmony식 공유 폴더의 흔적이 있는지 → 무엇이 있는지 한 줄, 없으면 None.
-
-    C:\\USA_DB(폴더·링크·무엇이든 — lstat, 따라가지 않음)나 바로 가기 C:\\USA_DB.lnk가 있으면 예손 설정이 된 PC.
-    find_local_config_dir가 거기서 공유 설정을 찾지 못하고 문제 줄 없이 지나간 경우(폴더는 있는데 그 아래에 설정이 없음,
-    바로 가기 대상에 설정이 없음, 링크가 아닌 로컬 폴더 등)에도 '공유 설정이 아예 없는 PC'로 보지 않게 함
-    (shared_config_load의 config_missing). 종류를 알 수 없어도 흔적이 있는 쪽. NAS를 열지 않음.
-    """
-    is_file = is_file or _default_is_file
-    parts = paths._mac_parts(mac_config_dir or shared_config.MAC_CONFIG_DIR)
-    top = (drive or system_drive()).rstrip("\\/") + "\\" + parts[0]
-    kind = _path_kind(top)
-    if kind != "없음":
-        return f"{top} 있음 ({kind})"
-    lnk = top + ".lnk"
-    if is_file(lnk):
-        return f"{lnk} 있음 (바로 가기)"
-    return None
-
-
 def config_dir_key(folder):
     """공유 설정 폴더 후보 비교 키: UNC는 unc_key, 로컬 경로는 대소문자·구분자 무시."""
     if folder.startswith("\\\\"):
