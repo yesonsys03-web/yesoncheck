@@ -22,6 +22,11 @@ SEQ_SUFFIX = ".seq"
 
 # base는 마지막 '-' 앞까지 (탐욕 매칭), 프레임 번호는 2자리 이상 ASCII 숫자 ('\d'는 다른 문자 체계 숫자도 받아서 안 씀)
 _FRAME_NAME = re.compile(r"(.+)-([0-9]{2,})\.([^.]+)")
+# Toon Boom Harmony가 미리보기로 써 두는 프레임: preview-<16진수 16자리>-<번호>.<확장자> (번호는 0으로 채우지 않음 — 실제 폴더에서 본 모양)
+_HARMONY_PREVIEW_FRAME = re.compile(r"preview-[0-9a-f]{16}-[0-9]+\.[^.]+", re.IGNORECASE)
+# Harmony가 렌더 프레임(과 그 미리보기)을 두는 폴더 이름 — 이 폴더 안에서는 아래 접두로 시작하는 프레임을 모두 미리보기로 봄
+FRAMES_DIR = "frames"
+PREVIEW_PREFIX = "preview-"
 
 
 @dataclass(frozen=True)
@@ -72,6 +77,27 @@ def parse_frame_name(name):
     if ext not in SEQ_EXTENSIONS:
         return None
     return base, int(digits), ext, len(digits)
+
+
+def is_frames_preview_name(name, in_frames_folder):
+    """frames 폴더 안(in_frames_folder)의 `preview-`로 시작하는 파일 이름인지 (대소문자 무시; `preview_…`·`previews-…`는 아님) —
+    프레임이든 영상이든 검수에 쓰지 않는 파일이라 목록에 넣지 않음 (사용자 결정 2026-11-24). 프레임(is_preview_frame의 첫 갈래)과
+    영상(video_list의 목록 읽기)이 함께 쓰는 한 규칙 — 접두를 고칠 때 한 곳만 고치게."""
+    return in_frames_folder and name.lower().startswith(PREVIEW_PREFIX)
+
+
+def is_preview_frame(name, in_frames_folder=False):
+    """Harmony의 미리보기 프레임 이름인지 — 검수에 쓰지 않는 파일이라 사이드바 목록에 넣지 않음 (video_list가 목록을 읽을 때 뺌; 사용자 결정
+    2026-11-24: 그 프레임들이 Seq 목록에 시퀀스로 들어와 깨진 프레임에서 썸네일 오류 창이 떴음). 디스크를 읽지 않음, 대소문자 무시.
+
+    - 어느 폴더에서나: `preview-<16진수 16자리>-<번호>.<확장자>` 모양
+    - frames 폴더 안(in_frames_folder)에서는: `preview-`로 시작하면 모두 (`preview_…`·`previews-…`는 아님)
+
+    묶는 규칙(group_sequences·sequence_of_frame)은 이 이름을 가리지 않음 — 프레임을 직접 열면(파일 열기·끌어다 놓기) 예전처럼 열림.
+    """
+    if is_frames_preview_name(name, in_frames_folder):
+        return True
+    return _HARMONY_PREVIEW_FRAME.fullmatch(name) is not None
 
 
 def group_sequences(dir_path, names):

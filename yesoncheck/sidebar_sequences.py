@@ -381,7 +381,13 @@ class SidebarSequencesMixin:
             if seq is not None:
                 sequences.setdefault(_seq_key(seq), seq)
                 found.setdefault(key, folder)
-        folders = {folder: video_list.sort_sequences(indexes[key].sequences) for key, folder in found.items()}
+        # 폴더의 시퀀스들도 목록에 덧붙이되 Harmony 미리보기 묶음은 빼고(목록 읽기와 같은 규칙 — video_list.is_listed_sequence),
+        # 놓은 프레임의 시퀀스는 미리보기여도 넣음 (직접 고른 것)
+        folders = {
+            folder: video_list.sort_sequences(
+                [seq for seq in indexes[key].sequences if _seq_key(seq) in sequences or video_list.is_listed_sequence(seq)])
+            for key, folder in found.items()
+        }
         return DroppedFrames(list(sequences.values()), folders)
 
     def _read_dropped_frame_folder(self, folder):

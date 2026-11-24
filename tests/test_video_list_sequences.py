@@ -334,3 +334,132 @@ def test_no_import_cycle_in_either_order(first, second):
     code = f"import {first}, {second}; from yesoncheck import video_list as v; assert v.natural_key"
     done = subprocess.run([sys.executable, "-c", code], cwd=REPO_ROOT, capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
+
+
+# ---- Harmony 미리보기 프레임 제외 (2026-11-24 — 검수에 필요 없는 파일, 깨진 프레임에서 썸네일 오류 창이 떴음) ----
+
+PREVIEW_HEX = "0a1b2c3d4e5f6a7b"  # 지어낸 16진수 16자리
+
+
+def preview_frames(folder, numbers=(10, 11, 12), stem=None, ext="tga", pad=0):
+    """프레임 파일들을 만듦 — 기본은 Harmony 미리보기 모양(번호를 0으로 채우지 않음: …-10.tga), pad를 주면 0으로 채움(…-0001.png)."""
+    stem = stem or f"preview-{PREVIEW_HEX}"
+    for n in numbers:
+        touch(folder / f"{stem}-{n:0{pad}d}.{ext}")
+
+
+def test_harmony_preview_frames_are_not_listed_in_a_job(tmp_path):
+    job = tmp_path / "job"
+    frames = build_tree(job)
+    preview_frames(frames)
+    preview_frames(frames, stem="preview-ABCDEF0123456789")  # 한 폴더에 미리보기 묶음이 여럿이어도
+    result = video_list.scan_job("FL", str(job))
+    assert [s.base for s in result.sequences] == ["EX01_tk1"]
+    assert sorted(names(result)) == ["EX01_tk1.mov", "EX02.mov"]  # 영상은 그대로
+    assert result.unreadable == []
+
+
+def test_anything_starting_with_preview_dash_is_not_listed_in_a_frames_folder(tmp_path):
+    """frames 폴더 안에서는 preview-로 시작하는 프레임이면 16진수 모양이 아니어도 뺌 (대소문자 무시 — 폴더 이름도)."""
+    root = tmp_path / "root"
+    for folder in (root / "scene-01" / "frames", root / "scene-02" / "Frames"):
+        preview_frames(folder, numbers=(1, 2, 3), stem="preview-final", ext="png", pad=4)
+        preview_frames(folder, numbers=(10, 11), stem="Preview-test")
+        touch(folder / "real_tk1-0001.tga")
+        touch(folder / "real_tk1-0002.tga")
+    result = video_list.scan_folder(str(root))
+    assert [s.base for s in result.sequences] == ["real_tk1", "real_tk1"]
+
+
+def test_outside_a_frames_folder_only_the_harmony_shape_is_dropped(tmp_path):
+    """frames가 아닌 폴더에서는 Harmony 미리보기 모양(preview-<16진수 16자리>-<번호>)만 뺌 — 사용자가 preview-로 이름 지은 시퀀스는 보임."""
+    root = tmp_path / "renders"
+    preview_frames(root, numbers=(1, 2, 3), stem="preview-final", ext="png", pad=4)
+    preview_frames(root)  # Harmony 모양 — 다른 폴더로 옮겨 둔 미리보기 프레임
+    touch(root / "preview_shot01-0001.tga")
+    touch(root / "preview_shot01-0002.tga")
+    result = video_list.scan_folder(str(root))
+    assert [s.base for s in result.sequences] == ["preview-final", "preview_shot01"]
+
+
+def test_videos_starting_with_preview_dash_are_not_listed_in_a_frames_folder_of_a_job(tmp_path):
+    """frames 폴더 안에서는 preview-로 시작하는 **파일**을 넣지 않음 — 프레임뿐 아니라 영상도 (사용자: "frames 폴더 내의 preview-로
+    시작하는 파일은 표시하지 않아도 돼"). preview_…·previews-…처럼 다른 이름과 검수할 영상은 그대로."""
+    job = tmp_path / "job"
+    frames = job / "scene-01" / "frames"
+    for name in ("preview-final.mov", "Preview-CLIP.MP4", "preview_shot.mov", "previews-x.mov", "SHOT_tk1.mov"):
+        touch(frames / name)
+    preview_frames(frames)
+    result = video_list.scan_job("FL", str(job))
+    assert sorted(names(result)) == ["SHOT_tk1.mov", "preview_shot.mov", "previews-x.mov"] and result.sequences == []
+
+
+def test_videos_starting_with_preview_dash_are_not_listed_in_a_frames_folder_when_loading_a_folder(tmp_path):
+    """폴더 불러오기(하위 폴더까지): frames 폴더(대소문자 무시·읽는 폴더 자신이어도)의 preview- 영상은 빼고, 다른 폴더의 것은 둠."""
+    root = tmp_path / "root"
+    touch(root / "scene-01" / "frames" / "preview-clip.mov")
+    touch(root / "scene-01" / "frames" / "SHOT_tk1.mov")
+    touch(root / "scene-02" / "Frames" / "PREVIEW-clip.mp4")
+    touch(root / "renders" / "preview-clip.mov")  # frames가 아닌 폴더 — 사용자가 이름 지은 영상
+    result = video_list.scan_folder(str(root))
+    assert sorted(names(result)) == ["SHOT_tk1.mov", "preview-clip.mov"]
+    assert [os.path.basename(os.path.dirname(path)) for name, path in result.videos if name == "preview-clip.mov"] == ["renders"]
+    only_frames = video_list.scan_folder(str(root / "scene-01" / "frames"))
+    assert names(only_frames) == ["SHOT_tk1.mov"]
+
+
+def test_job_rules_that_read_other_folders_keep_preview_videos(tmp_path):
+    """frames가 아닌 폴더를 읽는 작품 규칙(job 바로 안 등)은 그대로 — preview- 영상이어도 보임."""
+    job = tmp_path / "job"
+    touch(job / "preview-clip.mov")
+    assert names(video_list.scan_job("MS_Animatic", str(job))) == ["preview-clip.mov"]
+    assert names(video_list.scan_job("FL", str(job))) == ["preview-clip.mov"]  # job 폴더 바로 안
+
+
+@pytest.mark.parametrize("work", ["MS_Animatic", "TJS_Animatic", "FL"])
+def test_a_job_folder_that_is_itself_named_frames_follows_the_same_rule(tmp_path, work):
+    """job 폴더 자신이 frames인 드문 경우: 바로 안의 preview- 영상은 빼되, preview-로 시작하는 하위 폴더는 예전처럼 읽음."""
+    job = tmp_path / "frames"
+    touch(job / "preview-clip.mov")
+    touch(job / "SHOT_tk1.mov")
+    touch(job / "preview-sub" / "frames" / "inner.mov")  # 기본 규칙(FL)이 읽는 하위/frames
+    touch(job / "preview-sub" / "direct.mov")  # TJS 규칙이 읽는 하위 폴더 한 단계
+    result = video_list.scan_job(work, str(job))
+    expected = {"MS_Animatic": ["SHOT_tk1.mov"], "TJS_Animatic": ["SHOT_tk1.mov", "direct.mov"], "FL": ["SHOT_tk1.mov", "inner.mov"]}
+    assert sorted(names(result)) == expected[work]
+
+
+def test_the_folder_being_read_is_itself_a_frames_folder(tmp_path):
+    """읽는 폴더 자신이 frames여도 (끝의 구분자가 있어도) preview-로 시작하는 프레임은 뺌."""
+    folder = tmp_path / "scene-01" / "frames"
+    preview_frames(folder, numbers=(1, 2, 3), stem="preview-final", ext="png", pad=4)
+    touch(folder / "real_tk1-0001.tga")
+    touch(folder / "real_tk1-0002.tga")
+    for given in (str(folder), str(folder) + os.sep):
+        assert [s.base for s in video_list.scan_folder(given).sequences] == ["real_tk1"]
+
+
+def test_is_listed_sequence_follows_the_listing_rule():
+    """걸러지지 않은 묶음(끌어다 놓은 프레임의 폴더)에서 고를 때 쓰는 판정 — 목록 읽기와 같은 규칙."""
+    frames_dir = os.path.join("j", "scene-01", "frames")
+    other_dir = os.path.join("j", "renders")
+    harmony = SeqInfo(other_dir, f"preview-{PREVIEW_HEX}", "tga", 2, 10, 40, 31)
+    named = SeqInfo(other_dir, "preview-final", "png", 4, 1, 3, 3)
+    assert video_list.is_listed_sequence(SeqInfo(frames_dir, "EX01_tk1", "tga", 4, 1, 2, 2)) is True
+    assert video_list.is_listed_sequence(harmony) is False  # Harmony 모양은 어느 폴더에서나
+    assert video_list.is_listed_sequence(named) is True
+    assert video_list.is_listed_sequence(SeqInfo(frames_dir, "preview-final", "png", 4, 1, 3, 3)) is False  # frames 폴더 안
+
+
+def test_refresh_quietly_drops_an_old_listed_preview_video_and_keeps_one_dropped_on_purpose(tmp_path):
+    """예전 버전이 목록에 넣어 둔 frames/preview-….mov는 다시 읽기에서 조용히 빠지고 (파일이 그대로 있으니 '없어진 영상'이 아님 —
+    알릴 것이 없음), 사용자가 따로 끌어다 놓은 같은 영상(출처 없는 줄)은 파일이 있는 동안 남음."""
+    job = tmp_path / "job"
+    preview = touch(job / "scene-01" / "frames" / "preview-a.mov")
+    shot = touch(job / "scene-01" / "frames" / "SHOT_tk1.mov")
+    source = ListSource("job", str(job), "FL")
+    read = video_list.read_sources([source], [preview])
+    assert read.errors == {} and read.gone_files == set() and read.unverified == []
+    rows = [(preview, source), (shot, source), (preview, None)]
+    removed, new_list = video_list.plan_refresh(rows, read.results, read.gone_files)
+    assert removed == [0] and new_list == [1, 2]
