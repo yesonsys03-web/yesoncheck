@@ -97,8 +97,9 @@ def test_newest_release_is_the_ui_redesign():
     from yesoncheck import release_notes_en
 
     for notes in (release_notes, release_notes_en):
-        assert [(r.version, r.date) for r in notes.RELEASES[:4]] == [
-            ("2.1.1", "2026-11-23"), ("2.1.0", "2026-11-20"), ("2.0.1", "2026-11-18"), ("2.0.0", "2026-11-17")], notes.__name__
+        assert [(r.version, r.date) for r in notes.RELEASES[:5]] == [
+            ("2.1.2", "2026-11-24"), ("2.1.1", "2026-11-23"), ("2.1.0", "2026-11-20"), ("2.0.1", "2026-11-18"),
+            ("2.0.0", "2026-11-17")], notes.__name__
     text = release_notes.notes_text("2.0.0")
     assert "화면 언어" in text and "재생 줄" in text
     text = release_notes.notes_text("2.0.1")  # 2.0.1 — 사이드바 키·와이프를 끄면 B를 닫음·매뉴얼 설치 쪽 (사용자 지시 2026-11-18)
@@ -107,3 +108,5 @@ def test_newest_release_is_the_ui_redesign():
     assert "사이드바 A·B 단추" in text and "오른쪽 아래" in text and "슬라이더" in text
     text = release_notes.notes_text("2.1.1")  # 2.1.1 — 공유 설정을 찾지 못하면 시작 창 없음·업데이트 확인 창 고침 (사용자 지시 2026-11-23)
     assert "공유 설정 오류" in text and "업데이트 확인 실패" in text and "공유 설정 폴더 변경" in text
+    text = release_notes.notes_text("2.1.2")  # 2.1.2 — Harmony 미리보기 파일(frames 폴더의 preview-…)을 목록에서 뺌 (사용자 지시 2026-11-24)
+    assert "preview-" in text and "`frames` 폴더" in text and "썸네일을 만들지 못해" in text and "끌어다 놓으면" in text

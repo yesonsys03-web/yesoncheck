@@ -7,6 +7,24 @@ entry for entry (no Qt). The deploy notes (GitHub Release, update banner) still 
 from yesoncheck.release_notes import Release
 
 RELEASES = (
+    Release("2.1.2", "2026-11-24",
+            "Preview files that Toon Boom Harmony writes into a scene's `frames` folder (`preview-…`) no longer show up in the "
+            "sidebar list. Since they are not listed, the error window they caused in thumbnail mode no longer appears.",
+            (
+                ("Sidebar list", (
+                    "Frames that Toon Boom Harmony wrote as a preview (`preview-<hex>-<number>.<ext>`) are no longer listed as "
+                    "image sequences in the Seq and All tabs, whatever folder they are in.",
+                    "Inside a `frames` folder, files whose names start with `preview-` are not listed, frames and videos alike — "
+                    "they are not review material. Files in other folders still show even if their names start with `preview-`.",
+                    "Choosing such a file directly or dragging it in still opens it as before.",
+                    "Since they are not listed, the ‘썸네일을 만들지 못해 이 시퀀스는 아이콘 없이 둡니다’ (Could not make the thumbnail, "
+                    "so this sequence is left without an icon) window that a broken preview frame could bring up in thumbnail "
+                    "mode no longer appears.",
+                )),
+                ("Manual", (
+                    "The image sequences page now says which files are left out of the list.",
+                )),
+            )),
     Release("2.1.1", "2026-11-23",
             "The ‘공유 설정 오류’ (Shared settings error) window no longer appears at every start on PCs without Yeson's in-house "
             "shared settings (outside the company) or not connected to the NAS. An ‘업데이트 확인 실패’ (Update check failed) window "
