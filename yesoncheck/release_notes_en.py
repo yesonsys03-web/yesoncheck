@@ -9,7 +9,7 @@ from yesoncheck.release_notes import Release
 RELEASES = (
     Release("2.1.2", "2026-11-24",
             "Preview files that Toon Boom Harmony writes into a scene's `frames` folder (`preview-…`) no longer show up in the "
-            "sidebar list. The error window they caused in thumbnail mode goes away with them.",
+            "sidebar list. Since they are not listed, the error window they caused in thumbnail mode no longer appears.",
             (
                 ("Sidebar list", (
                     "Frames that Toon Boom Harmony wrote as a preview (`preview-<hex>-<number>.<ext>`) are no longer listed as "
@@ -17,8 +17,9 @@ RELEASES = (
                     "Inside a `frames` folder, files whose names start with `preview-` are not listed, frames and videos alike — "
                     "they are not review material. Files in other folders still show even if their names start with `preview-`.",
                     "Choosing such a file directly or dragging it in still opens it as before.",
-                    "This also ends the ‘썸네일을 만들지 못해 이 시퀀스는 아이콘 없이 둡니다’ (Could not make the thumbnail, so this "
-                    "sequence is left without an icon) window that a broken preview frame could bring up in thumbnail mode.",
+                    "Since they are not listed, the ‘썸네일을 만들지 못해 이 시퀀스는 아이콘 없이 둡니다’ (Could not make the thumbnail, "
+                    "so this sequence is left without an icon) window that a broken preview frame could bring up in thumbnail "
+                    "mode no longer appears.",
                 )),
                 ("Manual", (
                     "The image sequences page now says which files are left out of the list.",
