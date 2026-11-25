@@ -9,8 +9,6 @@ AppKit(PyObjC)은 창을 띄우는 함수 안에서만 불러옴 — Windows 빌
 lock의 pyobjc-framework-Cocoa로 들어감(check_frozen_imports가 앱에 들어갔는지 대조). Qt를 쓰지 않음.
 """
 
-import unicodedata
-
 _running = []  # 지금 떠 있는 창들 (runModal 안) — cancel_running이 닫음
 
 
@@ -18,9 +16,10 @@ def pick_folders_or_files(title):
     """창을 띄워 고른 경로 목록을 돌려줌 (취소면 빈 목록). title은 창 위쪽에 보이는 안내 글.
 
     - 답이 '확인'일 때만 URLs를 읽음: 취소한 창도 URLs에 그때 보던 폴더를 돌려줌(확인함) — 안 보고 읽으면 취소가 그 폴더를 불러옴.
-    - 경로는 NFC로: Qt의 기본 창·끌어다 놓기가 주는 경로와 같은 모양. NSURL의 path()는 URL이 만들어진 길에 따라 한글을 자모로 푼
-      NFD일 수 있고(fileURLWithPath로 만든 URL — 확인함), NFD 경로는 NFS 공유에서 다른 이름이며 주석 파일 이름도 달라짐.
-      디스크의 이름이 NFD라 NFC 경로가 없을 때는 부른 쪽이 paths.find_unicode_variant로 찾음.
+    - 경로는 창이 준 그대로 (한글 이름의 모양 NFC·NFD를 바꾸지 않음): NFS 공유는 이름을 바이트 그대로 견줘서 한 폴더에 이름이 같고
+      모양만 다른 항목이 둘 있을 수 있음 — 한 모양으로 바꿔 버리면 고르지 않은 쪽이 조용히 열림. NSURL의 path()는 URL이 만들어진
+      길에 따라 디스크의 이름과 모양이 다를 수 있으므로(fileURLWithPath로 만든 URL은 NFC 이름도 NFD로 풀어 줌 — 확인함), 받은 경로가
+      디스크에 없을 때 모양만 다른 실제 경로를 찾는 일은 부른 쪽이 함 (player_sidebar._as_on_disk → paths.find_unicode_variant).
     - 파일 경로가 없는 URL은 ValueError (글자 'None'을 경로로 돌려주지 않음).
     """
     import AppKit  # 여기서만: Windows 빌드에는 PyObjC가 없음
@@ -42,7 +41,7 @@ def pick_folders_or_files(title):
         path = url.path()
         if path is None:
             raise ValueError(f"열기 창이 파일 경로가 없는 것을 돌려주었습니다: {url}")
-        chosen.append(unicodedata.normalize("NFC", str(path)))
+        chosen.append(str(path))
     return chosen
 
 

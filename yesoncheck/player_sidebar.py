@@ -58,8 +58,9 @@ def one_dialog_picks_both():
 def _as_on_disk(path):
     """고른 경로가 그대로는 없으면 이름의 유니코드 정규화(NFC·NFD)만 다른 실제 경로를, 아니면 그대로.
 
-    NFS 공유는 한글 이름을 바이트 그대로 견줌 — 디스크의 이름이 자모로 풀린 NFD면 창이 준 NFC 경로는 없다고 나옴
-    (받은 첫 파일을 열 때와 같은 도우미 paths.find_unicode_variant: 하나로 정하지 못하면 None — 그때는 '찾을 수 없음'으로 알림).
+    NFS 공유는 한글 이름을 바이트 그대로 견줌 — Mac의 열기 창이 준 경로의 모양(자모로 풀린 NFD인지)이 디스크의 이름과 다르면
+    없다고 나옴. 받은 경로가 있으면 늘 그것(고른 바로 그 항목), 없을 때만 찾음 — 받은 첫 파일을 열 때와 같은 도우미
+    paths.find_unicode_variant: 하나로 정하지 못하면 None — 그때는 '찾을 수 없음'으로 알림.
     """
     return paths.find_unicode_variant(path) or path
 

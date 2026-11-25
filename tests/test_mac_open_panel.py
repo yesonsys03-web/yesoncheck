@@ -71,14 +71,15 @@ def test_cancelling_returns_nothing_even_though_the_panel_reports_a_folder(appki
     assert mac_open_panel.pick_folders_or_files("제목") == []
 
 
-def test_paths_come_back_composed_like_the_ones_qt_gives(appkit):
-    """한글 이름은 NFC로 — Qt의 기본 창·끌어다 놓기가 주는 경로와 같은 모양 (자모로 풀린 NFD 경로는 NFS 공유에서 다른 이름이고,
-    주석 파일 이름도 달라짐). fileURLWithPath로 만든 URL의 path()는 NFC 이름도 NFD로 풀어 줌(이 Mac에서 확인)."""
-    decomposed = unicodedata.normalize("NFD", "/x/한글폴더/가나다.mov")
-    assert decomposed != unicodedata.normalize("NFC", decomposed)
-    appkit(1, [decomposed])
+@pytest.mark.parametrize("form", ["NFC", "NFD"])
+def test_paths_come_back_exactly_as_the_panel_gave_them(appkit, form):
+    """한글 이름의 모양(NFC·자모로 풀린 NFD)을 바꾸지 않음 — 고른 바로 그 항목의 경로. NFS 공유는 이름을 바이트 그대로 견줘서, 한
+    폴더에 이름이 같고 모양만 다른 항목이 둘 있을 수 있음: 한 모양으로 바꿔 버리면 고르지 않은 쪽이 조용히 열림 (리뷰에서 잡음).
+    받은 경로가 디스크에 없을 때 모양만 다른 실제 경로를 찾는 일은 부른 쪽(player_sidebar._as_on_disk)."""
+    given = unicodedata.normalize(form, "/x/한글폴더/가나다.mov")
+    appkit(1, [given])
 
-    assert mac_open_panel.pick_folders_or_files("제목") == [unicodedata.normalize("NFC", decomposed)]
+    assert mac_open_panel.pick_folders_or_files("제목") == [given]
 
 
 def test_a_url_without_a_file_path_is_an_error_not_the_text_none(appkit):
@@ -130,4 +131,4 @@ def test_the_module_loads_without_appkit_or_qt():
     top = [node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))]
     names = {alias.name.split(".")[0] for node in top if isinstance(node, ast.Import) for alias in node.names}
     names |= {node.module.split(".")[0] for node in top if isinstance(node, ast.ImportFrom) and node.module}
-    assert names == {"unicodedata"}
+    assert names == set()
