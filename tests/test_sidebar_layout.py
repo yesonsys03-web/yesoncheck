@@ -191,11 +191,12 @@ def test_small_buttons_read_the_text_table_and_take_no_focus(player):
 
 def test_small_buttons_call_the_same_handlers_as_before(player, qapp, monkeypatch):
     calls = []
-    for name in ("select_folder", "add_bookmark", "show_bookmarks", "_refresh_sidebar_by_user"):
+    # '폴더 열기'는 open_folder_clicked로 (2026-11-25 — Mac은 거기서 select_folder, Windows는 두 항목을 띄움: tests/test_open_folder_pick.py)
+    for name in ("open_folder_clicked", "select_folder", "add_bookmark", "show_bookmarks", "_refresh_sidebar_by_user"):
         monkeypatch.setattr(player, name, lambda *args, name=name: calls.append(name))
     player.openFolderButton.click()
     player.refreshListButton.click()
-    assert calls == ["select_folder", "_refresh_sidebar_by_user"]
+    assert calls == ["open_folder_clicked", "_refresh_sidebar_by_user"]
     assert isinstance(player.bookmarkMenuButton, QToolButton)
     assert player.bookmarkMenuButton.popupMode() == QToolButton.InstantPopup
     actions = player.bookmarkMenuButton.menu().actions()

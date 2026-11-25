@@ -42,7 +42,8 @@ from PyQt5.QtWidgets import (
 
 from yesoncheck.video_widget import VIEWPORT_ENV, CustomVideoWidget
 from yesoncheck import bookmarks, build_info, default_app, downscale_filter, error_window, external_tools, file_associations, \
-    instance_link, instances, mac_native_gate, mac_prefs, manual_open, media_player_log, paths, timing_log, tool_panel, \
+    instance_link, instances, mac_native_gate, mac_open_panel, mac_prefs, manual_open, media_player_log, paths, timing_log, \
+    tool_panel, \
     ui_text, user_files, video_list, windows_display
 from yesoncheck import sidebar_sort  # 사이드바 정렬 기준의 기본값 (SidebarSortMixin)
 from yesoncheck.movie_pipe_source import movie_source_mode
@@ -262,6 +263,9 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         # 다른 job을 고르면 update_playlist가 읽은 (작품, 시즌, job)을 기억해 activated는 다시 읽지 않음 (한 번만 읽음)
         self._job_list_loaded_for = None
         self.jobComboBox.activated.connect(self._on_job_activated)
+        # 작품 고르기를 코드가 다시 채우는 중 (reload_work_combo — 공유 설정이 도착함·작품 경로를 고침): 그 연쇄의 'job을 고르지 않음'은
+        # 목록에 job에서 온 것이 없으면 목록을 비우지 않음 (_load_job_list — _sidebar_sources의 출처로 가름)
+        self._refilling_work_combo = False
 
         self.installEventFilter(self)
 
@@ -1477,8 +1481,8 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
     def close_for_update(self):
         """다른 창의 업데이트가 닫기를 요청함: 대화 상자를 Esc처럼 닫고 닫기 버튼을 누른 것처럼 닫음 (closeEvent — 작업
         멈춤 포함). 진행 창(QProgressDialog)은 cancel() — 그 창으로 도는 반복이 wasCanceled로 멈춤 (최소 표시 시간 전이라
-        아직 보이지 않는 진행 창도). 그 밖의 보이는 모달 대화 상자(질문·파일 고르기 등)는 reject(). 모달이 아닌 창(OCR 검토
-        창 등)은 앱이 끝날 때 닫힘."""
+        아직 보이지 않는 진행 창도). 그 밖의 보이는 모달 대화 상자(질문·파일 고르기 등)는 reject(). (Mac) '폴더 열기'의 기본 열기
+        창(mac_open_panel)은 취소. 모달이 아닌 창(OCR 검토 창 등)은 앱이 끝날 때 닫힘."""
         self._closing_for_update = True
         for widget in QApplication.topLevelWidgets():
             if isinstance(widget, QProgressDialog):
@@ -1489,6 +1493,9 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
                 print(f"[창 연결] 업데이트로 닫음: 대화 상자 취소 {type(widget).__name__} '{widget.windowTitle()}'",
                       flush=True)
                 widget.reject()
+        # (Mac) '폴더 열기'의 기본 열기 창은 Qt의 대화 상자가 아니라 위에서 닫히지 않음 — 그대로 두면 이 프로세스가 그 창 안에 머묾
+        if mac_open_panel.cancel_running():
+            print("[창 연결] 업데이트로 닫음: 열기 창 취소", flush=True)
         self.close()
 
     def closeEvent(self, event):

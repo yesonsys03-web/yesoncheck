@@ -63,8 +63,8 @@ PAGES = (
              ("h", "Opening videos", "open"),
              ("table", ("How", "Result"), (
                  ("Drop files onto the window",
-                  "One file opens in A; two files open in A and B. With three or more, the first file opens in A and the rest are "
-                  "added to the list."),
+                  "One file opens in A; two files open in A and B. With three or more, the first file opens in A. Every dropped "
+                  "file is also added to the Mov list (the list you have stays, and a video already in it is not added again)."),
                  ("Drop a folder onto the window",
                   "The list is **replaced** by the videos in that folder and the first video opens in A. The folder is also added "
                   "to the bookmarks automatically."),
@@ -75,7 +75,8 @@ PAGES = (
                  ("**A** · **B** buttons on a list row", "When turned on (in the {{menu.compare}} menu), they appear on the row under the mouse. **A** is the same as a click; **B** opens it in B and turns on the wipe. → [[sidebar/ab|A·B buttons]]"),
                  ("Choose show → season → job", "Loads the video list of that job (a feature specific to Yeson's in-house workflow). "
                                                 "→ [[library/works|Choosing a show]]"),
-                 ("Double-click in Finder or File Explorer", "A new window opens with that video in A. → [[windows]]"),
+                 ("Double-click in Finder or File Explorer",
+                  "A new window opens with that video in A and adds it to the Mov list. → [[windows]]"),
                  ("A single frame of an image sequence", "The whole sequence that the frame belongs to opens. → [[sequences]]"),
              )),
              ("h", "Basic review workflow", "flow"),
@@ -404,7 +405,8 @@ PAGES = (
                  "{{sidebar.works}} — choose show → season → job to put that job's videos into the list (shown only on PCs that "
                  "have loaded the shows). → [[library/works|Shows]]",
                  "{{sidebar.open_folder}} · {{sidebar.bookmarks}} ▾ · {{sidebar.refresh}} — choose a folder and put the videos and "
-                 "sequences in it into the list ({I}) / {{sidebar.bookmark.add}} · {{sidebar.bookmark.manage}} "
+                 "sequences in it into the list ({I}), or choose a file to bring in just that file / "
+                 "{{sidebar.bookmark.add}} · {{sidebar.bookmark.manage}} "
                  "([[library/bookmarks|Bookmarks]]) / read the list again ({F5}).",
                  "{{sidebar.mode.list}} · {{sidebar.mode.thumb}} — change how the list looks.",
                  "**Mov · Seq · All tabs** — videos / image sequences / both. The button next to the All tab (`Name ▾` in the picture) is the **Sort** button. "
@@ -559,6 +561,11 @@ PAGES = (
                  "folder onto the window.",
                  "The videos in that folder go into the Mov tab and the image sequences into the Seq tab. If the folder contains "
                  "only sequences, the sidebar switches straight to the Seq tab.",
+                 "If you choose a **file** instead of a folder in {{sidebar.open_folder}}, only that file is brought in, not its whole "
+                 "folder — as when you drop a file onto the window, it opens in A and is added to the Mov list (a frame of an image "
+                 "sequence opens that sequence). On a Mac you choose a folder, or one or more files, in the same dialog. On Windows the button "
+                 "shows {{sidebar.open_folder.folder}} and {{sidebar.open_folder.files}} to choose from, and the {I} key and the "
+                 "{{menu.file}} menu open the folder dialog.",
              )),
              ("h", "Bookmarks", "bookmarks"),
              ("fig", "bookmarks", "Bookmark manager window", ()),
@@ -804,8 +811,8 @@ PAGES = (
                  "Windows that are already open stay as they are. To bring back a window that was minimized to the Dock, click "
                  "that window's icon on the right side of the Dock.",
                  "If you **double-click** a video (.mov, .mp4) in Finder or File Explorer, or open it with **Open With** "
-                 "(다음으로 열기; on Windows, **Open with** — 연결 프로그램), a new window opens that video in A. If you open several "
-                 "at once, one window opens for each video.",
+                 "(다음으로 열기; on Windows, **Open with** — 연결 프로그램), a new window opens that video in A and adds it to the Mov "
+                 "list. If you open several at once, one window opens for each video.",
                  "While a window is closing (up to about 30 seconds while it finishes its work), a new window may not open — "
                  "open it again after the window has closed completely.",
              )),

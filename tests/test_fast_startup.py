@@ -418,20 +418,24 @@ def test_launch_opens_command_line_file_after_window_is_shown(qapp, monkeypatch,
         def open_file(self, video_type, file_path):
             events.append(("open", video_type, file_path))
 
+        def list_opened_video(self, file_path):
+            events.append(("list", file_path))
+
     created = []
     monkeypatch.setattr(app_module, "VideoPlayer", lambda **kwargs: created.append(FakePlayer(**kwargs)) or created[-1])
     try:
         assert app_module.launch(["yesoncheck", str(video)]) == 0
         assert events == ["show"]  # launch 안에서는 열지 않음
-        wait_until(lambda: len(events) == 7)
-        assert events == ["show", "update", "instances", "user_files", "viewport", "load", ("open", "A", str(video))]
+        wait_until(lambda: len(events) == 8)
+        assert events == ["show", "update", "instances", "user_files", "viewport", "load", ("open", "A", str(video)),
+                          ("list", str(video))]  # 연 뒤 Mov 목록에도 (2026-11-25)
 
         # 없는 파일도 open_file로 — 열지 못하면 open_file이 오류 창 (예전에는 기록 한 줄만 남기고 빈 창 — 설계 3-2)
         events.clear()
         missing = str(tmp_path / "없음.mov")
         assert app_module.launch(["yesoncheck", missing]) == 0
-        wait_until(lambda: len(events) == 7)
-        assert events == ["show", "update", "instances", "user_files", "viewport", "load", ("open", "A", missing)]
+        wait_until(lambda: len(events) == 8)
+        assert events == ["show", "update", "instances", "user_files", "viewport", "load", ("open", "A", missing), ("list", missing)]
         assert f"Opening file: {missing}" in capsys.readouterr().out
     finally:
         for player in created:

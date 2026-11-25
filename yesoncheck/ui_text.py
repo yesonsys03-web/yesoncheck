@@ -50,6 +50,11 @@ TEXTS = {
     # 사이드바
     "sidebar.works": {"ko": "작품 선택", "en": "Select show"},  # 사용자 지시 2026-11-16 (예전 가운데 열의 글자는 'Yeson 작품')
     "sidebar.open_folder": {"ko": "폴더 열기", "en": "Open folder"},
+    # '폴더 열기'로 파일도 가져옴 (2026-11-25): Mac은 기본 열기 창 하나(.pick이 그 제목)에서 폴더나 파일을, Windows는 단추가 두 항목을 띄움
+    "sidebar.open_folder.pick": {"ko": "폴더나 파일 고르기", "en": "Choose a folder or a file"},
+    "sidebar.open_folder.folder": {"ko": "폴더 고르기…", "en": "Choose a folder…"},
+    "sidebar.open_folder.files": {"ko": "파일 고르기…", "en": "Choose files…"},
+    "sidebar.open_folder.files.title": {"ko": "가져올 파일 고르기", "en": "Choose files to bring in"},
     "sidebar.bookmarks": {"ko": "북마크", "en": "Bookmarks"},
     "sidebar.bookmark.add": {"ko": "북마크 추가", "en": "Add bookmark"},
     "sidebar.bookmark.manage": {"ko": "북마크 관리… (P)", "en": "Manage bookmarks… (P)"},

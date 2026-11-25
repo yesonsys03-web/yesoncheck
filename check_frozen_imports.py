@@ -258,6 +258,19 @@ def exercise_native_decode():
     return f"네이티브 디코드: VideoToolbox {NATIVE_READ_FRAMES}장 {width}×{height} 32BGRA (hw={hw})"
 
 
+MAC_REQUIRED = ("AppKit",)  # Mac 앱이 꼭 쓰는 모듈 — '폴더 열기'의 기본 열기 창(yesoncheck.mac_open_panel, 함수 안의 지연 import)
+
+
+def mac_required_missing(skipped, platform=None):
+    """건너뛴 선택 모듈 줄(`이름 (사유)`) 가운데 Mac 앱이 꼭 쓰는 것 — macOS 빌드에서만 봄 (Windows 빌드에는 PyObjC가 없어 건너뛰는 것이 맞음).
+
+    지연 import는 빌드 환경에 그 모듈이 없어도 '선택 모듈'로 조용히 넘어감 — 그러면 앱에도 들어가지 않아 단추를 눌러야 드러남.
+    """
+    if (platform or sys.platform) != "darwin":
+        return []
+    return [line for line in skipped if line.split(" ", 1)[0] in MAC_REQUIRED]
+
+
 def exercise_app():
     """앱이 실행 중에 거치는 경로를 소스 환경에서 실행합니다."""
     sys.path.insert(0, PROJECT_ROOT)
@@ -270,6 +283,9 @@ def exercise_app():
             # 앱이 부르지 않는 함수 안의 선택 import(transnetv2_model.predict_video의 ffmpeg 등)는 건너뜀 (목록은 출력함).
             # TensorFlow는 여기서 건너뛰어도 아래 애니매틱2 실행에서 다시 불러 실패가 드러남
             skipped.append(f"{name} ({exc})")
+    required = mac_required_missing(skipped)
+    if required:
+        raise SystemExit("Mac 앱이 꼭 쓰는 모듈이 빌드 환경에 없습니다 (앱에도 들어가지 않음): " + ", ".join(required))
 
     frame_formats = exercise_sequence_decode()  # 가볍고 PIL 플러그인 누락을 바로 잡으므로 느린 OCR 앞에서
     native = exercise_native_decode()  # 같은 이유로 OCR 앞에서 (macOS는 몇 초, Windows는 건너뜀 한 줄)

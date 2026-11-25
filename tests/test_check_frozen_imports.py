@@ -314,6 +314,16 @@ def test_frozen_check_native_decode_fails_loudly_on_a_wrong_frame(fake_mac, case
     assert os.environ["PATH"] == path_before
 
 
+def test_appkit_missing_from_the_mac_build_environment_is_not_an_optional_module():
+    """'폴더 열기'의 기본 열기 창은 AppKit을 함수 안에서 불러옴 — 빌드 환경에 없으면 '건너뛴 선택 모듈'로 조용히 넘어가지 않고 Mac 빌드를 멈춤.
+    Windows 빌드는 PyObjC가 없어 건너뛰는 것이 맞음."""
+    skipped = ["AppKit (No module named 'AppKit')", "winreg (No module named 'winreg')", "AppKitExtras (x)"]
+
+    assert cfi.mac_required_missing(skipped, "darwin") == ["AppKit (No module named 'AppKit')"]
+    assert cfi.mac_required_missing(skipped, "win32") == []
+    assert cfi.mac_required_missing(["winreg (No module named 'winreg')"], "darwin") == []
+
+
 def test_native_frame_problem_names_a_wrong_dtype():
     """모양은 4K BGRX인데 형이 uint8이 아니면 '모양·형' 사유에 그 형을 적음 — whole_surface_handle도 uint8만 받지만 그 사유('손잡이 없음')로
     넘기지 않음 (형 검사를 빼면 이 시험이 실패). 4K uint16 프레임은 broadcast_to로 메모리 없이."""

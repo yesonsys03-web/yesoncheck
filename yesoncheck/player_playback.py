@@ -212,6 +212,12 @@ class PlayerPlaybackMixin:
             # 'job선택'. 보이던 목록과 그 job·폴더의 썸네일 자리만 비우고 어떤 폴더도 읽지 않음 (예전에는 빈 글자를 job으로
             # 여겨 작품·시즌 폴더를 job 폴더처럼 읽었음). 썸네일 자리를 비워 두면 이제 넣는 파일은 처음 끌어다 놓을 때처럼
             # 그 파일 옆에 (예전 job·폴더의 썸네일 폴더가 아니라)
+            if self._refilling_work_combo and not any(source.kind == "job" for source in self._sidebar_sources):
+                # 사용자가 바꾼 것이 아니라 코드가 작품 고르기를 다시 채우는 중이고(공유 설정이 도착함 — reload_work_combo) 목록에
+                # job에서 온 것이 없음: 그새 가져온 파일·폴더의 목록과 썸네일 자리를 그대로 둠. job에서 온 것이 있으면(읽지 못해
+                # 기억만 해 둔 job 포함) 아래에서 전처럼 비움. 출처로 가름 — current_job_path는 job을 본 뒤 폴더를 열어도 남아 있음
+                self.current_job_path = None  # 고른 job은 풀림 (썸네일 자리는 폴더의 것 — selected_folder_path가 먼저)
+                return
             self.sidebar.clear()
             self.current_job_path = None
             self.selected_folder_path = None

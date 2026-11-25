@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import sys
 import time
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
 )
 
-from yesoncheck import paths, ui_text, video_list
+from yesoncheck import error_window, mac_open_panel, paths, sequence_scan, ui_text, video_list
 # PlayerSidebarMixin의 부모 믹스인 (북마크, 선택 재생, 공유 설정·작품 경로, 목록 다시 읽기, Seq 탭, 썸네일)
 from yesoncheck.sidebar_ab_buttons import SidebarAbButtonsMixin
 from yesoncheck.sidebar_all import SidebarAllMixin
@@ -44,6 +45,35 @@ from yesoncheck.sidebar_items import (
     THUMBNAIL_FOLDER_PROBLEM,  # 다시 내보내기만 함 (이 모듈은 안 씀): test_sidebar_refresh가 이 경로로 가져옴
     ThumbnailContext,  # 다시 내보내기만 함 (이 모듈은 안 씀): player_playback·test_sidebar_refresh가 이 경로로 가져옴
 )
+
+
+def one_dialog_picks_both():
+    """기본(네이티브) 열기 창 하나에서 폴더와 파일을 모두 고를 수 있는 플랫폼인지 — Mac만.
+
+    Windows의 기본 창은 폴더 고르기와 파일 고르기가 따로라(한 창에서 둘 다는 못 함) '폴더 열기' 단추가 두 항목을 띄움.
+    """
+    return sys.platform == "darwin"
+
+
+def _as_on_disk(path):
+    """고른 경로가 그대로는 없으면 이름의 유니코드 정규화(NFC·NFD)만 다른 실제 경로를, 아니면 그대로.
+
+    NFS 공유는 한글 이름을 바이트 그대로 견줌 — Mac의 열기 창이 준 경로의 모양(자모로 풀린 NFD인지)이 디스크의 이름과 다르면
+    없다고 나옴. 받은 경로가 있으면 늘 그것(고른 바로 그 항목), 없을 때만 찾음 — 받은 첫 파일을 열 때와 같은 도우미
+    paths.find_unicode_variant: 하나로 정하지 못하면 None — 그때는 '찾을 수 없음'으로 알림.
+    """
+    return paths.find_unicode_variant(path) or path
+
+
+def _frame_of_sequences(file_path, sequences):
+    """file_path가 sequences(SeqInfo들) 중 하나의 프레임인지 — 이름 규칙으로만 봄 (디스크를 읽지 않음)."""
+    folder, name = os.path.split(file_path)
+    parsed = sequence_scan.parse_frame_name(name)
+    if parsed is None:
+        return False
+    base, _number, ext, pad = parsed
+    key = paths.path_key(folder)
+    return any(paths.path_key(seq.dir) == key and (seq.base, seq.ext, seq.pad) == (base, ext, pad) for seq in sequences)
 
 
 class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin, SidebarControlsMixin, SidebarRefreshMixin, SidebarSequencesMixin, SidebarAllMixin, SidebarSortMixin, SidebarOpenWithMixin, SidebarThumbnailsMixin, SidebarKeysMixin, SidebarAbButtonsMixin):
@@ -120,24 +150,8 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
                 elif not read_failed:
                     QMessageBox.warning(parent, "경고", "폴더에 지원되는 비디오 파일이 없습니다.")
             else:
-                # 개별 파일들만 있는 경우
-                if frames:
-                    # 프레임: 영상 파일이 함께 없으면 영상 파일을 놓을 때처럼 그 시퀀스를 열고 Seq 탭을 보여 줌. 영상이 함께 있으면 영상은 아래에서 예전대로,
-                    # 시퀀스는 Seq 목록에만 더함
-                    parent._add_dropped_frames(frames, show_tab=not video_files, open_them=not video_files)
-                if len(video_files) == 1:
-                    parent.open_file('A', video_files[0])
-                elif len(video_files) == 2:
-                    # 두 개 파일: Video A와 B에 각각 로드
-                    parent.open_file('A', video_files[0])
-                    parent.open_file('B', video_files[1])
-                elif len(video_files) > 2:
-                    # 여러 파일: 첫 번째는 Video A에, 나머지는 사이드바에 추가
-                    parent.open_file('A', video_files[0])
-                    remaining_files = video_files[1:]
-                    parent.add_files_to_sidebar(remaining_files)
-                    if remaining_files:
-                        QMessageBox.information(parent, "파일 로드 완료", f"첫 번째 파일이 Video A에 로드되고, {len(remaining_files)}개의 파일이 사이드바에 추가되었습니다.")
+                # 개별 파일들만 있는 경우: 열고 목록에도 넣음 ('폴더 열기'로 고른 파일과 같은 한 곳)
+                parent.open_dropped_files(video_files, frames)
             
             # 폴더와 함께 놓은 프레임의 시퀀스는 Seq 목록에만 더함 (폴더 처리는 위에서 예전대로)
             if has_folder and frames:
@@ -149,8 +163,53 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         """파일이 지원되는 비디오 형식인지 확인"""
         return os.path.splitext(file_path.lower())[1] in video_list.VIDEO_EXTENSIONS
 
-    def add_files_to_sidebar(self, file_paths, folders=()):
-        """사이드바에 파일들을 추가 (항상 번호순 정렬).
+    def open_dropped_files(self, video_files, frames):
+        """폴더 없이 가져온 파일들을 엶 — 영상 영역·창 본문에 놓은 파일과 '폴더 열기'로 고른 파일이 함께 지나는 한 곳.
+
+        영상: 첫째를 A로(둘이면 둘째를 B로) 열고 **모두 Mov 목록에 넣음** — 지금 목록은 그대로 두고 끝에 더하며, 이미 목록에 있는
+        영상은 다시 넣지 않음 (사용자 지시 2026-11-25: 사이드바에 놓으면 목록에 보이는데 영상 영역에 놓으면 보이지 않았음 — 전에는
+        하나·둘이면 열기만, 셋 이상이면 첫째를 뺀 나머지만 목록에). 하나·둘이면 안내 창 없이(영상이 열리는 것이 답), 셋 이상이면
+        예전처럼 안내 — 더한 것이 없으면(모두 이미 목록에 있음) '추가되었습니다'라고 하지 않음.
+        프레임(이미지 시퀀스 — _dropped_frames가 고른 것): 영상이 함께 없으면 그 시퀀스를 열고 Seq 탭을 보여 줌, 함께 있으면 Seq 목록에만.
+        """
+        if frames:
+            self._add_dropped_frames(frames, show_tab=not video_files, open_them=not video_files)
+        if not video_files:
+            return
+        self.open_file('A', video_files[0])
+        if len(video_files) == 2:
+            self.open_file('B', video_files[1])
+        many = len(video_files) > 2
+        new_files = self._list_new_videos(video_files, announce=many)
+        if many and new_files:
+            QMessageBox.information(self, "파일 로드 완료", f"첫 번째 파일이 Video A에 로드되고, {len(new_files)}개의 파일이 사이드바에 추가되었습니다.")
+
+    def list_opened_video(self, file_path):
+        """밖에서 받아 연 파일(동영상 더블클릭 — Windows 연결 프로그램·Mac Finder·다음으로 열기, 새 창이 받은 파일: app.open_startup_file)을
+        Mov 목록에도 넣음 (사용자 지시 2026-11-25 — Windows 확인에서 "더블클릭해서 오픈했을 때 사이드바 리스트에 표시되지 않아").
+
+        영상 파일일 때만(시퀀스의 프레임은 전처럼 열리기만), 이미 목록에 있으면 다시 넣지 않고, 안내 창 없이. 디스크에 없는 파일은
+        넣지 않음 — 열지 못한 사유는 open_file이 이미 창으로 알림.
+        """
+        file_path = paths.normalize_native(file_path)
+        if self.is_video_file(file_path):
+            self._list_new_videos([file_path], announce=False)
+
+    def _list_new_videos(self, video_files, announce):
+        """영상들 중 아직 Mov 목록에 없는 것만 끝에 더함 → 더한 경로들 (같은 영상은 한 번 — path_key로 견줌)."""
+        listed = set(self._known_sidebar_videos())
+        new_files = []
+        for file_path in video_files:
+            key = paths.path_key(file_path)
+            if key not in listed:
+                listed.add(key)
+                new_files.append(file_path)
+        if new_files:
+            self.add_files_to_sidebar(new_files, announce=announce)
+        return new_files
+
+    def add_files_to_sidebar(self, file_paths, folders=(), announce=True):
+        """사이드바에 파일들을 추가 (항상 번호순 정렬). announce=False면 끝의 '추가되었습니다' 안내 창을 띄우지 않음.
 
         folders: 끌어다 놓은 폴더 — 그 아래 파일은 그 폴더에서 들어온 것으로 기억 (목록 다시 읽기가 그 폴더를 같은 규칙으로
         다시 읽음). 나머지는 따로 넣은 파일 (다시 읽을 때 파일이 있는 동안만 목록에).
@@ -190,7 +249,7 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
                     self.generate_thumbnail(file_path, context=context)
         self._sidebar_read_done(None)  # 끌어다 놓은 폴더·파일을 방금 읽음 (앱이 다시 활성돼도 곧바로 또 읽지 않게)
         
-        if file_paths:
+        if file_paths and announce:
             QMessageBox.information(self, "완료", f"{len(file_paths)}개의 파일이 사이드바에 추가되었습니다.")
 
     def get_video_files_from_folder(self, folder_path):
@@ -477,11 +536,93 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
             except Exception as e:
                 print(f"Error updating job list: {e}")
 
+    def open_folder_clicked(self):
+        """'폴더 열기' 단추 — 단추 하나로 폴더도 파일도 (사용자 지시 2026-11-25).
+
+        Mac: 기본 열기 창 하나에서 폴더나 파일(여러 개)을 고름 (select_folder). 그 밖(Windows): 기본 창이 폴더와 파일을 함께 고르지 못해
+        단추 바로 아래에 '폴더 고르기…'·'파일 고르기…'를 띄움 (옆의 북마크 단추와 같은 모양).
+        """
+        if one_dialog_picks_both():
+            self.select_folder()
+            return
+        menu = self.open_folder_menu()
+        menu.exec_(self.openFolderButton.mapToGlobal(self.openFolderButton.rect().bottomLeft()))
+        menu.deleteLater()
+
+    def open_folder_menu(self):
+        """(Windows) '폴더 열기' 단추의 두 항목 — 띄우는 일은 부른 쪽 (시험은 항목을 바로 누름)."""
+        menu = QMenu(self)
+        menu.addAction(ui_text.text("sidebar.open_folder.folder")).triggered.connect(lambda: self.select_folder())
+        menu.addAction(ui_text.text("sidebar.open_folder.files")).triggered.connect(lambda: self.select_files())
+        return menu
+
     def select_folder(self):
+        """File → 폴더 열기…·I 키 (Mac은 '폴더 열기' 단추도).
+
+        Mac: 한 창에서 폴더나 파일(여러 개 — mac_open_panel) — 폴더면 예전 그대로 그 폴더를 불러오고, 파일이면 그 파일만 가져옴
+        (open_picked_paths).
+        창을 띄우지 못하면(PyObjC가 없는 환경 등) 트레이스백과 함께 오류 창 — 단추의 슬롯에서 예외가 새면 소스 실행의 앱이 죽음.
+        그 밖: 예전 그대로 폴더 창 (파일은 단추의 '파일 고르기…').
+        """
+        if one_dialog_picks_both():
+            try:
+                picked = mac_open_panel.pick_folders_or_files(ui_text.text("sidebar.open_folder.pick"))
+            except Exception:
+                error_window.show_unexpected("[폴더 열기]", "폴더나 파일을 고르는 창을 띄우지 못했습니다.")
+                return
+            if getattr(self, "_closing_for_update", False):
+                # 창이 떠 있는 동안 다른 창의 업데이트가 이 창을 닫음 (close_for_update가 열기 창을 취소함) — 닫히는 창에 아무것도 열지 않음
+                print("[폴더 열기] 창이 닫히는 중이라 고른 것을 열지 않음", flush=True)
+                return
+            self.open_picked_paths(picked)
+            return
         folder_path = QFileDialog.getExistingDirectory(self, "Select Folder")
         folder_path = paths.normalize_native(folder_path)
         if folder_path:
             self.load_videos_from_folder(folder_path)
+
+    def select_files(self):
+        """(Windows) '폴더 열기' → '파일 고르기…': 고른 파일만 가져옴 (여러 개 고를 수 있음, 필터 없음 — 이미지 시퀀스의 프레임도 고르게)."""
+        chosen, _filter = QFileDialog.getOpenFileNames(self, ui_text.text("sidebar.open_folder.files.title"))
+        self.open_picked_paths(chosen)
+
+    def open_picked_paths(self, picked):
+        """'폴더 열기'로 고른 경로들 (빈 글 = 취소).
+
+        폴더면 예전 그대로 그 폴더를 불러옴 (load_videos_from_folder). 폴더는 한 번에 하나 — 폴더와 함께 다른 것(다른 폴더·파일)을
+        골랐으면 첫 폴더를 불러오고 나머지는 가져오지 않았다고 알림 (여러 폴더는 창에 끌어다 놓기).
+        파일이면 그 파일만 가져옴 — 영상 영역에 놓을 때와 같은 규칙 (open_dropped_files: A로 열고 Mov 목록에 더함, 프레임이면 그 시퀀스).
+        가져오지 못한 것은 창 하나로 알림 (고른 것을 조용히 빼지 않음 — 가져올 수 있는 것은 그대로 가져옴): 폴더로도 파일로도 확인되지
+        않는 경로(그새 지워짐·공유가 끊김 — 폴더 읽기에 넘기지 않음: 그쪽은 읽기 전에 목록부터 비우고 '읽지 못한 폴더'로 기억함)와
+        영상도 시퀀스 프레임도 아닌 파일(한 장뿐인 프레임 포함).
+        """
+        picked = [_as_on_disk(paths.normalize_native(path)) for path in picked if path]
+        if not picked:
+            return
+        folders = [path for path in picked if os.path.isdir(path)]
+        if folders:
+            rest = [path for path in picked if path != folders[0]]
+            if rest:
+                names = "\n".join(os.path.basename(path.rstrip("/\\")) or path for path in rest)
+                QMessageBox.warning(self, "경고", f"폴더는 한 번에 하나만 불러옵니다. 함께 고른 것은 가져오지 않았습니다:\n{names}")
+            self.load_videos_from_folder(folders[0])
+            return
+        files = [path for path in picked if os.path.isfile(path)]
+        missing = [path for path in picked if path not in files]
+        video_files = [path for path in files if self.is_video_file(path)]
+        others = [path for path in files if not self.is_video_file(path)]
+        frames = self._dropped_frames(others)
+        unusable = [path for path in others if not _frame_of_sequences(path, frames.sequences)]
+        problems = []
+        if missing:
+            problems.append("찾을 수 없어 가져오지 않았습니다:\n" + "\n".join(missing))
+        if unusable:
+            problems.append("영상 파일이나 이미지 시퀀스의 프레임이 아니어서 가져오지 않았습니다:\n"
+                            + "\n".join(os.path.basename(path) for path in unusable))
+        if problems:
+            QMessageBox.warning(self, "경고", "\n\n".join(problems))
+        if video_files or frames:
+            self.open_dropped_files(video_files, frames)
 
     def load_videos_from_folder(self, folder_path):
         self.playlist.clear()

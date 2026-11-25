@@ -139,7 +139,7 @@ class SidebarControlsMixin:
     def _build_sidebar_tools(self):
         """작은 단추 줄: 폴더 열기 · 북마크 ▾(추가·관리) · 새로고침. 한 줄 위젯을 돌려줌."""
         self.openFolderButton = ShrinkButton()
-        self.openFolderButton.clicked.connect(lambda: self.select_folder())
+        self.openFolderButton.clicked.connect(lambda: self.open_folder_clicked())
         self.bookmarkMenuButton = ShrinkToolButton()
         self.bookmarkMenuButton.setPopupMode(QToolButton.InstantPopup)
         self.bookmarkMenuButton.setToolButtonStyle(Qt.ToolButtonTextOnly)
