@@ -151,6 +151,47 @@ def test_a_movie_dragged_anywhere_in_the_window_shows_in_the_list(player, dialog
     assert (player.filename_a == virtual(mov)) is opens
 
 
+# ---------------------------------------------------------------- 더블클릭으로 받은 영상도 목록에
+
+
+def test_a_movie_received_at_startup_opens_as_a_and_is_listed(player, dialogs, tmp_path):
+    """동영상을 더블클릭해(Windows 연결 프로그램, Mac Finder·다음으로 열기, 새 창이 받은 파일) 연 영상도 Mov 목록에 보임 —
+    Windows 확인에서 "사이드바 리스트에 표시되지 않아"(2026-11-25). 세 길 모두 app.open_startup_file 하나를 지남."""
+    from yesoncheck import app as app_module
+
+    mov = movie(tmp_path, "a.mov")
+
+    app_module.open_startup_file(player, mov)
+
+    assert player.filename_a == virtual(mov)
+    assert mov_names(player) == ["a.mov"]
+    assert [paths.path_key(path) for path in listed_paths(player)] == [paths.path_key(mov)]
+    assert dialogs.messages == []
+
+
+def test_a_received_movie_already_in_the_list_is_not_listed_twice(player, dialogs, tmp_path):
+    from yesoncheck import app as app_module
+
+    movie(tmp_path, "a.mov", folder="job")
+    player.load_videos_from_folder(str(tmp_path / "job"))
+    dialogs.messages.clear()
+
+    app_module.open_startup_file(player, str(tmp_path / "job" / "a.mov"))
+
+    assert mov_names(player) == ["a.mov"] and dialogs.messages == []
+
+
+def test_a_received_sequence_frame_is_not_put_in_the_movie_list(player, dialogs, tmp_path):
+    """받은 것이 이미지 시퀀스의 프레임이면 전처럼 그 시퀀스가 A로 열릴 뿐 — 프레임 파일을 Mov 목록에 넣지 않음."""
+    from yesoncheck import app as app_module
+
+    folder = shot_folder(tmp_path)
+
+    app_module.open_startup_file(player, frame(folder, "tk1", 3))
+
+    assert isinstance(player.cap_a, ImageSequenceCapture) and player.sidebar.count() == 0
+
+
 # ---------------------------------------------------------------- '폴더 열기': 한 창에서 폴더나 파일 (Mac)
 
 

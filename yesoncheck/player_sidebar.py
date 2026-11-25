@@ -179,6 +179,24 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         self.open_file('A', video_files[0])
         if len(video_files) == 2:
             self.open_file('B', video_files[1])
+        many = len(video_files) > 2
+        new_files = self._list_new_videos(video_files, announce=many)
+        if many and new_files:
+            QMessageBox.information(self, "파일 로드 완료", f"첫 번째 파일이 Video A에 로드되고, {len(new_files)}개의 파일이 사이드바에 추가되었습니다.")
+
+    def list_opened_video(self, file_path):
+        """밖에서 받아 연 파일(동영상 더블클릭 — Windows 연결 프로그램·Mac Finder·다음으로 열기, 새 창이 받은 파일: app.open_startup_file)을
+        Mov 목록에도 넣음 (사용자 지시 2026-11-25 — Windows 확인에서 "더블클릭해서 오픈했을 때 사이드바 리스트에 표시되지 않아").
+
+        영상 파일일 때만(시퀀스의 프레임은 전처럼 열리기만), 이미 목록에 있으면 다시 넣지 않고, 안내 창 없이. 디스크에 없는 파일은
+        넣지 않음 — 열지 못한 사유는 open_file이 이미 창으로 알림.
+        """
+        file_path = paths.normalize_native(file_path)
+        if self.is_video_file(file_path):
+            self._list_new_videos([file_path], announce=False)
+
+    def _list_new_videos(self, video_files, announce):
+        """영상들 중 아직 Mov 목록에 없는 것만 끝에 더함 → 더한 경로들 (같은 영상은 한 번 — path_key로 견줌)."""
         listed = set(self._known_sidebar_videos())
         new_files = []
         for file_path in video_files:
@@ -186,12 +204,9 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
             if key not in listed:
                 listed.add(key)
                 new_files.append(file_path)
-        if not new_files:
-            return
-        many = len(video_files) > 2
-        self.add_files_to_sidebar(new_files, announce=many)
-        if many:
-            QMessageBox.information(self, "파일 로드 완료", f"첫 번째 파일이 Video A에 로드되고, {len(new_files)}개의 파일이 사이드바에 추가되었습니다.")
+        if new_files:
+            self.add_files_to_sidebar(new_files, announce=announce)
+        return new_files
 
     def add_files_to_sidebar(self, file_paths, folders=(), announce=True):
         """사이드바에 파일들을 추가 (항상 번호순 정렬). announce=False면 끝의 '추가되었습니다' 안내 창을 띄우지 않음.

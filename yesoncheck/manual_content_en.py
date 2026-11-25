@@ -75,7 +75,8 @@ PAGES = (
                  ("**A** · **B** buttons on a list row", "When turned on (in the {{menu.compare}} menu), they appear on the row under the mouse. **A** is the same as a click; **B** opens it in B and turns on the wipe. → [[sidebar/ab|A·B buttons]]"),
                  ("Choose show → season → job", "Loads the video list of that job (a feature specific to Yeson's in-house workflow). "
                                                 "→ [[library/works|Choosing a show]]"),
-                 ("Double-click in Finder or File Explorer", "A new window opens with that video in A. → [[windows]]"),
+                 ("Double-click in Finder or File Explorer",
+                  "A new window opens with that video in A and adds it to the Mov list. → [[windows]]"),
                  ("A single frame of an image sequence", "The whole sequence that the frame belongs to opens. → [[sequences]]"),
              )),
              ("h", "Basic review workflow", "flow"),
@@ -810,8 +811,8 @@ PAGES = (
                  "Windows that are already open stay as they are. To bring back a window that was minimized to the Dock, click "
                  "that window's icon on the right side of the Dock.",
                  "If you **double-click** a video (.mov, .mp4) in Finder or File Explorer, or open it with **Open With** "
-                 "(다음으로 열기; on Windows, **Open with** — 연결 프로그램), a new window opens that video in A. If you open several "
-                 "at once, one window opens for each video.",
+                 "(다음으로 열기; on Windows, **Open with** — 연결 프로그램), a new window opens that video in A and adds it to the Mov "
+                 "list. If you open several at once, one window opens for each video.",
                  "While a window is closing (up to about 30 seconds while it finishes its work), a new window may not open — "
                  "open it again after the window has closed completely.",
              )),

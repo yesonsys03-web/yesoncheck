@@ -343,6 +343,9 @@ class LaunchPlayer(QWidget):
     def open_file(self, video_type, file_path):
         LaunchPlayer.events.append(("open", video_type, file_path))
 
+    def list_opened_video(self, file_path):
+        LaunchPlayer.events.append(("list", file_path))
+
 
 @pytest.fixture
 def launch_env(monkeypatch):
@@ -398,8 +401,9 @@ def test_launch_installs_router_first_and_readies_after_window_is_shown(qapp, la
     events = launch_env.events
     registered = ["register"] if sys.platform == "darwin" else []
     assert events == ["install", "update_check", "splash", "show", "ready", *registered]
-    wait_until(lambda: ("open", "A", str(video)) in events)
-    assert events[-6:] == ["update", "instances", "user_files", "viewport", "load", ("open", "A", str(video))]
+    wait_until(lambda: ("list", str(video)) in events)
+    assert events[-7:] == ["update", "instances", "user_files", "viewport", "load", ("open", "A", str(video)),
+                           ("list", str(video))]  # 받은 파일을 연 뒤 Mov 목록에도 (2026-11-25)
     assert launch_env.installed[0].argv_files == [str(video)] and launch_env.spawned == []
 
 
@@ -413,7 +417,7 @@ def test_launch_opens_first_file_here_and_spawns_the_rest(qapp, launch_env, tmp_
     wait_until(lambda: launch_env.spawned)
     process_events()
     assert ("open", "A", paths[0]) in launch_env.events
-    assert [e for e in launch_env.events if isinstance(e, tuple)] == [("open", "A", paths[0])]
+    assert [e for e in launch_env.events if isinstance(e, tuple)] == [("open", "A", paths[0]), ("list", paths[0])]
     assert launch_env.spawned == [paths[1:]]
 
 
@@ -455,6 +459,7 @@ def test_launch_opens_missing_startup_file_through_open_file(qapp, launch_env, t
     missing = str(tmp_path / "없는 폴더" / "장면 #3.mov")
     assert launch_env.app.launch(["yesoncheck", missing]) == 0
     wait_until(lambda: ("open", "A", missing) in launch_env.events)
+    assert launch_env.events.index(("list", missing)) == launch_env.events.index(("open", "A", missing)) + 1  # 연 뒤에 목록에도
 
 
 def test_open_startup_file_uses_path_with_other_unicode_form(qapp, monkeypatch, tmp_path):
@@ -470,16 +475,17 @@ def test_open_startup_file_uses_path_with_other_unicode_form(qapp, monkeypatch, 
         return real
 
     monkeypatch.setattr(paths, "find_unicode_variant", fake_find)
-    opened = []
-    player = SimpleNamespace(open_file=lambda video_type, path: opened.append((video_type, path)))
+    opened, listed = [], []
+    player = SimpleNamespace(open_file=lambda video_type, path: opened.append((video_type, path)), list_opened_video=listed.append)
     app_module.open_startup_file(player, handed)
-    assert asked == [handed] and opened == [("A", real)]
+    assert asked == [handed] and opened == [("A", real)] and listed == [real]  # 목록에도 실제 경로로
 
     # 찾지 못하면 받은 그대로 (open_file이 오류 창)
     monkeypatch.setattr(paths, "find_unicode_variant", lambda path: None)
     opened.clear()
+    listed.clear()
     app_module.open_startup_file(player, handed)
-    assert opened == [("A", handed)]
+    assert opened == [("A", handed)] and listed == [handed]
 
 
 def test_open_startup_file_missing_video_shows_error_window_naming_it(new_player, dialogs, tmp_path):
@@ -492,6 +498,7 @@ def test_open_startup_file_missing_video_shows_error_window_naming_it(new_player
     [(kind, title, text)] = dialogs.messages
     assert kind in ("critical", "warning") and missing in text
     assert player.filename_a in (None, "")
+    assert player.sidebar.count() == 0  # 없는 파일은 목록에 넣지 않음
 
 
 # ---- 오류 알림 (error_window — 빌드 앱은 앱의 예외 창) ----
