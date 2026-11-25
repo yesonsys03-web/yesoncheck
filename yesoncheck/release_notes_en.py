@@ -23,11 +23,13 @@ RELEASES = (
                 )),
                 ("Videos you bring in are listed too", (
                     "A video file dropped anywhere on the window goes into the Mov list — dropped on the video area or elsewhere "
-                    "in the window it opens and is added to the list (before, it only opened); dropped on the Mov list it is "
+                    "in the window it opens and is added to the list (before, one or two files only opened); dropped on the Mov list it is "
                     "only added to the list, not opened, as before.",
                     "A video opened by double-click in Finder or File Explorer, or with Open With, is also added to that window's "
                     "Mov list.",
-                    "The list you have stays and new videos are added at the end; a video already in the list is not added again.",
+                    "The list you have stays and new videos are added at the end. A video chosen with Open folder, dropped on the "
+                    "video area or elsewhere in the window, or opened by double-click is not added again if it is already in the "
+                    "list (one dropped on the Mov list is added as it is, as before).",
                     "Fixed: a list of videos or a folder brought in right after starting the app, while the shared settings (the "
                     "show list) were still loading, was cleared the moment loading finished.",
                 )),
