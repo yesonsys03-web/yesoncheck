@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
 )
 
-from yesoncheck import paths, sequence_scan, ui_text, video_list
+from yesoncheck import error_window, paths, sequence_scan, ui_text, video_list
 # PlayerSidebarMixin의 부모 믹스인 (북마크, 선택 재생, 공유 설정·작품 경로, 목록 다시 읽기, Seq 탭, 썸네일)
 from yesoncheck.sidebar_ab_buttons import SidebarAbButtonsMixin
 from yesoncheck.sidebar_all import SidebarAllMixin
@@ -66,23 +66,25 @@ def _frame_of_sequences(file_path, sequences):
     return any(paths.path_key(seq.dir) == key and (seq.base, seq.ext, seq.pad) == (base, ext, pad) for seq in sequences)
 
 
-def pick_folder_or_file(parent, title):
-    """(Mac) 기본 열기 창 하나에서 폴더나 파일 하나를 고르게 함 → 고른 경로, 취소면 빈 글.
+def pick_folders_or_files(parent, title):
+    """(Mac) 기본 열기 창(NSOpenPanel) 하나에서 폴더나 파일을 — 파일은 여러 개도 — 고르게 함 → 고른 경로 목록, 취소면 빈 목록.
 
-    QFileDialog의 정적 함수(getExistingDirectory·getOpenFileName)는 한쪽만 고르게 함. 파일 모드 AnyFile + 열기 모드로 띄우면 Qt가
-    Mac의 기본 창(NSOpenPanel)에 파일도 폴더도 고를 수 있게 넘김 — 2026-11-25 이 Mac(Qt 5.15.14)에서 창을 띄워 NSOpenPanel의 값을
-    읽어 확인: 파일 True · 폴더 True · 여러 개 False. 여러 개는 고르지 못함 (여러 파일은 끌어다 놓기).
+    Qt의 QFileDialog로는 '폴더도 파일도'와 '여러 개'를 함께 켤 수 없어 PyObjC(AppKit)로 창을 직접 띄움 (2026-11-25 이 Mac, Qt 5.15.14에서
+    창을 띄워 NSOpenPanel의 값으로 확인): 정적 함수는 한쪽만, 인스턴스의 AnyFile은 둘 다 되지만 하나만(여러 개 False — 처음에 이걸
+    썼다가 '파일 다중 선택이 안 돼'), ExistingFiles는 여러 개지만 파일만. 직접 띄운 창은 파일·폴더·여러 개가 모두 True이고, 창이 떠 있는
+    동안 Qt 타이머도 돎(재생이 멈추지 않음). 취소한 창도 URLs에 그때 보던 폴더를 돌려주므로 답(확인)을 본 뒤에만 읽음.
+    AppKit은 Mac 빌드에만 있음(lock의 pyobjc-framework-Cocoa) — 이 함수는 Mac에서만 부름. parent는 받기만 함(창은 앱 전체에 모달).
     """
-    dialog = QFileDialog(parent, title)
-    try:
-        dialog.setAcceptMode(QFileDialog.AcceptOpen)
-        dialog.setFileMode(QFileDialog.AnyFile)
-        if dialog.exec_() != QFileDialog.Accepted:
-            return ""
-        chosen = dialog.selectedFiles()
-        return chosen[0] if chosen else ""
-    finally:
-        dialog.deleteLater()
+    import AppKit  # 여기서만 불러옴: Windows 빌드에는 PyObjC가 없음
+
+    panel = AppKit.NSOpenPanel.openPanel()
+    panel.setCanChooseFiles_(True)
+    panel.setCanChooseDirectories_(True)
+    panel.setAllowsMultipleSelection_(True)
+    panel.setMessage_(title)
+    if panel.runModal() != AppKit.NSModalResponseOK:
+        return []
+    return [str(url.path()) for url in panel.URLs()]
 
 
 class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin, SidebarControlsMixin, SidebarRefreshMixin, SidebarSequencesMixin, SidebarAllMixin, SidebarSortMixin, SidebarOpenWithMixin, SidebarThumbnailsMixin, SidebarKeysMixin, SidebarAbButtonsMixin):
@@ -533,7 +535,7 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
     def open_folder_clicked(self):
         """'폴더 열기' 단추 — 단추 하나로 폴더도 파일도 (사용자 지시 2026-11-25).
 
-        Mac: 기본 열기 창 하나에서 폴더나 파일을 고름 (select_folder). 그 밖(Windows): 기본 창이 폴더와 파일을 함께 고르지 못해
+        Mac: 기본 열기 창 하나에서 폴더나 파일(여러 개)을 고름 (select_folder). 그 밖(Windows): 기본 창이 폴더와 파일을 함께 고르지 못해
         단추 바로 아래에 '폴더 고르기…'·'파일 고르기…'를 띄움 (옆의 북마크 단추와 같은 모양).
         """
         if one_dialog_picks_both():
@@ -553,11 +555,17 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
     def select_folder(self):
         """File → 폴더 열기…·I 키 (Mac은 '폴더 열기' 단추도).
 
-        Mac: 한 창에서 폴더나 파일 하나 — 폴더면 예전 그대로 그 폴더를 불러오고, 파일이면 그 파일만 가져옴 (open_picked_paths).
+        Mac: 한 창에서 폴더나 파일(여러 개) — 폴더면 예전 그대로 그 폴더를 불러오고, 파일이면 그 파일만 가져옴 (open_picked_paths).
+        창을 띄우지 못하면(PyObjC가 없는 환경 등) 트레이스백과 함께 오류 창 — 단추의 슬롯에서 예외가 새면 소스 실행의 앱이 죽음.
         그 밖: 예전 그대로 폴더 창 (파일은 단추의 '파일 고르기…').
         """
         if one_dialog_picks_both():
-            self.open_picked_paths([pick_folder_or_file(self, ui_text.text("sidebar.open_folder.pick"))])
+            try:
+                picked = pick_folders_or_files(self, ui_text.text("sidebar.open_folder.pick"))
+            except Exception:
+                error_window.show_unexpected("[폴더 열기]", "폴더나 파일을 고르는 창을 띄우지 못했습니다.")
+                return
+            self.open_picked_paths(picked)
             return
         folder_path = QFileDialog.getExistingDirectory(self, "Select Folder")
         folder_path = paths.normalize_native(folder_path)
@@ -572,7 +580,8 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
     def open_picked_paths(self, picked):
         """'폴더 열기'로 고른 경로들 (빈 글 = 취소).
 
-        폴더면 예전 그대로 그 폴더를 불러옴 (load_videos_from_folder — 한 창에서 고르는 폴더는 하나).
+        폴더면 예전 그대로 그 폴더를 불러옴 (load_videos_from_folder). 폴더는 한 번에 하나 — 폴더와 함께 다른 것(다른 폴더·파일)을
+        골랐으면 첫 폴더를 불러오고 나머지는 가져오지 않았다고 알림 (여러 폴더는 창에 끌어다 놓기).
         파일이면 그 파일만 가져옴 — 영상 영역에 놓을 때와 같은 규칙 (open_dropped_files: A로 열고 Mov 목록에 더함, 프레임이면 그 시퀀스).
         가져오지 못한 것은 창 하나로 알림 (고른 것을 조용히 빼지 않음 — 가져올 수 있는 것은 그대로 가져옴): 폴더로도 파일로도 확인되지
         않는 경로(그새 지워짐·공유가 끊김 — 폴더 읽기에 넘기지 않음: 그쪽은 읽기 전에 목록부터 비우고 '읽지 못한 폴더'로 기억함)와
@@ -581,10 +590,14 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         picked = [paths.normalize_native(path) for path in picked if path]
         if not picked:
             return
-        for path in picked:
-            if os.path.isdir(path):
-                self.load_videos_from_folder(path)
-                return
+        folders = [path for path in picked if os.path.isdir(path)]
+        if folders:
+            rest = [path for path in picked if path != folders[0]]
+            if rest:
+                names = "\n".join(os.path.basename(path.rstrip("/\\")) for path in rest)
+                QMessageBox.warning(self, "경고", f"폴더는 한 번에 하나만 불러옵니다. 함께 고른 것은 가져오지 않았습니다:\n{names}")
+            self.load_videos_from_folder(folders[0])
+            return
         files = [path for path in picked if os.path.isfile(path)]
         missing = [path for path in picked if path not in files]
         video_files = [path for path in files if self.is_video_file(path)]

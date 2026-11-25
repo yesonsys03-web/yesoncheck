@@ -1,13 +1,16 @@
 """'폴더 열기' 단추 하나로 폴더도 파일도 (사용자 지시 2026-11-25): 폴더를 고르면 예전 그대로, 파일을 고르면 그 파일만 가져옴.
 그리고 영상 영역·창 본문에 놓은 영상 파일도 Mov 목록에 보임 — 전에는 A로 열리기만 하고 목록에는 없었음(사이드바에 놓을 때만 보였음).
 
-고르는 창은 플랫폼마다 다름: Mac의 기본 열기 창은 한 창에서 폴더와 파일을 모두 고르게 할 수 있고(`pick_folder_or_file`),
+고르는 창은 플랫폼마다 다름: Mac의 기본 열기 창은 한 창에서 폴더와 파일을 모두(파일은 여러 개도) 고르게 할 수 있고
+(`pick_folders_or_files`),
 Windows의 기본 창은 그러지 못해 단추가 '폴더 고르기…'·'파일 고르기…' 두 항목을 띄움. 시험은 그 판단(`one_dialog_picks_both`)을
 바꿔 끼워 두 모양을 어느 플랫폼에서나 봄 — 진짜 창은 띄우지 않음(conftest의 dialogs와 아래 대역).
 예시 이름만 씀 (공개 저장소).
 """
 
 import os
+import sys
+import types
 
 import pytest
 from PyQt5.QtCore import Qt
@@ -20,7 +23,7 @@ from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_
 from yesoncheck import paths, player_sidebar, ui_text
 from yesoncheck.sequence_source import ImageSequenceCapture
 
-REAL_PICK = player_sidebar.pick_folder_or_file  # conftest의 dialogs가 이 이름을 대역으로 바꾸기 전의 진짜 함수
+REAL_PICK = player_sidebar.pick_folders_or_files  # conftest의 dialogs가 이 이름을 대역으로 바꾸기 전의 진짜 함수
 
 
 @pytest.fixture
@@ -154,16 +157,17 @@ def test_a_movie_dragged_anywhere_in_the_window_shows_in_the_list(player, dialog
 
 @pytest.fixture
 def one_dialog(monkeypatch):
-    """Mac의 모양: 기본 열기 창 하나에서 폴더나 파일을 고름. answers에 넣은 차례대로 창이 답하고(없으면 취소), asked에 창을 띄운 기록."""
+    """Mac의 모양: 기본 열기 창 하나에서 폴더나 파일(여러 개)을 고름. answers에 넣은 경로 목록을 차례대로 창이 답하고(없으면 취소),
+    asked에 창을 띄운 기록."""
     state = type("OneDialog", (), {})()
     state.answers, state.asked = [], []
 
     def pick(parent, title):
         state.asked.append(title)
-        return state.answers.pop(0) if state.answers else ""
+        return state.answers.pop(0) if state.answers else []
 
     monkeypatch.setattr(player_sidebar, "one_dialog_picks_both", lambda: True)
-    monkeypatch.setattr(player_sidebar, "pick_folder_or_file", pick)
+    monkeypatch.setattr(player_sidebar, "pick_folders_or_files", pick)
     return state
 
 
@@ -173,7 +177,7 @@ def test_picking_a_folder_loads_it_as_before(player, dialogs, one_dialog, tmp_pa
     dialogs.messages.clear()
     movie(tmp_path, "b.mov", folder="job")
     movie(tmp_path, "a.mov", folder="job")
-    one_dialog.answers.append(str(tmp_path / "job"))
+    one_dialog.answers.append([str(tmp_path / "job")])
 
     player.select_folder()
 
@@ -187,7 +191,7 @@ def test_picking_a_movie_file_brings_in_only_that_file(player, dialogs, one_dial
     """파일을 고르면 그 파일만 — 그 파일이 든 폴더의 다른 영상은 가져오지 않음. 영상 영역에 놓을 때와 같은 규칙(A로 열고 목록에 더함)."""
     wanted = movie(tmp_path, "wanted.mov", folder="job")
     movie(tmp_path, "other.mov", folder="job")
-    one_dialog.answers.append(wanted)
+    one_dialog.answers.append([wanted])
 
     player.select_folder()
 
@@ -201,7 +205,7 @@ def test_picking_a_movie_file_keeps_the_list_that_is_already_there(player, dialo
     player.load_videos_from_folder(str(tmp_path / "job"))
     dialogs.messages.clear()
     extra = movie(tmp_path, "extra.mov", folder="elsewhere")
-    one_dialog.answers.append(extra)
+    one_dialog.answers.append([extra])
 
     player.select_folder()
 
@@ -211,7 +215,7 @@ def test_picking_a_movie_file_keeps_the_list_that_is_already_there(player, dialo
 
 def test_picking_a_sequence_frame_opens_that_sequence(player, dialogs, one_dialog, tmp_path):
     folder = shot_folder(tmp_path)
-    one_dialog.answers.append(frame(folder, "tk1", 3))
+    one_dialog.answers.append([frame(folder, "tk1", 3)])
 
     player.select_folder()
 
@@ -226,7 +230,7 @@ def test_picking_a_file_that_is_not_a_video_or_a_frame_says_so(player, dialogs, 
     note = tmp_path / "notes" / "readme.txt"
     note.parent.mkdir()
     note.write_text("x")
-    one_dialog.answers.append(str(note))
+    one_dialog.answers.append([str(note)])
 
     player.select_folder()
 
@@ -254,7 +258,7 @@ def test_a_picked_path_that_is_gone_is_reported_and_the_list_stays(player, dialo
     opened = player.filename_a
     dialogs.messages.clear()
     gone = str(tmp_path / "gone.mov")
-    one_dialog.answers.append(gone)
+    one_dialog.answers.append([gone])
 
     player.select_folder()
 
@@ -265,10 +269,41 @@ def test_a_picked_path_that_is_gone_is_reported_and_the_list_stays(player, dialo
     assert mov_names(player) == ["s1.mov"] and dialogs.errors() == [dialogs.messages[0]]  # 읽지 못한 폴더로 남지 않음
 
 
+def test_picking_several_movie_files_brings_them_all_in(player, dialogs, one_dialog, tmp_path):
+    """Mac 창에서도 파일을 여러 개 고름 — 영상 영역에 여러 개를 놓을 때와 같은 규칙 (둘이면 A·B, 셋 이상이면 첫째만 A, 모두 목록에)."""
+    movies = [movie(tmp_path, f"{name}.mov", folder="job") for name in ("a", "b", "c")]
+    movie(tmp_path, "not-picked.mov", folder="job")
+    one_dialog.answers.append(movies[:2])
+    one_dialog.answers.append(movies)
+
+    player.select_folder()
+    assert player.filename_a == virtual(movies[0]) and player.filename_b == virtual(movies[1])
+    assert mov_names(player) == ["a.mov", "b.mov"] and dialogs.messages == []
+
+    player.select_folder()
+    assert mov_names(player) == ["a.mov", "b.mov", "c.mov"]  # 이미 있는 둘은 다시 넣지 않음
+    assert [title for _kind, title, _text in dialogs.messages] == ["완료", "파일 로드 완료"]
+
+
+def test_picking_a_folder_with_other_things_loads_that_folder_and_names_the_rest(player, dialogs, one_dialog, tmp_path):
+    """폴더는 한 번에 하나: 폴더와 함께 다른 것(다른 폴더·파일)을 고르면 첫 폴더를 불러오고 나머지는 가져오지 않았다고 알림."""
+    movie(tmp_path, "a.mov", folder="job")
+    movie(tmp_path, "z.mov", folder="other")
+    loose = movie(tmp_path, "loose.mov", folder="elsewhere")
+    one_dialog.answers.append([str(tmp_path / "job"), str(tmp_path / "other"), loose])
+
+    player.select_folder()
+
+    assert mov_names(player) == ["a.mov"]
+    assert [(kind, title) for kind, title, _text in dialogs.messages] == [("warning", "경고"), ("information", "폴더 로드 완료")]
+    said = dialogs.messages[0][2]
+    assert "other" in said and "loose.mov" in said and "job" not in said
+
+
 def test_the_button_opens_the_one_dialog_directly(player, dialogs, one_dialog, monkeypatch, tmp_path):
     monkeypatch.setattr(QMenu, "exec_", lambda *a, **k: pytest.fail("Mac에서는 메뉴를 띄우지 않음"))
     wanted = movie(tmp_path, "wanted.mov")
-    one_dialog.answers.append(wanted)
+    one_dialog.answers.append([wanted])
 
     player.openFolderButton.click()
 
@@ -279,33 +314,78 @@ def test_the_button_opens_the_one_dialog_directly(player, dialogs, one_dialog, m
 # ---------------------------------------------------------------- 고르는 창 자체 (Mac의 기본 창이 둘 다 고르게 하는 설정)
 
 
-class FakeExec:
-    """QFileDialog.exec_ 대역: 창의 설정을 적고 정해 둔 답을 돌려줌."""
+class FakePanel:
+    """NSOpenPanel 대역: 받은 설정을 적고, 정해 둔 답(확인·취소)과 고른 URL을 돌려줌."""
 
-    def __init__(self, monkeypatch, result, chosen):
-        self.seen = []
-        monkeypatch.setattr(QFileDialog, "exec_", lambda dialog: (self.seen.append(dialog), result)[1])
-        monkeypatch.setattr(QFileDialog, "selectedFiles", lambda dialog: list(chosen))
+    def __init__(self, response, chosen):
+        self.response, self.chosen, self.calls, self.shown = response, chosen, {}, 0
+
+    def __getattr__(self, name):
+        if not name.startswith("set"):
+            raise AttributeError(name)
+        return lambda value: self.calls.__setitem__(name, value)
+
+    def runModal(self):  # noqa: N802 (Objective-C 이름)
+        self.shown += 1
+        return self.response
+
+    def URLs(self):  # noqa: N802
+        return [types.SimpleNamespace(path=lambda chosen=chosen: chosen) for chosen in self.chosen]
 
 
-def test_the_one_dialog_is_the_native_open_dialog_in_any_file_mode(player, monkeypatch, tmp_path):
-    """Mac의 기본 열기 창은 '어떤 파일이든(AnyFile)' + 열기 모드일 때 파일과 폴더를 모두 고르게 함 (2026-11-25 이 Mac에서 창을 띄워
-    NSOpenPanel의 값으로 확인: 파일 True·폴더 True·여러 개 False). 파일 모드를 바꾸면 한쪽만 고르게 되므로 고정."""
-    fake = FakeExec(monkeypatch, QFileDialog.Accepted, [str(tmp_path / "job")])
+def fake_appkit(monkeypatch, response, chosen):
+    panel = FakePanel(response, chosen)
+    module = types.SimpleNamespace(NSOpenPanel=types.SimpleNamespace(openPanel=lambda: panel), NSModalResponseOK=1)
+    monkeypatch.setitem(sys.modules, "AppKit", module)
+    return panel
+
+
+def test_the_one_dialog_is_the_native_open_panel_that_picks_folders_and_several_files(player, monkeypatch):
+    """Mac의 기본 열기 창(NSOpenPanel)을 직접 띄움 — 파일·폴더·여러 개를 모두 켬. Qt의 QFileDialog로는 '폴더도 파일도'와 '여러 개'를
+    함께 켤 수 없음(AnyFile은 하나만, ExistingFiles는 파일만 — 2026-11-25 이 Mac에서 창을 띄워 NSOpenPanel의 값으로 확인)."""
+    panel = fake_appkit(monkeypatch, 1, ["/x/a.mov", "/x/b.mov"])
 
     chosen = REAL_PICK(player, "제목")
 
-    assert chosen == str(tmp_path / "job")
-    dialog = fake.seen[0]
-    assert dialog.fileMode() == QFileDialog.AnyFile and dialog.acceptMode() == QFileDialog.AcceptOpen
-    assert not dialog.testOption(QFileDialog.DontUseNativeDialog)  # Qt가 그린 창이 아니라 기본 창
-    assert dialog.windowTitle() == "제목" and dialog.parent() is player
+    assert chosen == ["/x/a.mov", "/x/b.mov"] and panel.shown == 1
+    assert panel.calls == {"setCanChooseFiles_": True, "setCanChooseDirectories_": True, "setAllowsMultipleSelection_": True,
+                           "setMessage_": "제목"}
 
 
-def test_the_one_dialog_returns_nothing_when_cancelled(player, monkeypatch, tmp_path):
-    FakeExec(monkeypatch, QFileDialog.Rejected, [str(tmp_path / "job")])
+def test_the_one_dialog_returns_nothing_when_cancelled(player, monkeypatch):
+    """취소하면 빈 목록 — 취소한 창도 URLs에 지금 폴더를 돌려주므로(이 Mac에서 확인) 답을 보고 읽어야 함."""
+    fake_appkit(monkeypatch, 0, ["/x/the-folder-it-was-showing"])
 
-    assert REAL_PICK(player, "제목") == ""
+    assert REAL_PICK(player, "제목") == []
+
+
+def test_the_real_open_panel_has_the_methods_the_dialog_uses():
+    """진짜 AppKit(Mac — PyObjC)에서 쓰는 이름이 맞는지: 창을 만들거나 띄우지 않고 클래스에 묻기만 함."""
+    AppKit = pytest.importorskip("AppKit", reason="PyObjC의 AppKit은 Mac에만 (Windows 빌드에는 없음)")  # noqa: N806
+
+    for selector in (b"setCanChooseFiles:", b"setCanChooseDirectories:", b"setAllowsMultipleSelection:", b"setMessage:",
+                     b"runModal", b"URLs"):
+        assert AppKit.NSOpenPanel.instancesRespondToSelector_(selector), selector
+    assert AppKit.NSModalResponseOK == 1
+
+
+def test_a_dialog_that_cannot_be_shown_is_reported_not_swallowed(player, dialogs, monkeypatch, tmp_path):
+    """창을 띄우다 실패하면(PyObjC가 없는 환경 등) 트레이스백과 함께 오류 창 — 조용히 아무 일도 없지 않고, 앱이 죽지도 않음."""
+    movie(tmp_path, "s1.mov", folder="job")
+    player.load_videos_from_folder(str(tmp_path / "job"))
+    dialogs.messages.clear()
+    monkeypatch.setattr(player_sidebar, "one_dialog_picks_both", lambda: True)
+
+    def broken(parent, title):
+        raise ImportError("No module named 'AppKit'")
+
+    monkeypatch.setattr(player_sidebar, "pick_folders_or_files", broken)
+
+    player.select_folder()
+
+    assert mov_names(player) == ["s1.mov"]
+    assert len(dialogs.messages) == 1 and dialogs.messages[0][0] == "critical"
+    assert "No module named 'AppKit'" in dialogs.messages[0][2] and "ImportError" in dialogs.messages[0][2]
 
 
 def test_only_the_mac_picks_both_in_one_dialog(monkeypatch):
@@ -328,7 +408,7 @@ def two_dialogs(monkeypatch):
         return (state.files.pop(0) if state.files else []), ""
 
     monkeypatch.setattr(player_sidebar, "one_dialog_picks_both", lambda: False)
-    monkeypatch.setattr(player_sidebar, "pick_folder_or_file", lambda *a: pytest.fail("Windows에서는 한 창으로 고르지 않음"))
+    monkeypatch.setattr(player_sidebar, "pick_folders_or_files", lambda *a: pytest.fail("Windows에서는 한 창으로 고르지 않음"))
     monkeypatch.setattr(QFileDialog, "getOpenFileNames", pick_files)
     return state
 
@@ -426,7 +506,7 @@ def test_the_two_choices_follow_the_ui_language(player, two_dialogs):
 
 def test_item_data_of_a_picked_file_is_its_path(player, dialogs, one_dialog, tmp_path):
     wanted = movie(tmp_path, "wanted.mov")
-    one_dialog.answers.append(wanted)
+    one_dialog.answers.append([wanted])
 
     player.select_folder()
 

@@ -96,10 +96,10 @@ def dialogs(monkeypatch):
 
     monkeypatch.setattr(QMessageBox, "exec_", box_exec)
     monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: rec.folders.pop(0) if rec.folders else "")
-    # '폴더 열기'의 Mac 창(한 창에서 폴더나 파일 — player_sidebar.pick_folder_or_file)도 같은 답 목록으로: 진짜 창을 띄우면 시험이 멈춤
+    # '폴더 열기'의 Mac 창(한 창에서 폴더나 파일 — player_sidebar.pick_folders_or_files)도 같은 답 목록으로: 진짜 창을 띄우면 시험이 멈춤
     from yesoncheck import player_sidebar
 
-    monkeypatch.setattr(player_sidebar, "pick_folder_or_file", lambda parent, title: rec.folders.pop(0) if rec.folders else "")
+    monkeypatch.setattr(player_sidebar, "pick_folders_or_files", lambda parent, title: [rec.folders.pop(0)] if rec.folders else [])
 
     def no_input(*args, **kwargs):
         raise AssertionError(f"시험 중 입력 창이 열렸습니다: {args[1:3]}")

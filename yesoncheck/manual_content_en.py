@@ -562,7 +562,7 @@ PAGES = (
                  "only sequences, the sidebar switches straight to the Seq tab.",
                  "If you choose a **file** instead of a folder in {{sidebar.open_folder}}, only that file is brought in, not its whole "
                  "folder — as when you drop a file onto the window, it opens in A and is added to the Mov list (a frame of an image "
-                 "sequence opens that sequence). On a Mac you choose a folder or one file in the same dialog. On Windows the button "
+                 "sequence opens that sequence). On a Mac you choose a folder, or one or more files, in the same dialog. On Windows the button "
                  "shows {{sidebar.open_folder.folder}} and {{sidebar.open_folder.files}} to choose from, and the {I} key and the "
                  "{{menu.file}} menu open the folder dialog.",
              )),
