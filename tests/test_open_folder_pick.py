@@ -105,16 +105,19 @@ def test_a_dropped_movie_is_added_to_the_list_that_is_already_there(player, dial
     assert dialogs.messages == []
 
 
-def test_a_dropped_movie_stays_listed_after_a_refresh_while_the_file_exists(player, dialogs, tmp_path):
-    mov = movie(tmp_path, "a.mov")
-    drop_files(player, "video", [mov])
+def test_dropped_movies_stay_listed_after_a_refresh_while_their_files_exist(player, dialogs, tmp_path):
+    """놓아서 들어온 영상은 '따로 넣은 파일' — 다시 읽어도 파일이 있는 동안 목록에 남고, 지워지면 빠짐.
+    지우는 것은 A로 열리지 않은 셋째: Windows는 열려 있는 파일을 지우지 못함 (첫 판은 A로 연 파일을 지워 Windows CI에서 실패)."""
+    movies = [movie(tmp_path, f"{name}.mov") for name in ("a", "b", "c")]
+    drop_files(player, "video", movies)
+    assert player.filename_a == virtual(movies[0]) and player.cap_b is None
 
     refresh(player)
-    assert mov_names(player) == ["a.mov"]
+    assert mov_names(player) == ["a.mov", "b.mov", "c.mov"]
 
-    os.remove(mov)
+    os.remove(movies[2])
     refresh(player)
-    assert mov_names(player) == []
+    assert mov_names(player) == ["a.mov", "b.mov"]
 
 
 def test_three_movies_all_listed_already_open_the_first_without_a_notice(player, dialogs, tmp_path):
