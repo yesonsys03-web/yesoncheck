@@ -7,6 +7,35 @@ entry for entry (no Qt). The deploy notes (GitHub Release, update banner) still 
 from yesoncheck.release_notes import Release
 
 RELEASES = (
+    Release("2.1.3", "2026-11-25",
+            "The one Open folder button in the sidebar now opens folders and files. A video you drop in or open by double-click "
+            "is also added to the Mov list, wherever you open it.",
+            (
+                ("Open folder now takes files too", (
+                    "Choosing a folder replaces the list with that folder's videos as before; choosing a **file** brings in just "
+                    "that file, not its whole folder — it opens in A (two files open in A and B) and is added to the Mov list. "
+                    "Choosing a frame of an image sequence opens that sequence.",
+                    "On a Mac you choose a folder, or one or more files, in the same dialog. One folder at a time.",
+                    "On Windows the button shows Choose a folder… and Choose files… right below it. The I key and File → Open "
+                    "folder… open the folder dialog as before.",
+                    "Anything that could not be brought in (a file that is neither a video nor a frame of an image sequence, a "
+                    "path that cannot be found) is reported in a window.",
+                )),
+                ("Videos you bring in are listed too", (
+                    "A video file dropped anywhere on the window goes into the Mov list — dropped on the video area or elsewhere "
+                    "in the window it opens and is added to the list (before, it only opened); dropped on the Mov list it is "
+                    "only added to the list, not opened, as before.",
+                    "A video opened by double-click in Finder or File Explorer, or with Open With, is also added to that window's "
+                    "Mov list.",
+                    "The list you have stays and new videos are added at the end; a video already in the list is not added again.",
+                    "Fixed: a list of videos or a folder brought in right after starting the app, while the shared settings (the "
+                    "show list) were still loading, was cleared the moment loading finished.",
+                )),
+                ("Manual", (
+                    "The ‘Getting started’, ‘Sidebar (video list)’, ‘Shows · folders · bookmarks’ and ‘Multiple windows · default video app’ "
+                    "pages now describe the above.",
+                )),
+            )),
     Release("2.1.2", "2026-11-24",
             "Preview files that Toon Boom Harmony writes into a scene's `frames` folder (`preview-…`) no longer show up in the "
             "sidebar list. Since they are not listed, the error window they caused in thumbnail mode no longer appears.",
