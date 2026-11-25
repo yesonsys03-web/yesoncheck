@@ -18,6 +18,7 @@ from tests.conftest import write_test_video
 from tests.test_sequence_frame_open import deliver_drag, drop_files, frame, mov_names, seq_identities, shot_folder, virtual
 from tests.test_sidebar_refresh import refresh
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
+from tests.test_work_season_job import season_player
 from yesoncheck import mac_open_panel, paths, player_sidebar, ui_text
 from yesoncheck.sequence_source import ImageSequenceCapture
 
@@ -179,6 +180,86 @@ def test_a_received_movie_already_in_the_list_is_not_listed_twice(player, dialog
     app_module.open_startup_file(player, str(tmp_path / "job" / "a.mov"))
 
     assert mov_names(player) == ["a.mov"] and dialogs.messages == []
+
+
+# 진짜 앱에서 받은 영상이 목록에 남지 않던 까닭 (2026-11-25, 이 Mac에서 진짜 앱을 파일 인자와 함께 켜서 확인): 창은 공유 설정을
+# 뒤에서 읽는 동안 먼저 뜨고 받은 파일도 그사이에 열림 → 공유 설정이 도착해 작품 고르기를 다시 채우면(reload_work_combo) 그 연쇄가
+# 'job을 고르지 않음 → 목록을 비움'까지 가서 방금 넣은 항목을 지웠음. 위의 시험들은 공유 설정을 먼저 읽은 창이라 이 차례를 타지 않음.
+
+
+def test_a_received_movie_survives_the_shared_settings_arriving_afterwards(player, dialogs, tmp_path):
+    from yesoncheck import app as app_module
+
+    mov = movie(tmp_path, "a.mov")
+    app_module.open_startup_file(player, mov)
+    assert mov_names(player) == ["a.mov"]
+
+    player.reload_work_combo()  # 공유 설정이 도착해 작품 고르기를 채움 (_on_shared_config_loaded가 부르는 것)
+
+    assert mov_names(player) == ["a.mov"] and player.filename_a == virtual(mov)
+    assert dialogs.messages == []
+
+
+def test_a_folder_opened_before_the_shared_settings_arrive_survives_too(player, dialogs, tmp_path):
+    """NAS가 느려 공유 설정이 늦게 오는 동안 폴더를 먼저 연 경우: 그 폴더의 목록과 썸네일 자리를 그대로 둠."""
+    movie(tmp_path, "s1.mov", folder="job")
+    movie(tmp_path, "s2.mov", folder="job")
+    player.load_videos_from_folder(str(tmp_path / "job"))
+    thumbnails_at = player.current_thumbnail_folder
+    assert thumbnails_at
+
+    player.reload_work_combo()
+
+    assert mov_names(player) == ["s1.mov", "s2.mov"]
+    assert player.current_thumbnail_folder == thumbnails_at and player.selected_folder_path == str(tmp_path / "job")
+
+
+def test_sequences_brought_in_before_the_shared_settings_arrive_survive_too(player, dialogs, tmp_path):
+    folder = shot_folder(tmp_path)
+    drop_files(player, "video", [frame(folder, "tk1", 3)])
+    assert "tk1.seq" in seq_identities(player)
+
+    player.reload_work_combo()
+
+    assert "tk1.seq" in seq_identities(player) and os.path.basename(player.filename_a) == "tk1.seq"
+
+
+def test_a_job_list_is_still_cleared_when_the_work_picker_is_refilled(new_player, dialogs, work_area):
+    """job에서 온 목록은 전처럼 비움 — 작품 고르기를 다시 채우면 고른 job이 풀리므로 (작품 경로 관리·공유 설정 폴더 변경 뒤)."""
+    player = season_player(new_player, work_area)
+    player.workComboBox.setCurrentText("BB")
+    player.seasonComboBox.setCurrentText("BB_Season1")
+    player.jobComboBox.setCurrentText("job_01")
+    assert mov_names(player) == ["a.mov"] and player.current_job_path
+
+    player.reload_work_combo()
+
+    assert mov_names(player) == [] and player.current_job_path is None and player.current_thumbnail_folder is None
+
+
+def test_changing_the_work_by_hand_still_clears_a_list_that_is_not_from_a_job(new_player, dialogs, work_area, tmp_path):
+    """사용자가 작품을 바꿔 job 고르기가 비는 것은 전 그대로 — 폴더로 불러온 목록도 비움 (바뀐 것은 코드가 고르기를 다시 채울 때뿐)."""
+    player = season_player(new_player, work_area)
+    player.reload_work_combo()  # 공유 설정이 도착했던 창 (다시 채우기가 끝나면 '채우는 중' 표시도 내려가 있어야 함)
+    movie(tmp_path, "s1.mov", folder="loose")
+    player.load_videos_from_folder(str(tmp_path / "loose"))
+    assert mov_names(player) == ["s1.mov"]
+
+    player.workComboBox.setCurrentText("BB")
+
+    assert mov_names(player) == []
+
+
+def test_a_failed_refill_does_not_leave_the_window_keeping_lists_forever(player, dialogs, monkeypatch, tmp_path):
+    """작품 고르기를 다시 채우다 오류가 나도 '채우는 중' 표시는 내려감 — 남으면 그 뒤로 job 고르기를 비워도 목록이 안 비워짐."""
+    def boom():
+        raise RuntimeError("시즌 목록을 읽다 실패")
+
+    monkeypatch.setattr(player, "update_season_list", boom)
+    with pytest.raises(RuntimeError):
+        player.reload_work_combo()
+
+    assert player._refilling_work_combo is False
 
 
 def test_a_received_sequence_frame_is_not_put_in_the_movie_list(player, dialogs, tmp_path):

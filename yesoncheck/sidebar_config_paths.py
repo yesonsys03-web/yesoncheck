@@ -434,16 +434,25 @@ class SidebarConfigPathsMixin:
         return True
 
     def reload_work_combo(self):
-        """작품 콤보박스를 self.work_paths로 다시 채웁니다."""
-        self.workComboBox.blockSignals(True)
-        self.workComboBox.clear()
-        self.workComboBox.addItem(self._first_work_item())
-        for work_name in sorted(self.work_paths.keys()):
-            self.workComboBox.addItem(work_name)
-        self.workComboBox.blockSignals(False)
-        self._update_shared_config_title()
-        self._sync_work_picker()  # 작품을 읽어 왔으면 사이드바의 작품 묶음을 보임 (sidebar_controls)
-        self.update_season_list()
+        """작품 콤보박스를 self.work_paths로 다시 채웁니다.
+
+        다시 채우면 시즌·job 고르기도 비워져 'job을 고르지 않음'이 됨 — 그동안 `_refilling_work_combo`를 세워, job에서 온 목록이
+        아니면 목록을 비우지 않게 함 (`_load_job_list`): 창은 공유 설정을 뒤에서 읽는 동안 먼저 뜨므로, 그사이 가져온 파일·폴더
+        (더블클릭으로 받은 영상, 끌어다 놓은 것, 폴더 열기)의 목록이 공유 설정이 도착하는 순간 지워졌음 (2026-11-25, 진짜 앱으로 확인).
+        """
+        self._refilling_work_combo = True
+        try:
+            self.workComboBox.blockSignals(True)
+            self.workComboBox.clear()
+            self.workComboBox.addItem(self._first_work_item())
+            for work_name in sorted(self.work_paths.keys()):
+                self.workComboBox.addItem(work_name)
+            self.workComboBox.blockSignals(False)
+            self._update_shared_config_title()
+            self._sync_work_picker()  # 작품을 읽어 왔으면 사이드바의 작품 묶음을 보임 (sidebar_controls)
+            self.update_season_list()
+        finally:
+            self._refilling_work_combo = False
 
     def save_work_paths(self, parent=None):
         """작품 경로를 공유 파일에 저장합니다. 실패하면 오류 창을 띄우고 False."""

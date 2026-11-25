@@ -263,6 +263,9 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         # 다른 job을 고르면 update_playlist가 읽은 (작품, 시즌, job)을 기억해 activated는 다시 읽지 않음 (한 번만 읽음)
         self._job_list_loaded_for = None
         self.jobComboBox.activated.connect(self._on_job_activated)
+        # 작품 고르기를 코드가 다시 채우는 중 (reload_work_combo — 공유 설정이 도착함·작품 경로를 고침): 그 연쇄의 'job을 고르지 않음'은
+        # job에서 온 목록이 아니면 목록을 비우지 않음 (_load_job_list)
+        self._refilling_work_combo = False
 
         self.installEventFilter(self)
 
