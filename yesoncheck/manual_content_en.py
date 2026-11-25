@@ -404,7 +404,7 @@ PAGES = (
                  "{{sidebar.works}} — choose show → season → job to put that job's videos into the list (shown only on PCs that "
                  "have loaded the shows). → [[library/works|Shows]]",
                  "{{sidebar.open_folder}} · {{sidebar.bookmarks}} ▾ · {{sidebar.refresh}} — choose a folder and put the videos and "
-                 "sequences in it into the list, or choose a file to bring in just that file ({I}) / "
+                 "sequences in it into the list ({I}), or choose a file to bring in just that file / "
                  "{{sidebar.bookmark.add}} · {{sidebar.bookmark.manage}} "
                  "([[library/bookmarks|Bookmarks]]) / read the list again ({F5}).",
                  "{{sidebar.mode.list}} · {{sidebar.mode.thumb}} — change how the list looks.",

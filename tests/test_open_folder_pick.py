@@ -246,14 +246,23 @@ def test_cancelling_the_dialog_does_nothing(player, dialogs, one_dialog, tmp_pat
     assert mov_names(player) == ["s1.mov"] and dialogs.messages == []
 
 
-def test_a_path_that_cannot_be_checked_goes_to_the_folder_reader_which_reports_it(player, dialogs, one_dialog, tmp_path):
-    """고른 것이 파일로 확인되지 않으면(지워짐·공유가 끊김) 폴더 읽기에 넘김 — 그쪽이 사유를 창으로 알림 (조용히 넘어가지 않음)."""
-    one_dialog.answers.append(str(tmp_path / "gone"))
+def test_a_picked_path_that_is_gone_is_reported_and_the_list_stays(player, dialogs, one_dialog, tmp_path):
+    """고른 것이 폴더로도 파일로도 확인되지 않으면(그새 지워짐·공유가 끊김) 무엇을 찾지 못했는지 알리고 보던 목록은 그대로 —
+    폴더 읽기에 넘기면 읽기 전에 목록부터 비우고 '읽지 못한 폴더'로 기억해 버림 (리뷰에서 잡음)."""
+    movie(tmp_path, "s1.mov", folder="job")
+    player.load_videos_from_folder(str(tmp_path / "job"))
+    opened = player.filename_a
+    dialogs.messages.clear()
+    gone = str(tmp_path / "gone.mov")
+    one_dialog.answers.append(gone)
 
     player.select_folder()
 
-    assert player.cap_a is None
-    assert len(dialogs.errors()) == 1
+    assert mov_names(player) == ["s1.mov"] and player.filename_a == opened
+    assert [(kind, title) for kind, title, _text in dialogs.messages] == [("warning", "경고")]
+    assert paths.normalize_native(gone) in dialogs.messages[0][2]  # 어느 경로인지 통째로
+    refresh(player)
+    assert mov_names(player) == ["s1.mov"] and dialogs.errors() == [dialogs.messages[0]]  # 읽지 못한 폴더로 남지 않음
 
 
 def test_the_button_opens_the_one_dialog_directly(player, dialogs, one_dialog, monkeypatch, tmp_path):
@@ -359,6 +368,34 @@ def test_choosing_the_files_item_brings_in_the_picked_files_only(player, dialogs
     assert player.filename_a == virtual(first) and player.filename_b == virtual(second)  # 영상 영역에 둘을 놓을 때처럼
     assert mov_names(player) == ["a.mov", "b.mov"]
     assert dialogs.messages == []
+
+
+def test_picked_files_that_can_be_brought_in_are_and_the_rest_are_named(player, dialogs, two_dialogs, tmp_path):
+    """여러 개를 골랐는데 일부만 가져올 수 있으면: 되는 것은 가져오고, 안 되는 것은 이름을 알림 (고른 것을 조용히 빼지 않음)."""
+    good = movie(tmp_path, "a.mov", folder="job")
+    note = tmp_path / "job" / "readme.txt"
+    note.write_text("x")
+    gone = str(tmp_path / "job" / "gone.mov")
+    two_dialogs.files.append([good, str(note), gone])
+
+    player.open_folder_menu().actions()[1].trigger()
+
+    assert player.filename_a == virtual(good) and mov_names(player) == ["a.mov"]
+    assert [(kind, title) for kind, title, _text in dialogs.messages] == [("warning", "경고")]
+    said = dialogs.messages[0][2]
+    assert "readme.txt" in said and paths.normalize_native(gone) in said and "a.mov" not in said
+
+
+def test_a_lone_frame_picked_with_a_sequence_frame_is_named(player, dialogs, two_dialogs, tmp_path):
+    """한 장뿐인 프레임은 시퀀스가 아니라 가져오지 않음 — 함께 고른 시퀀스는 열고, 가져오지 않은 한 장은 이름을 알림."""
+    folder = shot_folder(tmp_path)
+    two_dialogs.files.append([frame(folder, "tk1", 2), frame(folder, "lone", 1)])
+
+    player.open_folder_menu().actions()[1].trigger()
+
+    assert os.path.basename(player.filename_a) == "tk1.seq"
+    assert [(kind, title) for kind, title, _text in dialogs.messages] == [("warning", "경고")]
+    assert "lone-0001.tga" in dialogs.messages[0][2] and "tk1-0002.tga" not in dialogs.messages[0][2]
 
 
 def test_cancelling_the_files_dialog_does_nothing(player, dialogs, two_dialogs):

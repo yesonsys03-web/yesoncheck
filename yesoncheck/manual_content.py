@@ -370,8 +370,8 @@ PAGES = (
          (
              ("fig", "sidebar", "사이드바", (
                  "{{sidebar.works}} — 작품 → 시즌 → job을 고르면 그 job의 영상이 목록에 들어옵니다 (작품을 읽어 온 PC에서만 보임). → [[library/works|작품]]",
-                 "{{sidebar.open_folder}} · {{sidebar.bookmarks}} ▾ · {{sidebar.refresh}} — 폴더를 골라 그 안의 영상·시퀀스를 목록에 넣거나, 파일을 "
-                 "골라 그 파일만 가져옵니다 ({I}) / "
+                 "{{sidebar.open_folder}} · {{sidebar.bookmarks}} ▾ · {{sidebar.refresh}} — 폴더를 골라 그 안의 영상·시퀀스를 목록에 넣거나({I}), 파일을 "
+                 "골라 그 파일만 가져옵니다 / "
                  "{{sidebar.bookmark.add}} · {{sidebar.bookmark.manage}} ([[library/bookmarks|북마크]]) / 목록을 다시 읽습니다 ({F5}).",
                  "{{sidebar.mode.list}} · {{sidebar.mode.thumb}} — 목록 모양을 바꿉니다.",
                  "**Mov · Seq · All 탭** — 영상 / 이미지 시퀀스 / 둘 다. All 탭 옆의 `↕`는 **정렬** 단추입니다. → [[sidebar/sort|정렬]]",

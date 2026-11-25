@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
 )
 
-from yesoncheck import paths, ui_text, video_list
+from yesoncheck import paths, sequence_scan, ui_text, video_list
 # PlayerSidebarMixin의 부모 믹스인 (북마크, 선택 재생, 공유 설정·작품 경로, 목록 다시 읽기, Seq 탭, 썸네일)
 from yesoncheck.sidebar_ab_buttons import SidebarAbButtonsMixin
 from yesoncheck.sidebar_all import SidebarAllMixin
@@ -53,6 +53,17 @@ def one_dialog_picks_both():
     Windows의 기본 창은 폴더 고르기와 파일 고르기가 따로라(한 창에서 둘 다는 못 함) '폴더 열기' 단추가 두 항목을 띄움.
     """
     return sys.platform == "darwin"
+
+
+def _frame_of_sequences(file_path, sequences):
+    """file_path가 sequences(SeqInfo들) 중 하나의 프레임인지 — 이름 규칙으로만 봄 (디스크를 읽지 않음)."""
+    folder, name = os.path.split(file_path)
+    parsed = sequence_scan.parse_frame_name(name)
+    if parsed is None:
+        return False
+    base, _number, ext, pad = parsed
+    key = paths.path_key(folder)
+    return any(paths.path_key(seq.dir) == key and (seq.base, seq.ext, seq.pad) == (base, ext, pad) for seq in sequences)
 
 
 def pick_folder_or_file(parent, title):
@@ -561,26 +572,35 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
     def open_picked_paths(self, picked):
         """'폴더 열기'로 고른 경로들 (빈 글 = 취소).
 
-        파일로 확인되는 것뿐이면 그 파일만 가져옴 — 영상 영역에 놓을 때와 같은 규칙 (open_dropped_files: A로 열고 Mov 목록에 더함,
-        프레임이면 그 시퀀스). 영상도 시퀀스 프레임도 아니면 무엇을 가져오지 못했는지 창으로 알림.
-        그 밖(폴더, 또는 지금 파일로 확인되지 않는 경로 — 지워짐·공유가 끊김)은 예전 그대로 폴더 불러오기에 넘김: 읽지 못하면 그쪽이
-        사유를 창으로 알림 (여기서 조용히 버리지 않음).
+        폴더면 예전 그대로 그 폴더를 불러옴 (load_videos_from_folder — 한 창에서 고르는 폴더는 하나).
+        파일이면 그 파일만 가져옴 — 영상 영역에 놓을 때와 같은 규칙 (open_dropped_files: A로 열고 Mov 목록에 더함, 프레임이면 그 시퀀스).
+        가져오지 못한 것은 창 하나로 알림 (고른 것을 조용히 빼지 않음 — 가져올 수 있는 것은 그대로 가져옴): 폴더로도 파일로도 확인되지
+        않는 경로(그새 지워짐·공유가 끊김 — 폴더 읽기에 넘기지 않음: 그쪽은 읽기 전에 목록부터 비우고 '읽지 못한 폴더'로 기억함)와
+        영상도 시퀀스 프레임도 아닌 파일(한 장뿐인 프레임 포함).
         """
         picked = [paths.normalize_native(path) for path in picked if path]
         if not picked:
             return
         for path in picked:
-            if not os.path.isfile(path):
+            if os.path.isdir(path):
                 self.load_videos_from_folder(path)
                 return
-        video_files = [path for path in picked if self.is_video_file(path)]
-        others = [path for path in picked if not self.is_video_file(path)]
+        files = [path for path in picked if os.path.isfile(path)]
+        missing = [path for path in picked if path not in files]
+        video_files = [path for path in files if self.is_video_file(path)]
+        others = [path for path in files if not self.is_video_file(path)]
         frames = self._dropped_frames(others)
-        if not video_files and not frames:
-            names = "\n".join(os.path.basename(path) for path in others)
-            QMessageBox.warning(self, "경고", f"영상 파일이나 이미지 시퀀스의 프레임이 아니어서 가져오지 않았습니다:\n{names}")
-            return
-        self.open_dropped_files(video_files, frames)
+        unusable = [path for path in others if not _frame_of_sequences(path, frames.sequences)]
+        problems = []
+        if missing:
+            problems.append("찾을 수 없어 가져오지 않았습니다:\n" + "\n".join(missing))
+        if unusable:
+            problems.append("영상 파일이나 이미지 시퀀스의 프레임이 아니어서 가져오지 않았습니다:\n"
+                            + "\n".join(os.path.basename(path) for path in unusable))
+        if problems:
+            QMessageBox.warning(self, "경고", "\n\n".join(problems))
+        if video_files or frames:
+            self.open_dropped_files(video_files, frames)
 
     def load_videos_from_folder(self, folder_path):
         self.playlist.clear()
