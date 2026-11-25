@@ -69,7 +69,8 @@ PAGES = (
              ("h", "영상 열기", "open"),
              ("table", ("방법", "결과"), (
                  ("파일을 창에 끌어다 놓기",
-                  "하나면 A에, 둘이면 A와 B에 열립니다. 셋 이상이면 첫 파일이 A에 열리고 나머지는 목록에 더해집니다."),
+                  "하나면 A에, 둘이면 A와 B에 열립니다. 셋 이상이면 첫 파일이 A에 열립니다. 놓은 파일은 모두 Mov 목록에도 "
+                  "더해집니다 (지금 목록은 그대로, 이미 목록에 있는 영상은 다시 넣지 않음)."),
                  ("폴더를 창에 끌어다 놓기",
                   "목록이 그 폴더의 영상으로 **바뀌고** 첫 영상이 A에 열립니다. 폴더는 북마크에도 저절로 더해집니다."),
                  ("Mov 목록 위에 끌어다 놓기",
@@ -369,7 +370,8 @@ PAGES = (
          (
              ("fig", "sidebar", "사이드바", (
                  "{{sidebar.works}} — 작품 → 시즌 → job을 고르면 그 job의 영상이 목록에 들어옵니다 (작품을 읽어 온 PC에서만 보임). → [[library/works|작품]]",
-                 "{{sidebar.open_folder}} · {{sidebar.bookmarks}} ▾ · {{sidebar.refresh}} — 폴더를 골라 그 안의 영상·시퀀스를 목록에 넣습니다 ({I}) / "
+                 "{{sidebar.open_folder}} · {{sidebar.bookmarks}} ▾ · {{sidebar.refresh}} — 폴더를 골라 그 안의 영상·시퀀스를 목록에 넣거나, 파일을 "
+                 "골라 그 파일만 가져옵니다 ({I}) / "
                  "{{sidebar.bookmark.add}} · {{sidebar.bookmark.manage}} ([[library/bookmarks|북마크]]) / 목록을 다시 읽습니다 ({F5}).",
                  "{{sidebar.mode.list}} · {{sidebar.mode.thumb}} — 목록 모양을 바꿉니다.",
                  "**Mov · Seq · All 탭** — 영상 / 이미지 시퀀스 / 둘 다. All 탭 옆의 `↕`는 **정렬** 단추입니다. → [[sidebar/sort|정렬]]",
@@ -493,6 +495,10 @@ PAGES = (
              ("list", (
                  "사이드바의 {{sidebar.open_folder}}({I} — {{menu.file}} 메뉴에도)로 폴더를 고르거나, 폴더를 창에 끌어다 놓습니다.",
                  "그 폴더의 영상은 Mov 탭에, 이미지 시퀀스는 Seq 탭에 들어갑니다. 시퀀스만 있는 폴더면 Seq 탭으로 바로 넘어갑니다.",
+                 "{{sidebar.open_folder}}에서 폴더 대신 **파일**을 고르면 그 폴더 전체가 아니라 그 파일만 가져옵니다 — 파일을 창에 끌어다 놓을 "
+                 "때처럼 A에 열리고 Mov 목록에 더해집니다(이미지 시퀀스의 프레임이면 그 시퀀스). Mac은 같은 창에서 폴더나 파일 하나를 "
+                 "고릅니다. Windows는 단추를 누르면 뜨는 {{sidebar.open_folder.folder}}·{{sidebar.open_folder.files}} 중에서 고르고, {I} 키와 "
+                 "{{menu.file}} 메뉴는 폴더를 고르는 창입니다.",
              )),
              ("h", "북마크", "bookmarks"),
              ("fig", "bookmarks", "북마크 관리 창", ()),

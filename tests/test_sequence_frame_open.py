@@ -604,13 +604,14 @@ def spy_window_drops(monkeypatch, player):
 
 
 def test_window_drop_opens_a_movie_as_a(player, dialogs, tmp_path):
-    """영상 파일 하나를 창 본문에 놓으면 영상 영역에 놓을 때처럼 A로 열림 (목록은 건드리지 않음, 안내 창 없음)."""
+    """영상 파일 하나를 창 본문에 놓으면 영상 영역에 놓을 때처럼 A로 열리고 Mov 목록에도 들어감 (안내 창 없음).
+    2026-11-25 전에는 열리기만 하고 목록에는 없었음 — 자세한 규칙은 tests/test_open_folder_pick.py."""
     mov = write_test_video(str(tmp_path / "movs" / "a.mov"))
 
     drop_files(player, "window", [mov])
 
     assert player.filename_a == virtual(mov) and player.cap_a is not None and player.cap_a.isOpened()
-    assert player.cap_b is None and player.sidebar.count() == 0
+    assert player.cap_b is None and mov_names(player) == ["a.mov"]
     assert dialogs.messages == []
 
 
@@ -624,15 +625,16 @@ def test_window_drop_opens_two_movies_as_a_and_b(player, dialogs, tmp_path):
     assert dialogs.messages == []
 
 
-def test_window_drop_of_three_movies_opens_the_first_and_lists_the_rest(player, dialogs, tmp_path):
+def test_window_drop_of_three_movies_opens_the_first_and_lists_them_all(player, dialogs, tmp_path):
+    """셋 이상이면 첫째를 A로 열고 모두 목록에 (2026-11-25 전에는 첫째를 뺀 나머지만 목록에)."""
     movies = [write_test_video(str(tmp_path / "movs" / f"{name}.mov")) for name in ("a", "b", "c")]
 
     drop_files(player, "window", movies)
 
     assert player.filename_a == virtual(movies[0]) and player.cap_b is None
-    assert mov_names(player) == ["b.mov", "c.mov"]
-    assert dialogs.messages == [("information", "완료", "2개의 파일이 사이드바에 추가되었습니다."),  # 목록에 넣을 때 (영상 영역에 놓을 때와 같은 안내)
-                                ("information", "파일 로드 완료", "첫 번째 파일이 Video A에 로드되고, 2개의 파일이 사이드바에 추가되었습니다.")]
+    assert mov_names(player) == ["a.mov", "b.mov", "c.mov"]
+    assert dialogs.messages == [("information", "완료", "3개의 파일이 사이드바에 추가되었습니다."),  # 목록에 넣을 때 (영상 영역에 놓을 때와 같은 안내)
+                                ("information", "파일 로드 완료", "첫 번째 파일이 Video A에 로드되고, 3개의 파일이 사이드바에 추가되었습니다.")]
 
 
 def test_window_drop_of_a_movie_folder_fills_the_list_and_opens_the_first(player, dialogs, tmp_path):

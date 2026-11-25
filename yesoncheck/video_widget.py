@@ -586,24 +586,8 @@ class CustomVideoWidget(QGraphicsView):
                 elif not read_failed:
                     QMessageBox.warning(parent, "경고", "폴더에 지원되는 비디오 파일이 없습니다.")
             else:
-                # 개별 파일들만 있는 경우
-                if frames:
-                    # 프레임: 영상 파일이 함께 없으면 영상 파일을 놓을 때처럼 그 시퀀스를 열고 Seq 탭을 보여 줌. 영상이 함께 있으면 영상은 아래에서 예전대로,
-                    # 시퀀스는 Seq 목록에만 더함
-                    parent._add_dropped_frames(frames, show_tab=not video_files, open_them=not video_files)
-                if len(video_files) == 1:
-                    parent.open_file('A', video_files[0])
-                elif len(video_files) == 2:
-                    # 두 개 파일: Video A와 B에 각각 로드
-                    parent.open_file('A', video_files[0])
-                    parent.open_file('B', video_files[1])
-                elif len(video_files) > 2:
-                    # 여러 파일: 첫 번째는 Video A에, 나머지는 사이드바에 추가
-                    parent.open_file('A', video_files[0])
-                    remaining_files = video_files[1:]
-                    parent.add_files_to_sidebar(remaining_files)
-                    if remaining_files:
-                        QMessageBox.information(parent, "파일 로드 완료", f"첫 번째 파일이 Video A에 로드되고, {len(remaining_files)}개의 파일이 사이드바에 추가되었습니다.")
+                # 개별 파일들만 있는 경우: 열고 목록에도 넣음 ('폴더 열기'로 고른 파일과 같은 한 곳)
+                parent.open_dropped_files(video_files, frames)
             
             # 폴더와 함께 놓은 프레임의 시퀀스는 Seq 목록에만 더함 (폴더 처리는 위에서 예전대로)
             if has_folder and frames:
