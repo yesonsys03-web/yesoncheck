@@ -2,15 +2,13 @@
 그리고 영상 영역·창 본문에 놓은 영상 파일도 Mov 목록에 보임 — 전에는 A로 열리기만 하고 목록에는 없었음(사이드바에 놓을 때만 보였음).
 
 고르는 창은 플랫폼마다 다름: Mac의 기본 열기 창은 한 창에서 폴더와 파일을 모두(파일은 여러 개도) 고르게 할 수 있고
-(`pick_folders_or_files`),
+(`mac_open_panel.pick_folders_or_files` — 창 자체의 시험은 tests/test_mac_open_panel.py),
 Windows의 기본 창은 그러지 못해 단추가 '폴더 고르기…'·'파일 고르기…' 두 항목을 띄움. 시험은 그 판단(`one_dialog_picks_both`)을
 바꿔 끼워 두 모양을 어느 플랫폼에서나 봄 — 진짜 창은 띄우지 않음(conftest의 dialogs와 아래 대역).
 예시 이름만 씀 (공개 저장소).
 """
 
 import os
-import sys
-import types
 
 import pytest
 from PyQt5.QtCore import Qt
@@ -20,10 +18,8 @@ from tests.conftest import write_test_video
 from tests.test_sequence_frame_open import deliver_drag, drop_files, frame, mov_names, seq_identities, shot_folder, virtual
 from tests.test_sidebar_refresh import refresh
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
-from yesoncheck import paths, player_sidebar, ui_text
+from yesoncheck import mac_open_panel, paths, player_sidebar, ui_text
 from yesoncheck.sequence_source import ImageSequenceCapture
-
-REAL_PICK = player_sidebar.pick_folders_or_files  # conftest의 dialogs가 이 이름을 대역으로 바꾸기 전의 진짜 함수
 
 
 @pytest.fixture
@@ -162,12 +158,12 @@ def one_dialog(monkeypatch):
     state = type("OneDialog", (), {})()
     state.answers, state.asked = [], []
 
-    def pick(parent, title):
+    def pick(title):
         state.asked.append(title)
         return state.answers.pop(0) if state.answers else []
 
     monkeypatch.setattr(player_sidebar, "one_dialog_picks_both", lambda: True)
-    monkeypatch.setattr(player_sidebar, "pick_folders_or_files", pick)
+    monkeypatch.setattr(mac_open_panel, "pick_folders_or_files", pick)
     return state
 
 
@@ -300,6 +296,55 @@ def test_picking_a_folder_with_other_things_loads_that_folder_and_names_the_rest
     assert "other" in said and "loose.mov" in said and "job" not in said
 
 
+def test_the_disk_root_picked_with_a_folder_is_named_by_its_path(player, dialogs, one_dialog, tmp_path):
+    """함께 고른 것이 이름 없는 경로(디스크의 맨 위)여도 알림에 빈 줄이 아니라 그 경로가 보임."""
+    movie(tmp_path, "a.mov", folder="job")
+    root = os.path.abspath(os.sep)
+    one_dialog.answers.append([str(tmp_path / "job"), root])
+
+    player.select_folder()
+
+    assert mov_names(player) == ["a.mov"]
+    assert dialogs.messages[0][2].splitlines()[-1] == paths.normalize_native(root)
+
+
+def test_a_picked_name_that_differs_only_in_unicode_form_is_found(player, dialogs, one_dialog, monkeypatch, tmp_path):
+    """창이 준 경로가 그대로는 없으면 이름의 정규화(NFC·NFD)만 다른 실제 경로를 찾아 그것을 엶 — NFS 공유는 한글 이름을 바이트 그대로
+    견줘서, 디스크에 NFD로 저장된 이름은 NFC 경로로는 없다고 나옴 (받은 첫 파일을 열 때와 같은 도우미 paths.find_unicode_variant)."""
+    real = movie(tmp_path, "wanted.mov", folder="job")
+    as_given = str(tmp_path / "job" / "as-the-panel-gave-it.mov")  # 그대로는 없는 경로
+    asked = []
+    monkeypatch.setattr(paths, "find_unicode_variant", lambda path, *a, **k: (asked.append(path), real if path == as_given else None)[1])
+    one_dialog.answers.append([as_given])
+
+    player.select_folder()
+
+    assert asked == [paths.normalize_native(as_given)]
+    assert player.filename_a == virtual(real) and mov_names(player) == ["wanted.mov"]
+    assert dialogs.messages == []
+
+
+def test_an_update_closing_this_window_cancels_the_open_panel_and_nothing_is_opened(player, dialogs, monkeypatch, tmp_path):
+    """열기 창이 떠 있는 동안 다른 창의 업데이트가 이 창을 닫으면: 떠 있는 창을 취소로 닫고(Qt 대화 상자가 아니라 reject로는 안 닫힘 —
+    안 닫으면 그 업데이트가 90초 뒤 멈춤), 창이 닫히는 중이니 그 뒤 돌아온 답으로 아무것도 열지 않음."""
+    wanted = movie(tmp_path, "wanted.mov")
+    cancelled = []
+    monkeypatch.setattr(player_sidebar, "one_dialog_picks_both", lambda: True)
+    monkeypatch.setattr(mac_open_panel, "cancel_running", lambda: (cancelled.append(True), 1)[1])
+
+    def pick(title):
+        player.close_for_update()  # 창이 떠 있는 동안 온 닫기 요청
+        return [wanted]  # (취소가 늦어 답이 돌아왔더라도)
+
+    monkeypatch.setattr(mac_open_panel, "pick_folders_or_files", pick)
+
+    player.select_folder()
+
+    assert cancelled == [True]
+    assert player.cap_a is None and player.sidebar.count() == 0
+    assert dialogs.messages == []
+
+
 def test_the_button_opens_the_one_dialog_directly(player, dialogs, one_dialog, monkeypatch, tmp_path):
     monkeypatch.setattr(QMenu, "exec_", lambda *a, **k: pytest.fail("Mac에서는 메뉴를 띄우지 않음"))
     wanted = movie(tmp_path, "wanted.mov")
@@ -314,61 +359,6 @@ def test_the_button_opens_the_one_dialog_directly(player, dialogs, one_dialog, m
 # ---------------------------------------------------------------- 고르는 창 자체 (Mac의 기본 창이 둘 다 고르게 하는 설정)
 
 
-class FakePanel:
-    """NSOpenPanel 대역: 받은 설정을 적고, 정해 둔 답(확인·취소)과 고른 URL을 돌려줌."""
-
-    def __init__(self, response, chosen):
-        self.response, self.chosen, self.calls, self.shown = response, chosen, {}, 0
-
-    def __getattr__(self, name):
-        if not name.startswith("set"):
-            raise AttributeError(name)
-        return lambda value: self.calls.__setitem__(name, value)
-
-    def runModal(self):  # noqa: N802 (Objective-C 이름)
-        self.shown += 1
-        return self.response
-
-    def URLs(self):  # noqa: N802
-        return [types.SimpleNamespace(path=lambda chosen=chosen: chosen) for chosen in self.chosen]
-
-
-def fake_appkit(monkeypatch, response, chosen):
-    panel = FakePanel(response, chosen)
-    module = types.SimpleNamespace(NSOpenPanel=types.SimpleNamespace(openPanel=lambda: panel), NSModalResponseOK=1)
-    monkeypatch.setitem(sys.modules, "AppKit", module)
-    return panel
-
-
-def test_the_one_dialog_is_the_native_open_panel_that_picks_folders_and_several_files(player, monkeypatch):
-    """Mac의 기본 열기 창(NSOpenPanel)을 직접 띄움 — 파일·폴더·여러 개를 모두 켬. Qt의 QFileDialog로는 '폴더도 파일도'와 '여러 개'를
-    함께 켤 수 없음(AnyFile은 하나만, ExistingFiles는 파일만 — 2026-11-25 이 Mac에서 창을 띄워 NSOpenPanel의 값으로 확인)."""
-    panel = fake_appkit(monkeypatch, 1, ["/x/a.mov", "/x/b.mov"])
-
-    chosen = REAL_PICK(player, "제목")
-
-    assert chosen == ["/x/a.mov", "/x/b.mov"] and panel.shown == 1
-    assert panel.calls == {"setCanChooseFiles_": True, "setCanChooseDirectories_": True, "setAllowsMultipleSelection_": True,
-                           "setMessage_": "제목"}
-
-
-def test_the_one_dialog_returns_nothing_when_cancelled(player, monkeypatch):
-    """취소하면 빈 목록 — 취소한 창도 URLs에 지금 폴더를 돌려주므로(이 Mac에서 확인) 답을 보고 읽어야 함."""
-    fake_appkit(monkeypatch, 0, ["/x/the-folder-it-was-showing"])
-
-    assert REAL_PICK(player, "제목") == []
-
-
-def test_the_real_open_panel_has_the_methods_the_dialog_uses():
-    """진짜 AppKit(Mac — PyObjC)에서 쓰는 이름이 맞는지: 창을 만들거나 띄우지 않고 클래스에 묻기만 함."""
-    AppKit = pytest.importorskip("AppKit", reason="PyObjC의 AppKit은 Mac에만 (Windows 빌드에는 없음)")  # noqa: N806
-
-    for selector in (b"setCanChooseFiles:", b"setCanChooseDirectories:", b"setAllowsMultipleSelection:", b"setMessage:",
-                     b"runModal", b"URLs"):
-        assert AppKit.NSOpenPanel.instancesRespondToSelector_(selector), selector
-    assert AppKit.NSModalResponseOK == 1
-
-
 def test_a_dialog_that_cannot_be_shown_is_reported_not_swallowed(player, dialogs, monkeypatch, tmp_path):
     """창을 띄우다 실패하면(PyObjC가 없는 환경 등) 트레이스백과 함께 오류 창 — 조용히 아무 일도 없지 않고, 앱이 죽지도 않음."""
     movie(tmp_path, "s1.mov", folder="job")
@@ -376,10 +366,10 @@ def test_a_dialog_that_cannot_be_shown_is_reported_not_swallowed(player, dialogs
     dialogs.messages.clear()
     monkeypatch.setattr(player_sidebar, "one_dialog_picks_both", lambda: True)
 
-    def broken(parent, title):
+    def broken(title):
         raise ImportError("No module named 'AppKit'")
 
-    monkeypatch.setattr(player_sidebar, "pick_folders_or_files", broken)
+    monkeypatch.setattr(mac_open_panel, "pick_folders_or_files", broken)
 
     player.select_folder()
 
@@ -408,7 +398,7 @@ def two_dialogs(monkeypatch):
         return (state.files.pop(0) if state.files else []), ""
 
     monkeypatch.setattr(player_sidebar, "one_dialog_picks_both", lambda: False)
-    monkeypatch.setattr(player_sidebar, "pick_folders_or_files", lambda *a: pytest.fail("Windows에서는 한 창으로 고르지 않음"))
+    monkeypatch.setattr(mac_open_panel, "pick_folders_or_files", lambda *a: pytest.fail("Windows에서는 한 창으로 고르지 않음"))
     monkeypatch.setattr(QFileDialog, "getOpenFileNames", pick_files)
     return state
 
