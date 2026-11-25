@@ -19,7 +19,7 @@ from tests.test_sequence_frame_open import deliver_drag, drop_files, frame, mov_
 from tests.test_sidebar_refresh import refresh
 from tests.test_work_paths_ui import make_config, new_player  # noqa: F401 (new_player: fixture)
 from tests.test_work_season_job import season_player
-from yesoncheck import mac_open_panel, paths, player_sidebar, ui_text
+from yesoncheck import mac_open_panel, paths, player_playback, player_sidebar, ui_text
 from yesoncheck.sequence_source import ImageSequenceCapture
 
 
@@ -227,14 +227,57 @@ def test_sequences_brought_in_before_the_shared_settings_arrive_survive_too(play
 def test_a_job_list_is_still_cleared_when_the_work_picker_is_refilled(new_player, dialogs, work_area):
     """job에서 온 목록은 전처럼 비움 — 작품 고르기를 다시 채우면 고른 job이 풀리므로 (작품 경로 관리·공유 설정 폴더 변경 뒤)."""
     player = season_player(new_player, work_area)
-    player.workComboBox.setCurrentText("BB")
-    player.seasonComboBox.setCurrentText("BB_Season1")
-    player.jobComboBox.setCurrentText("job_01")
+    pick_job(player)
     assert mov_names(player) == ["a.mov"] and player.current_job_path
 
     player.reload_work_combo()
 
     assert mov_names(player) == [] and player.current_job_path is None and player.current_thumbnail_folder is None
+
+
+def pick_job(player, job="job_01"):
+    player.workComboBox.setCurrentText("BB")
+    player.seasonComboBox.setCurrentText("BB_Season1")
+    player.jobComboBox.setCurrentText(job)
+
+
+def test_a_folder_opened_over_a_job_list_survives_the_refill(new_player, dialogs, work_area, tmp_path):
+    """job의 목록을 보다가 폴더를 열었으면 보이는 것은 그 폴더의 목록 — 작품 고르기를 다시 채워도 남김. 'job에서 온 목록인지'는
+    전에 job을 고른 적이 있는지가 아니라 지금 목록의 출처로 가름 (리뷰에서 잡음: current_job_path는 폴더를 열어도 남음)."""
+    player = season_player(new_player, work_area)
+    pick_job(player)
+    movie(tmp_path, "s1.mov", folder="loose")
+    player.load_videos_from_folder(str(tmp_path / "loose"))
+    assert mov_names(player) == ["s1.mov"]
+
+    player.reload_work_combo()
+
+    assert mov_names(player) == ["s1.mov"] and player.selected_folder_path == str(tmp_path / "loose")
+    assert player.current_job_path is None  # 고른 job은 풀림
+
+
+def test_a_job_that_could_not_be_read_is_forgotten_when_the_work_picker_is_refilled(new_player, dialogs, work_area, monkeypatch):
+    """job 폴더에 닿지 못하면 그 job을 기억해 둠(연결이 돌아오면 새로고침으로 목록이 생기게) — 작품 고르기를 다시 채우면 고른 job이
+    풀리므로 그 기억도 지움: 안 지우면 다음 새로고침이 고르지도 않은 옛 job의 영상을 목록에 넣음 (리뷰에서 잡음)."""
+    player = season_player(new_player, work_area)
+    job_path = os.path.join(player.get_work_path("BB"), "BB_Season1", "job_01")
+    real_stat = os.stat
+
+    def stat(path, *args, **kwargs):
+        if isinstance(path, str) and paths.path_key(path) == paths.path_key(job_path):
+            raise OSError(5, "Input/output error", path)
+        return real_stat(path, *args, **kwargs)
+
+    player.workComboBox.setCurrentText("BB")
+    player.seasonComboBox.setCurrentText("BB_Season1")  # job 고르기가 채워진 뒤에 끊김 (채울 때 읽는 폴더 목록은 그대로)
+    monkeypatch.setattr(player_playback.os, "stat", stat)
+    player.jobComboBox.setCurrentText("job_01")
+    assert [source.kind for source in player._sidebar_sources] == ["job"] and mov_names(player) == []
+    assert len(dialogs.errors()) == 1
+
+    player.reload_work_combo()
+
+    assert player._sidebar_sources == {}
 
 
 def test_changing_the_work_by_hand_still_clears_a_list_that_is_not_from_a_job(new_player, dialogs, work_area, tmp_path):

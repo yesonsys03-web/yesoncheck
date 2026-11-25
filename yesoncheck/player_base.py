@@ -264,7 +264,7 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         self._job_list_loaded_for = None
         self.jobComboBox.activated.connect(self._on_job_activated)
         # 작품 고르기를 코드가 다시 채우는 중 (reload_work_combo — 공유 설정이 도착함·작품 경로를 고침): 그 연쇄의 'job을 고르지 않음'은
-        # job에서 온 목록이 아니면 목록을 비우지 않음 (_load_job_list)
+        # 목록에 job에서 온 것이 없으면 목록을 비우지 않음 (_load_job_list — _sidebar_sources의 출처로 가름)
         self._refilling_work_combo = False
 
         self.installEventFilter(self)
