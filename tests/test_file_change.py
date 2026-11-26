@@ -148,7 +148,8 @@ def test_note_at_failure_when_the_file_cannot_be_checked_says_so(tmp_path, monke
     note, unchecked, trace = file_change.note_at_failure(opened, problem, path)
 
     assert note is None and unchecked.startswith(f"{file_change.UNCHECKED_HEADLINE} — PermissionError: ")
-    assert "\n" not in unchecked and path in unchecked
+    # (경로 전체가 아니라 파일 이름으로 봄: OSError의 글은 경로를 repr로 적어 Windows에서는 역슬래시가 두 겹)
+    assert "\n" not in unchecked and "shot.mov" in unchecked
     assert trace.startswith("Traceback (most recent call last)") and "PermissionError" in trace
 
 
