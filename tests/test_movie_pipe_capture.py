@@ -22,7 +22,7 @@ from tests.prores_clips import (
     BYTE_EXACT, HEIGHT, TOLERANCE_422, WIDTH, byte_diff_stats, frame_alignment_problem, frame_number, make_audio_first,
     make_chroma_clip, make_numbered_clip, make_truncated, read_all_frames, stats_summary,
 )
-from yesoncheck import error_window, external_tools, movie_pipe_source
+from yesoncheck import error_window, external_tools, file_change, movie_pipe_source
 from yesoncheck.movie_pipe_source import (
     FAILURE_HEADLINE, READAHEAD_FRAMES, FFmpegPipeCapture, MovieProbe, PipeCaptureError, probe_movie,
 )
@@ -88,9 +88,20 @@ def audio_first(tmp_path_factory):
 
 
 @pytest.fixture
-def windows(monkeypatch, qapp):
+def notices(monkeypatch, qapp):
+    """알림 창(error_window.show_notice — 본문 text + 자세히 details)을 띄우지 않고 (글, 자세히, 부른 스레드)로 기록
+    (연 뒤 다시 쓰인 파일의 도중 실패)."""
+    shown = []
+    monkeypatch.setattr(error_window, "show_notice", lambda text, details: shown.append(
+        SimpleNamespace(text=text, details=details, thread=threading.current_thread())))
+    yield shown
+    qapp.processEvents()
+
+
+@pytest.fixture
+def windows(monkeypatch, qapp, notices):
     """오류 창(error_window.show_window)을 띄우지 않고 (글, 부른 스레드)로 기록. 끝날 때 남은 Qt 이벤트를 비워
-    (바꿔치기가 살아 있는 동안) 다른 시험에서 진짜 창이 뜨지 않게."""
+    (바꿔치기가 살아 있는 동안) 다른 시험에서 진짜 창이 뜨지 않게. (알림 창도 함께 막음 — notices)"""
     shown = []
     monkeypatch.setattr(error_window, "show_window",
                         lambda text: shown.append(SimpleNamespace(text=text, thread=threading.current_thread())))
@@ -335,6 +346,79 @@ def test_kill_mid_read_is_failure_not_eof(prores_clip, transport, qapp, windows,
         assert len(windows) == 1
         assert windows[0].thread is threading.main_thread()
         assert prores_clip in windows[0].text
+    finally:
+        cap.release()
+
+
+def test_a_file_rewritten_while_open_is_explained_in_plain_words(tmp_path, qapp, windows, notices, capsys):
+    """열어 둔 영상 파일이 다시 쓰이면(다시 렌더링) 긴 오류 창 대신 알림 창 — 본문은 쉬운 말뿐(무슨 일인지와 할 일), 기술적인
+    원인(ffmpeg 파이프·명령·stderr)은 '자세히'와 기록에 그대로 (사용자 보고 2026-11-26 — Mac 네이티브 캡처와 같은 규칙: file_change).
+    파일을 고치는 것은 ffmpeg가 끝난 뒤: Windows는 다른 프로세스가 열어 둔 파일을 못 고칠 수 있음."""
+    clip = str(tmp_path / "shot.mov")
+    make_numbered_clip(clip, count=COUNT)
+    cap = FFmpegPipeCapture(clip, probe_movie(clip))
+    try:
+        for i in range(10):
+            ok, frame = cap.read()
+            assert ok and frame_number(frame) == i
+        session = cap._session
+        session.proc.kill()  # 읽던 ffmpeg가 끊김
+        assert wait_for(lambda: session.proc.poll() is not None)
+        with open(clip, "wb") as fh:  # 같은 이름으로 다시 쓰기 시작함 (앞부분만)
+            fh.write(b"\0" * 4096)
+
+        extra = 0
+        while cap.read()[0]:  # 전송에 남은 정상 프레임을 다 준 뒤에야 죽음
+            extra += 1
+            assert extra <= READAHEAD_FRAMES + KILL_SLACK
+        assert not cap.isOpened()
+
+        err = capsys.readouterr().err
+        assert err.count(file_change.REWRITTEN_HEADLINE) == 1 and err.count(FAILURE_HEADLINE) == 1
+        assert f"{movie_pipe_source.LOG_PREFIX} {file_change.REWRITTEN_HEADLINE}" in err
+        assert err.index(file_change.REWRITTEN_HEADLINE) < err.index(file_change.TECHNICAL_HEADER) < err.index(FAILURE_HEADLINE)
+        assert notices == []  # 창은 read 안이 아니라 Qt 루프에서
+        qapp.processEvents()
+        assert windows == [] and len(notices) == 1  # 오류 창이 아니라 알림 창 하나
+        notice = notices[0]
+        assert notice.thread is threading.main_thread()
+        assert notice.text.startswith(f"{file_change.REWRITTEN_HEADLINE}\n{file_change.REWRITTEN_ADVICE}\n")
+        assert f"파일: {clip}" in notice.text and "바뀐 것: 크기 " in notice.text and "→ 4KB" in notice.text  # 4096바이트
+        assert FAILURE_HEADLINE not in notice.text and "ffmpeg" not in notice.text  # 본문에는 기술 글이 없음
+        assert notice.details.startswith(f"{FAILURE_HEADLINE}.\n원인: ")
+        assert "PipeCaptureError" in notice.details and "ffmpeg stderr:" in notice.details
+    finally:
+        cap.release()
+
+
+def test_a_failure_while_the_file_cannot_be_checked_keeps_the_error_window(tmp_path, qapp, windows, notices, capsys, monkeypatch):
+    """실패한 때 파일을 확인하지 못하면(NAS 연결 끊김·권한) '다시 쓰였다'고 하지 않음 — 예전 오류 창 그대로, 확인하지 못한 사유는
+    그 창의 끝과 기록에. read 안이라 예외를 내지 않음."""
+    clip = str(tmp_path / "shot.mov")
+    make_numbered_clip(clip, count=COUNT)
+    cap = FFmpegPipeCapture(clip, probe_movie(clip))
+    try:
+        assert cap.read()[0]
+
+        def refused(target):
+            raise PermissionError(13, "Permission denied", target)
+
+        monkeypatch.setattr(file_change, "stamp", refused)  # 연 뒤로는 파일을 확인할 수 없음
+        session = cap._session
+        session.proc.kill()
+        assert wait_for(lambda: session.proc.poll() is not None)
+        extra = 0
+        while cap.read()[0]:
+            extra += 1
+            assert extra <= READAHEAD_FRAMES + KILL_SLACK
+        assert not cap.isOpened()
+
+        err = capsys.readouterr().err
+        assert file_change.REWRITTEN_HEADLINE not in err and err.count(FAILURE_HEADLINE) == 1
+        assert file_change.UNCHECKED_HEADLINE in err and "PermissionError" in err
+        qapp.processEvents()
+        assert notices == [] and len(windows) == 1 and windows[0].text.startswith(f"{FAILURE_HEADLINE}.\n파일: {clip}\n원인: ")
+        assert file_change.UNCHECKED_HEADLINE in windows[0].text and "PermissionError" in windows[0].text
     finally:
         cap.release()
 

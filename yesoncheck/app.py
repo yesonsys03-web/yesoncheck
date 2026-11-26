@@ -136,6 +136,18 @@ class _ErrorDialog(QObject):
         finally:
             self.is_open = False
 
+    def show_notice(self, text, details):
+        """알림 창(error_window.show_notice — 본문 text + 기록 파일 경로, 기술 정보 details는 자세히 칸). show_text처럼 한 번에 하나만."""
+        if self.is_open:
+            first_line = text.strip().splitlines()[0] if text.strip() else ""
+            print(f"(오류 창이 이미 열려 있어 이 오류는 로그에만 남깁니다: {first_line})", file=sys.stderr, flush=True)
+            return
+        self.is_open = True
+        try:
+            error_window.notice_box(f"{text}\n\n로그: {self.log_path}", details)
+        finally:
+            self.is_open = False
+
 
 def make_excepthook(log_path):
     """sys.excepthook: 예외는 항상 스택 트레이스째 로그(stderr)에 남기고, 오류 창은 GUI 스레드에서 하나씩.

@@ -5,6 +5,11 @@ mac_app_events(파일 열기·앱 다시 열기)·player_base(GL 뷰포트 폴�
 경로를 붙이고, 이미 떠 있으면 기록에만 — 같은 실패가 되풀이돼도 창이 쌓이지 않음), 그 창이 없으면(소스 실행) 같은 제목(TITLE)의
 QMessageBox.critical. 트레이스백은 창에 끝 DETAILS_LIMIT 글자만(무엇이 실패했는지 — 앞의 글 — 는 그대로), 기록에는 전부.
 GUI 스레드에서 부를 것.
+
+알림 창(show_notice — 2026-11-26): 오류라기보다 사용자가 할 일이 있는 상황(열어 둔 영상이 다시 렌더링됨 — file_change)에 씀. 본문은
+쉬운 말뿐이고 기술 정보(원인·트레이스백)는 'Show Details…' 단추 뒤의 스크롤되는 칸에 전부 — 오류 창처럼 본문에 넣으면 창이 화면만큼
+길어져(트레이스백 3000자 — 실측 높이 1400px) 정작 읽어야 할 첫 줄이 묻힘. 경고 아이콘, 빌드 앱이면 오류 창과 같은 규칙(기록 파일
+경로·한 번에 하나).
 """
 
 import sys
@@ -15,6 +20,8 @@ from PyQt5.QtWidgets import QMessageBox
 
 TITLE = "YesonCheck 오류"  # 앱의 예외 창(app._ErrorDialog)과 같은 제목
 DETAILS_LIMIT = 3000  # 오류 창에 보이는 트레이스백의 끝 글자 수 (예외 글이 끝에 있음 — 기록에는 전부)
+DETAILS_HINT = "기술 정보는 아래 'Show Details…' 단추를 누르면 보입니다."  # 알림 창 본문의 끝 줄 (단추 글자는 Qt의 것)
+BOX_TITLE_PROPERTY = "ycTitle"  # macOS의 QMessageBox는 창 제목을 버림 — 시험·실행 시험이 읽는 속성 (player_update와 같은 이름)
 
 
 def show_error(prefix: str, text: str) -> None:
@@ -42,6 +49,27 @@ def show_window(text: str) -> None:
         dialog.show_text(text)
     else:
         QMessageBox.critical(None, TITLE, text)
+
+
+def show_notice(text: str, details: str) -> None:
+    """알림 창 (모듈 설명): 본문 text(쉬운 말) + 'Show Details…'를 누르면 펼쳐지는 details(기술 정보 전부). 기록은 부른 쪽이.
+    빌드 앱이면 앱의 예외 창 객체를 거쳐(기록 파일 경로를 붙이고, 창이 이미 떠 있으면 기록에만), 없으면(소스 실행) 바로 띄움."""
+    dialog = getattr(sys.excepthook, "dialog", None)
+    if dialog is not None:
+        dialog.show_notice(text, details)
+    else:
+        notice_box(text, details)
+
+
+def notice_box(text: str, details: str) -> None:
+    """경고 아이콘의 창: 본문 text + DETAILS_HINT, 자세히 칸에 details. 닫을 때까지 기다림 (show_notice·app._ErrorDialog가 부름)."""
+    box = QMessageBox(QMessageBox.Warning, TITLE, f"{text}\n\n{DETAILS_HINT}", QMessageBox.Ok)
+    box.setProperty(BOX_TITLE_PROPERTY, TITLE)
+    box.setDetailedText(details)
+    try:
+        box.exec_()
+    finally:
+        box.deleteLater()
 
 
 def report_from_handler(prefix: str, context: str) -> None:

@@ -86,7 +86,7 @@ from fractions import Fraction
 
 import cv2
 
-from yesoncheck import ui_text
+from yesoncheck import file_change, ui_text
 from yesoncheck.frame_handles import NativeHandle, wrap_native
 from yesoncheck.mac_native_gate import NATIVE_MODE_ENV
 from yesoncheck.movie_pipe_source import PLAY_LOG_PREFIX
@@ -457,6 +457,8 @@ class NativeVTCapture:
         if probe.width < 1 or probe.height < 1 or (probe.nb_frames or 0) < 1 or probe.avg is None or probe.r is None:
             raise NativeCaptureError(f"네이티브로 열 수 없는 probe입니다 (크기·프레임 수·프레임 속도가 있어야 함): {probe}", path)
         self._path = path
+        # 연 때의 파일 모습 — 도중 실패 때 '연 뒤에 다시 쓰였는지(다시 렌더링)' 견줌 (_die). 애셋을 만들기 전에 적음
+        self._opened, self._stamp_problem = file_change.stamp_at_open(path)
         self._count = probe.nb_frames
         self._fps = float(probe.avg)
         self._width = probe.width
@@ -680,7 +682,9 @@ class NativeVTCapture:
 
     def _die(self, reason):
         """죽음 전이 뒤의 뒤처리 (read가 _lock 밖에서 한 번): 링 비움 → 세션 stop(큐 비움 — 읽기 스레드가 cancelReading) → 기록 한 번 → 오류 창은 Qt
-        루프에서 한 번. _lock을 스스로 잡으므로 _lock을 쥔 채 부르면 안 된다. 예외를 내지 않음 (read 안 — B 방식)."""
+        루프에서 한 번. _lock을 스스로 잡으므로 _lock을 쥔 채 부르면 안 된다. 예외를 내지 않음 (read 안 — B 방식).
+        연 뒤 파일이 다시 쓰였으면(다시 렌더링 — file_change) 오류 창 대신 쉬운 말의 알림 창(파이프의 _report_rewritten) — 탈출구
+        안내는 없음(디코더를 바꿔도 같은 일 — 다시 열어야 함)."""
         with self._lock:
             self._ring.clear()  # 죽은 캡처는 더 읽지 않음 — 잠긴 버퍼(4K 8장 ~266MB)를 붙들지 않게
             self._target = None
@@ -690,12 +694,18 @@ class NativeVTCapture:
         except Exception:
             _last_resort(f"AVAssetReader를 멈추지 못했습니다: {self._path}")
         try:
+            note, unchecked = file_change.note_at_failure(self._opened, self._stamp_problem, self._path)
             context = f"{NATIVE_FAILURE_HEADLINE}.\n파일: {self._path}\n원인: {reason}"
-            details = _STACK_HEADER + "".join(traceback.format_stack()).rstrip()
+            details = _STACK_HEADER + "".join(traceback.format_stack()).rstrip() + unchecked
         except Exception:
             _last_resort(f"{NATIVE_FAILURE_HEADLINE} — 알릴 글을 만들지 못했습니다: {self._path}\n원인: {reason}")
             return
-        _report_failure(context, details)
+        if note is None:
+            _report_failure(context, details)
+            return
+        from yesoncheck import movie_pipe_source  # (이 모듈은 PLAY_LOG_PREFIX만 모듈 수준에서 가져옴)
+
+        movie_pipe_source._report_rewritten(NATIVE_LOG_PREFIX, note, f"{NATIVE_FAILURE_HEADLINE}.\n원인: {reason}\n\n{details}")
 
 
 def _report_failure(context, details):
