@@ -87,26 +87,33 @@ def audio_first(tmp_path_factory):
     return path
 
 
+class _Shown(list):
+    """windows 픽스처의 기록: 오류 창은 이 목록 자체에, 알림 창(error_window.show_notice)은 notices에."""
+
+    def __init__(self):
+        super().__init__()
+        self.notices = []
+
+
 @pytest.fixture
-def notices(monkeypatch, qapp):
-    """알림 창(error_window.show_notice — 본문 text + 자세히 details)을 띄우지 않고 (글, 자세히, 부른 스레드)로 기록
-    (연 뒤 다시 쓰인 파일의 도중 실패)."""
-    shown = []
-    monkeypatch.setattr(error_window, "show_notice", lambda text, details: shown.append(
+def windows(monkeypatch, qapp):
+    """오류 창(error_window.show_window)을 띄우지 않고 (글, 부른 스레드)로 기록. 끝날 때 남은 Qt 이벤트를 비워
+    (바꿔치기가 살아 있는 동안) 다른 시험에서 진짜 창이 뜨지 않게. 알림 창(error_window.show_notice — 연 뒤 다시 쓰인 파일의 도중
+    실패)도 여기서 함께 막아 `.notices`에 (글, 자세히, 부른 스레드)로 모음 — 이 픽스처만 가져다 쓰는 다른 시험 파일
+    (test_movie_pipe_transport)에서도 진짜 알림 창이 뜨지 않게 (notices 픽스처에 기대지 않음)."""
+    shown = _Shown()
+    monkeypatch.setattr(error_window, "show_window",
+                        lambda text: shown.append(SimpleNamespace(text=text, thread=threading.current_thread())))
+    monkeypatch.setattr(error_window, "show_notice", lambda text, details: shown.notices.append(
         SimpleNamespace(text=text, details=details, thread=threading.current_thread())))
     yield shown
     qapp.processEvents()
 
 
 @pytest.fixture
-def windows(monkeypatch, qapp, notices):
-    """오류 창(error_window.show_window)을 띄우지 않고 (글, 부른 스레드)로 기록. 끝날 때 남은 Qt 이벤트를 비워
-    (바꿔치기가 살아 있는 동안) 다른 시험에서 진짜 창이 뜨지 않게. (알림 창도 함께 막음 — notices)"""
-    shown = []
-    monkeypatch.setattr(error_window, "show_window",
-                        lambda text: shown.append(SimpleNamespace(text=text, thread=threading.current_thread())))
-    yield shown
-    qapp.processEvents()
+def notices(windows):
+    """알림 창의 기록 (windows 픽스처가 막고 모은 것)."""
+    return windows.notices
 
 
 # ---------------------------------------------------------------- 도구

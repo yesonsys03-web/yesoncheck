@@ -96,23 +96,29 @@ def alpha_clip(tmp_path_factory):
     return path
 
 
-@pytest.fixture
-def notices(monkeypatch, qapp):
-    """알림 창(error_window.show_notice — 본문 text + 자세히 details)을 띄우지 않고 기록 (연 뒤 다시 쓰인 파일의 도중 실패)."""
-    shown = []
-    monkeypatch.setattr(error_window, "show_notice", lambda text, details: shown.append(SimpleNamespace(text=text, details=details)))
-    yield shown
-    qapp.processEvents()
+class _Shown(list):
+    """windows 픽스처의 기록: 오류 창은 이 목록 자체에, 알림 창(error_window.show_notice)은 notices에."""
+
+    def __init__(self):
+        super().__init__()
+        self.notices = []
 
 
 @pytest.fixture
-def windows(monkeypatch, qapp, notices):
+def windows(monkeypatch, qapp):
     """오류 창(error_window.show_window)을 띄우지 않고 글로 기록. 끝날 때 남은 Qt 이벤트를 비워 진짜 창이 뜨지 않게.
-    (알림 창도 함께 막음 — notices)"""
-    shown = []
+    알림 창(error_window.show_notice — 연 뒤 다시 쓰인 파일의 도중 실패)도 여기서 함께 막아 `.notices`에 (글, 자세히)로 모음."""
+    shown = _Shown()
     monkeypatch.setattr(error_window, "show_window", lambda text: shown.append(text))
+    monkeypatch.setattr(error_window, "show_notice", lambda text, details: shown.notices.append(SimpleNamespace(text=text, details=details)))
     yield shown
     qapp.processEvents()
+
+
+@pytest.fixture
+def notices(windows):
+    """알림 창의 기록 (windows 픽스처가 막고 모은 것)."""
+    return windows.notices
 
 
 # ---------------------------------------------------------------- 도구
