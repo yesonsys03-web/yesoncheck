@@ -418,8 +418,47 @@ def test_a_failure_while_the_file_cannot_be_checked_keeps_the_error_window(tmp_p
         assert file_change.UNCHECKED_HEADLINE in err and "PermissionError" in err
         qapp.processEvents()
         assert notices == [] and len(windows) == 1 and windows[0].text.startswith(f"{FAILURE_HEADLINE}.\n파일: {clip}\n원인: ")
-        assert file_change.UNCHECKED_HEADLINE in windows[0].text and "PermissionError" in windows[0].text
+        head, tail = windows[0].text.split("\n\n", 1)
+        assert head.splitlines()[-1].startswith(f"{file_change.UNCHECKED_HEADLINE} — PermissionError: ")  # 머리 쪽(잘리지 않는 곳)에 한 줄
+        # 창의 끝은 예전처럼 ffmpeg의 명령·stderr — 확인의 트레이스백이 그 뒤에 붙어 밀어내지 않음 (기록에는 있음)
+        assert "Traceback (most recent call last)" not in tail.split("ffmpeg stderr:")[1] and "Traceback (most recent call last)" in err
     finally:
+        cap.release()
+
+
+def test_a_failure_does_not_wait_for_storage_that_does_not_answer(tmp_path, qapp, windows, notices, capsys, monkeypatch):
+    """저장소(NAS)가 멈춘 채 난 실패: 파일이 다시 쓰였는지의 확인이 끝나지 않아도 read()는 곧 돌아오고(화면이 멈추지 않음) 예전
+    오류 창이 뜸 — 확인하지 못한 사유 한 줄과 함께 (리뷰: 캡처의 30초 한도가 바로 이 경우를 위한 것)."""
+    clip = str(tmp_path / "shot.mov")
+    make_numbered_clip(clip, count=COUNT)
+    cap = FFmpegPipeCapture(clip, probe_movie(clip))
+    gate = threading.Event()
+
+    def stalled(target):
+        gate.wait(20)
+        raise OSError("시험 끝")
+
+    try:
+        assert cap.read()[0]
+        monkeypatch.setattr(file_change, "stamp", stalled)
+        monkeypatch.setattr(file_change, "CHECK_TIMEOUT_S", 0.2)
+        session = cap._session
+        session.proc.kill()
+        assert wait_for(lambda: session.proc.poll() is not None)
+        started = time.monotonic()
+        extra = 0
+        while cap.read()[0]:
+            extra += 1
+            assert extra <= READAHEAD_FRAMES + KILL_SLACK
+        waited = time.monotonic() - started
+        assert not cap.isOpened() and waited < 5, f"죽는 read가 {waited:.1f}초 걸렸습니다"
+
+        assert capsys.readouterr().err.count(FAILURE_HEADLINE) == 1
+        qapp.processEvents()
+        assert notices == [] and len(windows) == 1
+        assert f"{file_change.UNCHECKED_HEADLINE} — 0.2초 안에 파일을 확인하지 못함" in windows[0].text.split("\n\n", 1)[0]
+    finally:
+        gate.set()
         cap.release()
 
 

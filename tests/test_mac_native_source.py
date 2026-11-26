@@ -555,8 +555,11 @@ def test_a_failure_while_the_file_cannot_be_checked_keeps_the_technical_notice(t
         assert file_change.REWRITTEN_HEADLINE not in err and err.count(NATIVE_FAILURE_HEADLINE) == 1
         assert "파일이 다시 쓰였는지 확인하지 못했습니다" in err and "PermissionError" in err
         qapp.processEvents()
-        assert notices == [] and len(windows) == 1 and windows[0].startswith(NATIVE_FAILURE_HEADLINE)
-        assert "파일이 다시 쓰였는지 확인하지 못했습니다" in windows[0] and windows[0].rstrip().endswith("\n" + NATIVE_ESCAPE_HINT)
+        assert notices == [] and len(windows) == 1
+        assert windows[0].startswith(f"{NATIVE_FAILURE_HEADLINE}.\n파일: {path}\n원인: 시험이 낸 실패\n"
+                                     f"{file_change.UNCHECKED_HEADLINE} — PermissionError: ")  # 사유 한 줄은 머리 쪽(잘리지 않는 곳)에
+        assert windows[0].rstrip().endswith("\n" + NATIVE_ESCAPE_HINT)
+        assert "Traceback (most recent call last)" in err and err.index("Traceback") < err.index(STACK_MARK)  # 확인의 트레이스백은 기록에
     finally:
         cap.release()
 

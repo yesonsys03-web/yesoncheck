@@ -6,6 +6,8 @@
 """
 
 import os
+import threading
+import time
 
 import pytest
 
@@ -85,6 +87,7 @@ def test_the_note_says_what_happened_and_what_to_do_in_plain_words(tmp_path):
     for word in ("VideoToolbox", "ffmpeg", "probe", "리더"):  # 첫머리에는 기술 낱말 없이
         assert word not in file_change.REWRITTEN_HEADLINE + file_change.REWRITTEN_ADVICE
     assert "다시 렌더링" in file_change.REWRITTEN_HEADLINE and "다시 눌러 열어" in file_change.REWRITTEN_ADVICE
+    assert "깨진" not in note  # 새 파일이 온전한지는 보지 않음(크기·고친 때만) — '깨진 것이 아니다'라고 하지 않음 (리뷰)
 
 
 def test_stamping_a_missing_file_raises(tmp_path):
@@ -108,14 +111,16 @@ def test_stamp_at_open_gives_the_stamp_or_why_not(tmp_path):
     assert opened is None and "열 때 파일 모습" in problem and "FileNotFoundError" in problem
     opened, problem = file_change.stamp_at_open("bad\0name.mov")  # os.stat이 ValueError
     assert opened is None and "ValueError" in problem
+    opened, problem = file_change.stamp_at_open(None)  # 경로가 아닌 값(TypeError)도 올리지 않음 — 여는 쪽이 자기 오류로 알림
+    assert opened is None and "TypeError" in problem
 
 
 def test_no_note_at_failure_for_an_untouched_file(tmp_path):
-    """파일이 그대로면 쉬운 말 없음 — 캡처는 예전 글 그대로 알림."""
+    """파일이 그대로면 쉬운 말 없음 — 캡처는 예전 글 그대로 알림. → (쉬운 말, 확인 못 한 사유 한 줄, 그 트레이스백)"""
     path = write(tmp_path / "shot.mov", b"x" * 10)
     opened, problem = file_change.stamp_at_open(path)
 
-    assert file_change.note_at_failure(opened, problem, path) == (None, "")
+    assert file_change.note_at_failure(opened, problem, path) == (None, "", "")
 
 
 def test_note_at_failure_for_a_rewritten_file(tmp_path):
@@ -124,14 +129,15 @@ def test_note_at_failure_for_a_rewritten_file(tmp_path):
     opened, problem = file_change.stamp_at_open(path)
     write(path, b"", mtime=1_700_000_600)
 
-    note, unchecked = file_change.note_at_failure(opened, problem, path)
+    note, unchecked, trace = file_change.note_at_failure(opened, problem, path)
 
-    assert unchecked == "" and note == file_change.rewritten_note(opened, path)
+    assert (unchecked, trace) == ("", "") and note == file_change.rewritten_note(opened, path)
     assert note.startswith(file_change.REWRITTEN_HEADLINE) and note.count(f"파일: {path}") == 1
 
 
 def test_note_at_failure_when_the_file_cannot_be_checked_says_so(tmp_path, monkeypatch):
-    """지금 확인하지 못하면(NAS 끊김·권한) 다시 쓰였다고 하지 않음 — 쉬운 말 없이, 확인하지 못한 사유(트레이스백째)를 덧붙일 글로."""
+    """지금 확인하지 못하면(NAS 끊김·권한) 다시 쓰였다고 하지 않음 — 쉬운 말 없이, 사유는 한 줄(창의 머리 쪽에 둘 글)과
+    트레이스백(기록에 둘 글)으로 따로: 트레이스백을 창의 끝에 붙이면 거기 있어야 할 ffmpeg stderr가 밀려남 (리뷰)."""
     path = write(tmp_path / "shot.mov", b"x" * 10)
     opened, problem = file_change.stamp_at_open(path)
 
@@ -139,24 +145,26 @@ def test_note_at_failure_when_the_file_cannot_be_checked_says_so(tmp_path, monke
         raise PermissionError(13, "Permission denied", target)
 
     monkeypatch.setattr(file_change, "stamp", refused)
-    note, unchecked = file_change.note_at_failure(opened, problem, path)
+    note, unchecked, trace = file_change.note_at_failure(opened, problem, path)
 
-    assert note is None and unchecked.startswith(f"\n\n{file_change.UNCHECKED_HEADLINE} — ")
-    assert "PermissionError" in unchecked and "Traceback (most recent call last)" in unchecked
+    assert note is None and unchecked.startswith(f"{file_change.UNCHECKED_HEADLINE} — PermissionError: ")
+    assert "\n" not in unchecked and path in unchecked
+    assert trace.startswith("Traceback (most recent call last)") and "PermissionError" in trace
 
 
 def test_note_at_failure_never_raises_even_on_an_unexpected_error(tmp_path, monkeypatch):
-    """read 안에서 불림 — 견주다 난 예상 못 한 예외도 올리지 않고 그 트레이스백을 덧붙일 글로 (원래 실패는 그대로 알려야 함)."""
+    """read 안에서 불림 — 견주다 난 예상 못 한 예외도 올리지 않고 글로 (원래 실패는 그대로 알려야 함)."""
     path = write(tmp_path / "shot.mov", b"x" * 10)
     opened, problem = file_change.stamp_at_open(path)
 
     def broken(target):
-        raise RuntimeError("시험이 낸 오류")
+        raise RuntimeError("시험이 낸 오류\n둘째 줄")
 
     monkeypatch.setattr(file_change, "stamp", broken)
-    note, unchecked = file_change.note_at_failure(opened, problem, path)
+    note, unchecked, trace = file_change.note_at_failure(opened, problem, path)
 
-    assert note is None and file_change.UNCHECKED_HEADLINE in unchecked and "RuntimeError: 시험이 낸 오류" in unchecked
+    assert note is None and unchecked == f"{file_change.UNCHECKED_HEADLINE} — RuntimeError: 시험이 낸 오류"  # 한 줄만
+    assert "RuntimeError: 시험이 낸 오류\n둘째 줄" in trace
 
 
 def test_note_at_failure_without_a_stamp_from_open_says_why(tmp_path):
@@ -165,7 +173,32 @@ def test_note_at_failure_without_a_stamp_from_open_says_why(tmp_path):
     opened, problem = file_change.stamp_at_open(path)  # 없는 파일
     write(path, b"x" * 10)
 
-    assert file_change.note_at_failure(opened, problem, path) == (None, f"\n\n{file_change.UNCHECKED_HEADLINE} — {problem}")
+    assert file_change.note_at_failure(opened, problem, path) == (None, f"{file_change.UNCHECKED_HEADLINE} — {problem}", "")
+
+
+def test_note_at_failure_does_not_wait_for_storage_that_does_not_answer(tmp_path, monkeypatch):
+    """NAS가 멈춰서 난 실패(캡처의 30초 한도)에서 같은 NAS의 파일을 확인하느라 화면이 또 멈추면 안 됨 — 확인은 한도
+    (CHECK_TIMEOUT_S) 안에서만 기다리고, 넘으면 다시 쓰였다고 하지 않고 그 사유를 알림 (리뷰: hard mount의 stat은 끝없이 기다림)."""
+    path = write(tmp_path / "shot.mov", b"x" * 10)
+    opened, problem = file_change.stamp_at_open(path)
+    gate = threading.Event()
+
+    def stalled(target):
+        gate.wait(20)  # 응답하지 않는 저장소
+        raise OSError("시험 끝")
+
+    monkeypatch.setattr(file_change, "stamp", stalled)
+    monkeypatch.setattr(file_change, "CHECK_TIMEOUT_S", 0.2)
+    started = time.monotonic()
+    try:
+        note, unchecked, trace = file_change.note_at_failure(opened, problem, path)
+        waited = time.monotonic() - started
+    finally:
+        gate.set()
+
+    assert waited < 5, f"확인을 {waited:.1f}초 기다렸습니다"
+    assert note is None and trace == ""
+    assert unchecked == f"{file_change.UNCHECKED_HEADLINE} — 0.2초 안에 파일을 확인하지 못함 (저장소가 응답하지 않는 것으로 보임)"
 
 
 def test_module_has_no_qt():

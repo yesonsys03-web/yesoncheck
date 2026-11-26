@@ -79,6 +79,25 @@ def test_show_notice_keeps_the_body_short_and_puts_details_behind_the_button(qap
     assert (box.kind, box.title) == ("warning", error_window.TITLE)
     assert box.text == f"무슨 일인지 쉬운 말\n\n{error_window.DETAILS_HINT}"
     assert box.details == f"기술 정보 {LONG}끝"
+    [details_button] = [label for label in box.buttons if "Details" in label]
+    assert f"'{details_button}'" in error_window.DETAILS_HINT  # 안내의 단추 이름은 Qt가 붙인 글자 그대로 (Show Details...)
+
+
+def test_show_notice_clips_huge_details_keeping_both_ends(qapp, dialogs, monkeypatch):
+    """자세히 칸의 글이 아주 길면(ffmpeg stderr는 길이 한도 없이 모임) 머리(머리말·원인)와 끝(stderr의 끝)을 남기고 가운데를 줄임 —
+    창에 수 MB를 넣지 않음. 전체는 기록에 (부른 쪽이 남김)."""
+    monkeypatch.setattr(sys, "excepthook", sys.__excepthook__)
+    limit, head = error_window.NOTICE_DETAILS_LIMIT, error_window.NOTICE_DETAILS_HEAD
+    details = "머리말\n원인: 무엇\n" + "x" * (limit * 3) + "\nstderr의 끝"
+
+    error_window.show_notice("쉬운 말", details)
+    error_window.show_notice("쉬운 말", "y" * limit)  # 한도까지는 그대로
+
+    clipped, whole = (box.details for box in dialogs.boxes)
+    assert whole == "y" * limit
+    assert clipped.startswith(details[:head]) and clipped.endswith(details[-(limit - head):])
+    omitted = len(details) - limit
+    assert f"(가운데 {omitted:,}자 생략 — 전체는 기록에)" in clipped and len(clipped) < limit + 100
 
 
 def test_show_notice_in_built_app_adds_log_path(qapp, dialogs, monkeypatch, tmp_path):

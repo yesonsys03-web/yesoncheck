@@ -1425,17 +1425,20 @@ class FFmpegPipeCapture:
             else:
                 stderr = ""
             error = PipeCaptureError(f"{reason}: {self._path}", command, stderr)
-            note, unchecked = file_change.note_at_failure(self._opened, self._stamp_problem, self._path)
-            context = f"{FAILURE_HEADLINE}.\n파일: {self._path}\n원인: {reason}"
-            details = ("읽던 곳 (가장 최근 호출이 마지막):\n" + "".join(traceback.format_stack())
-                       + f"{type(error).__name__}: {error}" + unchecked)
+            # 연 뒤 파일이 다시 쓰였는지 (한도 안에서만 기다림 — file_change.CHECK_TIMEOUT_S). 견주지 못한 사유 한 줄은 머리 쪽에,
+            # 그 트레이스백은 자세한 글의 앞에: 창에는 자세한 글의 끝(stderr)만 보이므로 끝에 붙이면 stderr를 밀어냄
+            note, unchecked, unchecked_trace = file_change.note_at_failure(self._opened, self._stamp_problem, self._path)
+            context = f"{FAILURE_HEADLINE}.\n파일: {self._path}\n원인: {reason}" + (f"\n{unchecked}" if unchecked else "")
+            details = ((f"{unchecked_trace}\n\n" if unchecked_trace else "") + "읽던 곳 (가장 최근 호출이 마지막):\n"
+                       + "".join(traceback.format_stack()) + f"{type(error).__name__}: {error}")
+            technical = None if note is None else f"{FAILURE_HEADLINE}.\n원인: {reason}\n\n{details}"
         except Exception:
             _last_resort(f"{FAILURE_HEADLINE} — 알릴 글을 만들지 못했습니다: {self._path}\n원인: {reason}")
             return
         if note is None:
             _report_failure(context, details)
         else:
-            _report_rewritten(LOG_PREFIX, note, f"{FAILURE_HEADLINE}.\n원인: {reason}\n\n{details}")
+            _report_rewritten(LOG_PREFIX, note, technical)
 
 
 _RELAY = None  # 오류 창을 Qt 루프로 넘기는 QObject (처음 알릴 때 만들어 GUI 스레드로 옮김)
@@ -1464,7 +1467,7 @@ def _report_rewritten(prefix, note, technical):
     """연 뒤 다시 쓰인 파일(다시 렌더링 — file_change)의 도중 실패 알림 — 어느 스레드에서 불러도 되고 예외를 내지 않는다
     (Mac 네이티브 캡처도 자기 prefix로 부름). 기록(stderr)에는 지금 바로 한 번: note(쉬운 말) + TECHNICAL_HEADER + technical 전부.
     창은 QApplication이 있으면 GUI 스레드의 Qt 루프로 미뤄 한 번: 오류 창이 아니라 알림 창(error_window.show_notice) — 본문은 note뿐,
-    technical(머리말·원인·호출 스택)은 그 창의 '자세히' 칸에 자르지 않고."""
+    technical(머리말·원인·호출 스택)은 그 창의 '자세히' 칸에 (아주 길면 그 창이 가운데를 줄임 — error_window.clip_details)."""
     try:
         print(f"{prefix} {note}\n\n{file_change.TECHNICAL_HEADER}\n{technical}", file=sys.stderr, flush=True)
         from PyQt5.QtCore import QCoreApplication

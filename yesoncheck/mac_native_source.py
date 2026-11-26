@@ -694,9 +694,13 @@ class NativeVTCapture:
         except Exception:
             _last_resort(f"AVAssetReader를 멈추지 못했습니다: {self._path}")
         try:
-            note, unchecked = file_change.note_at_failure(self._opened, self._stamp_problem, self._path)
-            context = f"{NATIVE_FAILURE_HEADLINE}.\n파일: {self._path}\n원인: {reason}"
-            details = _STACK_HEADER + "".join(traceback.format_stack()).rstrip() + unchecked
+            # 연 뒤 파일이 다시 쓰였는지 (한도 안에서만 기다림 — file_change.CHECK_TIMEOUT_S). 견주지 못한 사유 한 줄은 머리 쪽에,
+            # 그 트레이스백은 자세한 글의 앞에 (파이프의 _die와 같은 자리)
+            note, unchecked, unchecked_trace = file_change.note_at_failure(self._opened, self._stamp_problem, self._path)
+            context = f"{NATIVE_FAILURE_HEADLINE}.\n파일: {self._path}\n원인: {reason}" + (f"\n{unchecked}" if unchecked else "")
+            details = ((f"{unchecked_trace}\n\n" if unchecked_trace else "") + _STACK_HEADER
+                       + "".join(traceback.format_stack()).rstrip())
+            technical = None if note is None else f"{NATIVE_FAILURE_HEADLINE}.\n원인: {reason}\n\n{details}"
         except Exception:
             _last_resort(f"{NATIVE_FAILURE_HEADLINE} — 알릴 글을 만들지 못했습니다: {self._path}\n원인: {reason}")
             return
@@ -705,7 +709,7 @@ class NativeVTCapture:
             return
         from yesoncheck import movie_pipe_source  # (이 모듈은 PLAY_LOG_PREFIX만 모듈 수준에서 가져옴)
 
-        movie_pipe_source._report_rewritten(NATIVE_LOG_PREFIX, note, f"{NATIVE_FAILURE_HEADLINE}.\n원인: {reason}\n\n{details}")
+        movie_pipe_source._report_rewritten(NATIVE_LOG_PREFIX, note, technical)
 
 
 def _report_failure(context, details):
