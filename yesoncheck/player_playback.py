@@ -224,6 +224,10 @@ class PlayerPlaybackMixin:
             self.current_thumbnail_folder = None
             self._thumbnail_folder_problem = None
             return
+        local = self._local_work(self.workComboBox.currentText())
+        if local is not None:  # 이 PC의 작품(회사 밖 PC): 고른 끝 폴더를 폴더 열기와 같은 규칙으로 — SidebarLocalWorksMixin
+            self._load_local_work_list(local)
+            return
         selected_job = self.jobComboBox.currentText()
         self.sidebar.clear()
         # 다른 job을 고르면 Qt가 바로 다음 activated를 보냄 → _on_job_activated가 이 job을 또 읽지 않게

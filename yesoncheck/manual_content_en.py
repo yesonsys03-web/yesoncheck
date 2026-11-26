@@ -137,9 +137,9 @@ PAGES = (
                  "YesonCheck. → [[windows/default|Default app for videos]]",
                  "After that, when a new version comes out a notice bar appears at the top of the window; click it to download and install — you "
                  "do not need to reinstall by hand. → [[update]]",
-                 "On a PC without Yeson's in-house shared settings folder (outside the company), everything works except choosing shows and "
-                 "managing show paths. No notice window appears about the missing shared settings — only{{title.config_problem}} is added "
-                 "to the end of the window title. → [[library/works|Choosing a show]]",
+                 "On a PC without Yeson's in-house shared settings folder (outside the company), everything works too. No notice "
+                 "appears about the missing shared settings, and you choose shows by registering that PC's own shows. "
+                 "→ [[library/local|Shows on a PC outside the company]]",
              )),
              ("h", "Uninstalling", "remove"),
              ("list", (
@@ -536,8 +536,9 @@ PAGES = (
          "Three ways to load the videos to review — choosing from a show, opening a folder, and bookmarks.",
          (
              ("h", "Show → season → job", "works"),
-             ("note", "Choosing **show → season → job** and managing show paths are features specific to Yeson's in-house "
-                      "workflow — they are tailored to Yeson's show folder structure and shared settings. Open any other folder "
+             ("note", "Choosing **show → season → job** is a feature specific to Yeson's in-house workflow — it is tailored to "
+                      "Yeson's show folder structure and shared settings. On a PC outside the company, register "
+                      "[[library/local|that PC's own shows]] and choose them in the same place; open any other folder "
                       "with [[library/folder|Opening a folder]] or [[library/bookmarks|Bookmarks]] below."),
              ("list", (
                  "In the {{sidebar.works}} group at the top of the sidebar, choose **show → season → job** in that order; the "
@@ -549,11 +550,26 @@ PAGES = (
                  "required).",
                  "On Windows, if the shared settings folder is somewhere else, choose it with Settings → {{settings.shared_config}}.",
                  "If the shared settings cannot be found (not connected to the in-house NAS, or outside the company), the app starts "
-                 "without any notice window and{{title.config_problem}} is added to the end of the window title — only choosing shows "
-                 "is unavailable. In-house, check the NAS connection and start the app again (on Windows, if it still is not found, "
-                 "choose the folder yourself with Settings → {{settings.shared_config}} above). {{menu.tools}} → {{menu.tools.work_paths}} "
-                 "shows the detailed reason. If the shared settings folder opens but the file in it is broken or missing, a "
-                 "‘공유 설정 오류’ (Shared settings error) window tells you at startup.",
+                 "without any notice window and the in-house show list is empty. "
+                 "In-house, check the NAS connection and start the app again (on Windows, if it still is not found, "
+                 "choose the folder yourself with Settings → {{settings.shared_config}} above). The reason is behind the "
+                 "‘공유 설정을 찾지 못한 까닭…’ (Why the shared settings were not found) button of the window that "
+                 "{{menu.tools}} → {{menu.tools.work_paths}} opens. If the shared settings folder opens but the file in it is broken or "
+                 "missing, a ‘공유 설정 오류’ (Shared settings error) window tells you at startup.",
+             )),
+             ("h", "Shows on a PC outside the company", "local"),
+             ("list", (
+                 "On a PC that cannot find the in-house shared settings, {{menu.tools}} → {{menu.tools.work_paths}} opens **a show list "
+                 "saved only on that PC** (no password). Register a show name and a folder on that PC with ‘작품 추가’ (Add show), and it "
+                 "appears in the {{sidebar.works}} group of the sidebar.",
+                 "For each show you set **how many more folders to choose** — one of ‘작품을 고르면 바로 영상 목록’ (list the videos as "
+                 "soon as the show is chosen), ‘작품 → 폴더 하나를 더 고름’ (show → one folder) and ‘작품 → 폴더 → 폴더’ (show → folder → "
+                 "folder). The second and third boxes show {{picker.folder}}, and what you choose there are the subfolders of that folder.",
+                 "The videos and image sequences under the last folder you chose are listed, **including all its subfolders** — the same "
+                 "rule as [[library/folder|Opening a folder]], so any folder structure works.",
+                 "If the folder has moved, correct it with ‘폴더 바꾸기’ (Change folder) in the same window, and the number of steps with "
+                 "‘단계 바꾸기’ (Change steps). ‘작품 삭제’ (Remove show) only removes it from the list — the folder and its videos stay.",
+                 "This list is not used on a PC that has read the in-house shared settings — in-house, the show list on the NAS is used as before.",
              )),
              ("h", "Opening a folder", "folder"),
              ("list", (
@@ -931,9 +947,10 @@ PAGES = (
                  ("The app does not start on Windows after choosing GPU",
                   "Delete the `display_renderer` line in `%LOCALAPPDATA%\\YesonCheck\\prefs.json`, or start the app with the "
                   "environment variable `YESONCHECK_VIEWPORT=raster`."),
-                 ("The window title ends with{{title.config_problem}}",
+                 ("The sidebar has no show chooser, or the show list is empty",
                   "The shared settings were not found. In-house, check the NAS connection and start the app again. Outside the "
-                  "company, just keep using the app — only choosing shows is unavailable. → [[library/works|Choosing a show]]"),
+                  "company, register that PC's own shows in {{menu.tools}} → {{menu.tools.work_paths}}. "
+                  "→ [[library/local|Shows on a PC outside the company]]"),
                  ("A show is not in the list or its folder cannot be found",
                   "Tell your administrator — it is fixed in {{menu.tools}} → {{menu.tools.work_paths}}."),
              )),

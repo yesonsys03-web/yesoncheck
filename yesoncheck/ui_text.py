@@ -67,6 +67,8 @@ TEXTS = {
     "picker.loading": {"ko": "공유 설정 불러오는 중…", "en": "Loading shared settings…"},
     "picker.season": {"ko": "시즌선택", "en": "Select season"},
     "picker.job": {"ko": "job선택", "en": "Select job"},
+    # 이 PC의 작품(회사 밖 PC — local_works)의 둘째·셋째 콤보: 시즌·job이 아니라 그 작품 폴더 아래의 폴더
+    "picker.folder": {"ko": "폴더선택", "en": "Select folder"},
     # 목록 아래 개수 줄 (sidebar_counts) — 영문은 하나일 때 낱말이 다름. 괄호 안의 'TK2 5' 꼴은 두 언어에서 같음(색을 칠하는 쪽이 읽음)
     "count.item": {"ko": "{count}개", "en": "{count} item"},
     "count.items": {"ko": "{count}개", "en": "{count} items"},
@@ -142,7 +144,6 @@ TEXTS = {
     "open_with.prefs_problem": {"ko": "설정 파일을 읽지 못했습니다", "en": "Could not read the settings file"},
     # 창 제목의 꼬리 (앞은 'Yeson Checker <버전>' — 언어와 무관)
     "title.loading": {"ko": " — 공유 설정 불러오는 중…", "en": " — loading shared settings…"},
-    "title.config_problem": {"ko": " — 공유 설정 오류 (작품 목록 없음)", "en": " — shared settings error (no show list)"},
     "title.path_map_problem": {"ko": " — 변환표 오류", "en": " — path map error"},
     "title.path_map_problem.windows": {"ko": " — 변환표 오류 (작품 경로 관리에서 자동 설정)",
                                        "en": " — path map error (set it up in Manage show paths)"},

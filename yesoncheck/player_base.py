@@ -153,6 +153,9 @@ class VideoPlayerBase(PlayerHoverThumbsMixin, PlayerTransportMixin, PlayerToolsM
         self.bookmarks_file = bookmarks.default_path()
         self.load_bookmarks()
 
+        # 이 PC의 작품(공유 설정을 찾지 못한 PC — SidebarLocalWorksMixin): 이름 → LocalWork, 읽지 못했으면 그 사유
+        self.local_works = {}
+        self.local_works_problem = None
         # 작품 경로: 공유 설정 폴더의 work_paths.json (문제는 창 표시 후 resolve_shared_config_problem이 알림)
         if load_shared_config:
             self.shared_config_loading = False

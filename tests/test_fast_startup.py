@@ -338,7 +338,7 @@ def test_unexpected_gather_error_becomes_shared_config_problem(win, dialogs, tmp
     assert "드라이브 목록을 읽다 실패 (가짜 재현)" in player.shared_config_problem
     assert "Traceback" in player.shared_config_problem
     assert "드라이브 목록을 읽다 실패 (가짜 재현)" in capsys.readouterr().err  # 로그에도 스택 트레이스째
-    assert "공유 설정 오류" in player.windowTitle()
+    assert "공유 설정 오류" not in player.windowTitle()  # 창 제목에는 적지 않음 (2026-11-27) — 아래의 오류 창이 알림
     # resolve가 알림: 설정 폴더를 고르게 하고(취소) 공유 설정 오류 창
     assert any(kind == "critical" and title == "공유 설정 오류" and "가짜 재현" in text
                for kind, title, text in dialogs.messages)

@@ -17,7 +17,7 @@ import os
 import sys
 
 import pytest
-from PyQt5.QtWidgets import QFileDialog
+from PyQt5.QtWidgets import QDialog, QFileDialog
 
 from tests.test_fast_startup import wait_until
 from tests.test_mac_mounts import NO_SUCH_CONFIG
@@ -297,7 +297,7 @@ def test_mac_gets_no_window_and_the_reason_goes_to_the_log(no_share_mac, players
     out = capsys.readouterr().out
     assert "[공유 설정]" in out and QUIET_LOG in out
     assert "작품 경로 파일이 없습니다" in out and "Traceback" in out  # 사유는 기록에 그대로
-    assert "공유 설정 오류" in player.windowTitle()  # 창 제목의 표시는 그대로
+    assert "공유 설정 오류" not in player.windowTitle()  # 창 제목에도 적지 않음 (2026-11-27)
     assert player.workPickerGroup.isHidden()  # 작품을 읽어 온 적이 없는 PC
 
 
@@ -308,7 +308,7 @@ def test_mac_that_has_read_works_before_is_quiet_too(no_share_mac, players, dial
     player = players()
     player.resolve_shared_config_problem()
     assert dialogs.messages == []
-    assert "공유 설정 오류" in player.windowTitle()
+    assert "공유 설정 오류" not in player.windowTitle()
     assert not player.workPickerGroup.isHidden()  # 작품 묶음의 자리는 그대로 (안내 항목만)
 
 
@@ -398,14 +398,19 @@ def test_saved_folder_without_the_file_is_still_asked_about_on_windows(win, dial
     assert len(picker) == 1
 
 
-# ---------------------------------------------------------------- 메뉴로 부르는 길은 그대로 (사유는 여기서 봄)
+# ---------------------------------------------------------------- 메뉴로 부르는 길 (사유는 여기서 봄)
+# 작품 경로 관리는 2026-11-27부터 경고 창이 아니라 이 PC의 작품 창을 엶 (test_local_works_ui) — 찾지 못한 사유는 그 창의 단추 뒤에
 
 @mac_only
-def test_work_path_manager_still_says_why(no_share_mac, players, dialogs):
+def test_work_path_manager_still_says_why(no_share_mac, players, dialogs, monkeypatch):
     player = players()
+    opened = []
+    monkeypatch.setattr(QDialog, "exec_", lambda dialog: opened.append(dialog) or 0)
     player.manage_work_paths()
-    assert window_kinds(dialogs) == [("warning", "작품 경로 관리")]
-    assert "관리할 수 없습니다" in dialogs.warnings[0] and "작품 경로 파일이 없습니다" in dialogs.warnings[0]
+    assert [dialog.windowTitle() for dialog in opened] == ["작품 경로 관리 (이 PC)"] and dialogs.messages == []
+    opened[0].reason_button.click()
+    [box] = dialogs.boxes
+    assert (box.kind, box.title) == ("information", "공유 설정") and "작품 경로 파일이 없습니다" in box.details
 
 
 def test_work_path_manager_also_lists_the_places_that_could_not_be_checked(win, dialogs, monkeypatch):  # noqa: F811
@@ -414,9 +419,13 @@ def test_work_path_manager_also_lists_the_places_that_could_not_be_checked(win, 
     line = "Z: 연결 정보를 읽지 못함 (가짜 재현)"
     monkeypatch.setattr(path_map_setup, "connected_shares", lambda remote_of_drive=None: ([], [line]))
     player = win.player()
+    opened = []
+    monkeypatch.setattr(QDialog, "exec_", lambda dialog: opened.append(dialog) or 0)
     player.manage_work_paths()
-    assert window_kinds(dialogs) == [("warning", "작품 경로 관리")]
-    assert NOT_SET in dialogs.warnings[0] and line in dialogs.warnings[0]
+    assert [dialog.windowTitle() for dialog in opened] == ["작품 경로 관리 (이 PC)"] and dialogs.messages == []
+    opened[0].reason_button.click()
+    [box] = dialogs.boxes
+    assert NOT_SET in box.details and line in box.details
 
 
 def test_choosing_the_folder_from_the_menu_still_asks(win, dialogs, monkeypatch):  # noqa: F811

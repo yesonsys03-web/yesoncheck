@@ -228,7 +228,7 @@ def _banner_texts(player):
 
 
 def _title_texts(player):
-    """창 제목 — 보통·불러오는 중·공유 설정 오류·변환표 오류 (끝에 되돌림)."""
+    """창 제목 — 보통·불러오는 중·공유 설정 문제(제목에 적지 않음 — 보통과 같음)·변환표 오류 (끝에 되돌림)."""
     saved = (getattr(player, "shared_config_loading", False), player.shared_config_problem, getattr(player, "path_map_problem", None))
     found = []
     try:
