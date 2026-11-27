@@ -77,12 +77,13 @@ class SidebarLocalWorksMixin:
 
     def _show_local_works_problem(self, parent):
         """읽지 못한 목록의 사유 창. 이 PC는 작품 창(과 그 '찾지 못한 까닭' 단추)까지 가지 못하므로, 공유 설정을 찾지 못했다는 것과
-        그 사유(자세히 칸)도 여기서 보임 — 사내에서 NAS가 끊긴 PC가 빈 작품 목록의 까닭을 볼 길."""
+        그 사유도 여기서 보임 — 사내에서 NAS가 끊긴 PC가 빈 작품 목록의 까닭을 볼 길. 본문은 화면 언어의 글뿐, 기술적인 사유 둘
+        (목록을 읽지 못한 까닭, 공유 설정을 찾지 못한 까닭 — 기록과 같은 한글 글)은 자세히 칸에."""
         title = _t("problem.title")
-        body = f"{_t('read_failed')}\n\n{self.local_works_problem}\n\n{_t('not_found')}"
-        box = QMessageBox(QMessageBox.Warning, title, body, QMessageBox.Ok, parent)
+        box = QMessageBox(QMessageBox.Warning, title, f"{_t('read_failed')}\n\n{_t('not_found')}", QMessageBox.Ok, parent)
         box.setProperty(BOX_TITLE_PROPERTY, title)
-        box.setDetailedText(f"{self._shared_config_problem_text()}{self._config_dir_search_problems_text()}")
+        box.setDetailedText(f"{self.local_works_problem}\n\n"
+                            f"{self._shared_config_problem_text()}{self._config_dir_search_problems_text()}")
         try:
             box.exec_()
         finally:

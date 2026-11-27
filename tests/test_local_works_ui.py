@@ -659,7 +659,9 @@ def test_a_list_that_cannot_be_read_is_told_in_english(outside, dialogs, show):
 
     told = dialogs.boxes[1]
     assert told.title == "This PC's show list" and told.text.startswith("This PC's show list could not be read")
-    assert "The in-house shared settings (NAS) were not found." in told.text and "local_works" in told.text
+    assert "The in-house shared settings (NAS) were not found." in told.text
+    assert ui_texts.hangul([told.text]) == []  # 본문은 모두 화면 언어 — 기술적인 사유(한글, 기록과 같은 글)는 자세히 칸에 (리뷰)
+    assert told.details.startswith("설정 파일의 local_works") and player._shared_config_problem_text() in told.details
 
 
 # ---------------------------------------------------------------- 사내 PC는 그대로 · 읽지 못한 목록
@@ -708,7 +710,8 @@ def test_a_list_that_cannot_be_read_is_told_and_never_overwritten(outside, dialo
     assert "local_works" in dialogs.warnings[0] and "Traceback" in capsys.readouterr().err
     # 이 창만 뜨는 PC에서도 '공유 설정을 찾지 못했음'과 그 사유를 볼 수 있음 (작품 창의 단추까지 가지 못하므로 — 리뷰)
     [told] = dialogs.boxes
-    assert "사내 공유 설정(NAS)을 찾지 못했습니다" in told.text and told.details.startswith(player._shared_config_problem_text())
+    assert "사내 공유 설정(NAS)을 찾지 못했습니다" in told.text and "local_works" not in told.text
+    assert told.details.startswith("설정 파일의 local_works") and player._shared_config_problem_text() in told.details
 
     monkeypatch.setattr(QDialog, "exec_", lambda dialog: pytest.fail("읽지 못한 목록으로 작품 창이 열렸습니다"))
     player.manage_work_paths()
