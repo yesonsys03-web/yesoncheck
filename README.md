@@ -196,6 +196,7 @@ ProRes mov는 **자동으로 더 빠른 디코더로 열립니다**. **Mac(Intel
   이렇게 끄면 앱 기록에 `[파이프] 프레임 캐시:` 줄이 아예 나오지 않습니다 (`[재생] ffmpeg 파이프: …` 줄은 그대로).
 - **Mac에서 영상 화면이 이상하면**: 영상 영역이 비어 있거나 '영상 화면(GL 텍스처 스트리밍)을 그리지 못했습니다' 오류 창이 뜨면, 환경 변수 `YESONCHECK_VIDEO_ITEM=pixmap`을 정하고 앱을 다시 켜면 예전 그리기 방식으로 돌아갑니다 (예: 개발 모드는 `YESONCHECK_VIDEO_ITEM=pixmap ./run_app.sh`, 빌드한 앱은 터미널에서 `YESONCHECK_VIDEO_ITEM=pixmap "<앱 위치>/YesonCheck_Autocut_Intel.app/Contents/MacOS/YesonCheck_Autocut"`처럼 앱 안의 실행 파일을 직접 켭니다 — Apple Silicon 앱은 `_AppleSilicon.app`). 기본은 `auto`이고, `auto`·`gl`·`pixmap` 외의 값은 켤 때 오류로 알립니다. 새 방식으로 그리는지는 앱 기록의 `[표시] GL 텍스처 스트리밍(VideoFrameItem)` 줄로 압니다. Windows는 화면 그리기가 예전 그대로라 해당 없습니다.
 - **재생 중 디코더가 끊기면** 오류 창이 한 번 뜨고 영상이 끝난 것처럼 멈춥니다 — 같은 영상을 다시 열면 됩니다.
+- **열어 둔 영상이 다시 렌더링되면**(같은 이름으로 파일이 다시 쓰임) 그 영상은 더 읽지 못할 수 있습니다. 이때는 긴 오류 창 대신 '이 영상은 연 뒤에 파일이 다시 쓰였습니다 …' 알림이 한 번 뜹니다 — 렌더가 끝난 뒤 목록에서 그 영상을 다시 눌러 열면 됩니다. 알림에는 파일과 바뀐 것(크기·고친 때)이 보이고, 기술 정보는 알림의 `Show Details...` 단추와 앱 기록에 남습니다.
 - 4K ProRes 4444는 초당 약 130MB(≈1Gbps)를 읽어야 해서, 1Gbps(기가비트) 네트워크에서는 처음 재생이 끊길 수 있습니다 (한 번 읽은 뒤에는 캐시 덕에 부드럽습니다).
 
 ### Mac의 ProRes 재생

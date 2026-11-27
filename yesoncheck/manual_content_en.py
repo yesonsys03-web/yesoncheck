@@ -942,6 +942,10 @@ PAGES = (
                  ("On Mac, the video area is empty or a drawing error dialog appears",
                   "Settings → {{settings.decoder}} → {{settings.decoder.ffmpeg}}."),
                  ("A slider preview error dialog keeps appearing", "Turn off Settings → {{settings.hover_thumbs}}."),
+                 ("While viewing a video, the notice ‘이 영상은 연 뒤에 파일이 다시 쓰였습니다’ (this video's file was written again "
+                  "after it was opened) appears",
+                  "The video's file was written again after you opened it (usually it was rendered again under the same name). "
+                  "When the render has finished, click that video in the list again to open it."),
                  ("ProRes videos do not open on Windows",
                   "This happens when security software blocks the local communication inside the app. Open them the old way "
                   "with the environment variable `YESONCHECK_MOVIE_SOURCE=cv2` described below."),
