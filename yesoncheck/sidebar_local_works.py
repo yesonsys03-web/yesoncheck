@@ -15,10 +15,14 @@
 - 목록: `_job_picked`가 단계 수만큼 다 골랐는지를 `_local_job_picked`로 묻고, `_load_job_list` → `_load_local_work_list`가 끝 폴더를
   `load_videos_from_folder(…, quiet=True)`로 — '폴더 열기'와 같은 규칙(하위 폴더까지, 출처는 폴더라 새로고침도 같은 길)이되 안내 창·모두
   고르기 없이. 단계 0은 작품을 고를 때 `_fill_local_work_pickers`가 **한 번** 읽음(콤보를 비우는 신호마다 다시 읽지 않게).
+  같은 폴더를 다시 고르면(`_on_job_activated` → `_refresh_shown_local_list`) 사내 job처럼 목록만 다시 읽음 — 보던 영상은 그대로.
 - 창: `manage_work_paths` → `manage_local_works` — 비밀번호 없음. 읽지 못한 목록(`local_works_problem`)이면 열지 않고 사유를 보임
   (덮어쓰지 않게). 그 문제는 켤 때 `_report_local_works_problem`이 한 번 알림 (`resolve_shared_config_problem`).
 
-상태(`self.local_works`·`self.local_works_problem`)는 `VideoPlayerBase.__init__`이 만듦. 창의 글은 한글(작품 경로 관리 창과 같음).
+상태(`self.local_works`·`self.local_works_problem`)는 `VideoPlayerBase.__init__`이 만듦.
+**창과 알림의 글은 화면 언어를 따름**(글자 표 `ui_text`의 `local_works.*` — 딸린 창은 보통 한글로 남지만 이 창은 회사 밖 PC에서 쓰는
+창이라 두 언어로; 사용자 2026-11-27). 창은 열 때마다 만들므로 그때의 언어. 기록(stderr)에 적는 글과 자세히 칸의 기술 글
+(찾아본 곳·트레이스백 — 기록과 같은 글)은 한글 그대로.
 """
 
 import os
@@ -30,20 +34,16 @@ from PyQt5.QtWidgets import (
 )
 
 from yesoncheck import local_works, paths, ui_text
+from yesoncheck.sidebar_items import SIDEBAR_SOURCE_ROLE
 from yesoncheck.user_files import UserFileError
 
 LOG_PREFIX = "[이 PC의 작품]"
-MANAGER_TITLE = "작품 경로 관리 (이 PC)"
-PROBLEM_TITLE = "이 PC의 작품 목록"
 BOX_TITLE_PROPERTY = "ycTitle"  # macOS의 QMessageBox는 창 제목을 버림 — 시험·실행 시험이 읽는 속성 (player_update와 같은 이름)
-MANAGER_INTRO = (
-    "사내 공유 설정(NAS)을 찾지 못해, 이 PC에만 저장되는 작품 목록을 엽니다 (사내 PC라면 NAS 연결을 확인하세요).\n\n"
-    "작품마다 폴더와 '폴더를 몇 번 더 고를지'를 정합니다. 마지막으로 고른 폴더 아래의 영상을 하위 폴더까지 모두 목록에 넣습니다 "
-    "— '폴더 열기'와 같은 규칙이라 폴더 구조를 가리지 않습니다."
-)
-NOT_FOUND_NOTICE = "사내 공유 설정(NAS)을 찾지 못했습니다. 사내 PC라면 NAS 연결을 확인한 뒤 앱을 다시 켜세요."
-LOCAL_LIST_NOTICE = "회사 밖에서는 이 PC의 작품 목록을 씁니다."
-PICK_FIRST = "목록에서 작품을 먼저 고르세요."
+
+
+def _t(key, **values):
+    """이 창의 화면 글 (지금 화면 언어) — 글자 표의 `local_works.<key>`."""
+    return ui_text.text(f"local_works.{key}", **values)
 
 
 class SidebarLocalWorksMixin:
@@ -53,7 +53,7 @@ class SidebarLocalWorksMixin:
 
     def _use_local_works(self, wanted):
         """(_apply_shared_config) 공유 설정을 찾지 못한 PC면 이 PC의 작품 목록을 읽어 둠, 아니면 비움. 읽지 못하면 빈 목록 +
-        local_works_problem(사유·트레이스백 — 알림은 _report_local_works_problem·작품 창)."""
+        local_works_problem(그 사유 — 기록에는 바로 트레이스백째, 알림은 _report_local_works_problem·작품 창)."""
         self.local_works = {}
         self.local_works_problem = None
         if not wanted:
@@ -61,8 +61,8 @@ class SidebarLocalWorksMixin:
         try:
             self.local_works = {work.name: work for work in local_works.read()}
         except (UserFileError, OSError, TimeoutError) as exc:
-            self.local_works_problem = f"이 PC의 작품 목록을 읽지 못했습니다 — 목록 없이 계속합니다 (파일은 그대로 둠).\n\n{exc}"
-            print(f"{LOG_PREFIX} {self.local_works_problem}", file=sys.stderr, flush=True)
+            self.local_works_problem = str(exc)  # 알림 창의 머리 글은 보일 때의 화면 언어로 붙임 (_show_local_works_problem)
+            print(f"{LOG_PREFIX} {ui_text.korean('local_works.read_failed')}\n\n{exc}", file=sys.stderr, flush=True)
             traceback.print_exc()
 
     def reload_local_works(self):
@@ -78,8 +78,10 @@ class SidebarLocalWorksMixin:
     def _show_local_works_problem(self, parent):
         """읽지 못한 목록의 사유 창. 이 PC는 작품 창(과 그 '찾지 못한 까닭' 단추)까지 가지 못하므로, 공유 설정을 찾지 못했다는 것과
         그 사유(자세히 칸)도 여기서 보임 — 사내에서 NAS가 끊긴 PC가 빈 작품 목록의 까닭을 볼 길."""
-        box = QMessageBox(QMessageBox.Warning, PROBLEM_TITLE, f"{self.local_works_problem}\n\n{NOT_FOUND_NOTICE}", QMessageBox.Ok, parent)
-        box.setProperty(BOX_TITLE_PROPERTY, PROBLEM_TITLE)
+        title = _t("problem.title")
+        body = f"{_t('read_failed')}\n\n{self.local_works_problem}\n\n{_t('not_found')}"
+        box = QMessageBox(QMessageBox.Warning, title, body, QMessageBox.Ok, parent)
+        box.setProperty(BOX_TITLE_PROPERTY, title)
         box.setDetailedText(f"{self._shared_config_problem_text()}{self._config_dir_search_problems_text()}")
         try:
             box.exec_()
@@ -98,10 +100,7 @@ class SidebarLocalWorksMixin:
         """work의 폴더(이 PC의 경로 그대로). 없으면 한 번 알리고 ""."""
         if os.path.isdir(work.folder):
             return work.folder
-        self._report_work_path_problem(
-            f"작품 '{work.name}' 폴더를 열 수 없습니다.\n\n이 PC 경로: {work.folder}\n\n"
-            "폴더가 옮겨졌으면 Tools → 작품 경로 관리에서 폴더를 다시 정하세요."
-        )
+        self._report_work_path_problem(_t("folder_gone", name=work.name, folder=work.folder), title=_t("path_problem.title"))
         return ""
 
     # ---------------------------------------------------------------- 작품 고르기
@@ -122,7 +121,8 @@ class SidebarLocalWorksMixin:
         try:
             names = local_works.subfolders(folder)
         except OSError as exc:
-            self._report_work_path_problem(f"폴더를 읽지 못했습니다.\n\n{folder}\n\n{type(exc).__name__}: {exc}")
+            self._report_work_path_problem(f"{_t('folder_unreadable')}\n\n{folder}\n\n{type(exc).__name__}: {exc}",
+                                           title=_t("path_problem.title"))
             return
         combo.addItems(names)
 
@@ -190,6 +190,19 @@ class SidebarLocalWorksMixin:
         self.load_videos_from_folder(folder, quiet=True)
         self._job_list_loaded_for = self._job_selection()
 
+    def _refresh_shown_local_list(self, work):
+        """(_on_job_activated — 같은 폴더를 다시 고름, _job_picked가 참) 목록이 지금 고른 끝 폴더의 것이면 다시 읽기만 하고 True —
+        사내 job을 다시 고를 때처럼 보던 영상(A·재생 자리·와이프 B)은 그대로 (사용자 2026-11-27 "같은 폴더를 다시 고를 때도 기존대로";
+        처음에는 목록을 새로 불러와 첫 영상을 A에 다시 열었음). 목록이 그 폴더의 것이 아니면(그사이 다른 폴더를 불러옴·끌어다 놓음,
+        고를 때 영상이 없었음) False — 부른 쪽이 처음 고를 때처럼 불러옴."""
+        folder = local_works.picked_folder(work, self._local_picks(work))
+        sources = {source for source in self._sidebar_sources
+                   if source.kind == "folder" and paths.same_path(source.folder, folder)}
+        if not any(self.sidebar.item(row).data(SIDEBAR_SOURCE_ROLE) in sources for row in range(self.sidebar.count())):
+            return False
+        self.refresh_sidebar()
+        return True
+
     # ---------------------------------------------------------------- 작품 창
 
     def manage_local_works(self):
@@ -204,36 +217,36 @@ class SidebarLocalWorksMixin:
             dialog.deleteLater()
 
     def _local_works_dialog(self):
-        """이 PC의 작품 목록 창을 만듦 (띄우는 일은 manage_local_works — 시험은 단추를 바로 누름).
+        """이 PC의 작품 목록 창을 만듦 (띄우는 일은 manage_local_works — 시험은 단추를 바로 누름). 글은 지금 화면 언어.
         창의 속성: intro_label, works_list, add_button, folder_button, levels_button, remove_button, reason_button, close_button."""
         dialog = QDialog(self)
-        dialog.setWindowTitle(MANAGER_TITLE)
+        dialog.setWindowTitle(_t("title"))
         dialog.setModal(True)
         dialog.setMinimumSize(700, 460)
         layout = QVBoxLayout(dialog)
-        dialog.intro_label = QLabel(MANAGER_INTRO)
+        dialog.intro_label = QLabel(_t("intro"))
         dialog.intro_label.setWordWrap(True)
         layout.addWidget(dialog.intro_label)
         dialog.works_list = QListWidget()
         dialog.works_list.setAlternatingRowColors(True)
         layout.addWidget(dialog.works_list)
         buttons = QHBoxLayout()
-        for attribute, text, slot in (
-            ("add_button", "작품 추가", self._add_local_work),
-            ("folder_button", "폴더 바꾸기", self._change_local_work_folder),
-            ("levels_button", "단계 바꾸기", self._change_local_work_levels),
-            ("remove_button", "작품 삭제", self._remove_local_work),
+        for attribute, key, slot in (
+            ("add_button", "add", self._add_local_work),
+            ("folder_button", "folder", self._change_local_work_folder),
+            ("levels_button", "levels", self._change_local_work_levels),
+            ("remove_button", "remove", self._remove_local_work),
         ):
-            button = QPushButton(text)
+            button = QPushButton(_t(key))
             button.clicked.connect(lambda _checked=False, slot=slot: slot(dialog))
             setattr(dialog, attribute, button)
             buttons.addWidget(button)
-        dialog.close_button = QPushButton("닫기")
+        dialog.close_button = QPushButton(_t("close"))
         dialog.close_button.clicked.connect(dialog.close)
         buttons.addWidget(dialog.close_button)
         layout.addLayout(buttons)
         bottom = QHBoxLayout()
-        dialog.reason_button = QPushButton("공유 설정을 찾지 못한 까닭…")
+        dialog.reason_button = QPushButton(_t("reason"))
         dialog.reason_button.clicked.connect(lambda _checked=False: self._show_shared_config_reason(dialog))
         bottom.addWidget(dialog.reason_button)
         bottom.addStretch()
@@ -252,34 +265,30 @@ class SidebarLocalWorksMixin:
         row = dialog.works_list.currentRow()
         names = sorted(self.local_works)
         if not 0 <= row < len(names):
-            QMessageBox.information(dialog, MANAGER_TITLE, PICK_FIRST)
+            QMessageBox.information(dialog, _t("title"), _t("pick_first"))
             return None
         return self.local_works[names[row]]
 
     def _ask_levels(self, dialog, current):
         """단계 수를 고르게 함 → 고른 수, 취소면 None."""
         texts = [local_works.level_text(levels) for levels in local_works.LEVELS]
-        text, ok = QInputDialog.getItem(
-            dialog, MANAGER_TITLE,
-            "작품을 고른 뒤 폴더를 몇 번 더 고를지 정하세요.\n마지막으로 고른 폴더 아래의 영상을 하위 폴더까지 모두 목록에 넣습니다:",
-            texts, local_works.LEVELS.index(current), False,
-        )
+        text, ok = QInputDialog.getItem(dialog, _t("title"), _t("ask.levels"), texts, local_works.LEVELS.index(current), False)
         if not ok or text not in texts:
             return None
         return local_works.LEVELS[texts.index(text)]
 
     def _save_local_works(self, dialog, save):
-        """save()로 설정 파일을 고치고 창·작품 콤보를 다시 채움 → 됐으면 True. 틀린 값(ValueError·LookupError)은 그 글로 안내,
-        파일 문제(깨진 파일·잠금·쓰기 실패)는 트레이스백째 기록과 창으로 — 파일은 그대로."""
+        """save()로 설정 파일을 고치고 창·작품 콤보를 다시 채움 → 됐으면 True. 틀린 값(ValueError·LookupError — 창이 미리 거르지 못한
+        것: 그사이 다른 창이 고침 등)은 그 글로 안내, 파일 문제(깨진 파일·잠금·쓰기 실패)는 트레이스백째 기록과 창으로 — 파일은 그대로."""
         try:
             save()
         except (ValueError, LookupError) as exc:
-            QMessageBox.warning(dialog, MANAGER_TITLE, str(exc))
+            QMessageBox.warning(dialog, _t("title"), str(exc))
             return False
         except (UserFileError, OSError, TimeoutError):
-            print(f"{LOG_PREFIX} 이 PC의 작품 목록을 저장하지 못했습니다:", file=sys.stderr, flush=True)
+            print(f"{LOG_PREFIX} {ui_text.korean('local_works.save_failed')}", file=sys.stderr, flush=True)
             traceback.print_exc()
-            QMessageBox.critical(dialog, MANAGER_TITLE, f"이 PC의 작품 목록을 저장하지 못했습니다.\n\n{traceback.format_exc()}")
+            QMessageBox.critical(dialog, _t("title"), f"{_t('save_failed')}\n\n{traceback.format_exc()}")
             return False
         self.reload_local_works()
         self._refresh_local_works_list(dialog)
@@ -295,14 +304,18 @@ class SidebarLocalWorksMixin:
         return paths.find_unicode_variant(folder) or folder
 
     def _add_local_work(self, dialog):
-        name, ok = QInputDialog.getText(dialog, MANAGER_TITLE, "작품 이름을 입력하세요:")
+        name, ok = QInputDialog.getText(dialog, _t("title"), _t("ask.name"))
         name = name.strip() if ok else ""
         if not name:
             return
+        # 화면 언어로 알릴 수 있게 저장 전에 거름 (저장 함수도 같은 것을 다시 봄 — 그쪽 글은 한글)
         if name in self.local_works:
-            QMessageBox.warning(dialog, MANAGER_TITLE, f"이미 있는 작품 이름입니다: {name}")
+            QMessageBox.warning(dialog, _t("title"), _t("name.exists", name=name))
             return
-        folder = QFileDialog.getExistingDirectory(dialog, f"{name} 작품 폴더 선택")
+        if name in local_works.reserved_names():
+            QMessageBox.warning(dialog, _t("title"), _t("name.reserved", name=name))
+            return
+        folder = QFileDialog.getExistingDirectory(dialog, _t("ask.folder", name=name))
         if not folder:
             return
         levels = self._ask_levels(dialog, local_works.DEFAULT_LEVELS)
@@ -315,7 +328,7 @@ class SidebarLocalWorksMixin:
         work = self._selected_local_work(dialog)
         if work is None:
             return
-        folder = QFileDialog.getExistingDirectory(dialog, f"{work.name} 작품 폴더 선택", work.folder)
+        folder = QFileDialog.getExistingDirectory(dialog, _t("ask.folder", name=work.name), work.folder)
         if folder:
             self._save_local_works(dialog, lambda: local_works.change(work.name, folder=self._folder_as_on_disk(folder)))
 
@@ -331,18 +344,16 @@ class SidebarLocalWorksMixin:
         work = self._selected_local_work(dialog)
         if work is None:
             return
-        answer = QMessageBox.question(
-            dialog, MANAGER_TITLE,
-            f"'{work.name}'을(를) 이 PC의 작품 목록에서 뺄까요?\n\n{work.folder}\n\n목록에서만 뺍니다 — 폴더와 영상은 지우지 않습니다.",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-        )
+        answer = QMessageBox.question(dialog, _t("title"), _t("remove.ask", name=work.name, folder=work.folder),
+                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if answer == QMessageBox.Yes:
             self._save_local_works(dialog, lambda: local_works.remove(work.name))
 
     def _show_shared_config_reason(self, dialog):
-        """공유 설정을 찾지 못한 사유: 본문은 쉬운 말, 기술 글(찾아본 곳·트레이스백)은 자세히 칸에."""
-        box = QMessageBox(QMessageBox.Information, "공유 설정", f"{NOT_FOUND_NOTICE} {LOCAL_LIST_NOTICE}", QMessageBox.Ok, dialog)
-        box.setProperty(BOX_TITLE_PROPERTY, "공유 설정")
+        """공유 설정을 찾지 못한 사유: 본문은 쉬운 말, 기술 글(찾아본 곳·트레이스백 — 기록과 같은 한글 글)은 자세히 칸에."""
+        title = _t("reason.title")
+        box = QMessageBox(QMessageBox.Information, title, f"{_t('not_found')} {_t('not_found.local')}", QMessageBox.Ok, dialog)
+        box.setProperty(BOX_TITLE_PROPERTY, title)
         box.setDetailedText(f"{self._shared_config_problem_text()}{self._config_dir_search_problems_text()}")
         try:
             box.exec_()

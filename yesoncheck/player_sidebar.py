@@ -715,6 +715,9 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         loaded, self._job_list_loaded_for = self._job_list_loaded_for, None
         if loaded == self._job_selection() or not self._job_picked():
             return
+        local = self._local_work(self.workComboBox.currentText())
+        if local is not None and self._refresh_shown_local_list(local):
+            return  # 이 PC의 작품: 목록이 그 폴더의 것이면 사내 job처럼 다시 읽기만 (보던 영상은 그대로)
         job_sources = {source for source in self._sidebar_sources if source.kind == "job"}
         if any(self.sidebar.item(i).data(SIDEBAR_SOURCE_ROLE) in job_sources for i in range(self.sidebar.count())):
             self.refresh_sidebar()

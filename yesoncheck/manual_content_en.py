@@ -553,22 +553,23 @@ PAGES = (
                  "without any notice window and the in-house show list is empty. "
                  "In-house, check the NAS connection and start the app again (on Windows, if it still is not found, "
                  "choose the folder yourself with Settings → {{settings.shared_config}} above). The reason is behind the "
-                 "‘공유 설정을 찾지 못한 까닭…’ (Why the shared settings were not found) button of the window that "
+                 "{{local_works.reason}} button of the window that "
                  "{{menu.tools}} → {{menu.tools.work_paths}} opens. If the shared settings folder opens but the file in it is broken or "
                  "missing, a ‘공유 설정 오류’ (Shared settings error) window tells you at startup.",
              )),
              ("h", "Shows on a PC outside the company", "local"),
              ("list", (
                  "On a PC that cannot find the in-house shared settings, {{menu.tools}} → {{menu.tools.work_paths}} opens **a show list "
-                 "saved only on that PC** (no password). Register a show name and a folder on that PC with ‘작품 추가’ (Add show), and it "
-                 "appears in the {{sidebar.works}} group of the sidebar.",
-                 "For each show you set **how many more folders to choose** — one of ‘작품을 고르면 바로 영상 목록’ (list the videos as "
-                 "soon as the show is chosen), ‘작품 → 폴더 하나를 더 고름’ (show → one folder) and ‘작품 → 폴더 → 폴더’ (show → folder → "
-                 "folder). The second and third boxes show {{picker.folder}}, and what you choose there are the subfolders of that folder.",
+                 "saved only on that PC** (no password). Register a show name and a folder on that PC with {{local_works.add}}, and it "
+                 "appears in the {{sidebar.works}} group of the sidebar. This window follows the screen language.",
+                 "For each show you set **how many more folders to choose** — one of {{local_works.level.0}}, {{local_works.level.1}} "
+                 "and {{local_works.level.2}}. The second and third boxes show {{picker.folder}}, and what you choose there are the "
+                 "subfolders of that folder.",
                  "The videos and image sequences under the last folder you chose are listed, **including all its subfolders** — the same "
                  "rule as [[library/folder|Opening a folder]], so any folder structure works.",
-                 "If the folder has moved, correct it with ‘폴더 바꾸기’ (Change folder) in the same window, and the number of steps with "
-                 "‘단계 바꾸기’ (Change steps). ‘작품 삭제’ (Remove show) only removes it from the list — the folder and its videos stay.",
+                 "If the folder has moved, correct it with {{local_works.folder}} in the same window, and the number of steps with "
+                 "{{local_works.levels}}. {{local_works.remove}} only removes it from the list — the folder and its videos stay. "
+                 "Choosing the same folder again only re-reads the list (the video you are watching stays).",
                  "This list is not used on a PC that has read the in-house shared settings — in-house, the show list on the NAS is used as before.",
              )),
              ("h", "Opening a folder", "folder"),

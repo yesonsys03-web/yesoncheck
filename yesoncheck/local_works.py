@@ -28,7 +28,6 @@ from yesoncheck.user_files import UserFileError
 PREF_KEY = "local_works"
 LEVELS = (0, 1, 2)
 DEFAULT_LEVELS = 1  # 작품 추가 창에서 처음 골라져 있는 단계 (작품 → 폴더)
-_LEVEL_TEXTS = {0: "작품을 고르면 바로 영상 목록", 1: "작품 → 폴더 하나를 더 고름", 2: "작품 → 폴더 → 폴더 (두 번 더 고름)"}
 SKIPPED_FOLDERS = ("@eaDir",)  # 고를 폴더에서 빼는 이름: NAS(Synology)가 폴더마다 만드는 색인 폴더 ('.'으로 시작하는 것도 뺌)
 # 작품 콤보의 안내 항목(0번)의 글 — 어느 언어의 것이든 작품 이름으로 받지 않음: 작품은 콤보의 글로 찾으므로, 같은 이름의 작품이 있으면
 # 아무것도 고르지 않은 0번이 그 작품으로 보임 (언어를 바꾼 뒤에도 — 그래서 모든 언어의 글)
@@ -75,9 +74,9 @@ def _check_levels(levels):
 
 
 def level_text(levels):
-    """단계 수를 화면의 글로."""
+    """단계 수를 화면의 글로 (지금 화면 언어 — ui_text의 local_works.level.N)."""
     _check_levels(levels)
-    return _LEVEL_TEXTS[levels]
+    return ui_text.text(f"local_works.level.{levels}")
 
 
 def _works_of(prefs, path):

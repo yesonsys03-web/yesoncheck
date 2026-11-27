@@ -533,13 +533,14 @@ class SidebarConfigPathsMixin:
             return ""
         return native
 
-    def _report_work_path_problem(self, message):
-        """작품 하나를 고를 때 시즌·job·목록이 각각 같은 경로를 물으므로 같은 오류는 한 번만 보여 줍니다."""
+    def _report_work_path_problem(self, message, title="작품 경로 오류"):
+        """작품 하나를 고를 때 시즌·job·목록이 각각 같은 경로를 물으므로 같은 오류는 한 번만 보여 줍니다.
+        title: 창 제목 (이 PC의 작품은 화면 언어의 제목을 넘김 — SidebarLocalWorksMixin)."""
         shown = self.__dict__.setdefault("_work_path_problems_shown", set())
         if message in shown:
             return
         shown.add(message)
-        QMessageBox.critical(self, "작품 경로 오류", message)
+        QMessageBox.critical(self, title, message)
 
     def _stored_work_path_or_warn(self, folder_path, parent):
         """고른 폴더를 공유 설정에 저장할 Mac 경로로 바꿉니다. 못 바꾸면 오류 창을 띄우고 None."""

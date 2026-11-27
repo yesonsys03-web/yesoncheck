@@ -15,8 +15,9 @@ import shutil
 import sys
 
 import pytest
-from PyQt5.QtWidgets import QDialog, QInputDialog, QMessageBox
+from PyQt5.QtWidgets import QDialog, QFileDialog, QInputDialog, QMessageBox, QPushButton
 
+from tests import ui_texts
 from tests.conftest import write_test_video
 from tests.test_fast_startup import wait_until
 from tests.test_mac_mounts import NO_SUCH_CONFIG
@@ -343,7 +344,8 @@ def test_no_level_lists_everything_as_soon_as_the_work_is_picked(outside, dialog
 
 def test_a_picked_folder_is_read_once(outside, dialogs, monkeypatch, show):
     """사람이 콤보에서 고르면 Qt는 currentIndexChanged 바로 다음에 activated도 보냄 — 같은 폴더를 두 번 읽지 않음
-    (읽은 것을 기억: _job_list_loaded_for)."""
+    (읽은 것을 기억: _job_list_loaded_for). 기억하지 않으면 그 activated를 '같은 폴더를 다시 고름'으로 보고 뒤 스레드에서 한 번 더
+    읽으므로, 다시 읽기가 끝나기까지 기다린 뒤 셈."""
     player = outside()
     register(player, "MyShow", show, 1)
     pick(player.workComboBox, "MyShow")
@@ -353,6 +355,7 @@ def test_a_picked_folder_is_read_once(outside, dialogs, monkeypatch, show):
 
     pick(player.jobComboBox, "s2")  # currentIndexChanged
     player._on_job_activated(player.jobComboBox.currentIndex())  # 바로 뒤의 activated (이벤트를 처리하기 전)
+    wait_refreshed(player)
 
     assert len(reads) == 1 and listed(player) == ["d.mp4"]
 
@@ -422,18 +425,42 @@ def test_changing_the_first_folder_empties_the_list_until_the_second_is_picked(o
     assert listed(player) == [] and combo_items(player.jobComboBox) == [FOLDER, "ep10"]
 
 
-def test_picking_the_same_folder_again_reads_it_again(outside, dialogs, qapp, show):
+def test_picking_the_same_folder_again_rereads_the_list_and_keeps_the_video(outside, dialogs, qapp, monkeypatch, show):
+    """같은 폴더를 다시 고르면 사내 job을 다시 고를 때처럼 목록만 다시 읽음 — 보던 영상(A)을 다시 열지 않음
+    (사용자 2026-11-27: "같은 폴더를 다시 고를 때도 기존대로"; 처음에는 목록을 새로 불러와 첫 영상을 A에 다시 열었음)."""
     player = outside()
     register(player, "MyShow", show, 2)
     pick(player.workComboBox, "MyShow")
     pick(player.seasonComboBox, "s1")
     pick(player.jobComboBox, "ep02")
     qapp.processEvents()
+    opened = []
+    real_open = player.open_file
+    monkeypatch.setattr(player, "open_file", lambda *args, **kwargs: opened.append(args) or real_open(*args, **kwargs))
     write_test_video(os.path.join(show, "s1", "ep02", "new.mp4"), frames=3)
 
     player._on_job_activated(player.jobComboBox.currentIndex())  # 같은 항목을 다시 고름
+    wait_refreshed(player)
 
     assert listed(player) == ["c.mp4", "new.mp4"] and dialogs.messages == []
+    assert opened == [] and paths.same_path(player.filename_a, os.path.join(show, "s1", "ep02", "c.mp4"))
+
+
+def test_picking_the_same_folder_again_after_another_list_loads_it_afresh(outside, dialogs, qapp, show, tmp_path):
+    """목록이 그 폴더의 것이 아니면(그사이 폴더 열기로 다른 폴더를 봄) 다시 고를 때는 처음 고를 때처럼 불러옴 (사내 job과 같음)."""
+    player = outside()
+    register(player, "MyShow", show, 2)
+    pick(player.workComboBox, "MyShow")
+    pick(player.seasonComboBox, "s1")
+    pick(player.jobComboBox, "ep02")
+    qapp.processEvents()
+    other = write_test_video(str(tmp_path / "elsewhere" / "x.mp4"), frames=3)
+    player.load_videos_from_folder(os.path.dirname(other))
+    assert listed(player) == ["x.mp4"]
+
+    player._on_job_activated(player.jobComboBox.currentIndex())
+
+    assert listed(player) == ["c.mp4"] and paths.same_path(player.filename_a, os.path.join(show, "s1", "ep02", "c.mp4"))
 
 
 def test_refresh_picks_up_a_new_video(outside, dialogs, show):
@@ -513,6 +540,126 @@ def test_registered_works_are_there_the_next_time_the_app_starts(outside, dialog
 
     assert combo_items(player.workComboBox) == ["작품선택", "Another", "MyShow"]  # 이름 순서
     assert not player.workPickerGroup.isHidden() and dialogs.messages == []
+
+
+# ---------------------------------------------------------------- English 화면 (사용자 2026-11-27: "새 창의 언어 영문도 추가")
+
+def test_the_manager_window_is_in_english_on_an_english_screen(outside, dialogs, show):
+    player = outside()
+    register(player, "MyShow", show, 2)
+    player.set_ui_language("en")
+
+    dialog = manager(player)
+
+    buttons = [button.text() for button in dialog.findChildren(QPushButton)]
+    assert dialog.windowTitle() == "Manage show paths (this PC)"
+    assert buttons == ["Add show", "Change folder", "Change steps", "Remove show", "Close", "Why the shared settings were not found…"]
+    assert rows(dialog) == [f"MyShow: {show}\n    show → folder → folder (choose two more)"]
+    assert "saved only on this PC" in dialog.intro_label.text()
+    assert ui_texts.hangul([dialog.windowTitle(), dialog.intro_label.text(), *buttons, *rows(dialog)]) == []
+
+
+def test_adding_a_work_asks_in_english(outside, dialogs, monkeypatch, show):
+    player = outside()
+    player.set_ui_language("en")
+    dialog = manager(player)
+    asked = []
+
+    def get_text(parent, title, label, *args, **kwargs):
+        asked.append((title, label))
+        return "MyShow", True
+
+    def get_folder(parent, caption, *args, **kwargs):
+        asked.append((caption,))
+        return show
+
+    def get_item(parent, title, label, items, current, editable):
+        asked.append((title, label, tuple(items), current))
+        return items[2], True
+
+    monkeypatch.setattr(QInputDialog, "getText", get_text)
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", get_folder)
+    monkeypatch.setattr(QInputDialog, "getItem", get_item)
+
+    dialog.add_button.click()
+
+    assert local_works.read() == [LocalWork("MyShow", show, 2)]
+    assert asked[0] == ("Manage show paths (this PC)", "Enter a name for the show:")
+    assert asked[1] == ("Choose the folder of MyShow",)
+    title, label, items, current = asked[2]
+    assert title == "Manage show paths (this PC)" and label.startswith("Set how many more folders you choose after the show.")
+    assert items == ("list the videos as soon as the show is chosen", "show → one more folder",
+                     "show → folder → folder (choose two more)") and current == local_works.DEFAULT_LEVELS
+    assert ui_texts.hangul([text for entry in asked for text in entry if isinstance(text, str)] + list(items)) == []
+    assert dialogs.messages == []
+
+
+def test_notices_of_the_manager_are_in_english(outside, dialogs, monkeypatch, show):
+    player = outside()
+    register(player, "MyShow", show, 1)
+    player.set_ui_language("en")
+    dialog = manager(player)
+
+    dialog.folder_button.click()  # 고른 작품 없음
+    answer_text(monkeypatch, ("MyShow", True), ("Select show", True))
+    dialog.add_button.click()  # 이미 있는 이름
+    dialog.add_button.click()  # 안내 글과 같은 이름
+    dialog.works_list.setCurrentRow(0)
+    dialogs.answer_question(QMessageBox.No)
+    dialog.remove_button.click()
+    dialog.reason_button.click()
+
+    texts = [text for _kind, _title, text in dialogs.messages[:4]]
+    assert texts[0] == "Select a show in the list first."
+    assert texts[1] == "A show with this name already exists: MyShow"
+    assert texts[2].startswith("This name cannot be used") and texts[2].endswith(": Select show")
+    assert texts[3].startswith("Remove 'MyShow' from this PC's show list?") and "are not deleted" in texts[3]
+    assert ui_texts.hangul(texts) == [] and {title for _kind, title, _text in dialogs.messages[:4]} == {"Manage show paths (this PC)"}
+    reason = dialogs.boxes[-1]
+    assert reason.title == "Shared settings" and reason.text.startswith("The in-house shared settings (NAS) were not found.")
+    assert ui_texts.hangul([reason.text]) == []  # (자세히 칸의 기술 글은 한글 그대로 — 기록과 같은 글)
+    assert local_works.read() == [LocalWork("MyShow", show, 1)]
+
+
+def test_picker_problems_are_told_in_english(outside, dialogs, monkeypatch, show):
+    player = outside()
+    register(player, "MyShow", show, 2)
+    register(player, "Gone", os.path.join(show, "no_such_folder"), 1)
+    player.set_ui_language("en")
+    real = local_works.subfolders
+
+    def subfolders(folder):
+        if os.path.basename(folder) == "s1":
+            raise PermissionError(13, "Permission denied", folder)
+        return real(folder)
+
+    monkeypatch.setattr(local_works, "subfolders", subfolders)
+
+    pick(player.workComboBox, "Gone")
+    pick(player.workComboBox, "MyShow")
+    pick(player.seasonComboBox, "s1")
+
+    assert [(kind, title) for kind, title, _text in dialogs.messages] == [("critical", "Show path error")] * 2
+    gone, unreadable = dialogs.criticals
+    assert gone.startswith("The folder of 'Gone' cannot be opened.") and "Manage show paths" in gone
+    assert unreadable.startswith("The folder could not be read.") and "PermissionError" in unreadable
+    assert ui_texts.hangul([gone, unreadable]) == []
+
+
+def test_a_list_that_cannot_be_read_is_told_in_english(outside, dialogs, show):
+    """읽지 못한 목록의 알림: 머리 글은 화면 언어로 (그 뒤의 사유는 기록과 같은 글), 켠 뒤 언어를 바꿔도 그 언어로."""
+    os.makedirs(os.path.dirname(hover_strip.prefs_path()), exist_ok=True)
+    with open(hover_strip.prefs_path(), "w", encoding="utf-8") as fh:
+        json.dump({"local_works": "MyShow"}, fh)
+    player = outside()
+    assert dialogs.boxes[0].text.startswith("이 PC의 작품 목록을 읽지 못했습니다")
+
+    player.set_ui_language("en")
+    player.manage_work_paths()
+
+    told = dialogs.boxes[1]
+    assert told.title == "This PC's show list" and told.text.startswith("This PC's show list could not be read")
+    assert "The in-house shared settings (NAS) were not found." in told.text and "local_works" in told.text
 
 
 # ---------------------------------------------------------------- 사내 PC는 그대로 · 읽지 못한 목록
