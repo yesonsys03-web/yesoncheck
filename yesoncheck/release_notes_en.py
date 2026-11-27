@@ -7,6 +7,43 @@ entry for entry (no Qt). The deploy notes (GitHub Release, update banner) still 
 from yesoncheck.release_notes import Release
 
 RELEASES = (
+    Release("2.2.0", "2026-11-28",
+            "Choosing shows now works on a PC outside the company too — Manage show paths opens that PC's own show list. When a "
+            "video you have open is rendered again, a plain notice appears instead of a long error window.",
+            (
+                ("Shows on a PC outside the company", (
+                    "On a PC that cannot find the in-house shared settings (outside the company), Tools → Manage show paths… opens "
+                    "**a show list saved only on that PC** instead of a warning (no password). Register a show name and a folder "
+                    "on that PC, then choose it in the Select show group of the sidebar.",
+                    "For each show you set **how many more folders to choose** — list the videos as soon as the show is chosen, "
+                    "show → folder, or show → folder → folder. The videos and image sequences under the last folder you choose are "
+                    "listed, including all its subfolders (the same rule as Open folder), so any folder structure works.",
+                    "Choosing the same folder again only re-reads the list — the video you are watching stays.",
+                    "This window and its notices follow the screen language (한국어 / English).",
+                    "In-house PCs (PCs that read the shared settings) work as before — the show list and password of the shared "
+                    "settings, unchanged.",
+                )),
+                ("Window title", (
+                    "The ‘공유 설정 오류 (작품 목록 없음)’ (shared settings error — no show list) text that was added to the window "
+                    "title when the shared settings were not found is gone. The reason is behind the Why the shared settings were "
+                    "not found… button of the Manage show paths window.",
+                    "The path map error text in the title of a Windows PC that cannot reach its saved shared settings folder (an "
+                    "in-house laptop started elsewhere, for example) no longer appears in that case either.",
+                )),
+                ("When a video you have open is rendered again", (
+                    "If a video you are reviewing is rendered again under the same name, the open video may no longer be readable. "
+                    "Instead of the long technical error window, a notice starting ‘이 영상은 연 뒤에 파일이 다시 쓰였습니다 …’ (this "
+                    "video's file was written again after it was opened) appears once — when the render has finished, click that "
+                    "video in the list again to open it.",
+                    "The notice shows the file and what changed (size and modified time); the technical details are behind its "
+                    "Show Details... button and in the app log.",
+                    "An error with an unchanged file shows the same window as before.",
+                )),
+                ("Manual", (
+                    "The ‘Getting started’, ‘Shows · folders · bookmarks’ (new section ‘Shows on a PC outside the company’) and "
+                    "‘Troubleshooting’ pages now describe the above.",
+                )),
+            )),
     Release("2.1.3", "2026-11-25",
             "The one Open folder button in the sidebar now opens folders and files. A video you drop in or open by double-click "
             "is also added to the Mov list, wherever you open it.",

@@ -97,7 +97,8 @@ def test_newest_release_is_the_ui_redesign():
     from yesoncheck import release_notes_en
 
     for notes in (release_notes, release_notes_en):
-        assert [(r.version, r.date) for r in notes.RELEASES[:6]] == [
+        assert [(r.version, r.date) for r in notes.RELEASES[:7]] == [
+            ("2.2.0", "2026-11-28"),
             ("2.1.3", "2026-11-25"), ("2.1.2", "2026-11-24"), ("2.1.1", "2026-11-23"), ("2.1.0", "2026-11-20"),
             ("2.0.1", "2026-11-18"), ("2.0.0", "2026-11-17")], notes.__name__
     text = release_notes.notes_text("2.0.0")
@@ -112,3 +113,11 @@ def test_newest_release_is_the_ui_redesign():
     assert "preview-" in text and "`frames` 폴더" in text and "썸네일을 만들지 못해" in text and "끌어다 놓으면" in text
     text = release_notes.notes_text("2.1.3")  # 2.1.3 — 폴더 열기로 파일도·가져온 영상은 어디서 열든 목록에 (사용자 지시 2026-11-25)
     assert "폴더 열기" in text and "파일 고르기…" in text and "더블클릭" in text and "Mov 목록" in text and "끌어다 놓" in text
+    # 2.2.0 — 회사 밖 PC의 작품 목록·창 제목의 공유 설정 오류 제거(#85) · 다시 렌더링된 영상의 쉬운 말 알림(#84) (사용자 지시 2026-11-27
+    # "85 머지하고 배포 해", 버전은 물어서 2.2.0)
+    text = release_notes.notes_text("2.2.0")
+    assert "작품 경로 관리" in text and "폴더를 몇 번 더 고를지" in text and "화면 언어" in text
+    assert "공유 설정 오류 (작품 목록 없음)" in text and "다시 렌더링" in text and "Show Details..." in text
+    newest = release_notes_en.RELEASES[0]
+    english = newest.summary + " ".join(item for _title, items in newest.groups for item in items)
+    assert "Manage show paths" in english and "how many more folders" in english and "rendered again" in english
