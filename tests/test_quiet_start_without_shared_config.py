@@ -17,12 +17,12 @@ import os
 import sys
 
 import pytest
-from PyQt5.QtWidgets import QFileDialog
+from PyQt5.QtWidgets import QDialog, QFileDialog
 
 from tests.test_fast_startup import wait_until
 from tests.test_mac_mounts import NO_SUCH_CONFIG
 from tests.test_path_map_auto_ui import win  # noqa: F401 (fixture)
-from yesoncheck import hover_strip, mac_prefs, path_map_setup, paths, shared_config, shared_config_load, work_picker
+from yesoncheck import build_info, hover_strip, mac_prefs, path_map_setup, paths, shared_config, shared_config_load, work_picker
 
 mac_only = pytest.mark.skipif(sys.platform == "win32", reason="Mac의 공유 설정 자리(POSIX 경로) — Windows 동작은 win 픽스처의 시험")
 
@@ -297,7 +297,7 @@ def test_mac_gets_no_window_and_the_reason_goes_to_the_log(no_share_mac, players
     out = capsys.readouterr().out
     assert "[공유 설정]" in out and QUIET_LOG in out
     assert "작품 경로 파일이 없습니다" in out and "Traceback" in out  # 사유는 기록에 그대로
-    assert "공유 설정 오류" in player.windowTitle()  # 창 제목의 표시는 그대로
+    assert "공유 설정 오류" not in player.windowTitle()  # 창 제목에도 적지 않음 (2026-11-27)
     assert player.workPickerGroup.isHidden()  # 작품을 읽어 온 적이 없는 PC
 
 
@@ -308,7 +308,7 @@ def test_mac_that_has_read_works_before_is_quiet_too(no_share_mac, players, dial
     player = players()
     player.resolve_shared_config_problem()
     assert dialogs.messages == []
-    assert "공유 설정 오류" in player.windowTitle()
+    assert "공유 설정 오류" not in player.windowTitle()
     assert not player.workPickerGroup.isHidden()  # 작품 묶음의 자리는 그대로 (안내 항목만)
 
 
@@ -336,6 +336,21 @@ def test_windows_pc_gets_no_folder_picker_and_no_error_window(win, dialogs, monk
     assert dialogs.messages == [] and picker == []
     out = capsys.readouterr().out
     assert QUIET_LOG in out and NOT_SET in out
+
+
+def test_windows_laptop_away_from_its_saved_folder_has_a_clean_title(win, dialogs, monkeypatch):  # noqa: F811
+    """밖에서 켠 사내 Windows 노트북: 정해 둔 공유 설정 폴더에 닿지 못하면 그 안의 변환표(path_map.json)도 읽지 못함 — 그 '변환표 오류
+    (작품 경로 관리에서 자동 설정)'도 창 제목에 적지 않음. 같은 까닭(공유 설정을 찾지 못함)에서 온 문제이고, 그 PC의 작품 경로 관리는
+    이제 이 PC의 작품 창이라 안내가 가리키는 자동 설정도 거기에 없음 (리뷰에서 잡음 — 제목 표시를 반만 없앴음). 사유는 그 창의 단추에."""
+    no_shares_windows(win, monkeypatch)
+    shared_config.save_local_settings({"config_dir": GONE_UNC})
+    player = win.player()
+    assert player.shared_config_not_found is True and player.path_map_problem  # 변환표도 읽지 못한 상태
+
+    assert player.windowTitle() == build_info.title_base()
+
+    player._local_works_dialog().reason_button.click()
+    assert player.path_map_problem in dialogs.boxes[0].details  # 변환표 쪽 사유도 단추 뒤에서 봄
 
 
 def test_windows_laptop_away_from_its_saved_folder_gets_no_window(win, dialogs, monkeypatch, capsys):  # noqa: F811
@@ -398,14 +413,19 @@ def test_saved_folder_without_the_file_is_still_asked_about_on_windows(win, dial
     assert len(picker) == 1
 
 
-# ---------------------------------------------------------------- 메뉴로 부르는 길은 그대로 (사유는 여기서 봄)
+# ---------------------------------------------------------------- 메뉴로 부르는 길 (사유는 여기서 봄)
+# 작품 경로 관리는 2026-11-27부터 경고 창이 아니라 이 PC의 작품 창을 엶 (test_local_works_ui) — 찾지 못한 사유는 그 창의 단추 뒤에
 
 @mac_only
-def test_work_path_manager_still_says_why(no_share_mac, players, dialogs):
+def test_work_path_manager_still_says_why(no_share_mac, players, dialogs, monkeypatch):
     player = players()
+    opened = []
+    monkeypatch.setattr(QDialog, "exec_", lambda dialog: opened.append(dialog) or 0)
     player.manage_work_paths()
-    assert window_kinds(dialogs) == [("warning", "작품 경로 관리")]
-    assert "관리할 수 없습니다" in dialogs.warnings[0] and "작품 경로 파일이 없습니다" in dialogs.warnings[0]
+    assert [dialog.windowTitle() for dialog in opened] == ["작품 경로 관리 (이 PC)"] and dialogs.messages == []
+    opened[0].reason_button.click()
+    [box] = dialogs.boxes
+    assert (box.kind, box.title) == ("information", "공유 설정") and "작품 경로 파일이 없습니다" in box.details
 
 
 def test_work_path_manager_also_lists_the_places_that_could_not_be_checked(win, dialogs, monkeypatch):  # noqa: F811
@@ -414,9 +434,13 @@ def test_work_path_manager_also_lists_the_places_that_could_not_be_checked(win, 
     line = "Z: 연결 정보를 읽지 못함 (가짜 재현)"
     monkeypatch.setattr(path_map_setup, "connected_shares", lambda remote_of_drive=None: ([], [line]))
     player = win.player()
+    opened = []
+    monkeypatch.setattr(QDialog, "exec_", lambda dialog: opened.append(dialog) or 0)
     player.manage_work_paths()
-    assert window_kinds(dialogs) == [("warning", "작품 경로 관리")]
-    assert NOT_SET in dialogs.warnings[0] and line in dialogs.warnings[0]
+    assert [dialog.windowTitle() for dialog in opened] == ["작품 경로 관리 (이 PC)"] and dialogs.messages == []
+    opened[0].reason_button.click()
+    [box] = dialogs.boxes
+    assert NOT_SET in box.details and line in box.details
 
 
 def test_choosing_the_folder_from_the_menu_still_asks(win, dialogs, monkeypatch):  # noqa: F811

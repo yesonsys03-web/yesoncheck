@@ -95,6 +95,8 @@ class SidebarConfigPathsMixin:
             paths.activate(state.path_map)
         if state.mount_map is not None:
             paths.activate_mount_map(state.mount_map)
+        # 공유 설정을 찾지 못한 PC(회사 밖)만 이 PC의 작품 목록을 씀 — 읽은 PC·진짜 문제는 쓰지 않음 (SidebarLocalWorksMixin)
+        self._use_local_works(bool(state.shared_config_problem and state.config_not_found))
 
     def start_shared_config_load(self):
         """(창 표시 후) 공유 설정을 백그라운드 스레드에서 읽고, 끝나면 GUI 스레드에서 넣은 뒤 문제를 알립니다.
@@ -164,14 +166,17 @@ class SidebarConfigPathsMixin:
         return False
 
     def _update_shared_config_title(self):
-        """창 제목을 지금 상태(불러오는 중·공유 설정 오류·변환표 오류)와 지금 언어로 — 상태가 바뀔 때와 언어가 바뀐 뒤."""
+        """창 제목을 지금 상태(불러오는 중·변환표 오류)와 지금 언어로 — 상태가 바뀔 때와 언어가 바뀐 뒤.
+        공유 설정 문제는 제목에 적지 않음 (2026-11-27 사용자: "앱 타이틀 바에 공유설정 오류 메시지 표시는 필요없어" — 회사 밖 PC는 늘
+        그 표시가 붙어 있었음). 진짜 문제는 시작할 때의 창이, 사유는 Tools → 작품 경로 관리가 보임.
+        공유 설정을 찾지 못한 PC는 변환표 문제도 적지 않음: 밖에서 켠 사내 Windows 노트북은 정해 둔 공유 설정 폴더에 닿지 못해 그 안의
+        변환표도 못 읽는데(같은 까닭), 그 꼬리가 권하는 '작품 경로 관리에서 자동 설정'은 그 PC에서는 이 PC의 작품 창이라 거기에 없음."""
         if getattr(self, "shared_config_loading", False):
             self.setWindowTitle(build_info.title_base() + ui_text.text("title.loading"))
             return
         title = build_info.title_base()  # 빌드된 앱은 "Yeson Checker 1.1.0", 소스 실행은 "Yeson Checker"
-        if self.shared_config_problem:
-            title += ui_text.text("title.config_problem")
-        if getattr(self, "path_map_problem", None):
+        not_found = self.shared_config_problem and getattr(self, "shared_config_not_found", False)
+        if getattr(self, "path_map_problem", None) and not not_found:
             title += ui_text.text("title.path_map_problem.windows" if paths.IS_WINDOWS else "title.path_map_problem")
         self.setWindowTitle(title)
 
@@ -184,10 +189,12 @@ class SidebarConfigPathsMixin:
 
         공유 설정을 찾지 못한 것(shared_config_not_found — 없음·NAS에 닿지 않음)이면 어느 PC에서도 창을 띄우지 않고 문제 글을
         기록에만 남깁니다 (사용자 결정 2026-11-23: 회사 밖에서는 혼자 쓰는 앱이라 켤 때마다 뜨는 창이 필요 없고, 앱은 밖에서 켠
-        노트북과 사내의 NAS 끊김을 구별하지 못함). 창 제목의 표시는 그대로이고, 사유는 Tools → 작품 경로 관리에서도 보입니다.
+        노트북과 사내의 NAS 끊김을 구별하지 못함). 창 제목에도 적지 않고(2026-11-27), 사유는 Tools → 작품 경로 관리(이 PC의 작품
+        창)의 '공유 설정을 찾지 못한 까닭…' 단추에서 봅니다. 이때 쓰는 이 PC의 작품 목록을 읽지 못했으면 그것은 알립니다.
         """
         if self.shared_config_problem and self.shared_config_not_found:
             print(f"{NOT_FOUND_LOG}\n{self._shared_config_problem_text()}{self._config_dir_search_problems_text()}", flush=True)
+            self._report_local_works_problem()
             return
         if self.shared_config_problem and paths.IS_WINDOWS and not shared_config.is_valid_config_dir(self.work_paths_config_dir):
             if self.config_dir_candidates:
@@ -434,7 +441,7 @@ class SidebarConfigPathsMixin:
         return True
 
     def reload_work_combo(self):
-        """작품 콤보박스를 self.work_paths로 다시 채웁니다.
+        """작품 콤보박스를 self.work_paths(공유 설정의 작품)와 이 PC의 작품(_work_names)으로 다시 채웁니다.
 
         다시 채우면 시즌·job 고르기도 비워져 'job을 고르지 않음'이 됨 — 그동안 `_refilling_work_combo`를 세워, 목록에 job에서
         온 것이 없으면 목록을 비우지 않게 함 (`_load_job_list`): 창은 공유 설정을 뒤에서 읽는 동안 먼저 뜨므로, 그사이 가져온 파일·폴더
@@ -445,7 +452,7 @@ class SidebarConfigPathsMixin:
             self.workComboBox.blockSignals(True)
             self.workComboBox.clear()
             self.workComboBox.addItem(self._first_work_item())
-            for work_name in sorted(self.work_paths.keys()):
+            for work_name in self._work_names():
                 self.workComboBox.addItem(work_name)
             self.workComboBox.blockSignals(False)
             self._update_shared_config_title()
@@ -498,7 +505,11 @@ class SidebarConfigPathsMixin:
         Mac은 그곳 — mac_mounts).
 
         변환하지 못하거나 폴더가 없으면 오류 창을 한 번 띄우고 ""를 돌려줍니다.
+        이 PC의 작품(회사 밖 PC — SidebarLocalWorksMixin)은 적어 둔 폴더 그대로 (변환 없음).
         """
+        local = self._local_work(work_name)
+        if local is not None:
+            return self._local_work_folder(local)
         stored = self.work_paths.get(work_name, "")
         if not stored:
             return ""
@@ -522,13 +533,14 @@ class SidebarConfigPathsMixin:
             return ""
         return native
 
-    def _report_work_path_problem(self, message):
-        """작품 하나를 고를 때 시즌·job·목록이 각각 같은 경로를 물으므로 같은 오류는 한 번만 보여 줍니다."""
+    def _report_work_path_problem(self, message, title="작품 경로 오류"):
+        """작품 하나를 고를 때 시즌·job·목록이 각각 같은 경로를 물으므로 같은 오류는 한 번만 보여 줍니다.
+        title: 창 제목 (이 PC의 작품은 화면 언어의 제목을 넘김 — SidebarLocalWorksMixin)."""
         shown = self.__dict__.setdefault("_work_path_problems_shown", set())
         if message in shown:
             return
         shown.add(message)
-        QMessageBox.critical(self, "작품 경로 오류", message)
+        QMessageBox.critical(self, title, message)
 
     def _stored_work_path_or_warn(self, folder_path, parent):
         """고른 폴더를 공유 설정에 저장할 Mac 경로로 바꿉니다. 못 바꾸면 오류 창을 띄우고 None."""
@@ -616,8 +628,12 @@ class SidebarConfigPathsMixin:
         return True
 
     def manage_work_paths(self):
-        """작품 경로 관리 다이얼로그를 표시합니다."""
+        """작품 경로 관리 다이얼로그를 표시합니다. 공유 설정을 찾지 못한 PC(회사 밖)는 이 PC의 작품 목록 창
+        (SidebarLocalWorksMixin.manage_local_works — 비밀번호 없음), 진짜 문제(폴더는 열리는데 파일이 깨짐 등)는 사유의 경고 창."""
         if self._shared_config_busy():
+            return
+        if self.shared_config_problem and self.shared_config_not_found:
+            self.manage_local_works()
             return
         # 공유 설정에 문제가 있으면 관리 금지 (깨진 파일을 빈 목록으로 덮어쓰거나 새 비밀번호를 받지 않도록)
         if self.shared_config_problem or self.work_paths_config_dir is None:

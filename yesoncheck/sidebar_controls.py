@@ -229,8 +229,9 @@ class SidebarControlsMixin:
         Seq 항목의 글·툴팁, 창 제목의 꼬리. 우클릭 메뉴는 열 때마다 만들어 그때의 언어로 나옴. 썸네일 진행 막대는 만드는 동안만
         보이고 다음 글부터 새 언어."""
         self.retranslate_sidebar_controls()
-        placeholders = ((self.workComboBox, self._first_work_item()), (self.seasonComboBox, ui_text.text("picker.season")),
-                        (self.jobComboBox, ui_text.text("picker.job")))
+        # (이 PC의 작품을 골라 둔 채면 둘째·셋째는 '폴더선택' — _picker_placeholder)
+        placeholders = ((self.workComboBox, self._first_work_item()), (self.seasonComboBox, self._picker_placeholder("picker.season")),
+                        (self.jobComboBox, self._picker_placeholder("picker.job")))
         for combo, placeholder in placeholders:
             if combo.count():
                 blocked = combo.blockSignals(True)
@@ -337,14 +338,15 @@ class SidebarControlsMixin:
 
     def _sync_work_picker(self):
         """작품 묶음의 보임을 맞춤: 작품이 있으면 보이고 그 사실을 기억, 없으면 기억대로 (모듈 설명 — work_picker)."""
-        if self.work_paths and self._work_picker_seen is False:
+        has_works = bool(self.work_paths or self.local_works)  # 공유 설정의 작품이나 이 PC의 작품(회사 밖 PC)
+        if has_works and self._work_picker_seen is False:
             self._work_picker_seen = True
             try:
                 work_picker.remember_seen()
             except (UserFileError, OSError, TimeoutError):
                 print(f"{LOG_PREFIX} 작품을 읽어 왔음을 설정 파일에 적지 못했습니다 (이 창에서는 보임):", file=sys.stderr, flush=True)
                 traceback.print_exc()
-        self.workPickerGroup.setVisible(bool(self.work_paths) or self._work_picker_seen is not False)
+        self.workPickerGroup.setVisible(has_works or self._work_picker_seen is not False)
 
     def _show_combo_tooltips(self, *_args):
         """콤보마다 고른 글자를 툴팁으로 — 사이드바 폭에서 잘린 긴 작품·job 이름을 읽을 수 있게."""

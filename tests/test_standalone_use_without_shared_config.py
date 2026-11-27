@@ -56,7 +56,7 @@ def video_in(folder, name):
 def test_start_is_quiet_and_only_the_work_picker_is_missing(standalone, dialogs):
     assert dialogs.messages == []
     assert standalone.workPickerGroup.isHidden()
-    assert "공유 설정 오류" in standalone.windowTitle()  # 남는 표시는 창 제목뿐
+    assert "공유 설정 오류" not in standalone.windowTitle()  # 창 제목에도 표시 없음 (2026-11-27 — 전에는 제목에만 남겼음)
     for button in (standalone.openFolderButton, standalone.listModeButton):
         assert button.isEnabled()
 

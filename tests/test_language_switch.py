@@ -832,23 +832,22 @@ def test_thumbnail_bar_texts_by_language(shown, tmp_path):
 
 def test_window_title_tail_follows_the_language(shown):
     korean = ui_texts._title_texts(shown)
+    # 공유 설정 문제는 제목에 적지 않음 (2026-11-27): 문제만 있는 제목은 보통 제목과 같고, 변환표 문제와 함께면 변환표 꼬리만
     assert [title.partition(" — ")[2] for title in korean] == [
-        "", "공유 설정 불러오는 중…", "공유 설정 오류 (작품 목록 없음)", korean[3].partition(" — ")[2],
-        "공유 설정 오류 (작품 목록 없음)" + " — " + korean[3].partition(" — ")[2]]
+        "", "공유 설정 불러오는 중…", "", korean[3].partition(" — ")[2], korean[3].partition(" — ")[2]]
     assert korean[3].partition(" — ")[2].startswith("변환표 오류")
     shown.set_ui_language("en")
     english = ui_texts._title_texts(shown)
-    assert ui_texts.hangul(english) == [] and len(set(english)) == 5
+    assert ui_texts.hangul(english) == [] and len(set(english)) == 3
     assert [title.partition(" — ")[0] for title in english] == [title.partition(" — ")[0] for title in korean]  # 머리는 같음
-    # 문제가 있는 채 언어를 바꾸면 창 제목의 꼬리도 따라 바뀜. 변환표 문제는 지움 — Windows의 시험용 창은 변환표가 없어
-    # 처음부터 그 꼬리가 붙어 있음(english[2]는 공유 설정 오류 하나만인 제목)
+    # 변환표 문제가 있는 채 언어를 바꾸면 창 제목의 꼬리도 따라 바뀜
     saved = shown.shared_config_problem, shown.path_map_problem
-    shown.shared_config_problem, shown.path_map_problem = "x", None
+    shown.shared_config_problem, shown.path_map_problem = None, "y"
     try:
         shown._update_shared_config_title()
-        assert shown.windowTitle() == english[2]
+        assert shown.windowTitle() == english[3]
         shown.set_ui_language("ko")
-        assert shown.windowTitle() == korean[2]
+        assert shown.windowTitle() == korean[3]
     finally:
         shown.shared_config_problem, shown.path_map_problem = saved
         shown._update_shared_config_title()

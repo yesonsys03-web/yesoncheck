@@ -67,6 +67,58 @@ TEXTS = {
     "picker.loading": {"ko": "공유 설정 불러오는 중…", "en": "Loading shared settings…"},
     "picker.season": {"ko": "시즌선택", "en": "Select season"},
     "picker.job": {"ko": "job선택", "en": "Select job"},
+    # 이 PC의 작품(회사 밖 PC — local_works)의 둘째·셋째 콤보: 시즌·job이 아니라 그 작품 폴더 아래의 폴더
+    "picker.folder": {"ko": "폴더선택", "en": "Select folder"},
+    # 이 PC의 작품 창과 그 알림들 (sidebar_local_works) — 딸린 창은 보통 한글로 남지만 이 창은 회사 밖 PC(외국 회사 포함)에서 쓰는 창이라
+    # 두 언어로 (사용자 2026-11-27: "새 창의 언어 영문도 추가"). 기록에 적는 글은 korean()으로 한글 그대로
+    "local_works.title": {"ko": "작품 경로 관리 (이 PC)", "en": "Manage show paths (this PC)"},
+    "local_works.intro": {
+        "ko": "사내 공유 설정(NAS)을 찾지 못해, 이 PC에만 저장되는 작품 목록을 엽니다 (사내 PC라면 NAS 연결을 확인하세요).\n\n"
+              "작품마다 폴더와 '폴더를 몇 번 더 고를지'를 정합니다. 마지막으로 고른 폴더 아래의 영상을 하위 폴더까지 모두 목록에 넣습니다 "
+              "— '폴더 열기'와 같은 규칙이라 폴더 구조를 가리지 않습니다.",
+        "en": "The in-house shared settings (NAS) were not found, so this is a show list saved only on this PC (on an in-house PC, "
+              "check the NAS connection).\n\n"
+              "For each show you set its folder and how many more folders you choose. The videos under the last folder you choose "
+              "are listed, including all its subfolders — the same rule as 'Open folder', so any folder structure works."},
+    "local_works.add": {"ko": "작품 추가", "en": "Add show"},
+    "local_works.folder": {"ko": "폴더 바꾸기", "en": "Change folder"},
+    "local_works.levels": {"ko": "단계 바꾸기", "en": "Change steps"},
+    "local_works.remove": {"ko": "작품 삭제", "en": "Remove show"},
+    "local_works.close": {"ko": "닫기", "en": "Close"},
+    "local_works.reason": {"ko": "공유 설정을 찾지 못한 까닭…", "en": "Why the shared settings were not found…"},
+    "local_works.reason.title": {"ko": "공유 설정", "en": "Shared settings"},
+    "local_works.not_found": {"ko": "사내 공유 설정(NAS)을 찾지 못했습니다. 사내 PC라면 NAS 연결을 확인한 뒤 앱을 다시 켜세요.",
+                              "en": "The in-house shared settings (NAS) were not found. On an in-house PC, check the NAS connection and "
+                                    "start the app again."},
+    "local_works.not_found.local": {"ko": "회사 밖에서는 이 PC의 작품 목록을 씁니다.",
+                                    "en": "Outside the company, this PC's own show list is used."},
+    "local_works.pick_first": {"ko": "목록에서 작품을 먼저 고르세요.", "en": "Select a show in the list first."},
+    "local_works.ask.name": {"ko": "작품 이름을 입력하세요:", "en": "Enter a name for the show:"},
+    "local_works.ask.folder": {"ko": "{name} 작품 폴더 선택", "en": "Choose the folder of {name}"},
+    "local_works.ask.levels": {
+        "ko": "작품을 고른 뒤 폴더를 몇 번 더 고를지 정하세요.\n마지막으로 고른 폴더 아래의 영상을 하위 폴더까지 모두 목록에 넣습니다:",
+        "en": "Set how many more folders you choose after the show.\nThe videos under the last folder you choose are listed, "
+              "including all its subfolders:"},
+    "local_works.level.0": {"ko": "작품을 고르면 바로 영상 목록", "en": "list the videos as soon as the show is chosen"},
+    "local_works.level.1": {"ko": "작품 → 폴더 하나를 더 고름", "en": "show → one more folder"},
+    "local_works.level.2": {"ko": "작품 → 폴더 → 폴더 (두 번 더 고름)", "en": "show → folder → folder (choose two more)"},
+    "local_works.name.exists": {"ko": "이미 있는 작품 이름입니다: {name}", "en": "A show with this name already exists: {name}"},
+    "local_works.name.reserved": {"ko": "쓸 수 없는 이름입니다 (작품 고르기의 안내 글과 같음): {name}",
+                                  "en": "This name cannot be used (it is the same as the chooser's own text): {name}"},
+    "local_works.remove.ask": {
+        "ko": "'{name}'을(를) 이 PC의 작품 목록에서 뺄까요?\n\n{folder}\n\n목록에서만 뺍니다 — 폴더와 영상은 지우지 않습니다.",
+        "en": "Remove '{name}' from this PC's show list?\n\n{folder}\n\nIt is only removed from the list — the folder and its videos "
+              "are not deleted."},
+    "local_works.save_failed": {"ko": "이 PC의 작품 목록을 저장하지 못했습니다.", "en": "This PC's show list could not be saved."},
+    "local_works.read_failed": {"ko": "이 PC의 작품 목록을 읽지 못했습니다 — 목록 없이 계속합니다 (파일은 그대로 둠).",
+                                "en": "This PC's show list could not be read — continuing without it (the file is left as it is)."},
+    "local_works.problem.title": {"ko": "이 PC의 작품 목록", "en": "This PC's show list"},
+    "local_works.path_problem.title": {"ko": "작품 경로 오류", "en": "Show path error"},
+    "local_works.folder_gone": {
+        "ko": "작품 '{name}' 폴더를 열 수 없습니다.\n\n이 PC 경로: {folder}\n\n폴더가 옮겨졌으면 Tools → 작품 경로 관리에서 폴더를 다시 정하세요.",
+        "en": "The folder of '{name}' cannot be opened.\n\nPath on this PC: {folder}\n\nIf the folder has moved, set it again in "
+              "Tools → Manage show paths."},
+    "local_works.folder_unreadable": {"ko": "폴더를 읽지 못했습니다.", "en": "The folder could not be read."},
     # 목록 아래 개수 줄 (sidebar_counts) — 영문은 하나일 때 낱말이 다름. 괄호 안의 'TK2 5' 꼴은 두 언어에서 같음(색을 칠하는 쪽이 읽음)
     "count.item": {"ko": "{count}개", "en": "{count} item"},
     "count.items": {"ko": "{count}개", "en": "{count} items"},
@@ -142,7 +194,6 @@ TEXTS = {
     "open_with.prefs_problem": {"ko": "설정 파일을 읽지 못했습니다", "en": "Could not read the settings file"},
     # 창 제목의 꼬리 (앞은 'Yeson Checker <버전>' — 언어와 무관)
     "title.loading": {"ko": " — 공유 설정 불러오는 중…", "en": " — loading shared settings…"},
-    "title.config_problem": {"ko": " — 공유 설정 오류 (작품 목록 없음)", "en": " — shared settings error (no show list)"},
     "title.path_map_problem": {"ko": " — 변환표 오류", "en": " — path map error"},
     "title.path_map_problem.windows": {"ko": " — 변환표 오류 (작품 경로 관리에서 자동 설정)",
                                        "en": " — path map error (set it up in Manage show paths)"},

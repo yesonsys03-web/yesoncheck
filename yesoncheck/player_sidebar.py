@@ -24,6 +24,7 @@ from yesoncheck.sidebar_playlist import SidebarPlaylistMixin
 from yesoncheck.sidebar_config_paths import SidebarConfigPathsMixin
 from yesoncheck.sidebar_controls import SidebarControlsMixin
 from yesoncheck.sidebar_keys import SidebarKeysMixin
+from yesoncheck.sidebar_local_works import SidebarLocalWorksMixin
 from yesoncheck.sidebar_refresh import SidebarRefreshMixin
 from yesoncheck.sidebar_sequences import SidebarSequencesMixin
 from yesoncheck.sidebar_thumbnails import SidebarThumbnailsMixin
@@ -76,7 +77,7 @@ def _frame_of_sequences(file_path, sequences):
     return any(paths.path_key(seq.dir) == key and (seq.base, seq.ext, seq.pad) == (base, ext, pad) for seq in sequences)
 
 
-class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin, SidebarControlsMixin, SidebarRefreshMixin, SidebarSequencesMixin, SidebarAllMixin, SidebarSortMixin, SidebarOpenWithMixin, SidebarThumbnailsMixin, SidebarKeysMixin, SidebarAbButtonsMixin):
+class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarConfigPathsMixin, SidebarControlsMixin, SidebarRefreshMixin, SidebarSequencesMixin, SidebarAllMixin, SidebarSortMixin, SidebarOpenWithMixin, SidebarThumbnailsMixin, SidebarKeysMixin, SidebarAbButtonsMixin, SidebarLocalWorksMixin):
 
     def dragEnterEvent(self, event):
         """메인 윈도우에 파일 드래그앤드롭 이벤트"""
@@ -346,6 +347,10 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
 
     def update_season_list(self):
         selected_work = self.workComboBox.currentText()
+        local = self._local_work(selected_work)
+        if local is not None:  # 이 PC의 작품(회사 밖 PC): 폴더 단계 수대로 — SidebarLocalWorksMixin
+            self._fill_local_work_pickers(local)
+            return
         self._work_path_problems_shown = set()
         self.seasonComboBox.clear()
         self.seasonComboBox.addItem(ui_text.text("picker.season"))
@@ -444,6 +449,10 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
     def update_job_list(self):
         selected_season = self.seasonComboBox.currentText()
         selected_work = self.workComboBox.currentText()
+        local = self._local_work(selected_work)
+        if local is not None:  # 이 PC의 작품: 셋째 콤보는 고른 폴더의 하위 폴더 — SidebarLocalWorksMixin
+            self._fill_local_job_picker(local)
+            return
         
         # JSON에서 작품 기본 경로 가져오기
         base_path = self.get_work_path(selected_work)
@@ -624,7 +633,10 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         if video_files or frames:
             self.open_dropped_files(video_files, frames)
 
-    def load_videos_from_folder(self, folder_path):
+    def load_videos_from_folder(self, folder_path, quiet=False):
+        """folder_path 아래의 영상(하위 폴더까지)과 이미지 시퀀스를 목록에 넣고 첫 영상을 A에 엶 — 폴더 열기·북마크.
+        quiet: 작품 고르기에서 부름(이 PC의 작품 — SidebarLocalWorksMixin) — job 목록처럼 끝의 안내 창('폴더 로드 완료'·'영상이
+        없습니다')과 모두 고르기 없이 (폴더를 고를 때마다 창이 뜨지 않게). 읽지 못한 폴더의 알림은 그대로."""
         self.playlist.clear()
         self.sidebar.clear()
         
@@ -658,6 +670,8 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         if self.playlist:
             self.current_playlist_index = 0
             self.open_file('A', self.playlist[0])
+            if quiet:
+                return
             self.sidebar.selectAll()
             self.schedule_background_thumbnail_loading()
             QMessageBox.information(self, "폴더 로드 완료", f"{len(video_files)}개의 비디오 파일이 사이드바에 추가되었습니다.\n첫 번째 파일이 Video A에 로드되었습니다.")
@@ -665,7 +679,7 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
             # 시퀀스만 든 폴더: '영상이 없습니다'를 띄우지 않고 Seq 탭을 보여 줌 (탭 페이지 교체뿐 — 디스크를 읽지 않음).
             # 영상이 있는 폴더는 지금 보던 탭 그대로
             self.sidebar_tabs.setCurrentIndex(1)
-        elif not read_failed:
+        elif not read_failed and not quiet:
             QMessageBox.warning(self, "경고", "폴더에 지원되는 비디오 파일이 없습니다.")
 
     def load_selected_item_to_video_a(self):
@@ -685,7 +699,10 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         return combo.currentIndex() > 0
 
     def _job_picked(self):
-        """작품 → 시즌 → job 순서로 job까지 골랐는지 (시즌이 없는 작품은 작품 → job)."""
+        """작품 → 시즌 → job 순서로 job까지 골랐는지 (시즌이 없는 작품은 작품 → job, 이 PC의 작품은 그 단계 수만큼)."""
+        local = self._local_work(self.workComboBox.currentText())
+        if local is not None:
+            return self._local_job_picked(local)
         return self._picked(self.jobComboBox) and (
             self.workComboBox.currentText() in NO_SEASON_WORKS or self._picked(self.seasonComboBox))
 
@@ -698,6 +715,9 @@ class PlayerSidebarMixin(SidebarBookmarksMixin, SidebarPlaylistMixin, SidebarCon
         loaded, self._job_list_loaded_for = self._job_list_loaded_for, None
         if loaded == self._job_selection() or not self._job_picked():
             return
+        local = self._local_work(self.workComboBox.currentText())
+        if local is not None and self._refresh_shown_local_list(local):
+            return  # 이 PC의 작품: 목록이 그 폴더의 것이면 사내 job처럼 다시 읽기만 (보던 영상은 그대로)
         job_sources = {source for source in self._sidebar_sources if source.kind == "job"}
         if any(self.sidebar.item(i).data(SIDEBAR_SOURCE_ROLE) in job_sources for i in range(self.sidebar.count())):
             self.refresh_sidebar()

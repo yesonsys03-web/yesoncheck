@@ -218,11 +218,12 @@ def test_startup_password_cancelled_shows_one_critical(win, dialogs, tmp_path):
 
 
 def test_startup_with_both_problems_reports_both(win, dialogs, tmp_path):
-    """Finding 1 ruling 1a/1b: 공유 설정·변환표 문제가 둘 다 있으면 제목·시작 오류가 둘 다 보여야 함."""
+    """Finding 1 ruling 1a/1b: 공유 설정·변환표 문제가 둘 다 있으면 시작 오류에 둘 다 보여야 함 (창 제목에는 변환표 문제만 —
+    공유 설정 문제는 2026-11-27부터 제목에 적지 않음)."""
     config = make_config(str(tmp_path), None, raw="{broken")  # work_paths.json도 깨지고 path_map.json도 없음
     player = win.player(config)
     assert player.shared_config_problem and player.path_map_problem
-    assert "공유 설정 오류" in player.windowTitle()
+    assert "공유 설정 오류" not in player.windowTitle()
     assert "변환표 오류" in player.windowTitle()
     player.resolve_shared_config_problem()
     criticals = [text for kind, title, text in dialogs.messages if kind == "critical" and title == "공유 설정 오류"]
@@ -515,9 +516,10 @@ def test_harmony_link_realpath_error_kept_when_nothing_found(win, dialogs, tmp_p
     assert dialogs.messages == []
     out = capsys.readouterr().out
     assert "창으로 알리지 않음" in out and mirror in out and "가짜 재현" in out
-    player.manage_work_paths()  # 창으로는 Tools → 작품 경로 관리에서 봄
-    warnings = [text for kind, title, text in dialogs.messages if kind == "warning" and title == "작품 경로 관리"]
-    assert len(warnings) == 1 and mirror in warnings[0] and "가짜 재현" in warnings[0]
+    # 창으로는 Tools → 작품 경로 관리(이 PC의 작품 창 — 2026-11-27)의 '공유 설정을 찾지 못한 까닭…' 단추에서 봄
+    player._local_works_dialog().reason_button.click()
+    [box] = dialogs.boxes
+    assert mirror in box.details and "가짜 재현" in box.details
 
 
 def test_choose_config_dir_on_link_uses_real_unc(win, dialogs, tmp_path, monkeypatch, capsys):
@@ -643,9 +645,10 @@ def test_config_search_skips_share_that_never_answers(win, dialogs, short_timeou
     player.resolve_shared_config_problem()  # 시작할 때는 창 없이 기록에 (2026-11-23)
     assert dialogs.messages == []
     assert line in capsys.readouterr().out
-    player.manage_work_paths()  # 창으로는 Tools → 작품 경로 관리에서 봄
-    warnings = [text for kind, title, text in dialogs.messages if kind == "warning" and title == "작품 경로 관리"]
-    assert len(warnings) == 1 and line in warnings[0]
+    # 창으로는 Tools → 작품 경로 관리(이 PC의 작품 창 — 2026-11-27)의 '공유 설정을 찾지 못한 까닭…' 단추에서 봄
+    player._local_works_dialog().reason_button.click()
+    [box] = dialogs.boxes
+    assert line in box.details
 
 
 def test_configured_config_dir_that_never_answers(win, dialogs, short_timeout, tmp_path, monkeypatch, capsys):

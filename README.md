@@ -395,6 +395,7 @@ yesoncheck/
 ├─ sidebar_bookmarks.py    # 북마크 믹스인
 ├─ sidebar_playlist.py     # 선택 재생 믹스인
 ├─ sidebar_config_paths.py # 공유 설정·작품 경로 믹스인
+├─ sidebar_local_works.py  # 회사 밖 PC의 작품 고르기·이 PC의 작품 창 (공유 설정을 찾지 못한 PC)
 ├─ sidebar_refresh.py      # 목록 다시 읽기 믹스인
 ├─ sidebar_sequences.py    # Mov·Seq 탭, Seq 목록·우클릭 메뉴, 시퀀스 → MOV 진행 창 믹스인
 ├─ sidebar_all.py          # All 탭 믹스인 (Mov·Seq 목록을 한 목록에 — 선택 재생은 mov만), 목록 아래 개수 줄
@@ -410,6 +411,7 @@ yesoncheck/
 ├─ movie_pipe_source.py    # ProRes mov를 ffmpeg 파이프로 읽는 재생용 캡처와 판정(FFmpegPipeCapture)
 ├─ sidebar_items.py        # 사이드바 항목 상수·ThumbnailContext
 ├─ shared_config_load.py   # 공유 설정 읽기(창과 무관한 코드)
+├─ local_works.py          # 이 PC만의 작품 목록(이름·폴더·폴더 단계 수) 저장과 규칙
 ├─ player_timeline.py # OCR 타임라인 위젯 및 CollapsibleBox
 ├─ player_annotations.py # 수정 사항 주석 UI 및 재생 연동
 ├─ frame_annotations.py  # 주석 데이터 저장/로드
