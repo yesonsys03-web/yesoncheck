@@ -179,7 +179,8 @@ def test_window_title_shows_version_in_built_app(monkeypatch):
     monkeypatch.setattr(build_info, "current", lambda: BuildInfo("1.1.0", "0" * 40, "", "windows"))
     assert window_title() == "Yeson Checker 1.1.0"
     assert window_title(loading=True) == "Yeson Checker 1.1.0 — 공유 설정 불러오는 중…"
-    assert window_title(problem="없음").startswith("Yeson Checker 1.1.0 — 공유 설정 오류")
+    assert window_title(problem="없음") == "Yeson Checker 1.1.0"  # 공유 설정 문제는 제목에 적지 않음 (2026-11-27)
+    assert window_title(path_map_problem="없음").startswith("Yeson Checker 1.1.0 — 변환표 오류")  # 변환표 문제의 꼬리는 그대로
 
 
 def about_text(monkeypatch):
