@@ -29,7 +29,7 @@ from PyQt5.QtWidgets import (
     QDialog, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QListWidget, QMessageBox, QPushButton, QVBoxLayout,
 )
 
-from yesoncheck import local_works, ui_text
+from yesoncheck import local_works, paths, ui_text
 from yesoncheck.user_files import UserFileError
 
 LOG_PREFIX = "[이 PC의 작품]"
@@ -41,7 +41,8 @@ MANAGER_INTRO = (
     "작품마다 폴더와 '폴더를 몇 번 더 고를지'를 정합니다. 마지막으로 고른 폴더 아래의 영상을 하위 폴더까지 모두 목록에 넣습니다 "
     "— '폴더 열기'와 같은 규칙이라 폴더 구조를 가리지 않습니다."
 )
-NOT_FOUND_NOTICE = "사내 공유 설정(NAS)을 찾지 못했습니다. 사내 PC라면 NAS 연결을 확인한 뒤 앱을 다시 켜세요. 회사 밖에서는 이 PC의 작품 목록을 씁니다."
+NOT_FOUND_NOTICE = "사내 공유 설정(NAS)을 찾지 못했습니다. 사내 PC라면 NAS 연결을 확인한 뒤 앱을 다시 켜세요."
+LOCAL_LIST_NOTICE = "회사 밖에서는 이 PC의 작품 목록을 씁니다."
 PICK_FIRST = "목록에서 작품을 먼저 고르세요."
 
 
@@ -72,7 +73,18 @@ class SidebarLocalWorksMixin:
     def _report_local_works_problem(self):
         """(창 표시 후 — resolve_shared_config_problem) 이 PC의 작품 목록을 읽지 못했으면 한 번 알림."""
         if self.local_works_problem:
-            QMessageBox.warning(self, PROBLEM_TITLE, self.local_works_problem)
+            self._show_local_works_problem(self)
+
+    def _show_local_works_problem(self, parent):
+        """읽지 못한 목록의 사유 창. 이 PC는 작품 창(과 그 '찾지 못한 까닭' 단추)까지 가지 못하므로, 공유 설정을 찾지 못했다는 것과
+        그 사유(자세히 칸)도 여기서 보임 — 사내에서 NAS가 끊긴 PC가 빈 작품 목록의 까닭을 볼 길."""
+        box = QMessageBox(QMessageBox.Warning, PROBLEM_TITLE, f"{self.local_works_problem}\n\n{NOT_FOUND_NOTICE}", QMessageBox.Ok, parent)
+        box.setProperty(BOX_TITLE_PROPERTY, PROBLEM_TITLE)
+        box.setDetailedText(f"{self._shared_config_problem_text()}{self._config_dir_search_problems_text()}")
+        try:
+            box.exec_()
+        finally:
+            box.deleteLater()
 
     def _local_work(self, name):
         """name이 이 PC의 작품이면 그 LocalWork, 아니면 None."""
@@ -116,16 +128,20 @@ class SidebarLocalWorksMixin:
 
     def _fill_local_work_pickers(self, work):
         """(update_season_list — 이 PC의 작품을 고름) 둘째 콤보를 비우고 단계 수에 맞게 채움: 2 = 작품 폴더의 하위 폴더, 1·0 = 안내
-        항목만(단계 1은 셋째 콤보를 _fill_local_job_picker가). 단계 0은 여기서 작품 폴더의 영상을 한 번 읽어 목록에."""
+        항목만(단계 1은 셋째 콤보를 _fill_local_job_picker가). 단계 0은 여기서 작품 폴더의 영상을 한 번 읽어 목록에.
+        둘째 콤보를 비우고 채우는 동안은 그 신호(→ update_job_list)를 막고 셋째 콤보를 아래에서 한 번만 채움 — 신호마다 채우면 고를
+        폴더를 세 번 읽음(GUI 스레드의 폴더 읽기 — 느린 공유에서 멈춤이 세 배). 셋째 콤보의 신호는 그대로라 보이던 목록이 비워짐."""
         self._work_path_problems_shown = set()
-        self._reset_picker(self.seasonComboBox)  # → update_job_list(셋째 콤보) → update_playlist(목록 비움)
-        self._fill_local_job_picker(work)  # 신호가 오지 않은 경우에도 셋째 콤보가 이 작품의 것이게
-        folder = self._local_work_folder(work)
-        if not folder:
-            return
-        if work.levels == 2:
-            self._add_subfolders(self.seasonComboBox, folder)
-        elif work.levels == 0:
+        blocked = self.seasonComboBox.blockSignals(True)
+        try:
+            self._reset_picker(self.seasonComboBox)
+            folder = self._local_work_folder(work)
+            if folder and work.levels == 2:
+                self._add_subfolders(self.seasonComboBox, folder)
+        finally:
+            self.seasonComboBox.blockSignals(blocked)
+        self._fill_local_job_picker(work)  # → update_playlist(목록 비움)
+        if folder and work.levels == 0:
             self._show_local_folder(folder)
 
     def _fill_local_job_picker(self, work):
@@ -134,6 +150,10 @@ class SidebarLocalWorksMixin:
         self._reset_picker(self.jobComboBox)
         if work.levels == 0 or (work.levels == 2 and not self._picked(self.seasonComboBox)):
             return
+        if work.levels == 2:
+            # 둘째 콤보에서 폴더를 고름: 읽지 못한 폴더의 알림은 고를 때마다 (작품을 고를 때만 지우면, 다른 폴더를 고른 뒤 다시 골라도
+            # 같은 글이라 말없이 빈 칸)
+            self._work_path_problems_shown = set()
         folder = self._local_work_folder(work)
         if not folder:
             return
@@ -175,7 +195,7 @@ class SidebarLocalWorksMixin:
     def manage_local_works(self):
         """'Tools → 작품 경로 관리' (공유 설정을 찾지 못한 PC): 이 PC의 작품 목록 창. 목록을 읽지 못했으면 열지 않고 사유를 보임."""
         if self.local_works_problem:
-            QMessageBox.warning(self, PROBLEM_TITLE, self.local_works_problem)
+            self._show_local_works_problem(self)
             return
         dialog = self._local_works_dialog()
         try:
@@ -263,7 +283,16 @@ class SidebarLocalWorksMixin:
             return False
         self.reload_local_works()
         self._refresh_local_works_list(dialog)
+        if self.local_works_problem:  # 저장은 됐는데 다시 읽지 못함 — 말없이 빈 목록을 보이지 않음
+            self._show_local_works_problem(dialog)
         return True
+
+    @staticmethod
+    def _folder_as_on_disk(folder):
+        """고른 폴더를 적어 둘 경로로: 구분자를 다듬고, 그대로는 없는데 이름의 정규화(NFC·NFD)만 다른 실제 폴더가 있으면 그 경로
+        ('폴더 열기'와 같은 다듬기 — NFS 공유의 한글 폴더는 열기 창이 준 모양이 디스크의 이름과 다르면 없다고 나옴)."""
+        folder = paths.normalize_native(os.path.normpath(folder))
+        return paths.find_unicode_variant(folder) or folder
 
     def _add_local_work(self, dialog):
         name, ok = QInputDialog.getText(dialog, MANAGER_TITLE, "작품 이름을 입력하세요:")
@@ -279,7 +308,7 @@ class SidebarLocalWorksMixin:
         levels = self._ask_levels(dialog, local_works.DEFAULT_LEVELS)
         if levels is None:
             return
-        work = local_works.LocalWork(name, os.path.normpath(folder), levels)
+        work = local_works.LocalWork(name, self._folder_as_on_disk(folder), levels)
         self._save_local_works(dialog, lambda: local_works.add(work))
 
     def _change_local_work_folder(self, dialog):
@@ -288,7 +317,7 @@ class SidebarLocalWorksMixin:
             return
         folder = QFileDialog.getExistingDirectory(dialog, f"{work.name} 작품 폴더 선택", work.folder)
         if folder:
-            self._save_local_works(dialog, lambda: local_works.change(work.name, folder=os.path.normpath(folder)))
+            self._save_local_works(dialog, lambda: local_works.change(work.name, folder=self._folder_as_on_disk(folder)))
 
     def _change_local_work_levels(self, dialog):
         work = self._selected_local_work(dialog)
@@ -312,7 +341,7 @@ class SidebarLocalWorksMixin:
 
     def _show_shared_config_reason(self, dialog):
         """공유 설정을 찾지 못한 사유: 본문은 쉬운 말, 기술 글(찾아본 곳·트레이스백)은 자세히 칸에."""
-        box = QMessageBox(QMessageBox.Information, "공유 설정", NOT_FOUND_NOTICE, QMessageBox.Ok, dialog)
+        box = QMessageBox(QMessageBox.Information, "공유 설정", f"{NOT_FOUND_NOTICE} {LOCAL_LIST_NOTICE}", QMessageBox.Ok, dialog)
         box.setProperty(BOX_TITLE_PROPERTY, "공유 설정")
         box.setDetailedText(f"{self._shared_config_problem_text()}{self._config_dir_search_problems_text()}")
         try:

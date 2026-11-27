@@ -17,10 +17,11 @@
 쓰는 곳: `sidebar_local_works.SidebarLocalWorksMixin` (작품 고르기·이 PC의 작품 창).
 """
 
+import ntpath
 import os
 from dataclasses import asdict, dataclass
 
-from yesoncheck import hover_strip, mac_prefs
+from yesoncheck import hover_strip, mac_prefs, ui_text
 from yesoncheck.file_names import natural_key
 from yesoncheck.user_files import UserFileError
 
@@ -29,6 +30,9 @@ LEVELS = (0, 1, 2)
 DEFAULT_LEVELS = 1  # 작품 추가 창에서 처음 골라져 있는 단계 (작품 → 폴더)
 _LEVEL_TEXTS = {0: "작품을 고르면 바로 영상 목록", 1: "작품 → 폴더 하나를 더 고름", 2: "작품 → 폴더 → 폴더 (두 번 더 고름)"}
 SKIPPED_FOLDERS = ("@eaDir",)  # 고를 폴더에서 빼는 이름: NAS(Synology)가 폴더마다 만드는 색인 폴더 ('.'으로 시작하는 것도 뺌)
+# 작품 콤보의 안내 항목(0번)의 글 — 어느 언어의 것이든 작품 이름으로 받지 않음: 작품은 콤보의 글로 찾으므로, 같은 이름의 작품이 있으면
+# 아무것도 고르지 않은 0번이 그 작품으로 보임 (언어를 바꾼 뒤에도 — 그래서 모든 언어의 글)
+_PLACEHOLDER_KEYS = ("picker.work", "picker.loading")
 
 
 @dataclass(frozen=True)
@@ -44,9 +48,25 @@ def check(work):
     """등록할 수 있는 작품인지 — 아니면 ValueError (무엇이 왜인지)."""
     if not isinstance(work.name, str) or not work.name.strip():
         raise ValueError("작품 이름이 비어 있습니다.")
-    if not isinstance(work.folder, str) or not os.path.isabs(work.folder):
+    if work.name in reserved_names():
+        raise ValueError(f"쓸 수 없는 이름입니다 (작품 고르기의 안내 글과 같음): {work.name}")
+    if not isinstance(work.folder, str) or not is_full_path(work.folder):
         raise ValueError(f"작품 폴더는 처음부터 적은 경로여야 합니다: {work.folder!r}")
     _check_levels(work.levels)
+
+
+def reserved_names():
+    """작품 이름으로 쓸 수 없는 글 — 작품 콤보의 안내 항목의 글(모든 언어)."""
+    return {text for key in _PLACEHOLDER_KEYS for text in ui_text.TEXTS[key].values()}
+
+
+def is_full_path(folder, pathmod=None):
+    """folder가 어디서 켜든 같은 곳을 가리키는 경로인지: 처음부터 적은 경로이고, Windows는 드라이브(또는 \\\\서버\\공유)부터
+    (ntpath.isabs는 드라이브 없이 뿌리부터 적은 '\\foo'도 받음 — 지금 드라이브에 따라 달라지는 경로). pathmod: 시험용(기본 os.path)."""
+    pathmod = pathmod or os.path
+    if not pathmod.isabs(folder):
+        return False
+    return pathmod is not ntpath or bool(ntpath.splitdrive(folder)[0])
 
 
 def _check_levels(levels):
@@ -72,6 +92,8 @@ def _works_of(prefs, path):
                 raise ValueError(f"항목이 {{name, folder, levels}}가 아님: {entry!r}")
             work = LocalWork(entry["name"], entry["folder"], entry["levels"])
             check(work)
+            if any(known.name == work.name for known in works):  # (손으로 고친 파일) 이름으로 찾아 고치므로 둘이면 한쪽만 고쳐짐
+                raise ValueError(f"같은 이름의 작품이 둘: {work.name}")
             works.append(work)
     except ValueError as exc:
         raise UserFileError(f"설정 파일의 {PREF_KEY}(이 PC의 작품 목록)를 읽을 수 없습니다: {path}\n{exc}") from exc

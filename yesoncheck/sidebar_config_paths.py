@@ -168,12 +168,15 @@ class SidebarConfigPathsMixin:
     def _update_shared_config_title(self):
         """창 제목을 지금 상태(불러오는 중·변환표 오류)와 지금 언어로 — 상태가 바뀔 때와 언어가 바뀐 뒤.
         공유 설정 문제는 제목에 적지 않음 (2026-11-27 사용자: "앱 타이틀 바에 공유설정 오류 메시지 표시는 필요없어" — 회사 밖 PC는 늘
-        그 표시가 붙어 있었음). 진짜 문제는 시작할 때의 창이, 사유는 Tools → 작품 경로 관리가 보임."""
+        그 표시가 붙어 있었음). 진짜 문제는 시작할 때의 창이, 사유는 Tools → 작품 경로 관리가 보임.
+        공유 설정을 찾지 못한 PC는 변환표 문제도 적지 않음: 밖에서 켠 사내 Windows 노트북은 정해 둔 공유 설정 폴더에 닿지 못해 그 안의
+        변환표도 못 읽는데(같은 까닭), 그 꼬리가 권하는 '작품 경로 관리에서 자동 설정'은 그 PC에서는 이 PC의 작품 창이라 거기에 없음."""
         if getattr(self, "shared_config_loading", False):
             self.setWindowTitle(build_info.title_base() + ui_text.text("title.loading"))
             return
         title = build_info.title_base()  # 빌드된 앱은 "Yeson Checker 1.1.0", 소스 실행은 "Yeson Checker"
-        if getattr(self, "path_map_problem", None):
+        not_found = self.shared_config_problem and getattr(self, "shared_config_not_found", False)
+        if getattr(self, "path_map_problem", None) and not not_found:
             title += ui_text.text("title.path_map_problem.windows" if paths.IS_WINDOWS else "title.path_map_problem")
         self.setWindowTitle(title)
 

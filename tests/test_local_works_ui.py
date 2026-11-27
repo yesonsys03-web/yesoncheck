@@ -187,6 +187,62 @@ def test_a_name_that_is_already_there_is_refused(outside, dialogs, monkeypatch, 
     assert "이미 있는 작품" in dialogs.warnings[0] and local_works.read() == [LocalWork("MyShow", show, 1)]
 
 
+def test_a_name_that_looks_like_the_placeholder_is_refused(outside, dialogs, monkeypatch, show):
+    """'작품선택'(안내 항목의 글)을 이름으로 받으면 아무것도 고르지 않은 0번이 그 작품으로 보임 — 등록하지 않음 (리뷰)."""
+    player = outside()
+    dialog = manager(player)
+    answer_text(monkeypatch, ("작품선택", True))
+    dialogs.folders.append(show)
+    answer_item(monkeypatch, (local_works.level_text(0), True))
+
+    dialog.add_button.click()
+
+    assert local_works.read() == [] and listed(player) == []
+    assert [(kind, title) for kind, title, _text in dialogs.messages] == [("warning", MANAGER_TITLE)]
+    assert "쓸 수 없는 이름" in dialogs.warnings[0]
+
+
+def test_the_chosen_folder_is_stored_the_way_it_is_on_disk(outside, dialogs, monkeypatch, show, tmp_path):
+    """고른 폴더가 그대로는 없고 이름의 정규화(NFC·NFD)만 다른 실제 폴더가 있으면 그 경로로 적음 — 폴더 열기와 같은 다듬기
+    (NFS 공유의 한글 폴더: 열기 창이 준 모양이 디스크의 이름과 다르면 '폴더를 열 수 없습니다'가 됨 — 리뷰)."""
+    player = outside()
+    dialog = manager(player)
+    given, on_disk = str(tmp_path / "given_form"), show
+    monkeypatch.setattr(paths, "find_unicode_variant", lambda path, *a, **k: on_disk if paths.same_path(path, given) else None)
+    answer_text(monkeypatch, ("MyShow", True))
+    dialogs.folders.extend([given, given])
+    answer_item(monkeypatch, (local_works.level_text(1), True))
+
+    dialog.add_button.click()
+    assert local_works.read() == [LocalWork("MyShow", on_disk, 1)]
+
+    local_works.change("MyShow", folder=str(tmp_path))
+    player.reload_local_works()
+    dialog.works_list.setCurrentRow(0)
+    dialog.folder_button.click()
+    assert local_works.read() == [LocalWork("MyShow", on_disk, 1)]
+
+
+def test_a_list_that_cannot_be_read_back_after_saving_is_told(outside, dialogs, monkeypatch, show):
+    """저장은 됐는데 다시 읽지 못함(그사이 파일이 깨짐): 창이 말없이 빈 목록을 보이지 않고 그 사유를 알림 (리뷰)."""
+    from yesoncheck.user_files import UserFileError
+
+    player = outside()
+    dialog = manager(player)
+    answer_text(monkeypatch, ("MyShow", True))
+    dialogs.folders.append(show)
+    answer_item(monkeypatch, (local_works.level_text(1), True))
+
+    def broken(path=None):
+        raise UserFileError("시험이 낸 오류: 목록을 읽을 수 없음")
+
+    monkeypatch.setattr(local_works, "read", broken)
+    dialog.add_button.click()
+
+    assert [(kind, title) for kind, title, _text in dialogs.messages] == [("warning", "이 PC의 작품 목록")]
+    assert "시험이 낸 오류" in dialogs.warnings[0] and rows(dialog) == []
+
+
 def test_changing_the_folder_and_the_levels_of_the_selected_work(outside, dialogs, monkeypatch, show, tmp_path):
     player = outside()
     register(player, "MyShow", show, 1)
@@ -299,6 +355,47 @@ def test_a_picked_folder_is_read_once(outside, dialogs, monkeypatch, show):
     player._on_job_activated(player.jobComboBox.currentIndex())  # 바로 뒤의 activated (이벤트를 처리하기 전)
 
     assert len(reads) == 1 and listed(player) == ["d.mp4"]
+
+
+@pytest.mark.parametrize("levels, after_work, after_folder", [(0, 0, 0), (1, 1, 1), (2, 1, 2)])
+def test_folders_are_listed_once_per_pick(outside, dialogs, monkeypatch, show, levels, after_work, after_folder):
+    """고를 폴더 읽기(GUI 스레드의 폴더 읽기)는 고를 때마다 한 번 — 콤보를 비우는 신호마다 다시 읽지 않음
+    (느린 공유에서 멈춤이 세 배가 됨 — 리뷰)."""
+    player = outside()
+    register(player, "MyShow", show, levels)
+    reads = []
+    real = local_works.subfolders
+    monkeypatch.setattr(local_works, "subfolders", lambda folder: reads.append(folder) or real(folder))
+
+    pick(player.workComboBox, "MyShow")
+    assert len(reads) == after_work, reads
+
+    if levels == 2:
+        pick(player.seasonComboBox, "s1")
+        assert len(reads) == after_folder, reads
+
+
+def test_a_folder_that_cannot_be_read_is_told_each_time_it_is_picked(outside, dialogs, monkeypatch, show):
+    """읽지 못한 폴더의 알림은 그 폴더를 고를 때마다 (다른 폴더를 고른 뒤 다시 골라도 말없이 빈 칸이 아니게 — 리뷰)."""
+    player = outside()
+    register(player, "MyShow", show, 2)
+    real = local_works.subfolders
+
+    def subfolders(folder):
+        if os.path.basename(folder) == "s1":
+            raise PermissionError(13, "Permission denied", folder)
+        return real(folder)
+
+    monkeypatch.setattr(local_works, "subfolders", subfolders)
+    pick(player.workComboBox, "MyShow")
+
+    pick(player.seasonComboBox, "s1")
+    pick(player.seasonComboBox, "s2")
+    pick(player.seasonComboBox, "s1")
+
+    assert [title for _kind, title, _text in dialogs.messages] == ["작품 경로 오류"] * 2
+    assert all("폴더를 읽지 못했습니다" in text and "PermissionError" in text for text in dialogs.criticals)
+    assert combo_items(player.jobComboBox) == [FOLDER]
 
 
 def test_going_back_to_no_work_clears_the_list(outside, dialogs, show):
@@ -462,6 +559,9 @@ def test_a_list_that_cannot_be_read_is_told_and_never_overwritten(outside, dialo
     assert player.local_works == {} and combo_items(player.workComboBox) == ["작품선택"]
     assert [(kind, title) for kind, title, _text in dialogs.messages] == [("warning", "이 PC의 작품 목록")]
     assert "local_works" in dialogs.warnings[0] and "Traceback" in capsys.readouterr().err
+    # 이 창만 뜨는 PC에서도 '공유 설정을 찾지 못했음'과 그 사유를 볼 수 있음 (작품 창의 단추까지 가지 못하므로 — 리뷰)
+    [told] = dialogs.boxes
+    assert "사내 공유 설정(NAS)을 찾지 못했습니다" in told.text and told.details.startswith(player._shared_config_problem_text())
 
     monkeypatch.setattr(QDialog, "exec_", lambda dialog: pytest.fail("읽지 못한 목록으로 작품 창이 열렸습니다"))
     player.manage_work_paths()

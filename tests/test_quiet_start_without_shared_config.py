@@ -22,7 +22,7 @@ from PyQt5.QtWidgets import QDialog, QFileDialog
 from tests.test_fast_startup import wait_until
 from tests.test_mac_mounts import NO_SUCH_CONFIG
 from tests.test_path_map_auto_ui import win  # noqa: F401 (fixture)
-from yesoncheck import hover_strip, mac_prefs, path_map_setup, paths, shared_config, shared_config_load, work_picker
+from yesoncheck import build_info, hover_strip, mac_prefs, path_map_setup, paths, shared_config, shared_config_load, work_picker
 
 mac_only = pytest.mark.skipif(sys.platform == "win32", reason="Mac의 공유 설정 자리(POSIX 경로) — Windows 동작은 win 픽스처의 시험")
 
@@ -336,6 +336,21 @@ def test_windows_pc_gets_no_folder_picker_and_no_error_window(win, dialogs, monk
     assert dialogs.messages == [] and picker == []
     out = capsys.readouterr().out
     assert QUIET_LOG in out and NOT_SET in out
+
+
+def test_windows_laptop_away_from_its_saved_folder_has_a_clean_title(win, dialogs, monkeypatch):  # noqa: F811
+    """밖에서 켠 사내 Windows 노트북: 정해 둔 공유 설정 폴더에 닿지 못하면 그 안의 변환표(path_map.json)도 읽지 못함 — 그 '변환표 오류
+    (작품 경로 관리에서 자동 설정)'도 창 제목에 적지 않음. 같은 까닭(공유 설정을 찾지 못함)에서 온 문제이고, 그 PC의 작품 경로 관리는
+    이제 이 PC의 작품 창이라 안내가 가리키는 자동 설정도 거기에 없음 (리뷰에서 잡음 — 제목 표시를 반만 없앴음). 사유는 그 창의 단추에."""
+    no_shares_windows(win, monkeypatch)
+    shared_config.save_local_settings({"config_dir": GONE_UNC})
+    player = win.player()
+    assert player.shared_config_not_found is True and player.path_map_problem  # 변환표도 읽지 못한 상태
+
+    assert player.windowTitle() == build_info.title_base()
+
+    player._local_works_dialog().reason_button.click()
+    assert player.path_map_problem in dialogs.boxes[0].details  # 변환표 쪽 사유도 단추 뒤에서 봄
 
 
 def test_windows_laptop_away_from_its_saved_folder_gets_no_window(win, dialogs, monkeypatch, capsys):  # noqa: F811

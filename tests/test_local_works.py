@@ -7,7 +7,9 @@
 """
 
 import json
+import ntpath
 import os
+import posixpath
 
 import pytest
 
@@ -70,7 +72,11 @@ def test_a_name_is_registered_once(prefs, tmp_path):
     (LocalWork("MyShow", "/projects/a", 3), "단계"),
     (LocalWork("MyShow", "/projects/a", True), "단계"),
     (LocalWork("MyShow", "/projects/a", "1"), "단계"),
-], ids=["no_name", "blank_name", "relative", "no_folder", "too_deep", "bool_levels", "text_levels"])
+    (LocalWork("작품선택", "/projects/a", 1), "쓸 수 없는 이름"),
+    (LocalWork("Select show", "/projects/a", 1), "쓸 수 없는 이름"),
+    (LocalWork("공유 설정 불러오는 중…", "/projects/a", 1), "쓸 수 없는 이름"),
+], ids=["no_name", "blank_name", "relative", "no_folder", "too_deep", "bool_levels", "text_levels",
+        "placeholder", "english_placeholder", "loading_placeholder"])
 def test_a_work_that_makes_no_sense_is_refused_before_writing(prefs, bad, word):
     if bad.folder.startswith("/") and os.name == "nt":
         bad = LocalWork(bad.name, "C:" + bad.folder.replace("/", "\\"), bad.levels)
@@ -129,7 +135,8 @@ def test_a_work_added_by_another_window_is_not_lost(prefs, tmp_path):
     {"local_works": [{"name": "MyShow", "folder": "/projects/a"}]},
     {"local_works": [{"name": "MyShow", "folder": "/projects/a", "levels": 7}]},
     {"local_works": [{"name": 3, "folder": "/projects/a", "levels": 1}]},
-], ids=["not_a_list", "not_objects", "missing_key", "bad_levels", "bad_name"])
+    {"local_works": [{"name": "MyShow", "folder": "/projects/a", "levels": 1}, {"name": "MyShow", "folder": "/projects/b", "levels": 1}]},
+], ids=["not_a_list", "not_objects", "missing_key", "bad_levels", "bad_name", "same_name_twice"])
 def test_a_list_of_the_wrong_shape_is_an_error_and_is_not_overwritten(prefs, tmp_path, stored):
     """모양이 틀린 목록을 빈 목록으로 치지 않음 — 다음 저장이 덮어 지우지 않게 읽기도 쓰기도 UserFileError."""
     os.makedirs(os.path.dirname(prefs))
@@ -162,6 +169,20 @@ def test_the_default_place_is_this_pcs_settings_file(monkeypatch, tmp_path):
     local_works.add(work(tmp_path))
 
     assert local_works.read() == [work(tmp_path)] and os.path.isfile(place)
+
+
+@pytest.mark.parametrize("folder, pathmod, full", [
+    ("/projects/a", posixpath, True),
+    ("projects/a", posixpath, False),
+    ("C:\\projects\\a", ntpath, True),
+    ("\\\\server\\share\\a", ntpath, True),
+    ("\\projects\\a", ntpath, False),  # 드라이브 없이 뿌리부터 — 지금 드라이브에 따라 달라짐
+    ("C:projects", ntpath, False),  # 드라이브의 지금 폴더에 따라 달라짐
+    ("projects\\a", ntpath, False),
+])
+def test_a_folder_must_be_written_out_in_full(folder, pathmod, full):
+    """작품 폴더는 어디서 켜든 같은 곳을 가리키는 경로만 — Windows는 드라이브(또는 \\\\서버\\공유)부터 (리뷰: isabs만으로는 '\\foo'를 받음)."""
+    assert local_works.is_full_path(folder, pathmod) is full
 
 
 # ---------------------------------------------------------------- 고르기 규칙
