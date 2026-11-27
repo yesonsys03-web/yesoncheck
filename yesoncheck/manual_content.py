@@ -791,6 +791,9 @@ PAGES = (
                  ("Windows에서 줄여 본 화면의 가는 선이 지글거림", "Settings → {{settings.downscale}} → {{settings.downscale.area}}."),
                  ("Mac에서 영상 영역이 비거나 그리기 오류 창이 뜸", "Settings → {{settings.decoder}} → {{settings.decoder.ffmpeg}}."),
                  ("슬라이더 미리보기 오류 창이 되풀이됨", "Settings → {{settings.hover_thumbs}}을 끕니다."),
+                 ("영상을 보다가 ‘이 영상은 연 뒤에 파일이 다시 쓰였습니다’ 알림이 뜸",
+                  "열어 둔 뒤에 그 영상의 파일이 다시 쓰인 것입니다 (보통 같은 이름으로 다시 렌더링한 경우). 렌더가 끝난 뒤 목록에서 "
+                  "그 영상을 다시 눌러 엽니다."),
                  ("Windows에서 ProRes 영상이 열리지 않음", "보안 프로그램이 앱 안의 로컬 통신을 막을 때 생깁니다. 아래 환경 변수 "
                                                   "`YESONCHECK_MOVIE_SOURCE=cv2`로 예전 방식으로 엽니다."),
                  ("GPU를 고른 뒤 Windows에서 앱이 켜지지 않음", "`%LOCALAPPDATA%\\YesonCheck\\prefs.json`에서 `display_renderer` 줄을 "

@@ -15,6 +15,7 @@ import ctypes
 import dataclasses
 import gc
 import math
+import os
 import re
 import threading
 import time
@@ -30,7 +31,7 @@ import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
 from tests import prores_clips  # noqa: E402
-from yesoncheck import error_window, mac_native_source  # noqa: E402
+from yesoncheck import error_window, file_change, mac_native_source  # noqa: E402
 from yesoncheck.frame_handles import native_surface_of, whole_surface_handle  # noqa: E402
 from yesoncheck.mac_native_gate import native_ineligible_reason  # noqa: E402
 from yesoncheck.mac_native_source import (  # noqa: E402
@@ -95,13 +96,29 @@ def alpha_clip(tmp_path_factory):
     return path
 
 
+class _Shown(list):
+    """windows 픽스처의 기록: 오류 창은 이 목록 자체에, 알림 창(error_window.show_notice)은 notices에."""
+
+    def __init__(self):
+        super().__init__()
+        self.notices = []
+
+
 @pytest.fixture
 def windows(monkeypatch, qapp):
-    """오류 창(error_window.show_window)을 띄우지 않고 글로 기록. 끝날 때 남은 Qt 이벤트를 비워 진짜 창이 뜨지 않게."""
-    shown = []
+    """오류 창(error_window.show_window)을 띄우지 않고 글로 기록. 끝날 때 남은 Qt 이벤트를 비워 진짜 창이 뜨지 않게.
+    알림 창(error_window.show_notice — 연 뒤 다시 쓰인 파일의 도중 실패)도 여기서 함께 막아 `.notices`에 (글, 자세히)로 모음."""
+    shown = _Shown()
     monkeypatch.setattr(error_window, "show_window", lambda text: shown.append(text))
+    monkeypatch.setattr(error_window, "show_notice", lambda text, details: shown.notices.append(SimpleNamespace(text=text, details=details)))
     yield shown
     qapp.processEvents()
+
+
+@pytest.fixture
+def notices(windows):
+    """알림 창의 기록 (windows 픽스처가 막고 모은 것)."""
+    return windows.notices
 
 
 # ---------------------------------------------------------------- 도구
@@ -462,6 +479,93 @@ def test_short_file_is_failure_not_eof(clip30, claimed, delivered, qapp, windows
         qapp.processEvents()
         assert len(windows) == 1 and f"프레임 수 {claimed}" in windows[0]
         assert windows[0].rstrip().endswith("\n" + NATIVE_ESCAPE_HINT)
+    finally:
+        cap.release()
+
+
+def rewritten_clip(tmp_path, count=23):
+    """시험이 덮어쓸 수 있는 자기만의 클립 (보고된 영상처럼 23장, 23.976fps)."""
+    path = str(tmp_path / "shot.mov")
+    prores_clips.make_numbered_clip(path, count=count, fps="24000/1001")
+    return path
+
+
+def test_a_file_rewritten_while_open_is_explained_in_plain_words(tmp_path, qapp, windows, notices, capsys):
+    """열어 둔 영상이 다시 렌더링되면(여기서는 다시 쓰기 시작한 직후의 빈 파일): 긴 오류 창 대신 알림 창 — 본문은 쉬운 말뿐(무슨 일인지:
+    연 뒤에 파일이 다시 쓰였음, 할 일: 렌더가 끝난 뒤 다시 열기), 기술적인 원인·호출 스택은 '자세히'와 기록에 그대로. 디코더를 바꿔도
+    소용없는 일이라 탈출구 안내는 붙이지 않음. 사용자 보고(2026-11-26)의 글 '리더가 N번 프레임 앞에서 끝났습니다 … 0장을 준 뒤'가 이 경우.
+    기술적인 원인 글은 실행마다 다를 수 있어(이 Mac 40번: 38번은 그 글, 2번은 AVAssetReader의 -11880 Invalid sample cursor) 글의
+    내용이 아니라 '자세히와 기록에 같은 원인이 있음'만 봄 — 알림 창은 40번 모두 같았음."""
+    path = rewritten_clip(tmp_path)
+    cap = open_capture(path)
+    try:
+        assert len(read_until_false(cap)) == 23  # 열어서 끝까지 재생함
+        assert windows == [] and notices == [] and NATIVE_FAILURE_HEADLINE not in capsys.readouterr().err
+        open(path, "wb").close()  # 렌더가 같은 이름으로 다시 쓰기 시작함
+
+        cap.set(POS, 5)  # 휠로 프레임을 옮김
+        assert cap.read() == (False, None)
+        assert_dead(cap)
+
+        err = capsys.readouterr().err
+        assert err.count(file_change.REWRITTEN_HEADLINE) == 1 and err.count(NATIVE_FAILURE_HEADLINE) == 1  # 기록에는 둘 다
+        assert f"{NATIVE_LOG_PREFIX} {file_change.REWRITTEN_HEADLINE}" in err  # 기록의 머리는 이 캡처의 것
+        assert (err.index(file_change.REWRITTEN_HEADLINE) < err.index(file_change.TECHNICAL_HEADER)
+                < err.index(NATIVE_FAILURE_HEADLINE))  # 쉬운 말이 먼저
+        assert err.count(STACK_MARK) == 1
+        assert notices == []  # 창은 read 안이 아니라 Qt 루프에서
+        qapp.processEvents()
+        assert windows == [] and len(notices) == 1  # 오류 창이 아니라 알림 창 하나
+        notice = notices[0]
+        assert notice.text.startswith(f"{file_change.REWRITTEN_HEADLINE}\n{file_change.REWRITTEN_ADVICE}\n")
+        assert f"파일: {path}" in notice.text and "바뀐 것: 크기 " in notice.text and "→ 0바이트" in notice.text
+        for technical_word in (NATIVE_FAILURE_HEADLINE, "리더가", STACK_MARK, "VideoToolbox"):  # 본문에는 기술 글이 없음
+            assert technical_word not in notice.text
+        assert notice.details.startswith(f"{NATIVE_FAILURE_HEADLINE}.\n원인: ")
+        reason = notice.details.splitlines()[1]
+        assert len(reason) > len("원인: ") and reason in err and notice.details.count(STACK_MARK) == 1
+        assert NATIVE_ESCAPE_HINT not in notice.text + notice.details
+    finally:
+        cap.release()
+
+
+def test_a_file_that_is_gone_while_open_is_explained_too(tmp_path, qapp, windows, notices, capsys):
+    """지웠다 다시 만드는 렌더: 실패한 때 파일이 없으면 그것도 '다시 쓰였음'으로 알림."""
+    path = rewritten_clip(tmp_path)
+    cap = open_capture(path)
+    try:
+        assert len(read_until_false(cap)) == 23
+        os.remove(path)
+        cap._die("시험이 낸 실패")
+
+        qapp.processEvents()
+        assert windows == [] and len(notices) == 1 and notices[0].text.startswith(file_change.REWRITTEN_HEADLINE)
+        assert "바뀐 것: 지금은 파일이 없습니다" in notices[0].text and "시험이 낸 실패" in notices[0].details
+    finally:
+        cap.release()
+
+
+def test_a_failure_while_the_file_cannot_be_checked_keeps_the_technical_notice(tmp_path, qapp, windows, notices, capsys, monkeypatch):
+    """실패한 때 파일을 확인하지 못하면(NAS 연결 끊김·권한) '다시 쓰였다'고 하지 않음 — 원래 글 그대로, 확인하지 못한 사유는 기록에.
+    읽는 중(read 안)이라 예외를 내지 않음."""
+    path = rewritten_clip(tmp_path)
+    cap = open_capture(path)
+    try:
+        def refused(target):
+            raise PermissionError(13, "Permission denied", target)
+
+        monkeypatch.setattr(file_change, "stamp", refused)  # 연 뒤로는 파일을 확인할 수 없음
+        cap._die("시험이 낸 실패")
+
+        err = capsys.readouterr().err
+        assert file_change.REWRITTEN_HEADLINE not in err and err.count(NATIVE_FAILURE_HEADLINE) == 1
+        assert "파일이 다시 쓰였는지 확인하지 못했습니다" in err and "PermissionError" in err
+        qapp.processEvents()
+        assert notices == [] and len(windows) == 1
+        assert windows[0].startswith(f"{NATIVE_FAILURE_HEADLINE}.\n파일: {path}\n원인: 시험이 낸 실패\n"
+                                     f"{file_change.UNCHECKED_HEADLINE} — PermissionError: ")  # 사유 한 줄은 머리 쪽(잘리지 않는 곳)에
+        assert windows[0].rstrip().endswith("\n" + NATIVE_ESCAPE_HINT)
+        assert "Traceback (most recent call last)" in err and err.index("Traceback") < err.index(STACK_MARK)  # 확인의 트레이스백은 기록에
     finally:
         cap.release()
 
