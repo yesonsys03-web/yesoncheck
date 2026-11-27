@@ -9,38 +9,41 @@ from yesoncheck.release_notes import Release
 RELEASES = (
     Release("2.2.0", "2026-11-28",
             "Choosing shows now works on a PC outside the company too — Manage show paths opens that PC's own show list. When a "
-            "video you have open is rendered again, a plain notice appears instead of a long error window.",
+            "ProRes video you have open is rendered again, a plain notice appears instead of a long error window.",
             (
                 ("Shows on a PC outside the company", (
-                    "On a PC that cannot find the in-house shared settings (outside the company), Tools → Manage show paths… opens "
-                    "**a show list saved only on that PC** instead of a warning (no password). Register a show name and a folder "
-                    "on that PC, then choose it in the Select show group of the sidebar.",
+                    "On a PC that cannot find the in-house shared settings (outside the company, or an in-house PC not connected "
+                    "to the NAS), Tools → Manage show paths… opens **a show list saved only on that PC** instead of a warning (no "
+                    "password). Register a show name and a folder on that PC, then choose it in the Select show group of the "
+                    "sidebar.",
                     "For each show you set **how many more folders to choose** — list the videos as soon as the show is chosen, "
                     "show → folder, or show → folder → folder. The videos and image sequences under the last folder you choose are "
-                    "listed, including all its subfolders (the same rule as Open folder), so any folder structure works.",
-                    "Choosing the same folder again only re-reads the list — the video you are watching stays.",
+                    "listed, including all its subfolders (the same rule as Open folder), so any folder structure works. A very "
+                    "large folder pauses the app briefly while it is read, so narrow it down by choosing more folders.",
+                    "Choosing the same folder again in the last box only re-reads the list — the video you are watching stays.",
                     "This window and its notices follow the screen language (한국어 / English).",
                     "In-house PCs (PCs that read the shared settings) work as before — the show list and password of the shared "
                     "settings, unchanged.",
                 )),
                 ("Window title", (
-                    "The ‘공유 설정 오류 (작품 목록 없음)’ (shared settings error — no show list) text that was added to the window "
-                    "title when the shared settings were not found is gone. The reason is behind the Why the shared settings were "
-                    "not found… button of the Manage show paths window.",
-                    "The path map error text in the title of a Windows PC that cannot reach its saved shared settings folder (an "
-                    "in-house laptop started elsewhere, for example) no longer appears in that case either.",
+                    "The ‘shared settings error (no show list)’ text at the end of the window title (‘공유 설정 오류 (작품 목록 "
+                    "없음)’ on the Korean screen) is gone. On a PC that cannot find the shared settings, the reason is behind the "
+                    "Why the shared settings were not found… button of the Manage show paths window. When the shared settings "
+                    "folder opens but the file in it is broken or missing, a window still tells you at startup, as before.",
+                    "The path map error text is no longer added to the title of a PC that cannot find the shared settings either "
+                    "(a Windows laptop that cannot reach its saved shared settings folder, for example).",
                 )),
                 ("When a video you have open is rendered again", (
-                    "If a video you are reviewing is rendered again under the same name, the open video may no longer be readable. "
-                    "Instead of the long technical error window, a notice starting ‘이 영상은 연 뒤에 파일이 다시 쓰였습니다 …’ (this "
-                    "video's file was written again after it was opened) appears once — when the render has finished, click that "
-                    "video in the list again to open it.",
-                    "The notice shows the file and what changed (size and modified time); the technical details are behind its "
-                    "Show Details... button and in the app log.",
-                    "An error with an unchanged file shows the same window as before.",
+                    "If a ProRes video you are reviewing is rendered again under the same name, the open video may no longer be "
+                    "readable. Instead of the long technical error window, a notice starting ‘이 영상은 연 뒤에 파일이 다시 "
+                    "쓰였습니다 …’ (this video's file was written again after it was opened — the notice is in Korean) appears — "
+                    "when the render has finished, click that video in the list again to open it.",
+                    "The notice shows the file and what changed (size and modified time, or that the file is gone); the technical "
+                    "details are behind its Show Details... button and in the app log.",
+                    "An error with an unchanged file is still reported in an error window, as before.",
                 )),
                 ("Manual", (
-                    "The ‘Getting started’, ‘Shows · folders · bookmarks’ (new section ‘Shows on a PC outside the company’) and "
+                    "The ‘Installation’, ‘Shows · folders · bookmarks’ (new section ‘Shows on a PC outside the company’) and "
                     "‘Troubleshooting’ pages now describe the above.",
                 )),
             )),

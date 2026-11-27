@@ -118,6 +118,10 @@ def test_newest_release_is_the_ui_redesign():
     text = release_notes.notes_text("2.2.0")
     assert "작품 경로 관리" in text and "폴더를 몇 번 더 고를지" in text and "화면 언어" in text
     assert "공유 설정 오류 (작품 목록 없음)" in text and "다시 렌더링" in text and "Show Details..." in text
+    # 노트 리뷰(2026-11-27): 알림은 ProRes 재생 길에만 있음 · 매뉴얼에서 고친 쪽은 '시작하기'가 아니라 '설치'
+    assert "ProRes 영상" in text and "‘설치’" in text and "‘시작하기’" not in text
     newest = release_notes_en.RELEASES[0]
     english = newest.summary + " ".join(item for _title, items in newest.groups for item in items)
     assert "Manage show paths" in english and "how many more folders" in english and "rendered again" in english
+    assert "ProRes video" in english and "‘Installation’" in english and "‘Getting started’" not in english
+    assert "shared settings error (no show list)" in english  # 영어 화면의 제목에 붙던 글 그대로 (2.1.3의 ui_text)
